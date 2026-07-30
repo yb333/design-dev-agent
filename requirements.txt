@@ -5,7 +5,7 @@ pytest>=8.0.0
 
 # Excel 解析
 pandas>=2.0.0
-openpyxl>=3.1.0
+openpyxl>=3.1.5
 
 # SQL 语法检查
 sqlglot>=20.0.0
