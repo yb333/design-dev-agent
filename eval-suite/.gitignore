@@ -1,0 +1,5 @@
+# Golden outputs contain real business data — do not commit
+golden/
+
+# Evaluation results are temporary
+results/

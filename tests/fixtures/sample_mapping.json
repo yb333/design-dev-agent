@@ -1,0 +1,142 @@
+{
+  "source_tables": [
+    {
+      "source_schema": "dim",
+      "source_table": "dim_product_f",
+      "source_alias": "p",
+      "source_table_cn": "商品维度表",
+      "target_schema": "dws",
+      "target_table": "dwb_product_center_f",
+      "target_table_cn": "商品中心宽表",
+      "join_condition": "LEFT JOIN",
+      "schedule_task_name": "dws_product_center_di",
+      "execution_path": "/dws/product_center"
+    },
+    {
+      "source_schema": "dim",
+      "source_table": "dim_category_f",
+      "source_alias": "c",
+      "source_table_cn": "类目维度表",
+      "target_schema": "dws",
+      "target_table": "dwb_product_center_f",
+      "target_table_cn": "商品中心宽表",
+      "join_condition": "LEFT JOIN",
+      "schedule_task_name": "dws_product_center_di",
+      "execution_path": "/dws/product_center"
+    },
+    {
+      "source_schema": "dim",
+      "source_table": "dim_brand_f",
+      "source_alias": "b",
+      "source_table_cn": "品牌维度表",
+      "target_schema": "dws",
+      "target_table": "dwb_product_center_f",
+      "target_table_cn": "商品中心宽表",
+      "join_condition": "LEFT JOIN",
+      "schedule_task_name": "dws_product_center_di",
+      "execution_path": "/dws/product_center"
+    }
+  ],
+  "field_mappings": [
+    {
+      "source_column": "product_id",
+      "source_type": "bigint",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "product_id",
+      "target_column_cn": "商品ID",
+      "target_type": "bigint",
+      "source_table": "dim_product_f",
+      "source_alias": "p"
+    },
+    {
+      "source_column": "product_name",
+      "source_type": "varchar(200)",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "product_name",
+      "target_column_cn": "商品名称",
+      "target_type": "varchar(200)",
+      "source_table": "dim_product_f",
+      "source_alias": "p"
+    },
+    {
+      "source_column": "category_id",
+      "source_type": "bigint",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "category_id",
+      "target_column_cn": "类目ID",
+      "target_type": "bigint",
+      "source_table": "dim_category_f",
+      "source_alias": "c"
+    },
+    {
+      "source_column": "category_name",
+      "source_type": "varchar(100)",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "category_name",
+      "target_column_cn": "类目名称",
+      "target_type": "varchar(100)",
+      "source_table": "dim_category_f",
+      "source_alias": "c"
+    },
+    {
+      "source_column": "brand_id",
+      "source_type": "bigint",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "brand_id",
+      "target_column_cn": "品牌ID",
+      "target_type": "bigint",
+      "source_table": "dim_brand_f",
+      "source_alias": "b"
+    },
+    {
+      "source_column": "brand_name",
+      "source_type": "varchar(100)",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "brand_name",
+      "target_column_cn": "品牌名称",
+      "target_type": "varchar(100)",
+      "source_table": "dim_brand_f",
+      "source_alias": "b"
+    },
+    {
+      "source_column": "price",
+      "source_type": "decimal(18,2)",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "price",
+      "target_column_cn": "价格",
+      "target_type": "decimal(18,2)",
+      "source_table": "dim_product_f",
+      "source_alias": "p"
+    },
+    {
+      "source_column": "status",
+      "source_type": "int",
+      "mapping_rule": "加工",
+      "mapping_expression": "CASE WHEN status = 1 THEN 'active' ELSE 'inactive' END",
+      "target_column": "status",
+      "target_column_cn": "状态",
+      "target_type": "varchar(20)",
+      "source_table": "dim_product_f",
+      "source_alias": "p"
+    },
+    {
+      "source_column": "create_time",
+      "source_type": "timestamp",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "create_time",
+      "target_column_cn": "创建时间",
+      "target_type": "timestamp",
+      "source_table": "dim_product_f",
+      "source_alias": "p"
+    }
+  ],
+  "design_pattern": "single_source"
+}

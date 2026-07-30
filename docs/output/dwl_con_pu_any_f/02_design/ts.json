@@ -1,0 +1,160 @@
+{
+  "version": "1.0.0",
+  "spec_type": "ts",
+  "generated_at": "2026-04-14T12:31:56",
+  "generated_by": "dws-designer",
+
+  "meta": {
+    "target": {
+      "f_table": { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_any_f", "cn": "合同pu分析表" },
+      "i_view":  { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_any_i", "cn": "合同pu分析视图" }
+    },
+    "grain": "每个合同+pu一行（contract_id, pu_id）",
+    "load_strategy": { "strategy": "overwrite", "label": "全量覆盖", "delete_mode": "1" },
+    "field_count": { "business": 13, "audit": 4, "total": 17 },
+
+    "source_tables": [
+      { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_mtr_f", "table_cn": "合同pu指标表", "alias": "t" },
+      { "schema": "fin_dwl_cnb", "table": "dwl_con_any_f",   "table_cn": "合同分析表",   "alias": "f" },
+      { "schema": "fin_dwb_cnb", "table": "dwb_inv_head_i",   "table_cn": "发票头表",     "alias": "inv" },
+      { "schema": "fin_dwb_cnb", "table": "dwb_inv_cre_i",    "table_cn": "发票核销表",   "alias": "cre" },
+      { "schema": "fin_dwl_cnb", "table": "dwl_inv_mtr_i",    "table_cn": "发票指标表",   "alias": "inv_mtr" },
+      { "schema": "dwrdim_dw1",  "table": "dwr_dim_pu_d",     "table_cn": "pu维表",       "alias": "pu" }
+    ],
+
+    "schedule": {
+      "task_name": "task_dwl_con_pu_any_f",
+      "cron": "0 26 0 * * ?",
+      "task_group": "GROUP_SPRD",
+      "project": "SRP_DAILY",
+      "owner": "zhangsan",
+      "exec_params": { "P_CYCLE_ID": "${批次}" },
+      "upstream": [
+        { "table": "fin_dwl_cnb.dwl_con_pu_mtr_f", "task": "task_dwl_con_pu_mtr_f", "source": "rs" },
+        { "table": "fin_dwl_cnb.dwl_con_any_f",   "task": "task_dwl_con_any_f",   "source": "rs" },
+        { "table": "fin_dwb_cnb.dwb_inv_head_i",  "task": "task_dwb_inv_head_i",  "source": "rs" },
+        { "table": "fin_dwb_cnb.dwb_inv_cre_i",   "task": "task_dwb_inv_cre_i",   "source": "rs" },
+        { "table": "fin_dwl_cnb.dwl_inv_mtr_i",   "task": "task_dwl_inv_mtr_i",   "source": "rs" },
+        { "table": "dwrdim_dw1.dwr_dim_pu_d",     "task": "task_dwr_dim_pu_d",    "source": "rs" }
+      ],
+      "execution_platform": { "project_code": "SRP_ETL", "datasource": "SRP_DWS" }
+    }
+  },
+
+  "design": {
+    "complexity_analysis": {
+      "join_count": 5,
+      "has_grain_change": true,
+      "grain_change_detail": "行转列（rpt_code → 金额列）",
+      "multi_step_fields": 6,
+      "aggregation_after_join": false,
+      "segmentation_decision": "不分段",
+      "segmentation_reason": "JOIN≤12、聚合后关联=否、复杂关联链≤2；非洲发票步骤组满足CTE内联条件，不建物理中间表"
+    },
+    "audit_fields": {
+      "del_flag":            { "type": "nvarchar(1)",                    "default": "'N'" },
+      "crt_cycle_id":        { "type": "bigint",                         "default": "'${P_CYCLE_ID}'" },
+      "last_upd_cycle_id":   { "type": "bigint",                         "default": "'${P_CYCLE_ID}'" },
+      "dw_last_update_date": { "type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP" }
+    },
+    "distribution_key": ["contract_id", "pu_id"]
+  },
+
+  "rules": {
+    "R0001": {
+      "rule_name": "合同pu分析表写入",
+      "scenario": "默认场景",
+      "exec_sequence": 1,
+      "target_table": "fin_dwl_cnb.dwl_con_pu_any_f",
+      "is_view_step": false,
+      "design_intent": "主查询：行转列 rpt_code → 4个金额列，关联合同分析表、收敛后的发票指标表（排除非洲）、pu维表，写入分析宽表",
+
+      "source_tables": [
+        { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_mtr_f", "alias": "t" },
+        { "schema": "fin_dwl_cnb", "table": "dwl_con_any_f",   "alias": "f" },
+        { "schema": "fin_dwl_cnb", "table": "dwl_inv_mtr_i",   "alias": "inv_mtr" },
+        { "schema": "dwrdim_dw1",  "table": "dwr_dim_pu_d",    "alias": "pu" }
+      ],
+
+      "ctes": [
+        {
+          "name": "afr_inv",
+          "purpose": "获取非洲发票排除范围（company IN ('1001','1002') AND inv_p_flag=2 的发票核销记录）",
+          "source_tables": ["fin_dwb_cnb.dwb_inv_head_i", "fin_dwb_cnb.dwb_inv_cre_i"]
+        }
+      ],
+
+      "grain": {
+        "input": "(contract_id, pu_id, rpt_code) — 主表含多行rpt_code指标",
+        "output": "(contract_id, pu_id) — rpt_code行转列后收敛",
+        "change": "行转列（SUM + CASE WHEN rpt_code）"
+      },
+
+      "joins": [
+        { "alias": "t",       "type": "main",      "condition": "主表" },
+        { "alias": "f",       "type": "LEFT JOIN", "condition": "t.contract_key = f.contract_key" },
+        { "alias": "inv_mtr", "type": "LEFT JOIN", "condition": "t.contract_id = inv_mtr.contract_id AND t.pu_id = inv_mtr.pu_id", "filter": "inv_flag IN ('inv_in','inv_out') AND NOT EXISTS (afr_inv)" },
+        { "alias": "pu",      "type": "LEFT JOIN", "condition": "t.pu_id = pu.pu_id", "filter": "取最新有效行 scd_active_ind=1" }
+      ],
+
+      "join_safety": [
+        { "table": "dwl_con_any_f",   "join_key_unique": true,  "strategy": "直接关联" },
+        { "table": "dwl_inv_mtr_i",   "join_key_unique": false, "strategy": "按 contract_id+pu_id SUM GROUP BY 收敛后再关联", "reason": "含 inv_id 维度，按合同+pu不唯一" },
+        { "table": "dwr_dim_pu_d",    "join_key_unique": false, "strategy": "取最新有效行 scd_active_ind=1", "reason": "维度表含历史版本" }
+      ],
+
+      "fields": [
+        { "target_field": "contract_no",        "field_type": "nvarchar(500)",            "field_comment": "合同号",         "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"contract_no","alias":"t"}], "design_logic": "直取主表 contract_no" },
+        { "target_field": "contract_id",        "field_type": "numeric",                 "field_comment": "合同ID",         "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"contract_id","alias":"t"}], "design_logic": "直取主表 contract_id" },
+        { "target_field": "contrcat_key",       "field_type": "numeric",                 "field_comment": "合同key",        "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"contrcat_key","alias":"t"}], "design_logic": "直取主表 contrcat_key（注意源表拼写为 contrcat_key）" },
+        { "target_field": "pu_id",              "field_type": "numeric",                 "field_comment": "puID",           "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"pu_id","alias":"t"}], "design_logic": "直取主表 pu_id" },
+        { "target_field": "tc_code",            "field_type": "nvarchar(30)",            "field_comment": "币种代码",       "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"currency_code","alias":"t"}], "design_logic": "直取主表 currency_code，重命名为 tc_code" },
+        { "target_field": "equip_org_amt_usd",  "field_type": "numeric(38,10)",          "field_comment": "设备订货USD金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_usd","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0001' 对应设备订货金额，按合同+pu汇总" },
+        { "target_field": "equip_org_amt_rmb",  "field_type": "numeric(38,10)",          "field_comment": "设备订货RMB金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_rmb","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0001' 对应设备订货RMB，按合同+pu汇总" },
+        { "target_field": "equip_cfm_amt_rmb",  "field_type": "numeric(38,10)",          "field_comment": "设备收入RMB金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_rmb","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0002' 对应设备收入RMB，按合同+pu汇总" },
+        { "target_field": "equip_cfm_amt_usd",  "field_type": "numeric(38,10)",          "field_comment": "设备收入USD金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_usd","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0002' 对应设备收入USD，按合同+pu汇总" },
+        { "target_field": "proj_key",           "field_type": "numeric",                 "field_comment": "项目key",        "transform_type": "direct",    "source_fields": [{"table":"dwl_con_any_f","field":"proj_key","alias":"f"}], "design_logic": "直取合同分析表 proj_key" },
+        { "target_field": "inv_tol_amt_usd",    "field_type": "numeric(38,10)",          "field_comment": "发票总额USD",     "transform_type": "aggregate", "source_fields": [{"table":"dwl_inv_mtr_i","field":"inv_inst_amt_usd","alias":"inv_mtr"}], "design_logic": "对发票指标表 inv_inst_amt_usd 求和，排除非洲发票（afr_inv），按合同+pu收敛后关联" },
+        { "target_field": "inv_tol_amt_rmb",    "field_type": "numeric(38,10)",          "field_comment": "发票总额RMB",     "transform_type": "aggregate", "source_fields": [{"table":"dwl_inv_mtr_i","field":"inv_inst_amt_rmb","alias":"inv_mtr"}], "design_logic": "对发票指标表 inv_inst_amt_rmb 求和，排除非洲发票，按合同+pu收敛后关联" },
+        { "target_field": "pu_key",             "field_type": "numeric",                 "field_comment": "pu key",         "transform_type": "direct",    "source_fields": [{"table":"dwr_dim_pu_d","field":"pu_key","alias":"pu"}], "design_logic": "直取 pu 维表 pu_key（取最新有效行）" }
+      ],
+      "field_count": 13
+    },
+
+    "R0002": {
+      "rule_name": "消费视图",
+      "scenario": "默认场景",
+      "exec_sequence": 2,
+      "target_table": "fin_dwl_cnb.dwl_con_pu_any_i",
+      "is_view_step": true,
+      "design_intent": "纯视图封装，对外提供统一查询接口。命名规则：目标表 _F 后缀替换为 _I。仅生成 DDL，无 ETL。",
+      "source_tables": [
+        { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_any_f" }
+      ],
+      "fields": [],
+      "field_count": 0
+    }
+  },
+
+  "data_flow": {
+    "tables": [
+      { "schema": "fin_dwl_cnb", "name": "dwl_con_pu_mtr_f", "role": "source", "layer": "DWL" },
+      { "schema": "fin_dwl_cnb", "name": "dwl_con_any_f",   "role": "source", "layer": "DWL" },
+      { "schema": "fin_dwb_cnb", "name": "dwb_inv_head_i",  "role": "source", "layer": "DWB" },
+      { "schema": "fin_dwb_cnb", "name": "dwb_inv_cre_i",   "role": "source", "layer": "DWB" },
+      { "schema": "fin_dwl_cnb", "name": "dwl_inv_mtr_i",   "role": "source", "layer": "DWL" },
+      { "schema": "dwrdim_dw1",  "name": "dwr_dim_pu_d",    "role": "source", "layer": "DIM" },
+      { "schema": "fin_dwl_cnb", "name": "dwl_con_pu_any_f","role": "target", "layer": "DWL" },
+      { "schema": "fin_dwl_cnb", "name": "dwl_con_pu_any_i","role": "target", "layer": "DWL", "is_view": true }
+    ],
+    "dependencies": [
+      { "from": "R0001", "to": "R0002", "type": "data_flow", "intermediate_table": "fin_dwl_cnb.dwl_con_pu_any_f" }
+    ],
+    "schedule_groups": [
+      { "sequence": 1, "rules": ["R0001"] },
+      { "sequence": 2, "rules": ["R0002"] }
+    ]
+  },
+
+  "dq_rules": []
+}

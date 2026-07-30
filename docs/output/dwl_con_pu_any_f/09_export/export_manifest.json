@@ -1,0 +1,59 @@
+{
+  "generated_at": "2026-04-14 13:00:51",
+  "target_table": "fin_dwl_cnb.dwl_con_pu_any_f",
+  "target_table_short": "dwl_con_pu_any_f",
+  "task_name": "task_dwl_con_pu_any_f",
+  "job_name": "Pjob_dwl_con_pu_any_f",
+  "project_name": "SRP_DAILY",
+  "task_group": "GROUP_SPRD",
+  "cron_expr": "0 26 0 * * ?",
+  "params": [
+    "V_CYCLE_ID",
+    "V_GROUP_CODE"
+  ],
+  "upstream_deps": "",
+  "upstream_tasks": [
+    {
+      "source_table": "fin_dwl_cnb.dwl_con_pu_mtr_f",
+      "schedule_task": "task_dwl_con_pu_mtr_f",
+      "exec_path": "",
+      "dep_job_params": ""
+    },
+    {
+      "source_table": "fin_dwl_cnb.dwl_con_any_f",
+      "schedule_task": "task_dwl_con_any_f",
+      "exec_path": "",
+      "dep_job_params": ""
+    },
+    {
+      "source_table": "fin_dwb_cnb.dwb_inv_head_i",
+      "schedule_task": "task_dwb_inv_head_i",
+      "exec_path": "",
+      "dep_job_params": ""
+    },
+    {
+      "source_table": "fin_dwb_cnb.dwb_inv_cre_i",
+      "schedule_task": "task_dwb_inv_cre_i",
+      "exec_path": "",
+      "dep_job_params": ""
+    },
+    {
+      "source_table": "fin_dwl_cnb.dwl_inv_mtr_i",
+      "schedule_task": "task_dwl_inv_mtr_i",
+      "exec_path": "",
+      "dep_job_params": ""
+    },
+    {
+      "source_table": "dwrdim_dw1.dwr_dim_pu_d",
+      "schedule_task": "task_dwr_dim_pu_d",
+      "exec_path": "",
+      "dep_job_params": ""
+    }
+  ],
+  "files": [
+    "schedule_tasks.xlsx"
+  ],
+  "view_task_name": "task_dwl_con_pu_any_i",
+  "view_job_name": "Pjob_dwl_con_pu_any_i",
+  "view_name": "fin_dwl_cnb.dwl_con_pu_any_i"
+}

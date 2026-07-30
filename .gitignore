@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# MCP 本地配置（含凭据，绝不进 git）
+mcp-servers/*/db-config.json
+mcp-servers/*/db-sources.json
+
+# 运行时产出（skill 写入的工作目录，可重跑覆盖）
+# 注：docs/output/dwl_con_pu_any_f 作为标准示例保留，其余忽略
+docs/output/*
+!docs/output/dwl_con_pu_any_f/
+
+# 旧架构归档（迁移遗留，新系统完成后删除）
+legacy/
+
+# 旧版 PPT（已被 architecture-overview.html 替代）
+docs/ppt/agent-concept.html
+
+# RS图转文原始文件（已还原为 RS模板.md）
+docs/templates/RS（图转文）.md
+
+# 临时文件
+*.tmp
+*.bak
+*.backup

@@ -1,0 +1,341 @@
+{
+  "target_schema": "fin_dwl_cnb",
+  "target_table": "dwl_con_pu_any_f",
+  "target_table_cn": "合同pu分析表",
+  "parse_time": "2026-04-14 12:31:56",
+  "source_tables": [
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_table_cn": "合同pu指标表",
+      "target_schema": "fin_dwl_cnb",
+      "target_table_cn": "合同pu分析表",
+      "target_table": "dwl_con_pu_any_f",
+      "join_condition": "主表，需要将表中的rpt_code进行行转列，将对应金额打到列上",
+      "remark": "",
+      "schedule_task": "task_dwl_con_pu_mtr_f",
+      "exec_path": "",
+      "dep_job_params": "",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_any_f",
+      "source_table_cn": "合同分析表",
+      "target_schema": "fin_dwl_cnb",
+      "target_table_cn": "合同pu分析表",
+      "target_table": "dwl_con_pu_any_f",
+      "join_condition": "left join on t.contract_key = f.contract_key",
+      "remark": "",
+      "schedule_task": "task_dwl_con_any_f",
+      "exec_path": "",
+      "dep_job_params": "",
+      "source_alias": "f"
+    },
+    {
+      "source_schema": "fin_dwb_cnb",
+      "source_table": "dwb_inv_head_i",
+      "source_table_cn": "发票头表",
+      "target_schema": "fin_dwl_cnb",
+      "target_table_cn": "合同pu分析表",
+      "target_table": "dwl_con_pu_any_f",
+      "join_condition": "",
+      "remark": "为了获取排除非洲场景发票内容范围，详见数据处理步骤",
+      "schedule_task": "task_dwb_inv_head_i",
+      "exec_path": "",
+      "dep_job_params": "",
+      "source_alias": "inv"
+    },
+    {
+      "source_schema": "fin_dwb_cnb",
+      "source_table": "dwb_inv_cre_i",
+      "source_table_cn": "发票核销表",
+      "target_schema": "fin_dwl_cnb",
+      "target_table_cn": "合同pu分析表",
+      "target_table": "dwl_con_pu_any_f",
+      "join_condition": "",
+      "remark": "为了获取排除非洲场景发票内容范围，详见数据处理步骤",
+      "schedule_task": "task_dwb_inv_cre_i",
+      "exec_path": "",
+      "dep_job_params": "",
+      "source_alias": "cre"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_inv_mtr_i",
+      "source_table_cn": "发票指标表",
+      "target_schema": "fin_dwl_cnb",
+      "target_table_cn": "合同pu分析表",
+      "target_table": "dwl_con_pu_any_f",
+      "join_condition": "left join on t.contract_id =s.contract_id and t.pu_id=s.pu_id and s.inv_flag in('inv_in','inv_out') and not exists(select 1 from afr_inv app where s.inv_id=app.inv_id and s.contract_no =app.contract_no)",
+      "remark": "这里的afr_inv就是处理步骤1的结果集",
+      "schedule_task": "task_dwl_inv_mtr_i",
+      "exec_path": "",
+      "dep_job_params": "",
+      "source_alias": "inv_mtr"
+    },
+    {
+      "source_schema": "dwrdim_dw1",
+      "source_table": "dwr_dim_pu_d",
+      "source_table_cn": "pu维表",
+      "target_schema": "fin_dwl_cnb",
+      "target_table_cn": "合同pu分析表",
+      "target_table": "dwl_con_pu_any_f",
+      "join_condition": "left join on pu_id=pu_id ,纬度取最新",
+      "remark": "",
+      "schedule_task": "task_dwr_dim_pu_d",
+      "exec_path": "",
+      "dep_job_params": "",
+      "source_alias": "pu"
+    }
+  ],
+  "field_mappings": [
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "contract_no",
+      "source_type": "nvarchar(500)",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "contract_no",
+      "target_column_cn": "合同号",
+      "target_type": "nvarchar(500)",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "contract_id",
+      "source_type": "numeric",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "contract_id",
+      "target_column_cn": "合同id",
+      "target_type": "numeric",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "contrcat_key",
+      "source_type": "numeric",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "contrcat_key",
+      "target_column_cn": "合同key",
+      "target_type": "numeric",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "pu_id",
+      "source_type": "numeric",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "pu_id",
+      "target_column_cn": "pu的id",
+      "target_type": "numeric",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "currency_code",
+      "source_type": "nvarchar(30)",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "tc_code",
+      "target_column_cn": "交易币种",
+      "target_type": "nvarchar(30)",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "rpt_value_usd",
+      "source_type": "",
+      "mapping_rule": "数据加工",
+      "mapping_expression": "选择prt_code='fbt_0001'的行的rpt_value_usd，然后sum（这里sum是更安全的）",
+      "target_column": "equip_org_amt_usd",
+      "target_column_cn": "设备订货usd金额",
+      "target_type": "numeric(38,10)",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "rpt_value_rmb",
+      "source_type": "",
+      "mapping_rule": "数据加工",
+      "mapping_expression": "选择prt_code='fbt_0001'的行的rpt_value_usd，然后sum（这里sum是更安全的）",
+      "target_column": "equip_org_amt_rmb",
+      "target_column_cn": "设备订货rmb金额",
+      "target_type": "numeric(38,10)",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "rpt_value_rmb",
+      "source_type": "",
+      "mapping_rule": "数据加工",
+      "mapping_expression": "选择prt_code='fbt_0002'的行的rpt_value_usd，然后sum（这里sum是更安全的）",
+      "target_column": "equip_cfm_amt_rmb",
+      "target_column_cn": "设备收入rmb金额",
+      "target_type": "numeric(38,10)",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_pu_mtr_f",
+      "source_column": "rpt_value_usd",
+      "source_type": "",
+      "mapping_rule": "数据加工",
+      "mapping_expression": "选择prt_code='fbt_0002的行的rpt_value_usd，然后sum（这里sum是更安全的）",
+      "target_column": "equip_cfm_amt_usd",
+      "target_column_cn": "设备收入usd金额",
+      "target_type": "numeric(38,10)",
+      "source_alias": "t"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_con_any_f",
+      "source_column": "proj_key",
+      "source_type": "",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "proj_key",
+      "target_column_cn": "项目key",
+      "target_type": "numeric",
+      "source_alias": "f"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_inv_mtr_i",
+      "source_column": "inv_inst_amt_usd",
+      "source_type": "",
+      "mapping_rule": "数据加工",
+      "mapping_expression": "按照contract_no,pu_id,contract_id，收敛后，sum(inv_inst_amt_usd)",
+      "target_column": "inv_tol_amt_usd",
+      "target_column_cn": "开票usd金额",
+      "target_type": "numeric(38,10)",
+      "source_alias": "inv_mtr"
+    },
+    {
+      "source_schema": "fin_dwl_cnb",
+      "source_table": "dwl_inv_mtr_i",
+      "source_column": "inv_inst_amt_rmb",
+      "source_type": "",
+      "mapping_rule": "数据加工",
+      "mapping_expression": "按照contract_no,pu_id,contract_id，收敛后，sum(inv_inst_amt_rmb)",
+      "target_column": "inv_tol_amt_rmb",
+      "target_column_cn": "开票rmb金额",
+      "target_type": "numeric(38,10)",
+      "source_alias": "inv_mtr"
+    },
+    {
+      "source_schema": "dwrdim_dw1",
+      "source_table": "dwr_dim_pu_d",
+      "source_column": "pu_key",
+      "source_type": "",
+      "mapping_rule": "直取",
+      "mapping_expression": "",
+      "target_column": "pu_key",
+      "target_column_cn": "pu的key",
+      "target_type": "numeric",
+      "source_alias": "pu"
+    },
+    {
+      "source_schema": "",
+      "source_table": "（无）",
+      "source_column": "",
+      "source_type": "",
+      "mapping_rule": "赋值",
+      "mapping_expression": "'N'",
+      "target_column": "del_flag",
+      "target_column_cn": "删除标识",
+      "target_type": "nvarchar(1)",
+      "source_alias": ""
+    },
+    {
+      "source_schema": "",
+      "source_table": "（无）",
+      "source_column": "",
+      "source_type": "",
+      "mapping_rule": "赋值",
+      "mapping_expression": "${P_CYCLE_ID}",
+      "target_column": "crt_cycle_id",
+      "target_column_cn": "创建批次ID",
+      "target_type": "bigint",
+      "source_alias": ""
+    },
+    {
+      "source_schema": "",
+      "source_table": "（无）",
+      "source_column": "",
+      "source_type": "",
+      "mapping_rule": "赋值",
+      "mapping_expression": "${P_CYCLE_ID}",
+      "target_column": "last_upd_cycle_id",
+      "target_column_cn": "最后更新批次ID",
+      "target_type": "bigint",
+      "source_alias": ""
+    },
+    {
+      "source_schema": "",
+      "source_table": "（无）",
+      "source_column": "",
+      "source_type": "",
+      "mapping_rule": "赋值",
+      "mapping_expression": "CURRENT_TIMESTAMP",
+      "target_column": "dw_last_update_date",
+      "target_column_cn": "数仓最后更新时间",
+      "target_type": "timestamp(0) without time zone",
+      "source_alias": ""
+    }
+  ],
+  "design_pattern": "single_source",
+  "scene_count": 1,
+  "field_statistics": {
+    "total_records": 17,
+    "unique_fields": 17,
+    "direct_mapping": 7,
+    "processed_mapping": 0
+  },
+  "scheduling_config": {
+    "project_name": "SRP_DAILY",
+    "task_group": "GROUP_SPRD",
+    "schedule_cycle": "0 26 0 * * ?",
+    "owner": "zhangsan"
+  },
+  "execution_platform_config": {
+    "project_code": "SRP_ETL",
+    "project_cn_name": "商品中心",
+    "project_en_name": "ProductCenter",
+    "sub_project_code": "SRP_GRP01",
+    "sub_project_cn_name": "商品中心组",
+    "sub_project_en_name": "ProductCenterGroup",
+    "data_source": "SRP_DWS",
+    "business_owner": "zhangsan"
+  },
+  "design_config": {
+    "wrap_view": true,
+    "target_grain": "合同+pu粒度",
+    "write_strategy": "全量",
+    "incremental_key": ""
+  },
+  "data_flow": {
+    "groups": [
+      {
+        "name": "获取非洲发票范围",
+        "steps": [
+          {
+            "step": 1,
+            "description": "dwb_inv_head_i限制 where inv.company in ('1001,'1002') and inv_p_flag =2 内关联 dwb_inv_head_i 关联条件是 on inv.inv_id =cre.inv_id and cre.app_flag =0 and cre.p_flag=1 ; 这步操作结果集afr_inv ，获取非洲发票，后续在加工开票金额时，计算过程中排除这些数据"
+          }
+        ]
+      }
+    ]
+  }
+}

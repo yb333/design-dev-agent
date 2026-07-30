@@ -1,0 +1,101 @@
+{
+  "name": "合同pu粒度转换全流程",
+  "scope": "ulw-pipe",
+  "prompt": "@连接层粒度转换案例mapping.xlsx 完成设计评审开发及测试",
+  "target_table": "dwl_con_pu_any_f",
+  "golden_dir": "golden/dwl_con_pu_any_f",
+  "scoring": {
+    "field_completeness": 30,
+    "ddl_etl_consistency": 20,
+    "etl_logic": 25,
+    "safety": 15,
+    "structure": 10
+  },
+  "checks": [
+    {
+      "type": "files_exist",
+      "layer": "structure",
+      "paths": [
+        "01_input/mapping.json",
+        "02_design/design.md",
+        "04_ddl/create_table_dwl_con_pu_any_f_zhangsan.sql",
+        "04_ddl/create_view_dwl_con_pu_any_i_zhangsan.sql",
+        "05_etl/01_insert_dwl_con_pu_any_f.sql",
+        "09_export/execution_tasks.xlsx",
+        "09_export/schedule_tasks.xlsx"
+      ]
+    },
+    {
+      "type": "design_structure",
+      "layer": "structure"
+    },
+    {
+      "type": "comment_style",
+      "layer": "structure"
+    },
+    {
+      "type": "field_mapping_match",
+      "layer": "structure",
+      "golden_dir": "golden/dwl_con_pu_any_f"
+    },
+    {
+      "type": "audit_fields_present",
+      "layer": "structure"
+    },
+    {
+      "type": "segment_strategy",
+      "layer": "structure",
+      "golden_dir": "golden/dwl_con_pu_any_f"
+    },
+    {
+      "type": "field_completeness",
+      "layer": "field_completeness"
+    },
+    {
+      "type": "ddl_structure",
+      "layer": "ddl_etl_consistency"
+    },
+    {
+      "type": "ddl_columns_match",
+      "layer": "ddl_etl_consistency",
+      "golden_dir": "golden/dwl_con_pu_any_f"
+    },
+    {
+      "type": "etl_structure",
+      "layer": "ddl_etl_consistency"
+    },
+    {
+      "type": "ddl_etl_consistency",
+      "layer": "ddl_etl_consistency"
+    },
+    {
+      "type": "etl_logic",
+      "layer": "etl_logic"
+    },
+    {
+      "type": "safety",
+      "layer": "safety"
+    },
+    {
+      "type": "export_files_exist",
+      "layer": "structure"
+    },
+    {
+      "type": "export_sheets",
+      "layer": "structure",
+      "file": "09_export/schedule_tasks.xlsx",
+      "sheets": ["tasks", "jobs", "taskParams"]
+    },
+    {
+      "type": "export_sheets",
+      "layer": "structure",
+      "file": "09_export/execution_tasks.xlsx",
+      "sheets": ["RULE", "TargetFields"]
+    },
+    {
+      "type": "golden_structure_match",
+      "layer": "ddl_etl_consistency",
+      "golden_dir": "golden/dwl_con_pu_any_f"
+    }
+  ]
+}

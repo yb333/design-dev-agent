@@ -1,0 +1,14 @@
+# ETL 管道自动化系统依赖
+
+# 测试
+pytest>=8.0.0
+
+# Excel 解析
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# SQL 语法检查
+sqlglot>=20.0.0
+
+# 可选：类型检查
+# mypy>=1.0.0

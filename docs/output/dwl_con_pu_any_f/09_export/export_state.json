@@ -1,0 +1,9 @@
+{
+  "rule_group_code": "GR142851",
+  "rule_codes": [
+    "UR142851",
+    "UR142852",
+    "UR142853"
+  ],
+  "target_table": "fin_dwl_cnb.dwl_con_pu_any_f"
+}
