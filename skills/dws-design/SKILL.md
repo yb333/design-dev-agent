@@ -96,6 +96,8 @@ description: >-
 
 | 文档 | 内容 |
 |------|------|
+| `references/ts-template.json` | **TS JSON 产出模板**（ts.json 骨架，含占位符说明） |
+| `references/ts-template.md` | **TS MD 产出模板**（ts.md 骨架，7章结构，含占位符说明） |
 | `references/naming-conventions.md` | 表/字段/规则命名规范 |
 | `references/dws-best-practices.md` | DWS 物理设计标准（存储/分布/压缩/分区） |
 | `references/optimization-rules.md` | 分段策略 + 分布键优化 + 中间表决策规则 |

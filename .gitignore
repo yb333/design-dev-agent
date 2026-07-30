@@ -25,6 +25,9 @@ docs/output/*
 # 旧架构归档（迁移遗留，新系统完成后删除）
 legacy/
 
+# 开发时 skill 软链接（实际在 skills/，这里链接给 opencode 扫描）
+.opencode/skills/
+
 # 旧版 PPT（已被 architecture-overview.html 替代）
 docs/ppt/agent-concept.html
 

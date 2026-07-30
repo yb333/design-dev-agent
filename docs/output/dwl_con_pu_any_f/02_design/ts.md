@@ -14,7 +14,7 @@
 | **目标粒度** | 每个合同+pu一行（contract_id, pu_id） |
 | **写入策略** | 全量覆盖 |
 | **分布键** | contract_id, pu_id |
-| **字段统计** | 业务 13 + 审计 4 = 总计 17 |
+| **字段统计** | 业务 12 + 审计 4 = 总计 16 |
 | **场景数** | 1（默认场景） |
 | **规则数** | 2（R0001 写入 + R0002 视图） |
 
@@ -24,10 +24,8 @@
 |---|------|--------|------|-----|
 | 1 | fin_dwl_cnb.dwl_con_pu_mtr_f | 合同pu指标表 | t | DWL |
 | 2 | fin_dwl_cnb.dwl_con_any_f | 合同分析表 | f | DWL |
-| 3 | fin_dwb_cnb.dwb_inv_head_i | 发票头表 | inv | DWB |
-| 4 | fin_dwb_cnb.dwb_inv_cre_i | 发票核销表 | cre | DWB |
-| 5 | fin_dwl_cnb.dwl_inv_mtr_i | 发票指标表 | inv_mtr | DWL |
-| 6 | dwrdim_dw1.dwr_dim_pu_d | pu维表 | pu | DIM |
+| 3 | fin_dwl_cnb.dwl_inv_mtr_i | 发票指标表 | inv_mtr | DWL |
+| 4 | dwrdim_dw1.dwr_dim_pu_d | pu维表 | pu | DIM |
 
 ---
 
@@ -53,7 +51,7 @@
 
 | 中间逻辑 | 类型 | 名称 | 粒度 | 用途 |
 |----------|------|------|------|------|
-| 非洲发票排除范围 | CTE（内联于R0001） | afr_inv | (inv_id, contract_no) | 排除清单，供R0001 NOT EXISTS引用 |
+| 发票收敛聚合 | CTE（内联于R0001） | inv_agg | (contract_id, pu_id) | 发票指标表按合同+pu收敛求和（排除非洲发票），避免JOIN发散 |
 
 > 是否建物理中间表的评估见 §3。
 
@@ -65,10 +63,10 @@
 
 | 因素 | 值 | 阈值 | 说明 |
 |------|-----|------|------|
-| JOIN 表数量 | 5 | >12 触发分段 | 主查询，不含CTE内联表 |
-| 粒度变化 | 行转列 | 有即声明 | rpt_code → 金额列 |
+| JOIN 表数量 | 3 | >12 触发分段 | f（合同）、inv_agg（发票收敛）、pu（维表） |
+| 粒度变化 | 行转列 | 有即声明 | rpt_code → 4个金额列 |
 | 多步骤加工字段 | 6 | ≥5 触发分段 | 行转列4 + 聚合2 |
-| 聚合后关联 | 否 | — | — |
+| 聚合后关联 | 否 | — | 聚合在CTE内完成，主查询直接关联收敛结果 |
 | 复杂关联链 | 1层 | ≥3 触发分段 | — |
 
 ### 3.2 分段与中间表决策
@@ -79,7 +77,7 @@
 
 | 中间逻辑 | 决策 | 简要依据 |
 |----------|------|----------|
-| 非洲发票排除范围 | CTE内联，不建物理表 | 输出字段<3、仅单步引用、目的为过滤 |
+| 发票收敛聚合 | CTE内联，不建物理表 | 输出字段仅2个、单步引用、目的为避免JOIN发散；满足内联条件 |
 
 > 完整拆分评估规则在 designer skill 内，本节只呈现决策结论 + 简要依据，供闸口①确认。
 
@@ -96,14 +94,14 @@
 | 场景 | 默认场景 |
 | 执行序 | 1 |
 | 产出表 | `fin_dwl_cnb.dwl_con_pu_any_f`（目标F表） |
-| 设计意图 | 行转列 rpt_code→4个金额列，关联合同/发票/维表，写入分析宽表 |
-| 字段数 | 13业务 + 4审计 |
+| 设计意图 | rpt_code行转列→4个金额列，LEFT JOIN合同/发票收敛/维表，写入分析宽表 |
+| 字段数 | 12业务 + 4审计 |
 
 **CTE**：
 
 | CTE | 用途 | 来源表 |
 |-----|------|--------|
-| afr_inv | 非洲发票排除范围 | dwb_inv_head_i, dwb_inv_cre_i |
+| inv_agg | 发票按合同+pu收敛求和（排除非洲发票） | dwl_inv_mtr_i |
 
 **粒度**：
 
@@ -115,24 +113,24 @@
 
 | 别名 | JOIN | 关联条件 | 限定 |
 |------|------|----------|------|
-| t | 主表 | — | — |
+| t | 主表 | —（粒度锚点） | — |
 | f | LEFT JOIN | t.contract_key=f.contract_key | — |
-| inv_mtr | LEFT JOIN | contract_id+pu_id | inv_flag IN('inv_in','inv_out') AND NOT EXISTS(afr_inv) |
+| inv_agg | LEFT JOIN | contract_id+pu_id | 来源发票排除非洲发票 |
 | pu | LEFT JOIN | t.pu_id=pu.pu_id | 取最新有效行 |
 
 **关联安全分析**：
 
 | 被关联表 | JOIN键唯一 | 对齐策略 |
 |----------|-----------|----------|
-| dwl_con_any_f | ✅ 是 | 直接关联 |
-| dwl_inv_mtr_i | ❌ 否 | SUM GROUP BY收敛后关联（含inv_id维度） |
-| dwr_dim_pu_d | ❌ 否 | 取最新有效行（含历史版本） |
+| dwl_con_any_f | 是 | 直接关联（按合同粒度一对一） |
+| dwl_inv_mtr_i | 否 | GROUP BY收敛后关联（含发票维度） |
+| dwr_dim_pu_d | 否 | 取最新有效行（含历史版本） |
 
 **字段概要**（完整见 ts.json R0001.fields）：
 
 | 转换类型 | 数量 | 示例字段 |
 |----------|------|----------|
-| 直取(direct) | 7 | contract_no, contract_id, pu_id, tc_code, proj_key, pu_key... |
+| 直取(direct) | 6 | contract_no, contract_id, pu_id, tc_code, proj_key, pu_key |
 | 行转列(pivot) | 4 | equip_org_amt_usd/rmb, equip_cfm_amt_rmb/usd |
 | 聚合(aggregate) | 2 | inv_tol_amt_usd, inv_tol_amt_rmb |
 | 审计(assign) | 4 | del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（见模板） |
@@ -187,18 +185,18 @@ flowchart LR
 | 配置项 | 值 | 来源 |
 |--------|-----|------|
 | 调度任务 | task_dwl_con_pu_any_f | designer命名 |
-| 调度周期 | 0 26 0 * * ?（每日02:06） | designer细化（RS给"日级"框架） |
+| 调度周期 | `0 0 1 * * ?`（每日01:00，T+1） | designer细化（RS给"日级+SLA 3:30"框架） |
 | 任务组 | GROUP_SPRD | designer |
 | 执行参数 | P_CYCLE_ID=${批次} | designer |
 | 执行平台 | SRP_ETL / SRP_DWS | RS |
 
 **上游依赖**（RS给定）：
-task_dwl_con_pu_mtr_f, task_dwl_con_any_f, task_dwb_inv_head_i, task_dwb_inv_cre_i, task_dwl_inv_mtr_i, task_dwr_dim_pu_d
+task_dwl_con_pu_mtr_f, task_dwl_con_any_f, task_dwl_inv_mtr_i, task_dwr_dim_pu_d
 
 ---
 
 ## 7. 数据质量检查（DQ）
 
-> 本表 DQ 需求：无（预制占位，后续看是否必须）
+> 本表 DQ 需求：无（预制占位）
 
 （本表当前无 designer 设计的 DQ 规则。标准模板检查如主键唯一/非空可在 tester skill 自动套用。）

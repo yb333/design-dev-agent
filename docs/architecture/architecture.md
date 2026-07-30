@@ -188,20 +188,23 @@ L0 宿主层    codeagent/opencode（黑盒依赖）
 
 ### 5.2 组件清单
 
+> **编排定位**：设计开发段不定义自己的 primary agent。编排逻辑（各种 loop / 流程控制 / 质量保障回路）沉淀在 **command** 里，由任意 primary agent（项目主 agent 或 opencode 内置 build）执行。设计开发段提供的是：子 agent + skill + 脚本 + command。
+
 | 组件 | 类型 | 职责 |
 |------|------|------|
-| **dws-orchestrator** | primary主agent | 持共用领域知识+全局状态，按command编排调子agent/脚本 |
 | **dws-designer** | subagent | rs_input.json → TS制品包（ts.json+ts.md） |
 | **dws-coder** | subagent | TS规则 → SQL/DDL（含调执行脚本+自改报错） |
 | 输入预处理 | 脚本 | mapping+RS → rs_input.json + 预检 |
 | 执行脚本 | 脚本 | 连库跑SQL+机械检查（不占上下文，能等十几分钟） |
 | 导出脚本 | 脚本 | SQL+TS → 制品中间表达 |
-| /new-pipe | command | 新建任务流（agent:dws-orchestrator） |
+| **/new-pipe** | **command** | **编排逻辑的核心载体**（预处理→designer→闸口→coder螺旋→导出） |
 | /optimize | command | 优化任务流（未来） |
 | dws-design-skill | skill | designer加载：设计方法论+模板 |
 | dws-coding-skill | skill | coder加载：编码规范+模板 |
 
 **核心 subagent 只有2个（designer/coder）**。理由：只有"上下文隔离有收益+需AI理解"的才用agent；tester降级为脚本（UT是机械检查），exporter/预处理是确定性脚本。
+
+> **编排不依赖特定 agent**：command 的机制是"注入 primary agent 的指令模板"。项目主 agent（或内置 build）触发 /new-pipe 后，按 command 正文执行编排——调子 agent、管闸口、调脚本。编排逻辑在 command 里，不在某个 agent 的 prompt 里。这样：① 不和项目主 agent 冲突（它是执行者不是编排者）；② 没有项目主 agent 时用内置 build 也能跑。
 
 ### 5.3 为什么 designer 和 coder 必须合并成"一个段"（不分成两个独立段）
 
@@ -268,19 +271,23 @@ coder 产 SQL → [静态检查·规范] ─不通过→ 回 coder 重写
 ### 5.5 三者关系
 
 ```
-command（任务单：干这个）
+command（编排逻辑：怎么干——各种loop/流程/质量保障）
   ↓ 注入给
-dws-orchestrator（执行者：知道怎么干）
+任意 primary agent（执行者：项目主agent 或 内置build）
   ↓ Task调用子agent（子agent加载各自skill）
 dws-designer / dws-coder（能力零件：加载skill作知识）
+  ↓ bash调用
+脚本（preprocess/validate_ts/execute/export）
 ```
 
-- **command** = 任务单（干这个）→ frontmatter `agent:` 指定执行者，正文是指令
-- **orchestrator** = 执行者（怎么干）→ 通用流程能力在prompt，基本流程(设计→闸口→编码→导出)在prompt
+- **command** = 编排逻辑的核心载体（各种 loop / 流程控制 / 质量保障回路都写在这里）
+- **primary agent** = 执行者（按 command 指令执行，不需要懂设计开发领域知识）
 - **子agent** = 能力零件 → 加载各自skill作为知识
 - **skill** = 知识包（需加载到上下文才用）→ 按知识归属划分，permission.skill隔离
 - **格式文档** → read获取，不是skill
-- **公共脚本** → bash调用，不是skill
+- **脚本** → bash调用，不是skill
+
+> **类比**：command 是"详细作业指导书"（写满了步骤/检查点/回路），primary agent 是"操作工"（按指导书操作），子 agent 是"专用工具"（被操作工调用）。指导书是我们的核心——换个操作工也能按指导书干。
 
 ### 5.6 skill 可见性隔离
 
@@ -336,21 +343,23 @@ G. 成功→落盘
 
 ## 六、用户使用方式
 
-### 6.1 多流程段工具，每段一个 primary agent
+### 6.1 设计开发段不定义 primary agent
 
-工具覆盖 RS生成/设计开发/测试/运维，每段一个 primary agent。本项目段 = `dws-orchestrator`。
+设计开发段提供子 agent + skill + 脚本 + command，**编排逻辑沉在 command 里**。由项目的 primary agent（或内置 build）触发 command 执行编排。
 
 ### 6.2 使用流程
 
 ```
-1. 切到 dws-orchestrator（当前Tab手动 / 未来客户端自动）
+1. 在任意 primary agent 下（项目主agent / 内置build）
 2. /new-pipe @mapping.xlsx @RS.md（command触发）
-3. orchestrator跑流程：
-   预处理→designer产TS→⏸️闸口①（question弹确认）
+3. primary agent 按 command 指令执行编排：
+   预处理→调designer产TS→⏸️闸口①（question弹确认）
 4. 用户同会话确认/介入（长流程同会话对话）
-5. orchestrator继续：coder按规则螺旋→导出
+5. primary agent 继续：调coder按规则螺旋→调导出脚本
 6. 完成，产出TS+SQL/DDL+制品
 ```
+
+> **关键**：编排逻辑（各种 loop / 流程控制 / 质量保障回路）全在 command + 子 agent + 脚本里，primary agent 只是执行者。换个 primary agent 也能跑。
 
 ### 6.3 段间交接：靠 spec 文件，段间解耦
 
@@ -373,7 +382,7 @@ orchestrator 不关心 RS 谁产的，只读 rs_input.json。
 | 3 | 字段内嵌规则，按rule_code分组 | 切片=取一个规则，真正上下文隔离 |
 | 4 | design_logic=自然语言口径，不含SQL | SQL归coder翻译；自然语言便于闸口①人确认 |
 | 5 | 砍掉细TS独立文档 | 消费者不足，字段逻辑落SQL注释 |
-| 6 | 自定义orchestrator(非build) | 共用领域知识集中、多任务流共享 |
+| 6 | 编排逻辑沉在command里，不定义自己的primary agent | 编排是设计开发方案包的核心（各种loop/流程/质量保障），沉在command里让任意agent执行；不和项目主agent冲突，没有主agent用build也能跑 |
 | 7 | 核心子agent只2个(designer/coder) | 只有"上下文隔离有收益+需AI"才用agent；tester/exporter/预处理是脚本 |
 | 8 | tester降级为脚本 | UT是机械检查（跑通/主键不发散），不需AI |
 | 9 | 报错理解+改在coder | 代码+报错同上下文改最快 |
