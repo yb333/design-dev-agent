@@ -133,7 +133,7 @@ def main():
         ver = subprocess.run(py_parts + ["--version"], capture_output=True, text=True)
         print(f"  {python_cmd} ({ver.stdout.strip()})")
 
-        # venv
+        # venv（每次都确保依赖最新）
         venv_dir = config_dir / "venv"
         if not venv_dir.exists():
             print(f"  创建虚拟环境: {venv_dir}")
@@ -146,13 +146,16 @@ def main():
 
         reqs = collect_requirements(SCRIPT_DIR)
         if reqs:
-            print(f"  安装依赖: {', '.join(reqs)}")
+            print(f"  安装/升级依赖: {', '.join(reqs)}")
             subprocess.run([str(venv_py), "-m", "pip", "install", "--upgrade", "pip", "--quiet"],
                            capture_output=True)
-            r = subprocess.run([str(venv_py), "-m", "pip", "install"] + reqs + ["--quiet"],
+            r = subprocess.run([str(venv_py), "-m", "pip", "install", "--upgrade"] + reqs,
                                capture_output=True, text=True)
             if r.returncode != 0:
-                print(f"  ⚠ 依赖安装有警告: {r.stderr[:200]}")
+                print(f"  ✗ 依赖安装失败: {r.stderr[:300]}")
+                print("  请手动运行: pip install --upgrade openpyxl pandas")
+                input("按回车退出...")
+                sys.exit(1)
             else:
                 print(f"  ✓ 依赖安装完成")
         else:
