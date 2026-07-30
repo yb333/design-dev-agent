@@ -158,31 +158,76 @@ def run():
 
         reqs = collect_requirements(SCRIPT_DIR)
         if reqs:
-            print(f"  安装/升级依赖: {', '.join(reqs)}")
+            # 检测已安装的依赖版本，跳过已满足的
+            print(f"  检查依赖: {', '.join(reqs)}")
 
-            # 先升级 pip（显示输出，不吞错误）
-            r_pip = subprocess.run(
-                [str(venv_py), "-m", "pip", "install", "--upgrade", "pip"],
-                capture_output=True, text=True
-            )
-            if r_pip.returncode != 0:
-                print(f"  ⚠ pip 升级警告: {r_pip.stderr[:200]}")
+            # 解析 requirements 里的包名（去掉版本约束）
+            pkg_names = []
+            for req in reqs:
+                # openpyxl>=3.1.5 → openpyxl
+                import re as _re
+                m = _re.match(r"^([a-zA-Z0-9_-]+)", req)
+                if m:
+                    pkg_names.append(m.group(1))
 
-            # 装依赖（显示输出，不吞错误）
-            r_req = subprocess.run(
-                [str(venv_py), "-m", "pip", "install", "--upgrade"] + reqs,
-                capture_output=True, text=True
-            )
-            if r_req.returncode != 0:
-                print(f"  ✗ 依赖安装失败!")
-                print(f"  stderr: {r_req.stderr[:500]}")
-                print(f"  stdout: {r_req.stdout[:300]}")
-                print()
-                print("  请手动运行:")
-                print(f"    {venv_py} -m pip install --upgrade {' '.join(reqs)}")
-                return 1
+            # 检查每个包是否已安装且版本满足
+            need_install = False
+            for req in reqs:
+                import re as _re
+                m = _re.match(r"^([a-zA-Z0-9_-]+)(.*)$", req)
+                pkg = m.group(1) if m else req
+                # 查已安装版本
+                r_chk = subprocess.run(
+                    [str(venv_py), "-c", f"import importlib.metadata; print(importlib.metadata.version('{pkg}'))"],
+                    capture_output=True, text=True
+                )
+                if r_chk.returncode != 0:
+                    print(f"  ✗ {pkg}: 未安装，需要安装")
+                    need_install = True
+                    break
+                installed_ver = r_chk.stdout.strip()
+                # 检查版本是否满足约束（简单比较，够用）
+                constraint = m.group(2).strip() if m else ""
+                if constraint:
+                    # 用 packaging 检查，没有就简单判断
+                    r_sat = subprocess.run(
+                        [str(venv_py), "-c",
+                         f"from packaging.requirements import Requirement; "
+                         f"r=Requirement('{req}'); "
+                         f"import importlib.metadata; "
+                         f"exit(0 if r.specifier.contains(importlib.metadata.version('{pkg}')) else 1)"],
+                        capture_output=True, text=True
+                    )
+                    if r_sat.returncode != 0:
+                        print(f"  ⚠ {pkg}: 已装 {installed_ver}，但需要 {constraint}，需升级")
+                        need_install = True
+                    else:
+                        print(f"  ✓ {pkg}: {installed_ver}（满足 {constraint}）")
+                else:
+                    print(f"  ✓ {pkg}: {installed_ver}")
+
+            if need_install:
+                print(f"  安装/升级依赖: {', '.join(reqs)}")
+                subprocess.run(
+                    [str(venv_py), "-m", "pip", "install", "--upgrade", "pip"],
+                    capture_output=True, text=True
+                )
+                r_req = subprocess.run(
+                    [str(venv_py), "-m", "pip", "install", "--upgrade"] + reqs,
+                    capture_output=True, text=True
+                )
+                if r_req.returncode != 0:
+                    print(f"  ✗ 依赖安装失败!")
+                    print(f"  stderr: {r_req.stderr[:500]}")
+                    print(f"  stdout: {r_req.stdout[:300]}")
+                    print()
+                    print("  请手动运行:")
+                    print(f"    {venv_py} -m pip install --upgrade {' '.join(reqs)}")
+                    return 1
+                else:
+                    print(f"  ✓ 依赖安装完成")
             else:
-                print(f"  ✓ 依赖安装完成")
+                print(f"  ✓ 所有依赖版本满足，跳过安装")
         else:
             print("  无额外依赖")
     print()
