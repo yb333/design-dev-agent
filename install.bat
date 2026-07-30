@@ -30,4 +30,4 @@ py -3 install.py %*
 goto finish
 
 :finish
-if errorlevel 1 pause
+REM Python 内部已有 input("按回车退出")，这里不再重复 pause

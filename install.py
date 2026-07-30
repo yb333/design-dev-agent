@@ -11,6 +11,7 @@ import os
 import sys
 import shutil
 import subprocess
+import traceback
 from pathlib import Path
 
 
@@ -52,7 +53,7 @@ def scan_agents(base: Path) -> list[str]:
 
 
 def collect_requirements(base: Path) -> list[str]:
-    """汇总所有 skill 的 requirements.txt"""
+    """汇总 requirements.txt"""
     reqs = set()
     req_file = base / "requirements.txt"
     if req_file.exists():
@@ -72,7 +73,9 @@ def copy_dir(src: Path, dst: Path):
     ))
 
 
-def main():
+def run():
+    """主逻辑（不含 try/except，由 main 包裹）"""
+
     mode = "global"
     check_only = False
     for arg in sys.argv[1:]:
@@ -98,18 +101,18 @@ def main():
     if cmd_dir.exists():
         commands = [f.name for f in sorted(cmd_dir.glob("*.md"))]
 
-    print(f"  Skills:  {', '.join(skills) if skills else '(无)'}")
-    print(f"  Agents:  {', '.join(agents) if agents else '(无)'}")
-    print(f"  Commands:{', '.join(commands) if commands else '(无)'}")
+    print(f"  Skills:   {', '.join(skills) if skills else '(无)'}")
+    print(f"  Agents:   {', '.join(agents) if agents else '(无)'}")
+    print(f"  Commands: {', '.join(commands) if commands else '(无)'}")
 
     if not skills and not agents:
         print("  未找到任何可安装组件")
-        sys.exit(1)
+        return 1
     print()
 
     if check_only:
         print("检查模式，不执行安装。")
-        return
+        return 0
 
     # ── 2. 目标目录 ──
     if mode == "global":
@@ -127,35 +130,57 @@ def main():
     python_cmd = find_python()
     if not python_cmd:
         print("  ⚠ 未找到 Python 3.10+，跳过依赖安装")
-        print("  请手动安装 Python 后再运行 requirements.txt")
+        print("  preprocess.py 需要 openpyxl + pandas，请手动安装：")
+        print("  pip install openpyxl pandas")
     else:
         py_parts = python_cmd.split()
         ver = subprocess.run(py_parts + ["--version"], capture_output=True, text=True)
         print(f"  {python_cmd} ({ver.stdout.strip()})")
 
-        # venv（每次都确保依赖最新）
+        # venv
         venv_dir = config_dir / "venv"
         if not venv_dir.exists():
             print(f"  创建虚拟环境: {venv_dir}")
-            subprocess.run(py_parts + ["-m", "venv", str(venv_dir)], check=True)
+            r = subprocess.run(py_parts + ["-m", "venv", str(venv_dir)], capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"  ✗ 创建 venv 失败: {r.stderr}")
+                return 1
 
         if os.name == "nt":
             venv_py = venv_dir / "Scripts" / "python.exe"
         else:
             venv_py = venv_dir / "bin" / "python"
 
+        if not venv_py.exists():
+            print(f"  ✗ venv python 不存在: {venv_py}")
+            print("  尝试删除 venv 目录后重新运行")
+            return 1
+
         reqs = collect_requirements(SCRIPT_DIR)
         if reqs:
             print(f"  安装/升级依赖: {', '.join(reqs)}")
-            subprocess.run([str(venv_py), "-m", "pip", "install", "--upgrade", "pip", "--quiet"],
-                           capture_output=True)
-            r = subprocess.run([str(venv_py), "-m", "pip", "install", "--upgrade"] + reqs,
-                               capture_output=True, text=True)
-            if r.returncode != 0:
-                print(f"  ✗ 依赖安装失败: {r.stderr[:300]}")
-                print("  请手动运行: pip install --upgrade openpyxl pandas")
-                input("按回车退出...")
-                sys.exit(1)
+
+            # 先升级 pip（显示输出，不吞错误）
+            r_pip = subprocess.run(
+                [str(venv_py), "-m", "pip", "install", "--upgrade", "pip"],
+                capture_output=True, text=True
+            )
+            if r_pip.returncode != 0:
+                print(f"  ⚠ pip 升级警告: {r_pip.stderr[:200]}")
+
+            # 装依赖（显示输出，不吞错误）
+            r_req = subprocess.run(
+                [str(venv_py), "-m", "pip", "install", "--upgrade"] + reqs,
+                capture_output=True, text=True
+            )
+            if r_req.returncode != 0:
+                print(f"  ✗ 依赖安装失败!")
+                print(f"  stderr: {r_req.stderr[:500]}")
+                print(f"  stdout: {r_req.stdout[:300]}")
+                print()
+                print("  请手动运行:")
+                print(f"    {venv_py} -m pip install --upgrade {' '.join(reqs)}")
+                return 1
             else:
                 print(f"  ✓ 依赖安装完成")
         else:
@@ -194,7 +219,7 @@ def main():
 
     # ── 完成 ──
     print("=" * 55)
-    print("  安装完成！")
+    print("  ✓ 安装完成！")
     print("=" * 55)
     print()
     print(f"  安装位置: {config_dir}")
@@ -202,10 +227,31 @@ def main():
     print(f"  Agents:   {len(agents)} 个")
     print(f"  Commands: {len(commands)} 个")
     print()
-    print("测试方法：")
-    print("  1. 打开 opencode / codeagent")
-    print("  2. 输入测试 prompt（见下方或 README）")
+    print("测试：在 opencode/codeagent 里输入")
+    print("  /new-pipe @mapping文件 @RS文件")
     print()
+
+    return 0
+
+
+def main():
+    """入口：包 try/except，任何崩溃都不闪退"""
+    exit_code = 0
+    try:
+        exit_code = run()
+    except Exception:
+        print()
+        print("=" * 55)
+        print("  ✗ 安装出错！")
+        print("=" * 55)
+        traceback.print_exc()
+        exit_code = 1
+
+    # Windows 下始终暂停（不闪退）
+    if os.name == "nt":
+        input("\n按回车退出...")
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
