@@ -139,7 +139,10 @@ def main():
             print(f"  创建虚拟环境: {venv_dir}")
             subprocess.run(py_parts + ["-m", "venv", str(venv_dir)], check=True)
 
-        venv_py = venv_dir / ("Scripts" / "python.exe" if os.name == "nt" else "bin" / "python")
+        if os.name == "nt":
+            venv_py = venv_dir / "Scripts" / "python.exe"
+        else:
+            venv_py = venv_dir / "bin" / "python"
 
         reqs = collect_requirements(SCRIPT_DIR)
         if reqs:
