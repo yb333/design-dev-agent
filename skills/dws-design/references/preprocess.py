@@ -239,16 +239,18 @@ def _extract_list_table(section: str, header_map: dict[str, str]) -> list[dict[s
 
 
 def extract_rs_data(rs_path: str) -> dict[str, Any]:
-    """从 RS.md 的 markdown 表格提取结构化数据（按章节定位+表头匹配）。"""
+    """从 RS.md 的 markdown 表格提取结构化数据。
+    必填项缺失→error；非必填项缺失→warning+容错为空。
+    """
     content = Path(rs_path).read_text(encoding="utf-8")
     rs_data: dict[str, Any] = {}
     errors: list[str] = []
+    warnings: list[str] = []
 
-    # 1. 资产基本信息
+    # 1. 资产基本信息（必填）
     section = _find_section(content, RS_SECTION_KEYWORDS["asset"])
     asset = _extract_kv_table(section, ASSET_HEADER_MAP)
     if asset:
-        # 解析 target_full（schema.table 格式）
         target_full = asset.pop("target_full", "")
         if target_full and "." in target_full:
             parts = target_full.split(".")
@@ -256,24 +258,33 @@ def extract_rs_data(rs_path: str) -> dict[str, Any]:
             asset.setdefault("table", ".".join(parts[1:]))
         rs_data["meta"] = asset
     else:
-        errors.append("资产基本信息表格未找到或为空")
+        errors.append("资产基本信息表格未找到或为空（必填）")
 
-    # 2. 调度配置
+    # 2. 调度配置（非必填，容错为空）
     section = _find_section(content, RS_SECTION_KEYWORDS["sched"])
     sched = _extract_kv_table(section, SCHED_HEADER_MAP)
-    rs_data["schedule"] = sched
+    if sched:
+        rs_data["schedule"] = sched
+    else:
+        warnings.append("调度配置未找到（非必填，使用默认值）")
+        rs_data["schedule"] = {}
 
-    # 3. 湖表调度（上游任务）
+    # 3. 湖表调度（非必填，容错为空列表）
     section = _find_section(content, RS_SECTION_KEYWORDS["upstream"])
     upstream = _extract_list_table(section, UPSTREAM_HEADER_MAP)
-    rs_data["schedule"]["upstream"] = upstream
+    rs_data["schedule"]["upstream"] = upstream if upstream else []
+    if not upstream:
+        warnings.append("湖表调度信息未找到（非必填）")
 
-    # 4. DQ 规则（可选）
+    # 4. DQ 规则（可选，容错为空列表）
     section = _find_section(content, RS_SECTION_KEYWORDS["dq"])
     dq = _extract_list_table(section, DQ_HEADER_MAP)
-    rs_data["dq_requirements"] = dq
+    rs_data["dq_requirements"] = dq if dq else []
+    if not dq:
+        warnings.append("DQ 规则未找到（可选）")
 
     rs_data["_extract_errors"] = errors
+    rs_data["_extract_warnings"] = warnings
     return rs_data
 
 

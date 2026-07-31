@@ -1,45 +1,43 @@
 {
   "version": "1.0.0",
   "spec_type": "ts",
-  "generated_at": "← ISO时间",
+  "generated_at": "",
   "generated_by": "dws-designer",
 
   "meta": {
     "target": {
-      "f_table": { "schema": "←目标表schema", "table": "←目标F表名", "cn": "←中文名" },
-      "i_view":  { "schema": "←同schema", "table": "←I视图名(_F→_I)", "cn": "←中文名" }
+      "f_table": { "schema": "", "table": "", "cn": "" },
+      "i_view":  { "schema": "", "table": "", "cn": "" }
     },
-    "grain": "←目标表粒度，如：每个合同+pu一行（contract_id, pu_id）",
-    "load_strategy": { "strategy": "overwrite|partition|append", "label": "←中文", "delete_mode": "←删除模式" },
-    "field_count": { "business": "←业务字段数", "audit": 4, "total": "←总数" },
+    "grain": "",
+    "load_strategy": { "strategy": "", "label": "", "delete_mode": "" },
+    "field_count": { "business": 0, "audit": 4, "total": 0 },
 
     "source_tables": [
-      { "schema": "←源表schema", "table": "←源表名", "table_cn": "←中文名", "alias": "←别名" }
+      { "schema": "", "table": "", "table_cn": "", "alias": "" }
     ],
 
     "schedule": {
-      "task_name": "←task_目标表名",
-      "cron": "←标准cron，如 0 26 0 * * ?",
-      "task_group": "←任务组",
-      "project": "←项目",
-      "owner": "←责任人",
-      "exec_params": { "P_CYCLE_ID": "${批次}" },
-      "upstream": [
-        { "table": "←源表全名", "task": "←上游任务名", "source": "rs|designer" }
-      ],
-      "execution_platform": { "project_code": "←执行平台项目编码", "datasource": "←数据源" }
+      "task_name": "",
+      "cron": "",
+      "task_group": "",
+      "project": "",
+      "owner": "",
+      "exec_params": {},
+      "upstream": [],
+      "execution_platform": { "project_code": "", "datasource": "" }
     }
   },
 
   "design": {
     "complexity_analysis": {
-      "join_count": "←JOIN表数量",
-      "has_grain_change": "←true|false",
-      "grain_change_detail": "←粒度变化说明，如：行转列",
-      "multi_step_fields": "←多步骤加工字段数",
-      "aggregation_after_join": "←true|false",
-      "segmentation_decision": "←不分段|分段",
-      "segmentation_reason": "←决策理由"
+      "join_count": 0,
+      "has_grain_change": false,
+      "grain_change_detail": "",
+      "multi_step_fields": 0,
+      "aggregation_after_join": false,
+      "segmentation_decision": "",
+      "segmentation_reason": ""
     },
     "audit_fields": {
       "del_flag":            { "type": "nvarchar(1)",                    "default": "'N'" },
@@ -47,62 +45,60 @@
       "last_upd_cycle_id":   { "type": "bigint",                         "default": "'${P_CYCLE_ID}'" },
       "dw_last_update_date": { "type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP" }
     },
-    "distribution_key": ["←分布键字段1", "←分布键字段2"]
+    "distribution_key": []
   },
 
   "rules": {
     "R0001": {
-      "rule_name": "←规则中文名",
-      "scenario": "←场景名（单场景填'默认场景'）",
+      "rule_name": "",
+      "scenario": "",
       "exec_sequence": 1,
-      "target_table": "←产出表全名（中间表/目标F表）",
+      "target_table": "",
       "is_view_step": false,
-      "design_intent": "←该规则的设计意图（自然语言）",
+      "design_intent": "",
 
       "source_tables": [
-        { "schema": "←schema", "table": "←表名", "alias": "←别名" }
+        { "schema": "", "table": "", "alias": "" }
       ],
 
-      "ctes": [
-        { "name": "←CTE名", "purpose": "←用途", "source_tables": ["←来源表"] }
-      ],
+      "ctes": [],
 
       "grain": {
-        "input": "←输入粒度",
-        "output": "←输出粒度",
-        "change": "←变化方式，如：行转列/无变化"
+        "input": "",
+        "output": "",
+        "change": ""
       },
 
       "joins": [
-        { "alias": "←别名", "type": "main|LEFT JOIN|INNER JOIN", "condition": "←关联条件", "filter": "←限定条件（可选）" }
+        { "alias": "", "type": "", "condition": "", "filter": "" }
       ],
 
       "join_safety": [
-        { "table": "←被关联表", "join_key_unique": true, "strategy": "←直接关联|GROUP BY收敛|取最新有效行", "reason": "←原因" }
+        { "table": "", "join_key_unique": true, "strategy": "", "reason": "" }
       ],
 
       "fields": [
         {
-          "target_field": "←目标字段名",
-          "field_type": "←字段类型",
-          "field_comment": "←字段注释",
-          "transform_type": "direct|pivot|aggregate|assign",
+          "target_field": "",
+          "field_type": "",
+          "field_comment": "",
+          "transform_type": "",
           "source_fields": [
-            { "table": "←源表", "field": "←源字段", "alias": "←别名" }
+            { "table": "", "field": "", "alias": "" }
           ],
-          "design_logic": "←自然语言加工口径（不含SQL表达式）"
+          "design_logic": ""
         }
       ],
-      "field_count": "←字段数"
+      "field_count": 0
     }
   },
 
   "data_flow": {
     "tables": [
-      { "schema": "←schema", "name": "←表名", "role": "source|target", "layer": "←ODS|DWB|DWL|DIM", "is_view": false }
+      { "schema": "", "name": "", "role": "", "layer": "", "is_view": false }
     ],
     "dependencies": [
-      { "from": "←R0001", "to": "←R0002", "type": "data_flow", "intermediate_table": "←中间表（可选）" }
+      { "from": "", "to": "", "type": "data_flow", "intermediate_table": "" }
     ],
     "schedule_groups": [
       { "sequence": 1, "rules": ["R0001"] }
