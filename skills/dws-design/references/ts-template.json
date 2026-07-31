@@ -1,109 +1,162 @@
+// ============================================================================
+// TS 制品包 - ts.json 骨架模板
+// 本文件是 ts.json 的权威结构定义。产出时填入实际值，保留结构。
+// 字段含义见各处 // 注释。
+// ============================================================================
 {
-  "version": "1.0.0",
-  "spec_type": "ts",
-  "generated_at": "",
-  "generated_by": "dws-designer",
+  // --- 顶层 ---
+  "version": "1.0.0",                    // 格式版本
+  "spec_type": "ts",                     // 固定 "ts"
+  "generated_at": "",                    // 产出时间（ISO8601）
+  "generated_by": "dws-designer",        // 产出者标识
 
+  // ============================================================================
+  // meta —— 元信息（§1 概述的数据源）
+  // ============================================================================
   "meta": {
+    // target —— 目标表。F表(物理表,存数据) + I视图(F表镜像,对外消费),固定成对
+    // 绝大多数场景 I = F 镜像(SELECT * FROM ..._f),字段不变则F逻辑变化不影响I
     "target": {
       "f_table": { "schema": "", "table": "", "cn": "" },
       "i_view":  { "schema": "", "table": "", "cn": "" }
     },
-    "grain": "",
-    "load_strategy": { "strategy": "", "label": "", "delete_mode": "" },
-    "field_count": { "business": 0, "audit": 4, "total": 0 },
+    "grain": "",                         // 目标表粒度(自然语言,如"一行=一个合同")
+    "load_strategy": {
+      "strategy": "",                    // overwrite(全量覆盖) | partition(分区) | append(追加)
+      "label": "",                       // 写入策略标签
+      "delete_mode": ""                  // 删除模式
+    },
+    "field_count": {                     // 字段统计
+      "business": 0,                     // 业务字段数
+      "audit": 4,                        // 审计字段数(固定4个)
+      "total": 0                         // 合计
+    },
 
-    "source_tables": [
+    "source_tables": [                   // 源表清单(来自 mapping 实体级)
       { "schema": "", "table": "", "table_cn": "", "alias": "" }
     ],
 
+    // schedule —— 调度。RS 给大框架(日级) -> designer 细化为标准 cron + 补中间表增量上游
     "schedule": {
-      "task_name": "",
-      "cron": "",
+      "task_name": "",                   // designer 命名
+      "cron": "",                        // designer 细化为标准表达式(如 "0 30 3 * * ?")
       "task_group": "",
       "project": "",
       "owner": "",
       "exec_params": {},
-      "upstream": [],
+      "upstream": [                      // 上游依赖(RS给 + 中间表增量)
+        // source: "rs"(RS 提供) | "designer"(设计新增的中间表)
+        { "table": "", "task": "", "source": "" }
+      ],
       "execution_platform": { "project_code": "", "datasource": "" }
     }
   },
 
+  // ============================================================================
+  // design —— 设计分析(§2 表模型 / §3 复杂度的数据源)
+  // ============================================================================
   "design": {
+    // complexity_analysis —— 复杂度评估,决定是否分段、是否建中间表
     "complexity_analysis": {
-      "join_count": 0,
-      "has_grain_change": false,
-      "grain_change_detail": "",
-      "multi_step_fields": 0,
-      "aggregation_after_join": false,
-      "segmentation_decision": "",
-      "segmentation_reason": ""
+      "join_count": 0,                   // JOIN 表数量
+      "has_grain_change": false,         // 是否有粒度变化(聚合/展开)
+      "grain_change_detail": "",         // 粒度变化说明
+      "multi_step_fields": 0,            // 多步骤加工的字段数
+      "aggregation_after_join": false,   // JOIN 后是否聚合
+      "segmentation_decision": "",       // 不分段 | 分段
+      "segmentation_reason": ""          // 分段决策理由
     },
+    // audit_fields —— 审计字段模板(4个固定字段)。不在 rules.fields 里重复
     "audit_fields": {
       "del_flag":            { "type": "nvarchar(1)",                    "default": "'N'" },
       "crt_cycle_id":        { "type": "bigint",                         "default": "'${P_CYCLE_ID}'" },
       "last_upd_cycle_id":   { "type": "bigint",                         "default": "'${P_CYCLE_ID}'" },
       "dw_last_update_date": { "type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP" }
     },
-    "distribution_key": []
+    "distribution_key": []                // 分布键(目标表+中间表统一管,只在 design 层定义)
   },
 
+  // ============================================================================
+  // rules —— ★ 核心实体:规则集合
+  // 一个规则 = 一条 INSERT = 产出一个表(中间表/目标F表/视图I表)
+  // 场景是规则的属性(scenario 字段),不是独立结构层
+  // 按 rule_code 索引,支持切片读取(coder 一次只取一个规则)
+  // ============================================================================
   "rules": {
     "R0001": {
       "rule_name": "",
-      "scenario": "",
-      "exec_sequence": 1,
-      "target_table": "",
-      "is_view_step": false,
-      "design_intent": "",
+      "scenario": "",                    // ★ 场景(单场景名 / 多场景合并标记)
+      "exec_sequence": 1,                // 执行顺序
+      "target_table": "",                // 产出表(中间表/目标F表/视图I表)
+      "is_view_step": false,             // 是否视图步骤
+      "design_intent": "",               // 该规则的设计意图(自然语言)
 
-      "source_tables": [
+      "source_tables": [                 // 该规则关联的源表
         { "schema": "", "table": "", "alias": "" }
       ],
 
-      "ctes": [],
+      "ctes": [                          // CTE(内联临时表)
+        { "name": "", "purpose": "", "source_tables": [] }
+      ],
 
+      // grain —— 输入->输出粒度变化
       "grain": {
-        "input": "",
-        "output": "",
-        "change": ""
+        "input": "",                     // 输入粒度
+        "output": "",                    // 输出粒度
+        "change": ""                     // 粒度变化说明
       },
 
-      "joins": [
+      "joins": [                         // 关联策略
         { "alias": "", "type": "", "condition": "", "filter": "" }
       ],
 
+      // join_safety —— 关联安全分析。JOIN键唯一性 -> 对齐策略
       "join_safety": [
         { "table": "", "join_key_unique": true, "strategy": "", "reason": "" }
       ],
 
+      // fields —— ★ 该规则产出的字段(内嵌,天然按规则分组)
+      // design_logic = 自然语言口径(不含SQL表达式),SQL 由 coder 翻译
+      // transform_type + source_fields = 结构化(支撑机读校验:静态检查SQL与TS一致性)
+      // 审计字段不在此列出(用 design.audit_fields 模板)
       "fields": [
         {
           "target_field": "",
           "field_type": "",
           "field_comment": "",
-          "transform_type": "",
-          "source_fields": [
+          "transform_type": "",          // direct(直取) | pivot(行转列) | aggregate(聚合) | assign(赋值)
+          "source_fields": [             // 源字段来源
             { "table": "", "field": "", "alias": "" }
           ],
-          "design_logic": ""
+          "design_logic": ""             // ★ 自然语言口径,不含SQL表达式
         }
       ],
       "field_count": 0
     }
   },
 
+  // ============================================================================
+  // data_flow —— 规则间关系(§5 数据流图的数据源)
+  // 参照 analyzer:节点=规则(产出表),场景通过节点属性标记,多场景并行用 schedule_groups
+  // ============================================================================
   "data_flow": {
-    "tables": [
+    "tables": [                          // 表节点(数据流图的节点)
       { "schema": "", "name": "", "role": "", "layer": "", "is_view": false }
+      // role: source(源表) | target(目标表)
+      // layer: ODS | DWB | DWL | DIM
     ],
-    "dependencies": [
+    "dependencies": [                    // 规则间数据流向(数据流图的边)
       { "from": "", "to": "", "type": "data_flow", "intermediate_table": "" }
     ],
-    "schedule_groups": [
+    "schedule_groups": [                 // 执行顺序/并行(场景并行在此体现)
       { "sequence": 1, "rules": ["R0001"] }
     ]
   },
 
+  // ============================================================================
+  // dq_rules —— DQ(可选,预制占位,不是每表必须)
+  // 只放设计意图(规则/类型/对象/阈值/告警级),DQ SQL 由 coder 生成
+  // 标准模板检查(主键唯一/非空/行数)在 tester skill 自动套用,不在此重复
+  // ============================================================================
   "dq_rules": []
 }

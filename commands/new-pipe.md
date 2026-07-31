@@ -9,6 +9,25 @@ agent: build
 
 ---
 
+## 产出目录结构
+
+所有产出放在 `10_project_deliver/{资产名}/ddlc_design_dev/` 下：
+
+```
+10_project_deliver/{资产名}/              ← 可能由别的 agent 创建，不存在则你建
+└── ddlc_design_dev/                      ← 我们的设计开发产出目录（你建）
+    ├── ts.json                           ← 对外产出（脚本组装）
+    ├── ts.md                             ← 对外产出（人读）
+    └── _internal/                        ← 过程产物
+        ├── rs_input.json                 ← 预处理产出
+        └── design_decisions.yaml         ← 设计决策产出
+```
+
+> 下文用 `{deliver}` 代指 `10_project_deliver/{资产名}/ddlc_design_dev`。
+> **资产名**从 RS 资产信息或 mapping 目标表推导。
+
+---
+
 ## 步骤 1：预处理（转换 + 校验，分开执行）
 
 从用户输入识别 mapping 文件（.xlsx）和 RS 文件（.md）。
@@ -19,17 +38,15 @@ agent: build
 python ~/.config/opencode/skills/dws-design/references/preprocess.py \
   --mapping {mapping路径} \
   --rs {RS路径} \
-  --output docs/output/{target_table}/01_input/rs_input.json
+  --output {deliver}/_internal/rs_input.json
 ```
 
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 
 ```bash
 python ~/.config/opencode/skills/dws-design/references/precheck.py \
-  --input docs/output/{target_table}/01_input/rs_input.json
+  --input {deliver}/_internal/rs_input.json
 ```
-
-**目标表名**从 RS 资产信息或 mapping 目标表推导。
 
 **校验返回码**：
 - 0（PASS）→ 继续
@@ -42,17 +59,22 @@ python ~/.config/opencode/skills/dws-design/references/precheck.py \
 
 ## 步骤 2：调 dws-designer 产出 TS
 
-预处理通过后，用 Task 调用 dws-designer：
+预处理通过后，用 Task 调用 dws-designer。
+
+designer 内部会自行完成"产 design_decisions.yaml → 调 assemble_ts.py 组装 ts.json/ts.md"，command 不需要管组装细节。
 
 ```
 Task(
   subagent_type="dws-designer",
   description="产出TS制品包",
-  prompt="读取 docs/output/{target_table}/01_input/rs_input.json，产出 ts.json + ts.md 到 docs/output/{target_table}/02_design/。"
+  prompt="读取 {deliver}/_internal/rs_input.json，产出 TS 制品包（ts.json + ts.md）到 {deliver}/。"
 )
 ```
 
-designer 完成后用 `ls` 验证 ts.json 和 ts.md 已生成。
+designer 完成后用 `ls` 验证 `{deliver}/` 下已生成：
+- `_internal/design_decisions.yaml`（设计决策）
+- `ts.json`（脚本组装的机读源）
+- `ts.md`（人读投影）
 
 ---
 
@@ -81,7 +103,7 @@ designer 完成后用 `ls` 验证 ts.json 和 ts.md 已生成。
 - ❌ 放弃
 ```
 
-**用户确认** → "设计已确认，TS 制品包已就绪于 02_design/"。
+**用户确认** → "设计已确认，TS 制品包已就绪于 {deliver}/"。
 **用户要改** → 回步骤 2 重新调 designer。
 **用户放弃** → 结束。
 
@@ -90,6 +112,7 @@ designer 完成后用 `ls` 验证 ts.json 和 ts.md 已生成。
 # 硬性规则
 
 - ✅ 预处理由你（primary agent）执行，不是 designer 的活
+- ✅ 产出目录结构严格按上方规范：对外产出放 `{deliver}/` 根，过程产物放 `_internal/`
 - ❌ 不要让 designer 解析 Excel 或 RS
 - ❌ 未经用户确认就算设计完成
 - ✅ designer 产出后用 ls 验证文件已生成

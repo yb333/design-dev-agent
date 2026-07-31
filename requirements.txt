@@ -7,6 +7,9 @@ pytest>=8.0.0
 pandas>=2.0.0
 openpyxl>=3.1.5
 
+# YAML 解析（assemble_ts.py 读 design_decisions.yaml）
+pyyaml>=6.0
+
 # SQL 语法检查
 sqlglot>=20.0.0
 

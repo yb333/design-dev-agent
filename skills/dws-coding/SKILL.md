@@ -22,7 +22,7 @@ description: >-
 # DWS ETL 编码 Skill
 
 > 本 skill 被 **dws-coder** agent 加载，提供编码规范和模板。
-> TS 格式定义见 `docs/specs/ts-format.md`。
+> TS 的 ts.json 结构见 dws-design skill 的 `references/ts-template.json`（读取规则时参考其 rules 结构）。
 
 ---
 
@@ -111,10 +111,10 @@ description: >-
 
 | 文档 | 内容 |
 |------|------|
-| `references/dws-coding-standards.md` | 编码规范（强制） |
+| `references/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
 | `references/etl-templates.md` | DDL/ETL 标准模板 |
-| `references/naming-conventions.md` | 命名规范 |
-| `docs/specs/ts-format.md` | TS 格式（读取规则的结构） |
+
+> TS 的 ts.json 结构（读取规则的 rules/fields 结构）见 dws-design skill 的 `references/ts-template.json`。
 
 ---
 

@@ -1,0 +1,112 @@
+# ============================================================================
+# design_decisions.yaml - 设计决策（designer agent 产出）
+# ----------------------------------------------------------------------------
+# 这个文件只含"设计判断"，不含字段类型/来源等确定性数据。
+# 字段详情（类型/注释/来源字段）由 assemble_ts.py 从 rs_input.json 自动搬移。
+#
+# 产出规则：
+# 1. rules[].field_targets 只列目标字段名（target_column），必须覆盖 rs_input
+#    里所有 target_column，不能漏、不能重复出现在多个规则。
+# 2. field_logics 只写【加工类字段】的自然语言口径；直取字段（直接复制）不写，
+#    脚本会自动填默认 design_logic。
+# 3. 不碰字段类型、来源表别名——这些脚本会从 rs_input 搬。
+# ============================================================================
+
+# === 规则拆分（核心判断）===
+# 一个规则 = 一条 INSERT = 产出一个表（中间表/目标F表/视图I表）
+rules:
+  - rule_code: R0001                    # 规则编号，从 R0001 起
+    rule_name: ""                       # 规则名（简短中文）
+    scenario: ""                        # 场景（单场景名 / 多场景合并标记；场景是规则的属性）
+    exec_sequence: 1                    # 执行顺序
+    target_table: ""                    # 产出表名（中间表/目标F表/视图I表）
+    is_view_step: false                 # 是否视图步骤
+    design_intent: ""                   # 该规则的设计意图（自然语言，一句话说清为什么这样拆）
+
+    # 该规则产出哪些目标字段（填 target_column 名，脚本据此从 rs_input 搬字段详情）
+    field_targets:
+      - contract_no
+      - contract_name
+      - contract_amt
+
+    # ★ 仅加工类字段写 design_logic（自然语言口径，不含 SQL）。
+    # 直取字段（transform_rule=直接复制）不写，脚本自动填 "直取 {alias}.{column}"。
+    # 加工/赋值/序列类字段必须写。
+    field_logics:
+      contract_amt: "本币金额，原币×汇率，排除作废合同"
+      settle_amt: "结算金额，取已结算状态金额汇总"
+
+    # 该规则关联的源表（填别名或表名，脚本从 rs_input 补 schema/table）
+    # 如果留空，脚本默认用 rs_input 里所有 source_tables
+    source_aliases: []
+
+    # CTE（内联临时表，可选）
+    ctes:
+      - name: ""
+        purpose: ""
+        source_tables: []
+
+    # 粒度变化（输入→输出）
+    grain:
+      input: ""                         # 如 "一行=一个源合同"
+      output: ""                        # 如 "一行=一个合同"
+      change: ""                        # "无变化" / "多行聚合" / "展开"
+
+    # 关联策略
+    joins:
+      - alias: ""
+        type: ""                        # main / LEFT JOIN / INNER JOIN ...
+        condition: ""
+        filter: ""
+
+    # 关联安全分析（JOIN键唯一性 → 对齐策略）
+    join_safety:
+      - table: ""
+        join_key_unique: true           # JOIN键在限定条件下是否唯一
+        strategy: ""                    # 不唯一时的对齐策略（GROUP BY收敛/取最新有效行）
+        reason: ""
+
+# === 复杂度分析与分段决策 ===
+complexity_analysis:
+  join_count: 0                         # JOIN 表数量
+  has_grain_change: false               # 是否有粒度变化
+  grain_change_detail: ""               # 粒度变化说明
+  multi_step_fields: 0                  # 多步骤加工字段数
+  aggregation_after_join: false         # JOIN 后是否聚合
+  segmentation_decision: ""             # "不分段" / "分段"
+  segmentation_reason: ""               # 决策理由
+
+# === 分布键（designer 判断，参考 design-guide.md §2.1）===
+distribution_key: []
+
+# === 调度细化（RS给大框架 → designer细化）===
+schedule:
+  task_name: ""                         # designer 命名
+  cron: ""                              # 细化为标准表达式，如 "0 30 3 * * ?"
+  task_group: ""
+  project: ""
+  # 设计新增的上游依赖（中间表引入的新上游）；rs_input 已有的上游脚本会自动带
+  upstream_added: []
+
+# === 数据流（规则间关系）===
+data_flow:
+  # 规则间数据流向
+  dependencies:
+    - from: ""                          # 规则编号，如 R0001
+      to: ""                            # 如 R0002
+      type: "data_flow"
+      intermediate_table: ""            # 若经过中间表
+  # 执行顺序/并行（场景并行在此体现）
+  schedule_groups:
+    - sequence: 1
+      rules: ["R0001"]
+
+# === DQ（可选，不是每表必须）===
+# 只放设计意图，DQ SQL 由 coder 生成
+dq_rules: []
+#   - rule_id: "DQ_001"
+#     rule_name: ""
+#     check_type: ""                    # uniqueness / range / consistency ...
+#     target: ""
+#     threshold: ""
+#     alert_level: ""                   # high / medium / low
