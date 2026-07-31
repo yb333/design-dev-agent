@@ -26,6 +26,16 @@ agent: build
 > 下文用 `{deliver}` 代指 `10_project_deliver/{资产名}/ddlc_design_dev`。
 > **资产名**从 RS 资产信息或 mapping 目标表推导。
 
+### 脚本路径（不要硬编码，要探测）
+
+预处理脚本（preprocess.py / precheck.py）装在 dws-design skill 的 references/ 下。**不要写死 `~/.config/...` 路径**（跨平台会错），先探测真实路径：
+
+```bash
+opencode debug skill
+```
+
+在输出里找 `dws-design` 的 `location`（SKILL.md 绝对路径），同级 `references/` 就是脚本目录。下文用 `{scripts}` 代指这个目录。
+
 ---
 
 ## 步骤 1：预处理（转换 + 校验，分开执行）
@@ -35,7 +45,7 @@ agent: build
 **步骤 1a：转换**（mapping + RS → rs_input.json）
 
 ```bash
-python ~/.config/opencode/skills/dws-design/references/preprocess.py \
+python {scripts}/preprocess.py \
   --mapping {mapping路径} \
   --rs {RS路径} \
   --output {deliver}/_internal/rs_input.json
@@ -44,7 +54,7 @@ python ~/.config/opencode/skills/dws-design/references/preprocess.py \
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 
 ```bash
-python ~/.config/opencode/skills/dws-design/references/precheck.py \
+python {scripts}/precheck.py \
   --input {deliver}/_internal/rs_input.json
 ```
 

@@ -10,12 +10,25 @@ description: >-
 
 本 skill 的所有文件（references/ 下的模板、规范、脚本）都在 **skill 安装目录** 下，不在你的工作目录下。
 
-读取文件时，必须用 **注入的 "Base directory for this skill" 路径** 拼接，例如：
-- `Base directory` + `/references/design-decisions-template.yaml`
+### 怎么拿到 skill 安装目录的真实路径
 
-上方 `<skill_files>` 列表里的路径是**绝对路径**，直接用 Read 工具读取即可。
+**优先**：加载 skill 后，opencode 会注入 `Base directory for this skill: {绝对路径}` 和 `<skill_files>` 文件列表。直接用这些绝对路径。
 
-**绝对不要**按当前工作目录去拼 references/ 路径——那会找不到文件。
+**兜底（注入缺失时）**：如果没看到注入的 Base directory（偶尔会发生），**不要自己猜路径**，用 opencode 命令探测：
+
+```bash
+opencode debug skill
+```
+
+输出里找 `dws-design` 的 `location`（SKILL.md 的绝对路径），它的**同级目录**就是 references/。例如 location 是 `.../skills/dws-design/SKILL.md`，则 references 在 `.../skills/dws-design/references/`。
+
+### 读取 references 文件
+
+拿到 skill 目录后，用 Read 工具读取，例如：
+- `{skill目录}/references/design-decisions-template.yaml`
+- `{skill目录}/references/design-guide.md`
+
+**绝对不要**按当前工作目录或 `~` 去拼路径——跨平台会出错。
 
 ---
 
