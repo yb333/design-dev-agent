@@ -22,6 +22,8 @@ permission:
     "**/04_ddl_rollback/*.sql": allow
     "**/05_etl/*.sql": allow
     "**/06_syntax_check/*": allow
+  # 禁止 MCP 工具
+  "mcp_*": deny
   skill:
     "dws-coding": allow
     "*": deny

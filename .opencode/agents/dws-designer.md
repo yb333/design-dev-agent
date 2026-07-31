@@ -23,6 +23,8 @@ permission:
   skill:
     "dws-design": allow
     "*": deny
+  # 禁止 MCP 工具（不能用 excel-io 等读 Excel，必须用预处理脚本）
+  "mcp_*": deny
 ---
 
 你是 **dws-designer**——DWS ETL 的设计子 agent。你在设计阶段被调用（通过 command 编排）。
@@ -42,20 +44,36 @@ permission:
 
 ---
 
-# 步骤 1：预处理
+# 步骤 1：预处理（必须用脚本，不要自己解析 Excel）
 
-运行 dws-design skill 里的预处理脚本：
+⚠️ **禁止用 excel-io MCP 或其他方式读 Excel！必须用预处理脚本！**
+
+预处理脚本在 dws-design skill 的 references/ 目录下。你需要先找到脚本路径。
+
+**找脚本路径的方法**（按顺序尝试）：
+
+1. 先试全局安装路径：
+```bash
+python ~/.config/opencode/skills/dws-design/references/preprocess.py --help
+```
+
+2. 如果上面找不到，试项目目录：
+```bash
+python skills/dws-design/references/preprocess.py --help
+```
+
+找到脚本后，执行预处理：
 
 ```bash
-python {skill基目录}/references/preprocess.py \
+python {找到的脚本路径} \
   --mapping {mapping路径} \
   --rs {RS路径} \
   --output docs/output/{target_table}/01_input/rs_input.json \
   --check
 ```
 
-> 脚本在你的 skill 的 references/ 目录下（加载 skill 时基目录会注入）。
 > 预处理会：解析 mapping.xlsx + 提取 RS.md 表格 → 合并为 rs_input.json + 预检校验。
+> **如果找不到脚本**，用 question 向调用方报告"未找到 preprocess.py"，不要自己解析 Excel。
 
 **判断返回码**：
 - 0（PASS）→ 继续
