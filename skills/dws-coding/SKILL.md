@@ -11,21 +11,13 @@ description: >-
 
 ### 怎么拿到 skill 安装目录的真实路径
 
-**优先**：加载 skill 后，opencode 会注入 `Base directory for this skill: {绝对路径}` 和 `<skill_files>` 文件列表。直接用这些绝对路径。
-
-**兜底（注入缺失时）**：如果没看到注入的 Base directory（偶尔会发生），**不要自己猜路径**，用 opencode 命令探测：
-
-```bash
-opencode debug skill
-```
-
-输出里找 `dws-coding` 的 `location`（SKILL.md 的绝对路径），它的**同级目录**就是 references/。
+加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找 references 文件——location 的同级目录就是 references/。
 
 ### 读取 references 文件
 
-拿到 skill 目录后，用 Read 工具读取，例如：
-- `{skill目录}/references/dws-coding-standards.md`
-- `{skill目录}/references/etl-templates.md`
+用注入的 location 路径拼 references，例如：
+- `{location所在目录}/references/dws-coding-standards.md`
+- `{location所在目录}/references/etl-templates.md`
 
 **绝对不要**按当前工作目录或 `~` 去拼路径——跨平台会出错。
 

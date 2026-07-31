@@ -71,7 +71,7 @@ permission:
 
 写好 design_decisions.yaml 后，运行组装脚本。
 
-**脚本路径**：用 skill 的 Base directory（加载 skill 时注入的）拼出 `{Base directory}/references/assemble_ts.py`。如果没看到注入的 Base directory，先跑 `opencode debug skill` 探测 skill 目录（详见 SKILL.md 路径规则）。
+**脚本路径**：用加载 skill 时注入的 location（SKILL.md 绝对路径）拼出 `{location所在目录}/references/assemble_ts.py`。
 
 ```bash
 python {skill目录}/references/assemble_ts.py \

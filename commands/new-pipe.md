@@ -26,15 +26,15 @@ agent: build
 > 下文用 `{deliver}` 代指 `10_project_deliver/{资产名}/ddlc_design_dev`。
 > **资产名**从 RS 资产信息或 mapping 目标表推导。
 
-### 脚本路径（不要硬编码，要探测）
+### 脚本路径（用 glob 找，不要硬编码）
 
-预处理脚本（preprocess.py / precheck.py）装在 dws-design skill 的 references/ 下。**不要写死 `~/.config/...` 路径**（跨平台会错），先探测真实路径：
+预处理脚本（preprocess.py / precheck.py）装在 dws-design skill 的 references/ 下。**不要写死 `~/.config/...` 路径**（跨平台会错）。用 glob 工具找：
 
-```bash
-opencode debug skill
+```
+glob: "**/dws-design/references/preprocess.py"
 ```
 
-在输出里找 `dws-design` 的 `location`（SKILL.md 绝对路径），同级 `references/` 就是脚本目录。下文用 `{scripts}` 代指这个目录。
+找到的路径就是脚本位置。下文用 `{scripts}` 代指 preprocess.py 所在目录。
 
 ---
 
