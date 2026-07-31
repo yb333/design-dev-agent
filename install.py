@@ -46,7 +46,7 @@ def scan_skills(base: Path) -> list[str]:
 
 def scan_agents(base: Path) -> list[str]:
     """扫描所有 .md agent 定义文件"""
-    agents_dir = base / ".opencode" / "agents"
+    agents_dir = base / "agents"
     if not agents_dir.exists():
         return []
     return [f.name for f in sorted(agents_dir.glob("*.md"))]
@@ -248,7 +248,7 @@ def run():
     agents_dir = config_dir / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
     for a in agents:
-        src = SCRIPT_DIR / ".opencode" / "agents" / a
+        src = SCRIPT_DIR / "agents" / a
         dst = agents_dir / a
         shutil.copy2(src, dst)
         print(f"  ✓ agent: {a}")

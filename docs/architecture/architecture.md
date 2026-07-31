@@ -72,7 +72,7 @@ last_reviewed: 2026-07-29
 | codeagent 是 opencode 套壳，原生能力完整 | 架构可依赖 opencode 原生（agents/permission/Task/question） |
 | 内网模型 minimax-2.7/glm-5.0；本机 glm-5.2；内网也可用5.2 | 主体逻辑用5.2开发验证；minimax/5.0兼容性独立验证 |
 | 对接平台能力是内网自研 skill | 本仓只产出制品+约定接口，运行验证在内网 |
-| 去掉 oh-my-opencode 插件 | 损失通用agent(sisyphus等)，用 .opencode/agents/*.md 自定义领域agent替代 |
+| 去掉 oh-my-opencode 插件 | 损失通用agent(sisyphus等)，用 agents/*.md 自定义领域agent替代 |
 
 ### 2.3 工作模式：近似验证 + 差异清单
 
@@ -429,7 +429,7 @@ orchestrator 不关心 RS 谁产的，只读 rs_input.json。
 
 | # | 改动 | 依赖 |
 |---|------|------|
-| 5 | 定义领域agent（orchestrator/designer/coder 的 .opencode/agents/*.md） | 本文档 |
+| 5 | 定义领域agent（designer/coder 的 agents/*.md） | 本文档 |
 | 6 | 写2个skill（design-skill/coding-skill） | 5 |
 | 7 | 重写command（/new-pipe等） | 5 |
 | 8 | 输入预处理工具（excel_parser扩展+RS提取+预检合并） | RS格式定稿 |

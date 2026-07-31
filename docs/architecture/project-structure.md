@@ -15,10 +15,10 @@ last_reviewed: 2026-07-28
 ```
 design-dev-agent/
 ├── docs/                设计文档（架构规范 + 格式定义 + 模板 + 产出示例）
-├── commands/            运行时：command（用户发起流程的编排剧本）
-├── skills/              运行时：skill（设计开发能力实现）
+├── agents/              源码：agent 定义（dws-designer / dws-coder）
+├── commands/            源码：command（用户发起流程的编排剧本）
+├── skills/              源码：skill（设计开发能力实现）
 ├── mcp-servers/         运行时：MCP server（连接层）
-├── .opencode/           运行时：opencode 项目级配置（hooks/scripts/agents）
 ├── eval-suite/          工程能力：评测套件（针对 skill 的独立评测）
 ├── tests/               工程能力：单元测试
 ├── CLAUDE.md            项目入口（新会话先读）
@@ -91,13 +91,14 @@ docs/
 
 ---
 
-### `.opencode/` —— 运行时·opencode 项目配置
+### `agents/` —— 源码·agent 定义
 
-**放什么**：opencode 项目级配置。
+**放什么**：opencode agent 定义文件（`.md`，含 frontmatter + body）。
 **当前**：
-- `hooks/whitelist.yaml`（工具白名单）
-- `scripts/verify_files.py`（文件校验脚本）
-- 未来：`agents/`（领域 agent 定义，**待定义时再建**）
+- `dws-designer.md`（设计子 agent）
+- `dws-coder.md`（编码子 agent）
+
+> agent/skill/command 三个源码目录平级，由 install.py 统一安装到 `~/.config/opencode/`。
 
 ---
 
@@ -139,10 +140,10 @@ eval-suite/
 | 格式规范/契约定义 | `docs/specs/` | TS格式、mapping格式 |
 | Excel 模板 | `docs/templates/` | 四件套模板 |
 | 跑出来的产出示例 | `docs/output/` | dwl_con_pu_any_f |
-| 用户发起流程的剧本 | `commands/` | ulw-pipe |
-| 能力实现（SKILL.md+脚本） | `skills/` | designer/coder |
+| 用户发起流程的剧本 | `commands/` | new-pipe |
+| 能力实现（SKILL.md+脚本） | `skills/` | dws-design/dws-coding |
+| agent 定义 | `agents/` | dws-designer/dws-coder |
 | 连接外部系统 | `mcp-servers/` | postgresql-executor |
-| opencode 项目配置 | `.opencode/` | hooks/agents |
 | 评测 skill 对不对 | `eval-suite/` | runner/validators |
 | 单元测试 | `tests/` | test_*.py |
 
