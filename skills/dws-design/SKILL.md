@@ -131,7 +131,9 @@ description: >-
 
 - [ ] rules 里每个规则有 rule_code / rule_name / field_targets
 - [ ] field_targets 覆盖 rs_input 的所有 target_column（不漏不重）
-- [ ] field_logics 只写加工类字段，直取字段不写
+- [ ] 如果 mapping 提供了审计字段（备注标"审计字段"），field_targets 要包含它们
+- [ ] 审计字段不用写 field_logics（assemble 自动处理：来源有逻辑用来源的，没有补标准值）
+- [ ] field_logics 只写加工类业务字段，直取字段不写
 - [ ] design_logic 是自然语言口径，不含 SQL
 - [ ] 场景是规则的 scenario 属性
 - [ ] complexity_analysis 填了分段决策

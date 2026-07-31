@@ -43,13 +43,23 @@ TRANSFORM_MAP = {
     "序列": "sequence",
 }
 
-# 标准审计字段(固定4个, 从 ts-template.json 一致)
-STANDARD_AUDIT_FIELDS = {
-    "del_flag":            {"type": "nvarchar(1)", "default": "'N'"},
-    "crt_cycle_id":        {"type": "bigint", "default": "'${P_CYCLE_ID}'"},
-    "last_upd_cycle_id":   {"type": "bigint", "default": "'${P_CYCLE_ID}'"},
+# 标准审计字段模板（4个固定字段，用于补充缺失的审计字段）
+STANDARD_AUDIT_TEMPLATE = {
+    "del_flag":            {"type": "nvarchar(1)",                    "default": "'N'"},
+    "crt_cycle_id":        {"type": "bigint",                         "default": "'${P_CYCLE_ID}'"},
+    "last_upd_cycle_id":   {"type": "bigint",                         "default": "'${P_CYCLE_ID}'"},
     "dw_last_update_date": {"type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP"},
 }
+STANDARD_AUDIT_NAMES = set(STANDARD_AUDIT_TEMPLATE.keys())
+
+
+def is_audit_field(fm: dict) -> bool:
+    """判断字段是否审计字段：备注优先（含'审计字段'），字段名兜底（匹配标准名）。"""
+    remark = (fm.get("remark") or "").strip()
+    if "审计字段" in remark:
+        return True
+    target = (fm.get("target_column") or "").strip().lower()
+    return target in STANDARD_AUDIT_NAMES
 
 
 # ============================================================
@@ -162,7 +172,8 @@ def build_rule(rule_dec, field_map):
         logic = logics.get(t)
         f = build_field(rec, logic, rule_dec.get("source_aliases"))
         # 加工/赋值/序列类字段没写 logic -> 记录警告
-        if f["transform_type"] != "direct" and not logic:
+        # 排除审计字段（赋值类审计字段的逻辑已从 mapping 的 transform_detail 搬入）
+        if f["transform_type"] != "direct" and not logic and not is_audit_field(rec):
             missing_logic.append(t)
         fields.append(f)
 
@@ -231,10 +242,14 @@ def build_meta(rs_input, decisions):
         "execution_platform": {},
     }
 
-    # 字段统计
-    field_count = len(rs_input.get("field_mappings", []))
-    business_count = field_count
-    audit_count = len(STANDARD_AUDIT_FIELDS)
+    # 字段统计：识别审计字段（来源提供的），其余为业务字段
+    all_fields = rs_input.get("field_mappings", [])
+    source_audit = [fm for fm in all_fields if is_audit_field(fm)]
+    source_audit_names = {(fm.get("target_column") or "").lower() for fm in source_audit}
+    # 来源没提供的审计字段，需要补充
+    supplemented = STANDARD_AUDIT_NAMES - source_audit_names
+    business_count = len(all_fields) - len(source_audit)
+    audit_count = len(source_audit) + len(supplemented)  # 来源的 + 补充的 = 总审计数
 
     load_strat = rs_meta.get("load_strategy", {})
     strategy = load_strat.get("strategy", "")
@@ -259,9 +274,31 @@ def build_meta(rs_input, decisions):
     }
 
 
-def build_design(decisions, field_count):
-    """组装 design。"""
+def build_design(decisions, rs_input):
+    """组装 design。audit_fields 智能处理：来源有用来源的，来源没的用标准模板补充。"""
     comp = decisions.get("complexity_analysis", {})
+
+    # 审计字段智能处理
+    all_fields = rs_input.get("field_mappings", [])
+    source_audit = [fm for fm in all_fields if is_audit_field(fm)]
+    source_audit_names = {(fm.get("target_column") or "").lower() for fm in source_audit}
+
+    audit_fields = {}
+    # 来源提供的审计字段：用来源的类型和默认值
+    for fm in source_audit:
+        name = (fm.get("target_column") or "").lower()
+        audit_fields[name] = {
+            "type": fm.get("target_type", ""),
+            "default": (fm.get("transform_detail") or fm.get("mapping_expression") or "").strip(),
+            "source": "mapping",  # 标记来自 mapping
+        }
+    # 来源没提供的审计字段：用标准模板补充
+    for name, spec in STANDARD_AUDIT_TEMPLATE.items():
+        if name not in source_audit_names:
+            audit_fields[name] = {**spec, "source": "supplemented"}  # 标记自动补充
+
+    supplemented = STANDARD_AUDIT_NAMES - source_audit_names
+
     return {
         "complexity_analysis": {
             "join_count": comp.get("join_count", 0),
@@ -272,7 +309,8 @@ def build_design(decisions, field_count):
             "segmentation_decision": comp.get("segmentation_decision", ""),
             "segmentation_reason": comp.get("segmentation_reason", ""),
         },
-        "audit_fields": STANDARD_AUDIT_FIELDS,
+        "audit_fields": audit_fields,
+        "audit_supplemented": sorted(supplemented),  # 记录哪些是补充的（ts.md 标注用）
         "distribution_key": decisions.get("distribution_key", []),
     }
 
@@ -287,7 +325,7 @@ def assemble_ts(rs_input, decisions):
             field_map[tc] = fm
 
     meta = build_meta(rs_input, decisions)
-    design = build_design(decisions, len(field_map))
+    design = build_design(decisions, rs_input)
 
     rules = {}
     all_missing_logic = []
@@ -297,6 +335,23 @@ def assemble_ts(rs_input, decisions):
         rules[code] = rule_obj
         if missing_logic:
             all_missing_logic.append((code, missing_logic))
+
+    # 补充审计字段：来源没提供的，加到最终规则（产出目标F表的最后规则）的 fields 里
+    supplemented = design.get("audit_supplemented", [])
+    if supplemented and rules:
+        # 找最终规则：exec_sequence 最大的规则
+        final_code = max(rules.keys(), key=lambda c: rules[c].get("exec_sequence", 0))
+        for name in supplemented:
+            spec = STANDARD_AUDIT_TEMPLATE.get(name, {})
+            rules[final_code]["fields"].append({
+                "target_field": name,
+                "field_type": spec.get("type", ""),
+                "field_comment": "审计字段（自动补充）",
+                "transform_type": "assign",
+                "source_fields": [],
+                "design_logic": f"固定赋值 {spec.get('default', '')}",
+            })
+            rules[final_code]["field_count"] += 1
 
     ts = {
         "version": "1.0.0",
@@ -343,6 +398,12 @@ def render_md(ts):
     lines.append(f"| **分布键** | {', '.join(design['distribution_key']) or '-'} |")
     fc = meta["field_count"]
     lines.append(f"| **字段统计** | 业务 {fc['business']} + 审计 {fc['audit']} = 总计 {fc['total']} |")
+    # 标注补充的审计字段
+    supplemented = design.get("audit_supplemented", [])
+    if supplemented:
+        lines.append(f"| **审计字段来源** | RS/mapping 未提供 {len(supplemented)} 个审计字段（{'、'.join(supplemented)}），已自动补充 |")
+    else:
+        lines.append(f"| **审计字段来源** | 全部来自 RS/mapping |")
     lines.append(f"| **规则数** | {len(rules)} |")
     lines.append("")
     lines.append("**来源表**:")

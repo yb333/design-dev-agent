@@ -154,7 +154,70 @@ def precheck(rs_input: dict[str, Any]) -> PrecheckResult:
             if term in str(expr):
                 result.add_warn(f"字段 {fm.get('target_column', '?')} 的映射表达式含模糊术语: '{term}'")
 
+    # 8. 审计字段校验
+    _check_audit_fields(field_mappings, result)
+
     return result
+
+
+# 标准审计字段（4个固定字段）
+STANDARD_AUDIT_FIELDS = ["del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"]
+
+
+def _is_audit_field(fm: dict) -> bool:
+    """判断一个字段是否审计字段：备注优先（含'审计字段'），字段名兜底（匹配标准名）。"""
+    remark = (fm.get("remark") or "").strip()
+    if "审计字段" in remark:
+        return True
+    target = (fm.get("target_column") or "").strip().lower()
+    return target in STANDARD_AUDIT_FIELDS
+
+
+def _check_audit_fields(field_mappings: list, result: PrecheckResult):
+    """审计字段校验：来源提供了则校验规范性，没提供则警告。"""
+    audit_fields = [fm for fm in field_mappings if _is_audit_field(fm)]
+
+    if not audit_fields:
+        result.add_warn(
+            "RS/mapping 未提供审计字段，将由 assemble_ts.py 自动补充 4 个标准审计字段"
+            f"（{'、'.join(STANDARD_AUDIT_FIELDS)}）"
+        )
+        return
+
+    result.add_pass(f"审计字段: mapping 提供了 {len(audit_fields)} 个")
+
+    # 校验数量（标准是 4 个）
+    if len(audit_fields) < 4:
+        missing = set(STANDARD_AUDIT_FIELDS) - {
+            (fm.get("target_column") or "").lower() for fm in audit_fields
+        }
+        result.add_warn(
+            f"审计字段数量不足 ({len(audit_fields)}/4)，缺少: {'、'.join(sorted(missing))}"
+            f"，缺失的将由 assemble 自动补充"
+        )
+
+    # 逐个校验规范性
+    for fm in audit_fields:
+        target = fm.get("target_column", "")
+        target_lower = target.lower()
+        rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        expr = (fm.get("transform_detail") or fm.get("mapping_expression") or "").strip()
+        target_type = (fm.get("target_type") or "").strip().lower()
+
+        if target_lower == "del_flag":
+            # del_flag 可以有逻辑（赋值或直接复制），不强制
+            if rule and rule not in ("直接复制", "赋值"):
+                result.add_warn(
+                    f"审计字段 {target} 的映射规则是 '{rule}'，"
+                    f"del_flag 通常是赋值或直接复制，请确认"
+                )
+        else:
+            # 其他三个审计字段应是标准赋值
+            if rule and rule not in ("赋值", "直接复制"):
+                result.add_warn(
+                    f"审计字段 {target} 的映射规则是 '{rule}'，"
+                    f"标准审计字段应是赋值（固定值），请确认"
+                )
 
 
 def main():

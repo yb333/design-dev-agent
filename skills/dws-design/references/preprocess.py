@@ -54,6 +54,7 @@ class AttributeMapping:
     target_type: str
     source_alias: str = ''
     scene_group: str = ''
+    remark: str = ''
 
 
 class ExcelMappingParser:
@@ -105,6 +106,7 @@ class ExcelMappingParser:
         '目标字段名': 'target_column',
         '目标字段中文名': 'target_column_cn',
         '目标字段类型': 'target_type',
+        '备注': 'remark',
         '分组': 'scene_group',
         '场景分组': 'scene_group',
         '数据分组': 'scene_group',
@@ -239,9 +241,10 @@ class ExcelMappingParser:
                     target_column_cn=self._safe_str(row.get('target_column_cn', '')),
                     target_type=self._safe_str(row.get('target_type', '')),
                     source_alias=self._safe_str(row.get('source_alias', '')),
-                    scene_group=self._safe_str(row.get('scene_group', ''))
+                    scene_group=self._safe_str(row.get('scene_group', '')),
+                    remark=self._safe_str(row.get('remark', ''))
                 )
-                
+
                 # v1.3.0: 自动推断依赖表
                 if mapping.mapping_rule == '加工' and not mapping.source_table and mapping.mapping_expression:
                     inferred_table = self._infer_source_table_from_expression(
@@ -260,7 +263,8 @@ class ExcelMappingParser:
                             target_column_cn=mapping.target_column_cn,
                             target_type=mapping.target_type,
                             source_alias=mapping.source_alias,
-                            scene_group=mapping.scene_group
+                            scene_group=mapping.scene_group,
+                            remark=mapping.remark
                         )
                 
                 if mapping.target_column:
