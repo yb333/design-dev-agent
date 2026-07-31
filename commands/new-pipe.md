@@ -9,26 +9,34 @@ agent: build
 
 ---
 
-## 步骤 1：预处理（你来执行，不是 designer 的活）
+## 步骤 1：预处理（转换 + 校验，分开执行）
 
 从用户输入识别 mapping 文件（.xlsx）和 RS 文件（.md）。
 
-运行预处理脚本（合并 mapping + RS → rs_input.json + 预检）：
+**步骤 1a：转换**（mapping + RS → rs_input.json）
 
 ```bash
 python ~/.config/opencode/skills/dws-design/references/preprocess.py \
   --mapping {mapping路径} \
   --rs {RS路径} \
-  --output docs/output/{target_table}/01_input/rs_input.json \
-  --check
+  --output docs/output/{target_table}/01_input/rs_input.json
+```
+
+**步骤 1b：校验**（检查 rs_input.json 完整性）
+
+```bash
+python ~/.config/opencode/skills/dws-design/references/precheck.py \
+  --input docs/output/{target_table}/01_input/rs_input.json
 ```
 
 **目标表名**从 RS 资产信息或 mapping 目标表推导。
 
-**判断返回码**：
+**校验返回码**：
 - 0（PASS）→ 继续
 - 1（WARNING）→ 显示警告，问用户是否继续
-- 2（INCOMPLETE）→ 停止，显示错误，让用户补输入
+- 2（INCOMPLETE）→ 停止，告诉用户哪里有问题，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
+
+> ⚠️ 用户修改的是 mapping.xlsx 或 RS.md（源文件），不是 rs_input.json（产物）。修改后必须重新跑 1a 转换，再跑 1b 校验。
 
 ---
 

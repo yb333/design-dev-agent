@@ -5,6 +5,20 @@ description: >-
   指导如何从 rs_input.json 产出 TS 制品包（ts.json + ts.md）。
 ---
 
+## ⚠️ 文件路径规则（必须遵守）
+
+本 skill 的所有文件（references/ 下的模板、规范、脚本）都在 **skill 安装目录** 下，不在你的工作目录下。
+
+读取文件时，必须用 **注入的 "Base directory for this skill" 路径** 拼接，例如：
+- `Base directory` + `/references/ts-template.json`
+- `Base directory` + `/references/naming-conventions.md`
+
+上方 `<skill_files>` 列表里的路径是**绝对路径**，直接用 Read 工具读取即可。
+
+**绝对不要**按当前工作目录去拼 references/ 路径——那会找不到文件。
+
+---
+
 # DWS ETL 设计 Skill
 
 > 本 skill 被 **dws-designer** agent 加载，提供设计方法论和 TS 产出规范。

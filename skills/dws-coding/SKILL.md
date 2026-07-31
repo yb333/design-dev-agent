@@ -5,6 +5,20 @@ description: >-
   指导如何从 TS 的规则切片产出合规的 SQL/DDL。
 ---
 
+## ⚠️ 文件路径规则（必须遵守）
+
+本 skill 的所有文件（references/ 下的规范、模板、脚本）都在 **skill 安装目录** 下，不在你的工作目录下。
+
+读取文件时，必须用 **注入的 "Base directory for this skill" 路径** 拼接，例如：
+- `Base directory` + `/references/dws-coding-standards.md`
+- `Base directory` + `/references/etl-templates.md`
+
+上方 `<skill_files>` 列表里的路径是**绝对路径**，直接用 Read 工具读取即可。
+
+**绝对不要**按当前工作目录去拼 references/ 路径——那会找不到文件。
+
+---
+
 # DWS ETL 编码 Skill
 
 > 本 skill 被 **dws-coder** agent 加载，提供编码规范和模板。

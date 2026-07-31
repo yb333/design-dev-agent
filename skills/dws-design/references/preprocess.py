@@ -1092,11 +1092,10 @@ def precheck(rs_input: dict[str, Any]) -> PrecheckResult:
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="输入预处理: mapping.xlsx + RS.md -> rs_input.json")
+    parser = argparse.ArgumentParser(description="输入预处理: mapping.xlsx + RS.md -> rs_input.json (只做转换)")
     parser.add_argument("--mapping", required=True, help="mapping.xlsx 路径")
     parser.add_argument("--rs", help="RS.md 路径(可选, 无则只解析 mapping)")
     parser.add_argument("--output", required=True, help="rs_input.json 输出路径")
-    parser.add_argument("--check", action="store_true", help="产出后执行预检")
     args = parser.parse_args()
 
     # 1. 解析 mapping.xlsx
@@ -1131,13 +1130,6 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(rs_input, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"产出 rs_input.json: {output_path}")
-
-    # 5. 预检(可选)
-    if args.check:
-        print("\n--- 预检 ---")
-        result = precheck(rs_input)
-        print(result.summary())
-        sys.exit(result.return_code)
 
 
 if __name__ == "__main__":
