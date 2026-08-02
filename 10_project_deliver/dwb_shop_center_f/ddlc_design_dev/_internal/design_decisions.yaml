@@ -1,0 +1,159 @@
+# ============================================================================
+# design_decisions.yaml - 店铺中心宽表 (slshp.dwb_shop_center_f) 设计决策
+# ----------------------------------------------------------------------------
+# 仅含设计判断。字段类型/来源/注释由 assemble_ts.py 从 rs_input.json 自动搬移。
+# 复杂度结论：JOIN 数与多步骤字段数均未达分段阈值，订单/评价聚合各只用一次
+# 且无跨资产复用价值 → 不分段，用 CTE 内联聚合，单规则产出最终 F 表。
+# ============================================================================
+
+rules:
+  - rule_code: R0001
+    rule_name: "店铺中心宽表加工"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "dwb_shop_center_f"
+    is_view_step: false
+    design_intent: >
+      以 dim_shop_f 为主表（已是店铺粒度），LEFT JOIN dim_region_f 取省份名称；
+      订单明细 (dwd_order_f) 与评价明细 (dwd_review_f) 因粒度细于店铺，先经 CTE
+      按 shop_id 聚合收敛到店铺粒度后再 LEFT JOIN 回主表，一次性产出店铺级宽表。
+      采用 CTE 内联而非物理中间表，因聚合结果只在本规则内使用一次、无独立校验诉求。
+
+    # 全部 20 个目标字段均由本规则产出（单规则覆盖）
+    field_targets:
+      # --- 主表直取字段 ---
+      - shop_id
+      - shop_name
+      - company_name
+      - open_time
+      - province_code
+      - shop_score
+      - service_score
+      - logistics_score
+      # --- 主表加工字段 ---
+      - shop_type_name
+      - shop_status_name
+      - open_days
+      # --- region 关联直取 ---
+      - province_name
+      # --- 订单聚合字段（来自 order_agg CTE）---
+      - total_order_cnt
+      - total_sales_amount
+      - total_buyer_cnt
+      # --- 评价聚合字段（来自 review_agg CTE）---
+      - review_cnt
+      # --- 审计字段 ---
+      - del_flag
+      - crt_cycle_id
+      - last_upd_cycle_id
+      - dw_last_update_date
+
+    # ★ 仅加工类业务字段写 design_logic（自然语言口径，不含 SQL）。
+    # 直取字段不写（脚本自动填默认）；审计字段不写（脚本按赋值规则自动处理）。
+    field_logics:
+      shop_type_name: "店铺类型中文化映射：FLAGSHIP→旗舰店，SPECIALTY→专卖店，FRANCHISE→专营店，其余取值→其他"
+      shop_status_name: "店铺状态中文化映射：OPEN→营业中，CLOSED→已关闭，FROZEN→冻结，其余取值→其他"
+      open_days: "营业天数 = 当前日期与开店时间(open_time)之间的天数差"
+      total_order_cnt: "按 shop_id 聚合 dwd_order_f，统计该店铺的累计订单行数"
+      total_sales_amount: "按 shop_id 汇总 dwd_order_f，对该店铺所有订单的支付金额(pay_amount)求和"
+      total_buyer_cnt: "按 shop_id 聚合 dwd_order_f，统计去重购买用户(user_id)的人数"
+      review_cnt: "按 shop_id 聚合 dwd_review_f，统计该店铺的累计评价行数"
+
+    # 该规则关联的全部源表（脚本据此关联 rs_input 中 source_alias）
+    source_aliases:
+      - dsf      # dim_shop_f 主表
+      - drf      # dim_region_f 地区
+      - dof      # dwd_order_f 订单明细
+      - drf5     # dwd_review_f 评价明细
+
+    # CTE（内联临时表，承担明细→店铺粒度的聚合收敛）
+    ctes:
+      - name: "order_agg"
+        purpose: "按 shop_id 聚合 dwd_order_f 订单明细，收敛到店铺粒度，产出累计订单数/累计销售额/累计购买人数三个度量，供主表 LEFT JOIN"
+        source_tables:
+          - dof
+      - name: "review_agg"
+        purpose: "按 shop_id 聚合 dwd_review_f 评价明细，收敛到店铺粒度，产出评价数度量，供主表 LEFT JOIN"
+        source_tables:
+          - drf5
+
+    # 粒度变化（输入→输出）
+    grain:
+      input: "主表为店铺粒度；dwd_order_f 为订单明细粒度；dwd_review_f 为评价明细粒度；dim_region_f 为地区粒度"
+      output: "每行一个店铺记录（店铺粒度）"
+      change: "多行聚合（订单明细、评价明细经 CTE 按 shop_id 收敛到店铺粒度后再关联）"
+
+    # 关联策略
+    joins:
+      - alias: "dsf"
+        type: "main"
+        condition: "主表 dim_shop_f"
+        filter: ""
+      - alias: "drf"
+        type: "LEFT JOIN"
+        condition: "dsf.province_code = drf.region_code"
+        filter: ""
+      - alias: "order_agg"
+        type: "LEFT JOIN"
+        condition: "dsf.shop_id = order_agg.shop_id"
+        filter: ""
+      - alias: "review_agg"
+        type: "LEFT JOIN"
+        condition: "dsf.shop_id = review_agg.shop_id"
+        filter: ""
+
+    # 关联安全分析（JOIN 键唯一性 → 对齐策略）
+    join_safety:
+      - table: "dim_region_f"
+        join_key_unique: true
+        strategy: "无需对齐"
+        reason: "region_code 在地区维度表中业务唯一（一个地区编码对应一行）， province_code→region_code 为多对一关联，关联安全"
+      - table: "dwd_order_f"
+        join_key_unique: false
+        strategy: "GROUP BY 收敛到 shop_id"
+        reason: "订单明细粒度下一个店铺对应多笔订单，shop_id 不唯一；通过对齐策略先按 shop_id 聚合（订单数/销售额/去重买家数）收敛为店铺粒度后再关联，CTE order_agg 已完成收敛，关联时 shop_id 唯一"
+      - table: "dwd_review_f"
+        join_key_unique: false
+        strategy: "GROUP BY 收敛到 shop_id"
+        reason: "评价明细粒度下一个店铺对应多条评价，shop_id 不唯一；通过对齐策略先按 shop_id 聚合（评价数）收敛为店铺粒度后再关联，CTE review_agg 已完成收敛，关联时 shop_id 唯一"
+
+# === 复杂度分析与分段决策 ===
+complexity_analysis:
+  join_count: 4                         # dim_shop_f(主) + dim_region_f + order_agg + review_agg
+  has_grain_change: true                # 订单/评价明细 → 店铺聚合
+  grain_change_detail: "dwd_order_f（订单明细粒度）与 dwd_review_f（评价明细粒度）需聚合到店铺粒度后再关联主表"
+  multi_step_fields: 4                  # total_order_cnt / total_sales_amount / total_buyer_cnt / review_cnt
+  aggregation_after_join: false         # 不属于 JOIN 后聚合，而是先聚合(CTE)后 JOIN；字段加工在 CTE 内完成
+  segmentation_decision: "不分段（用 CTE 内联聚合）"
+  segmentation_reason: >
+    JOIN 表数 4 与多步骤加工字段数 4 均未触及分段阈值（>12 / ≥5）；
+    订单聚合、评价聚合各自只在本规则内使用一次，无跨资产复用价值、无独立物理校验诉求，
+    按 design-guide §4.2 中间表 vs CTE 决策原则，采用 CTE 内联比建物理中间表更轻量；
+    单条 INSERT + 2 个 CTE 结构清晰，可读性与可维护性可控。
+
+# === 分布键（shop_id 为各表 JOIN 公共键，高基数，避免倾斜）===
+distribution_key:
+  - shop_id
+
+# === 业务主键（店铺唯一标识）===
+business_key:
+  - shop_id
+
+# === 调度细化（全量调度，T+1 日级，SLA 3:30）===
+schedule:
+  task_name: "dwb_shop_center_f"
+  cron: "0 30 3 * * ?"                   # 每天 03:30:00 执行（秒 分 时 日 月 周）
+  task_group: "slshp"
+  project: "slshp"
+  # CTE 内联未引入新物理表，无新增上游依赖；rs_input 已有上游脚本自动带
+  upstream_added: []
+
+# === 数据流（单规则，无规则间依赖）===
+data_flow:
+  dependencies: []                       # 仅一条规则，无规则间数据流
+  schedule_groups:
+    - sequence: 1
+      rules: ["R0001"]
+
+# === DQ（可选，本表暂不强制；如需可在后续补充）===
+dq_rules: []

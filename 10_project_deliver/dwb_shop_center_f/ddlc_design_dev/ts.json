@@ -1,0 +1,501 @@
+{
+  "version": "1.0.0",
+  "spec_type": "ts",
+  "generated_at": "2026-08-02T18:57:44",
+  "generated_by": "assemble_ts.py",
+  "meta": {
+    "target": {
+      "f_table": {
+        "schema": "slshp",
+        "table": "dwb_shop_center_f",
+        "cn": "店铺中心宽表"
+      },
+      "i_view": {
+        "schema": "slshp",
+        "table": "dwb_shop_center_i",
+        "cn": "店铺中心宽表"
+      }
+    },
+    "grain": "每行一个店铺记录",
+    "load_strategy": {
+      "strategy": "全量调度",
+      "label": "",
+      "delete_mode": ""
+    },
+    "field_count": {
+      "business": 16,
+      "audit": 4,
+      "total": 20
+    },
+    "source_tables": [
+      {
+        "schema": "dim",
+        "table": "dim_shop_f",
+        "table_cn": "店铺维度表",
+        "alias": "dsf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_region_f",
+        "table_cn": "地区维度表",
+        "alias": "drf"
+      },
+      {
+        "schema": "sdord",
+        "table": "dwd_order_f",
+        "table_cn": "订单明细事实表",
+        "alias": "dof"
+      },
+      {
+        "schema": "sdrev",
+        "table": "dwd_review_f",
+        "table_cn": "评价事实表",
+        "alias": "drf5"
+      }
+    ],
+    "schedule": {
+      "task_name": "dwb_shop_center_f",
+      "cron": "0 30 3 * * ?",
+      "task_group": "slshp",
+      "project": "slshp",
+      "owner": "",
+      "exec_params": {},
+      "upstream": [],
+      "execution_platform": {}
+    }
+  },
+  "design": {
+    "complexity_analysis": {
+      "join_count": 4,
+      "has_grain_change": true,
+      "grain_change_detail": "dwd_order_f（订单明细粒度）与 dwd_review_f（评价明细粒度）需聚合到店铺粒度后再关联主表",
+      "multi_step_fields": 4,
+      "aggregation_after_join": false,
+      "segmentation_decision": "不分段（用 CTE 内联聚合）",
+      "segmentation_reason": "JOIN 表数 4 与多步骤加工字段数 4 均未触及分段阈值（>12 / ≥5）； 订单聚合、评价聚合各自只在本规则内使用一次，无跨资产复用价值、无独立物理校验诉求， 按 design-guide §4.2 中间表 vs CTE 决策原则，采用 CTE 内联比建物理中间表更轻量； 单条 INSERT + 2 个 CTE 结构清晰，可读性与可维护性可控。\n"
+    },
+    "audit_fields": {
+      "del_flag": {
+        "type": "NVARCHAR(1)",
+        "default": "'N'",
+        "source": "mapping"
+      },
+      "crt_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "last_upd_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "dw_last_update_date": {
+        "type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+        "default": "CURRENT_TIMESTAMP",
+        "source": "mapping"
+      }
+    },
+    "audit_supplemented": [],
+    "distribution_key": [
+      "shop_id"
+    ],
+    "business_key": [
+      "shop_id"
+    ]
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "店铺中心宽表加工",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dwb_shop_center_f",
+      "is_view_step": false,
+      "design_intent": "以 dim_shop_f 为主表（已是店铺粒度），LEFT JOIN dim_region_f 取省份名称； 订单明细 (dwd_order_f) 与评价明细 (dwd_review_f) 因粒度细于店铺，先经 CTE 按 shop_id 聚合收敛到店铺粒度后再 LEFT JOIN 回主表，一次性产出店铺级宽表。 采用 CTE 内联而非物理中间表，因聚合结果只在本规则内使用一次、无独立校验诉求。\n",
+      "source_tables": [
+        {
+          "schema": "dim",
+          "table": "dim_shop_f",
+          "alias": "dsf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_region_f",
+          "alias": "drf"
+        },
+        {
+          "schema": "sdord",
+          "table": "dwd_order_f",
+          "alias": "dof"
+        },
+        {
+          "schema": "sdrev",
+          "table": "dwd_review_f",
+          "alias": "drf5"
+        }
+      ],
+      "ctes": [
+        {
+          "name": "order_agg",
+          "purpose": "按 shop_id 聚合 dwd_order_f 订单明细，收敛到店铺粒度，产出累计订单数/累计销售额/累计购买人数三个度量，供主表 LEFT JOIN",
+          "source_tables": [
+            "dof"
+          ]
+        },
+        {
+          "name": "review_agg",
+          "purpose": "按 shop_id 聚合 dwd_review_f 评价明细，收敛到店铺粒度，产出评价数度量，供主表 LEFT JOIN",
+          "source_tables": [
+            "drf5"
+          ]
+        }
+      ],
+      "grain": {
+        "input": "主表为店铺粒度；dwd_order_f 为订单明细粒度；dwd_review_f 为评价明细粒度；dim_region_f 为地区粒度",
+        "output": "每行一个店铺记录（店铺粒度）",
+        "change": "多行聚合（订单明细、评价明细经 CTE 按 shop_id 收敛到店铺粒度后再关联）"
+      },
+      "joins": [
+        {
+          "alias": "dsf",
+          "type": "main",
+          "condition": "主表 dim_shop_f",
+          "filter": ""
+        },
+        {
+          "alias": "drf",
+          "type": "LEFT JOIN",
+          "condition": "dsf.province_code = drf.region_code",
+          "filter": ""
+        },
+        {
+          "alias": "order_agg",
+          "type": "LEFT JOIN",
+          "condition": "dsf.shop_id = order_agg.shop_id",
+          "filter": ""
+        },
+        {
+          "alias": "review_agg",
+          "type": "LEFT JOIN",
+          "condition": "dsf.shop_id = review_agg.shop_id",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dim_region_f",
+          "join_key_unique": true,
+          "strategy": "无需对齐",
+          "reason": "region_code 在地区维度表中业务唯一（一个地区编码对应一行）， province_code→region_code 为多对一关联，关联安全"
+        },
+        {
+          "table": "dwd_order_f",
+          "join_key_unique": false,
+          "strategy": "GROUP BY 收敛到 shop_id",
+          "reason": "订单明细粒度下一个店铺对应多笔订单，shop_id 不唯一；通过对齐策略先按 shop_id 聚合（订单数/销售额/去重买家数）收敛为店铺粒度后再关联，CTE order_agg 已完成收敛，关联时 shop_id 唯一"
+        },
+        {
+          "table": "dwd_review_f",
+          "join_key_unique": false,
+          "strategy": "GROUP BY 收敛到 shop_id",
+          "reason": "评价明细粒度下一个店铺对应多条评价，shop_id 不唯一；通过对齐策略先按 shop_id 聚合（评价数）收敛为店铺粒度后再关联，CTE review_agg 已完成收敛，关联时 shop_id 唯一"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "shop_id",
+          "field_type": "bigint",
+          "field_comment": "店铺ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.shop_id"
+        },
+        {
+          "target_field": "shop_name",
+          "field_type": "varchar(200)",
+          "field_comment": "店铺名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.shop_name"
+        },
+        {
+          "target_field": "company_name",
+          "field_type": "varchar(200)",
+          "field_comment": "公司名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "company_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.company_name"
+        },
+        {
+          "target_field": "open_time",
+          "field_type": "datetime",
+          "field_comment": "开店时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "open_time",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.open_time"
+        },
+        {
+          "target_field": "province_code",
+          "field_type": "varchar(20)",
+          "field_comment": "省份编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "province_code",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.province_code"
+        },
+        {
+          "target_field": "shop_score",
+          "field_type": "decimal(3,2)",
+          "field_comment": "店铺评分",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_score",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.shop_score"
+        },
+        {
+          "target_field": "service_score",
+          "field_type": "decimal(3,2)",
+          "field_comment": "服务评分",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "service_score",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.service_score"
+        },
+        {
+          "target_field": "logistics_score",
+          "field_type": "decimal(3,2)",
+          "field_comment": "物流评分",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "logistics_score",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_shop_f.logistics_score"
+        },
+        {
+          "target_field": "shop_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "店铺类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_type",
+              "alias": ""
+            }
+          ],
+          "design_logic": "店铺类型中文化映射：FLAGSHIP→旗舰店，SPECIALTY→专卖店，FRANCHISE→专营店，其余取值→其他"
+        },
+        {
+          "target_field": "shop_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "店铺状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_status",
+              "alias": ""
+            }
+          ],
+          "design_logic": "店铺状态中文化映射：OPEN→营业中，CLOSED→已关闭，FROZEN→冻结，其余取值→其他"
+        },
+        {
+          "target_field": "open_days",
+          "field_type": "int",
+          "field_comment": "营业天数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "营业天数 = 当前日期与开店时间(open_time)之间的天数差"
+        },
+        {
+          "target_field": "province_name",
+          "field_type": "varchar(50)",
+          "field_comment": "省份名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_region_f",
+              "field": "region_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_region_f.region_name"
+        },
+        {
+          "target_field": "total_order_cnt",
+          "field_type": "int",
+          "field_comment": "累计订单数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 shop_id 聚合 dwd_order_f，统计该店铺的累计订单行数"
+        },
+        {
+          "target_field": "total_sales_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "累计销售额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 shop_id 汇总 dwd_order_f，对该店铺所有订单的支付金额(pay_amount)求和"
+        },
+        {
+          "target_field": "total_buyer_cnt",
+          "field_type": "int",
+          "field_comment": "累计购买人数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 shop_id 聚合 dwd_order_f，统计去重购买用户(user_id)的人数"
+        },
+        {
+          "target_field": "review_cnt",
+          "field_type": "int",
+          "field_comment": "评价数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 shop_id 聚合 dwd_review_f，统计该店铺的累计评价行数"
+        },
+        {
+          "target_field": "del_flag",
+          "field_type": "NVARCHAR(1)",
+          "field_comment": "删除标识",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "crt_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "创建批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "last_upd_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "最后更新批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "dw_last_update_date",
+          "field_type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+          "field_comment": "数仓最后更新时间",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        }
+      ],
+      "field_count": 20
+    }
+  },
+  "data_flow": {
+    "dependencies": [],
+    "schedule_groups": [
+      {
+        "sequence": 1,
+        "rules": [
+          "R0001"
+        ]
+      }
+    ]
+  },
+  "dq_rules": []
+}

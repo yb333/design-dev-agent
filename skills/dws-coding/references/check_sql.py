@@ -138,7 +138,9 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
     ts_fields = {f["target_field"].lower() for f in rule.get("fields", [])}
     # 加审计字段
     audit_fields = {k.lower() for k in design.get("audit_fields", {}).keys()}
-    ts_all_fields = ts_fields | audit_fields
+    # 加业务主键字段（中间表需要带关联键，即使不在 fields 列表里）
+    business_key_fields = {k.lower() for k in design.get("business_key", [])}
+    ts_all_fields = ts_fields | audit_fields | business_key_fields
 
     select_aliases = set(extract_select_aliases(sql_text))
 
@@ -179,6 +181,11 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
     for cte in rule.get("ctes", []):
         if cte.get("name"):
             ts_source_tables.add(cte["name"].lower())
+    # 所有规则的 target_table（中间表）也算合法引用——多规则场景下下游会引用上游产出的中间表
+    for rc, rr in rules.items():
+        tt = rr.get("target_table", "")
+        if tt:
+            ts_source_tables.add(tt.split(".")[-1].lower())
 
     select_tables = set(extract_from_tables(sql_text))
     # 去掉可能是子查询别名/CTE定义名的
