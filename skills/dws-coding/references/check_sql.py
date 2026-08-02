@@ -39,35 +39,118 @@ def read_sql(path: str) -> str:
     return '\n'.join(lines)
 
 
-def extract_select_aliases(sql: str) -> list[str]:
-    """提取 SELECT 输出的字段别名（AS xxx 或隐式别名）。
+def split_cte_main(sql: str) -> tuple[list[str], str]:
+    """把 SQL 拆成 (CTE 名列表, 主查询体)。
 
-    例如 SELECT t.contract_no, t.amt AS amount → ['contract_no', 'amount']
+    支持 `WITH name AS (...), name2 AS (...) <主SELECT>` 结构。
+    返回的 main 是最后一个顶层 CTE 右括号之后的 SQL（即最终对外输出的 SELECT）；
+    若没有 WITH，main 就是整个 sql。CTE 名供表引用校验把它们视作合法引用。
+
+    关键：通过括号深度跟踪 + 顶层 CTE 头模式 `name AS (` 识别。
+    WITH 子句里顶层只会出现「, name AS (」(下一个 CTE) 或主查询开头；
+    一旦在 depth==0 处遇到非 CTE 头的内容，说明已进入主查询，即可停止。
+    这样主查询里 COALESCE(...)/CASE...END 的括号不会被误判成 CTE 边界。
     """
+    m = re.search(r'\bWITH\b', sql, re.IGNORECASE)
+    if not m:
+        return [], sql
+
+    body = sql[m.end():]
+    cte_names: list[str] = []
+    depth = 0
+    last_cte_close = -1  # 最后一个 CTE 的右括号在 body 中的位置
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch == '(':
+            depth += 1
+            i += 1
+            continue
+        if ch == ')':
+            depth -= 1
+            # 只在「正在解析某个 CTE」时记录闭合位置
+            if depth == 0 and cte_names and last_cte_close < i:
+                # 确认这是当前最后一个 CTE 的闭合：要求此后到下一个 CTE 头/主查询之间是顶层
+                last_cte_close = i
+            i += 1
+            continue
+        if depth == 0:
+            # 跳过 CTE 之间的逗号/空白
+            if ch in (',', ' ', '\t', '\n', '\r'):
+                i += 1
+                continue
+            # 顶层尝试匹配 CTE 头: <名字> AS (
+            hm = re.match(r'([A-Za-z_]\w*)\s+AS\s*\(', body[i:], re.IGNORECASE)
+            if hm:
+                cte_names.append(hm.group(1).lower())
+                last_cte_close = -1  # 重置，等这个新 CTE 的右括号
+                i += hm.end() - 1  # 跳到 '(' 让 depth 计数接管其内部
+                continue
+            # 顶层遇到非逗号/空白/CTE 头 → 已进入主查询，停止扫描
+            break
+        i += 1
+
+    if last_cte_close >= 0:
+        main = body[last_cte_close + 1:].strip()
+    else:
+        main = body.strip()
+    return cte_names, main
+
+
+def _strip_sql_noise(sql: str) -> str:
+    """去掉会干扰字段/表抽取的 SQL 结构，避免误判。
+
+    处理：
+    1. EXTRACT(x FROM y) → EXTRACT(x FROM y) 里的 FROM 不是表引用，整体替换掉 FROM 子句
+    2. CAST(... AS type) / ::type → 类型转换的 AS type 不是字段别名
+    """
+    s = sql
+    # 1. EXTRACT(<part> FROM <expr>) —— 这里的 FROM 是函数语法，不是表引用
+    #    把 " FROM " 在 EXTRACT 上下文里替换掉（简单做法：替换 EXTRACT(...FROM...) 中的 FROM）
+    s = re.sub(r'(EXTRACT\s*\([^)]*?)\bFROM\b', r'\1__FROM__', s, flags=re.IGNORECASE)
+    # 2. CAST(<expr> AS <type>) —— 去掉 "AS <type>"，避免类型被当成别名
+    s = re.sub(r'\bAS\s+(BIGINT|INT|INTEGER|SMALLINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|'
+               r'VARCHAR|NVARCHAR|CHAR|TEXT|DATE|DATETIME|TIMESTAMP|BOOLEAN|BOOL|'
+               r'INTERVAL|JSON|BLOB|BYTEA|SERIAL)\b',
+               '', s, flags=re.IGNORECASE)
+    # 3. postgres 风格的类型转换 ::type
+    s = re.sub(r'::\w+', '', s)
+    return s
+
+
+def extract_select_aliases(sql: str) -> list[str]:
+    """提取【主查询】SELECT 输出的字段别名（AS xxx）。
+
+    只看 WITH ... 之后的最终 SELECT，避免把 CTE 内部的 AS 别名误当成输出字段。
+    例如 SELECT t.contract_no, t.amt AS amount → ['contract_no', 'amount']
+    也排除了 CAST(... AS type) / ::type 里的类型名（不是字段别名）。
+    """
+    _cte_names, main = split_cte_main(sql)
+    target = main if main else sql
+    target = _strip_sql_noise(target)
+
     aliases = []
-
-    # 找最外层 SELECT（跳过子查询的 SELECT）
-    # 简化策略：找第一个 SELECT 到第一个非嵌套 FROM/WHERE/GROUP 之间
-    # 更可靠的是找 "AS xxx" 模式 和 "字段名 xxx" 模式
-
-    # 模式1: AS alias
-    for m in re.finditer(r'\bAS\s+(\w+)', sql, re.IGNORECASE):
+    # 模式: AS alias（只取 ASCII 标识符；SQL 别名不会含中文等非 ASCII 字符，
+    # 限制为 ASCII 可避免注释里残留的 "JOIN 的" 这类被误当成别名）
+    for m in re.finditer(r'\bAS\s+([A-Za-z_]\w*)', target, re.IGNORECASE):
         aliases.append(m.group(1).lower())
-
-    # 模式2: 字段 空格 alias（不带 AS，如 t.contract_no contract_no）
-    # 这个较难准确提取，暂依赖 AS 模式
-    # 大多数规范 SQL 都用 AS
-
+    # 模式: 字段 空格 alias（不带 AS）较难准确提取，暂依赖 AS 模式（规范 SQL 都用 AS）
     return aliases
 
 
 def extract_from_tables(sql: str) -> list[str]:
-    """提取 FROM/JOIN 引用的表名。"""
+    """提取 FROM/JOIN 引用的表名（含 CTE 名，CTE 名合法性由调用方结合 cte_names 判断）。
+
+    先去掉 EXTRACT(... FROM ...) 这类函数语法里的 FROM，避免误判。
+    """
     tables = []
+    sql = _strip_sql_noise(sql)
 
     # FROM schema.table 或 FROM table
     # JOIN schema.table 或 JOIN table
-    for pattern in [r'\bFROM\s+(\w+(?:\.\w+)?)', r'\bJOIN\s+(\w+(?:\.\w+)?)']:
+    # 只取 ASCII 标识符：表名不会含中文等非 ASCII 字符，避免注释残留（如 "JOIN 的"）误判
+    for pattern in [r'\bFROM\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)', r'\bJOIN\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)']:
         for m in re.finditer(pattern, sql, re.IGNORECASE):
             table_ref = m.group(1)
             # 去掉 schema 前缀，只要表名
@@ -140,7 +223,18 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
     audit_fields = {k.lower() for k in design.get("audit_fields", {}).keys()}
     # 加业务主键字段（中间表需要带关联键，即使不在 fields 列表里）
     business_key_fields = {k.lower() for k in design.get("business_key", [])}
-    ts_all_fields = ts_fields | audit_fields | business_key_fields
+    # 加本规则的分组/收敛键（中间表聚合规则的 GROUP BY 键必须 SELECT 出来供下游关联，
+    # 但它未必等于全局 business_key，例如订单中心按 user_id 聚合的 tmp 表）。
+    # 从 grain.output 与 join_safety.strategy 文本里抽标识符作为合法键。
+    grain_key_fields = set()
+    grain = rule.get("grain", {}) or {}
+    if isinstance(grain, dict):
+        for m in re.finditer(r'([A-Za-z_]\w*)', str(grain.get("output", ""))):
+            grain_key_fields.add(m.group(1).lower())
+    for js in rule.get("join_safety", []) or []:
+        for m in re.finditer(r'(?:GROUP BY|PARTITION BY)\s+([A-Za-z_]\w*)', str(js.get("strategy", "")), re.IGNORECASE):
+            grain_key_fields.add(m.group(1).lower())
+    ts_all_fields = ts_fields | audit_fields | business_key_fields | grain_key_fields
 
     select_aliases = set(extract_select_aliases(sql_text))
 
@@ -186,11 +280,14 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
         tt = rr.get("target_table", "")
         if tt:
             ts_source_tables.add(tt.split(".")[-1].lower())
+    # SQL 里实际定义的 CTE 名也算合法引用（designer 通常不把 ctes 写进 ts.json，
+    # 但 coder 产出的 SELECT 里 WITH ... AS (...) 定义的 CTE 是合法的本地表引用）
+    cte_names, _main = split_cte_main(sql_text)
+    ts_source_tables.update(cte_names)
 
     select_tables = set(extract_from_tables(sql_text))
     # 去掉可能是子查询别名/CTE定义名的
     unknown_tables = select_tables - ts_source_tables
-    # 过滤掉明显的子查询别名（通常很短或首字母大写不一致）
     if unknown_tables:
         issues.append(
             f"[表引用] SELECT 引用了不在 ts.json source_tables 里的表: "

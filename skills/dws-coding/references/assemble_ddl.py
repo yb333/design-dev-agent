@@ -80,10 +80,14 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict) 
         max_field_len = max(max_field_len, len(fname))
         field_lines.append((fname, ftype, fcomment))
 
-    # 审计字段
+    # 审计字段（去重：若审计字段已出现在 rule.fields 中则不重复追加，
+    # 否则会生成重复列名导致 DDL 语法错误）
+    business_field_names = {fname for fname, _, _ in field_lines}
     audit_lines = []
     for aname, aspec in audit_fields.items():
-        atype = aspec.get("type", "")
+        if aname in business_field_names:
+            continue
+        atype = aspec.get("type", "") if isinstance(aspec, dict) else str(aspec)
         audit_lines.append((aname, atype, ""))
 
     # 输出字段

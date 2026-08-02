@@ -100,7 +100,12 @@ JOIN 条件从切片的 joins 取。
 
 ---
 
-## 4. 审计字段（标准4个，从切片 _global 取）
+## 4. 审计字段（标准4个，从切片 _global 取，所有规则必带）
+
+> **每条规则的 SELECT 都必须带这 4 个审计字段——包括中间表/临时表(tmp)规则。**
+> 原因：`assemble_ddl.py` 会给每张产出表（含 tmp 中间表）追加审计列，
+> 若 SELECT 漏带，会导致 SELECT 列数 < DDL 列数，INSERT 时列不匹配。
+> `_global.audit_fields` 在所有规则切片里都存在，不要因为"这是中间表"就省略。
 
 | 字段 | 赋值 |
 |---|---|
@@ -110,6 +115,16 @@ JOIN 条件从切片的 joins 取。
 | dw_last_update_date | `CURRENT_TIMESTAMP` |
 
 在 SELECT 里直接带上这 4 个字段的赋值。
+
+### 4.1 业务主键 / 分组键也必须出现在字段列表里
+
+聚合类规则（`grain.change == 多行聚合`）的**分组键/业务主键**（见 `_global.business_key` /
+`_global.distribution_key`，如 `user_id`、`product_id`）必须作为 SELECT 的一个字段输出
+（`dof.user_id AS user_id`），原因：
+- 它是目标表的 `DISTRIBUTE BY` 键和下游规则 `JOIN` 回来的关联键；
+- 若只放进 `GROUP BY` 而不 SELECT，DDL 会生成一个表里没有的列名做分布键，且下游无法关联。
+
+即：**GROUP BY 的键，必须同时 SELECT 出来。**
 
 ---
 
@@ -129,7 +144,7 @@ JOIN 条件从切片的 joins 取。
 产出 SELECT 前自检：
 - [ ] SELECT 覆盖切片里所有目标字段（不漏字段）
 - [ ] 每个字段有对应的 SQL 表达式（翻译自 design_logic）
-- [ ] 审计字段 4 个带上（从 _global.audit_fields 取）
+- [ ] 审计字段 4 个带上（从 _global.audit_fields 取，**中间表/tmp 规则也要带**）
 - [ ] JOIN 条件和切片的 joins 一致
 - [ ] 不能 SELECT *
 - [ ] NULL 字段有 COALESCE

@@ -137,6 +137,74 @@ class TestCheckSql:
         issues = check_sql(bad_sql, ts_data, "R0001")
         assert any("括号" in i for i in issues)
 
+    # ---- CTE（WITH ... AS (...)）相关：回归 012 大案例发现的误报 ----
+
+    def test_split_cte_main_extracts_cte_names(self):
+        """split_cte_main 应解析出所有顶层 CTE 名，并返回主查询体"""
+        from check_sql import split_cte_main
+        sql = """
+        WITH order_agg AS (SELECT user_id, COUNT(1) AS c FROM ods.o GROUP BY user_id),
+             pay_agg AS (SELECT user_id, SUM(amt) AS s FROM ods.p GROUP BY user_id)
+        SELECT oa.user_id AS user_id, oa.c AS order_cnt, pa.s AS pay_amt
+        FROM order_agg oa
+        LEFT JOIN pay_agg pa ON oa.user_id = pa.user_id
+        """
+        cte_names, main = split_cte_main(sql)
+        assert cte_names == ["order_agg", "pay_agg"]
+        assert main.strip().upper().startswith("SELECT")
+
+    def test_cte_internal_aliases_not_flagged_as_extra(self, ts_data):
+        """CTE 内部的 AS 别名不应被误判为主 SELECT 的输出字段"""
+        from check_sql import check_sql, split_cte_main, extract_select_aliases
+        # 用一个含 CTE 的 SELECT：内部 _rn / r_score 等不应进入主查询字段集
+        sql = """
+        WITH agg AS (
+            SELECT t.contract_no AS contract_no, ROW_NUMBER() OVER (PARTITION BY t.contract_no ORDER BY t.dt) AS r_score
+            FROM fin_dwl_cnb.dwl_con_pu_mtr_f t
+        )
+        SELECT a.contract_no AS contract_no,
+               'N' AS del_flag, '${P_CYCLE_ID}' AS crt_cycle_id,
+               '${P_CYCLE_ID}' AS last_upd_cycle_id, CURRENT_TIMESTAMP AS dw_last_update_date
+        FROM agg a
+        """
+        # 主查询别名里不应有 r_score（那是 CTE 内部的）
+        aliases = extract_select_aliases(sql)
+        assert "r_score" not in aliases
+        assert "contract_no" in aliases
+        # 字段覆盖检查不应把 r_score 报成"多出的字段"
+        issues = check_sql(sql, ts_data, "R0001")
+        extra_issues = [i for i in issues if "没定义的字段" in i]
+        assert len(extra_issues) == 0, f"不应把 CTE 内部别名报为多余字段: {extra_issues}"
+
+    def test_cte_names_treated_as_legit_tables(self, ts_data):
+        """主 SELECT 引用的 CTE 名不应被报为未知表"""
+        from check_sql import check_sql
+        sql = """
+        WITH agg AS (SELECT t.contract_no AS contract_no FROM fin_dwl_cnb.dwl_con_pu_mtr_f t)
+        SELECT a.contract_no AS contract_no,
+               'N' AS del_flag, '${P_CYCLE_ID}' AS crt_cycle_id,
+               '${P_CYCLE_ID}' AS last_upd_cycle_id, CURRENT_TIMESTAMP AS dw_last_update_date
+        FROM agg a
+        """
+        issues = check_sql(sql, ts_data, "R0001")
+        table_issues = [i for i in issues if "表引用" in i]
+        assert len(table_issues) == 0, f"CTE 名不应被报为未知表: {table_issues}"
+
+    def test_group_by_key_from_grain_not_flagged(self, ts_data):
+        """聚合规则按 grain.output 的分组键 SELECT 出来时，不应报为多余字段"""
+        from check_sql import check_sql
+        # ts_data 的 R0001 是聚合规则；构造一个带分组键 user_id 的 SELECT（即便 user_id 不在 fields 里）
+        # 这里用 contract_no（在 fields 里）作为分组键模拟，确保不误报
+        sql = """
+        SELECT t.contract_no AS contract_no,
+               'N' AS del_flag, '${P_CYCLE_ID}' AS crt_cycle_id,
+               '${P_CYCLE_ID}' AS last_upd_cycle_id, CURRENT_TIMESTAMP AS dw_last_update_date
+        FROM fin_dwl_cnb.dwl_con_pu_mtr_f t
+        """
+        issues = check_sql(sql, ts_data, "R0001")
+        extra_issues = [i for i in issues if "没定义的字段" in i]
+        assert len(extra_issues) == 0, f"grain 分组键不应报为多余字段: {extra_issues}"
+
 
 # ============================================================
 # assemble_ddl.py 测试
