@@ -1,8 +1,9 @@
 ---
 name: dws-coding
 description: >-
-  DWS ETL 编码方法论 + 规范 + 模板。被 dws-coder agent 加载。
-  指导如何从 TS 的规则切片产出合规的 SQL/DDL。
+  DWS ETL 编码方法论 + SELECT 产出规范。被 dws-coder agent 加载。
+  指导 coder 如何从 ts.json 规则切片产出合规的 SELECT 语句。
+  DDL/INSERT/UT 由脚本处理，不在本 skill 范围。
 ---
 
 ## ⚠️ 文件路径规则（必须遵守）
@@ -16,8 +17,8 @@ description: >-
 ### 读取 references 文件
 
 用注入的 location 路径拼 references，例如：
-- `{location所在目录}/references/dws-coding-standards.md`
 - `{location所在目录}/references/etl-templates.md`
+- `{location所在目录}/references/dws-coding-standards.md`
 
 **绝对不要**按当前工作目录或 `~` 去拼路径——跨平台会出错。
 
@@ -25,59 +26,61 @@ description: >-
 
 # DWS ETL 编码 Skill
 
-> 本 skill 被 **dws-coder** agent 加载，提供编码规范和模板。
-> TS 的 ts.json 结构见 dws-design skill 的 `references/ts-template.json`（读取规则时参考其 rules 结构）。
+> 本 skill 被 **dws-coder** agent 加载，提供 SELECT 编码规范和模板。
+> coder 的唯一产出是 SELECT 语句。DDL/INSERT/UT 由脚本处理。
 
 ---
 
 ## 1. 编码的核心任务
 
-把 TS 的某个规则（自然语言口径）转化为可执行的合规 SQL：
-- **DDL**：建表语句（IF NOT EXISTS + 分布键 + 列存）
-- **ETL**：INSERT INTO ... SELECT ...（从源表加工写入）
+把 TS 的某个规则（自然语言口径）转化为 SELECT 语句：
 
-本质是——**把 design_logic（自然语言）翻译成 SQL（套规范）**。
+> **把 design_logic（自然语言）翻译成 SQL（套规范）——这就是你全部的工作。**
+
+你不写 DDL（assemble_ddl.py 生成）、不拼 INSERT（run_ut.py 包装）、不做 UT（run_ut.py 检查）。
 
 ---
 
 ## 2. 编码流程
 
-### 步骤 1：理解规则
-- read ts.json，找到要编码的规则（R0001 等）
-- 读取该规则的 target_table / source_tables / joins / ctes / grain
-- 读取该规则的 fields 列表（每个字段的 design_logic + transform_type + source_fields）
+### 步骤 1：拿规则切片
 
-### 步骤 2：写 DDL
-- 目标表/中间表的建表语句
-- 字段名+类型从 ts.json 的 fields 取
-- 审计字段从 design.audit_fields 取（4个标准字段）
-- 分布键从 design.distribution_key 取
-- 详见 `references/etl-templates.md` 的 DDL 模板
+调 slice_ts.py 拿到自己负责的规则的数据（不读整个 ts.json）：
 
-### 步骤 3：写 ETL
-- INSERT INTO target SELECT ... FROM sources
-- 每个字段的加工逻辑：把 design_logic 翻译成 SQL 表达式
-  - direct（直取）→ 直接取源字段
-  - pivot（行转列）→ SUM(CASE WHEN ...)
-  - aggregate（聚合）→ SUM/GROUP BY
-  - assign（赋值）→ 固定值/占位符
-- JOIN 条件从规则的 joins 取
-- CTE 从规则的 ctes 取
-- WHERE/GROUP BY 从 grain 和 join_safety 推导
-- 详见 `references/etl-templates.md` 的 ETL 模板
+```bash
+python {skill目录}/references/slice_ts.py --ts {ts路径} --rule {规则号}
+```
+
+### 步骤 2：理解规则
+
+从切片读取：
+- target_table（产出表）/ source_tables / joins / ctes / grain
+- fields 列表（每个字段的 design_logic + transform_type + source_fields）
+- join_safety（关联安全策略，如"取最新有效行"）
+
+### 步骤 3：写 SELECT
+
+把每个字段的 design_logic 翻译成 SQL 表达式：
+- `direct` → `t.contract_no`
+- `pivot` → `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)`
+- `aggregate` → `SUM(inv_mtr.inv_inst_amt_usd)` + GROUP BY
+- `assign` → `'N'`（审计字段固定值）
+
+JOIN 条件从切片的 joins 取。
+关联安全策略（不唯一的 JOIN 键）体现在 CTE 或子查询里（先收敛再关联）。
+审计字段从切片 `_global.audit_fields` 取（4 个标准赋值）。
+
+详见 `references/etl-templates.md` 的 SELECT 模板。
 
 ### 步骤 4：套规范
-- 详见 `references/dws-coding-standards.md`
-- 核心：不能 SELECT *、NULL 要 COALESCE、审计字段齐全、命名规范
 
-### 步骤 5：静态检查
-- 调 sql_validator 脚本检查语法+规范
-- 调 validate_ddl 检查 DDL 字段类型与 TS 一致
+详见 `references/dws-coding-standards.md`：
+- 不能 SELECT *、NULL 必须 COALESCE、审计字段齐全、命名规范
 
-### 步骤 6：执行验证（螺旋回路）
-- 调执行脚本跑 SQL（连开发环境数据库）
-- 拿结构化结果（成功/失败+报错+行数+主键检查）
-- 失败→理解报错→改SQL→再跑
+### 步骤 5：静态对比
+
+调 check_sql.py 检查 SELECT 和 ts.json 切片是否一致（表/字段/JOIN）。
+不过则自己改后重对比，限3轮。
 
 ---
 
@@ -86,9 +89,8 @@ description: >-
 | transform_type | design_logic 示例 | SQL 翻译 |
 |---|---|---|
 | direct | "直取主表 contract_no" | `t.contract_no` |
-| direct | "直取 currency_code，重命名 tc_code" | `t.currency_code AS tc_code` |
 | pivot | "rpt_code='fbt_0001' 对应金额，按合同+pu汇总" | `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)` |
-| aggregate | "对金额求和，排除非洲发票" | `SUM(inv_mtr.inv_inst_amt_usd)` + NOT EXISTS 过滤 |
+| aggregate | "对金额求和，排除非洲发票" | `COALESCE(SUM(inv_amt), 0)` + NOT EXISTS 过滤 |
 | assign | "审计字段，固定 'N'" | `'N'` |
 
 **翻译原则**：
@@ -98,16 +100,16 @@ description: >-
 
 ---
 
-## 4. 审计字段（标准4个）
+## 4. 审计字段（标准4个，从切片 _global 取）
 
-| 字段 | 类型 | 默认值 |
-|---|---|---|
-| del_flag | nvarchar(1) | 'N' |
-| crt_cycle_id | bigint | '${P_CYCLE_ID}' |
-| last_upd_cycle_id | bigint | '${P_CYCLE_ID}' |
-| dw_last_update_date | timestamp(0) without time zone | CURRENT_TIMESTAMP |
+| 字段 | 赋值 |
+|---|---|
+| del_flag | `'N'` 或 mapping 定义的逻辑 |
+| crt_cycle_id | `'${P_CYCLE_ID}'` |
+| last_upd_cycle_id | `'${P_CYCLE_ID}'` |
+| dw_last_update_date | `CURRENT_TIMESTAMP` |
 
-从 ts.json 的 `design.audit_fields` 取，不自己编。
+在 SELECT 里直接带上这 4 个字段的赋值。
 
 ---
 
@@ -115,21 +117,21 @@ description: >-
 
 | 文档 | 内容 |
 |------|------|
+| `references/etl-templates.md` | SELECT 标准模板（各种加工模式） |
 | `references/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
-| `references/etl-templates.md` | DDL/ETL 标准模板 |
 
-> TS 的 ts.json 结构（读取规则的 rules/fields 结构）见 dws-design skill 的 `references/ts-template.json`。
+> 工具脚本（slice_ts.py / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在同目录 references/ 下，agent 通过 bash 调用。
 
 ---
 
 ## 6. 产出检查清单
 
-产出 SQL 前自检：
-- [ ] DDL 有 IF NOT EXISTS
-- [ ] DDL 有分布键（DISTRIBUTE BY HASH）
-- [ ] ETL 不能 SELECT *
+产出 SELECT 前自检：
+- [ ] SELECT 覆盖切片里所有目标字段（不漏字段）
+- [ ] 每个字段有对应的 SQL 表达式（翻译自 design_logic）
+- [ ] 审计字段 4 个带上（从 _global.audit_fields 取）
+- [ ] JOIN 条件和切片的 joins 一致
+- [ ] 不能 SELECT *
 - [ ] NULL 字段有 COALESCE
-- [ ] 审计字段齐全（4个）
-- [ ] INSERT 字段数 = SELECT 列数
 - [ ] 字段名符合命名规范
-- [ ] 静态检查（sql_validator）通过
+- [ ] check_sql.py 静态对比通过

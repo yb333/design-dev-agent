@@ -312,6 +312,7 @@ def build_design(decisions, rs_input):
         "audit_fields": audit_fields,
         "audit_supplemented": sorted(supplemented),  # 记录哪些是补充的（ts.md 标注用）
         "distribution_key": decisions.get("distribution_key", []),
+        "business_key": decisions.get("business_key", []),
     }
 
 

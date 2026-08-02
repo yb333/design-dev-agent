@@ -79,6 +79,11 @@ complexity_analysis:
 # === 分布键（designer 判断，参考 design-guide.md §2.1）===
 distribution_key: []
 
+# === 业务主键（业务唯一字段组合，供 UT 主键唯一检查）===
+# 注意：≠ 分布键。分布键是数据分布最优选，业务主键是业务唯一性。
+# DDL 不定义物理 PRIMARY KEY（DWS 列存限制），UT 用 business_key 查唯一性。
+business_key: []
+
 # === 调度细化（RS给大框架 → designer细化）===
 schedule:
   task_name: ""                         # designer 命名

@@ -1,0 +1,30 @@
+{
+  "default": "dws-dev",
+  "sources": {
+    "dws-dev": {
+      "type": "huawei-dws",
+      "host": "your-dws-cluster.huaweicloud.com",
+      "port": 8000,
+      "database": "your_database",
+      "user": "your_user",
+      "password": "${DWS_DEV_PASSWORD}",
+      "ssl": true,
+      "sslrootcert": "/path/to/dws-ca.pem"
+    },
+    "dws-prod": {
+      "type": "huawei-dws",
+      "host": "your-dws-prod-cluster.huaweicloud.com",
+      "port": 8000,
+      "database": "your_database",
+      "user": "your_user",
+      "password": "${DWS_PROD_PASSWORD}",
+      "ssl": true,
+      "sslrootcert": "/path/to/dws-ca.pem"
+    }
+  },
+  "security": {
+    "allowWriteOperations": true,
+    "maxRows": 1000,
+    "timeout": 0
+  }
+}
