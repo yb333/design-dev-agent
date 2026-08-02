@@ -1,0 +1,565 @@
+{
+  "version": "1.0.0",
+  "spec_type": "ts",
+  "generated_at": "2026-08-02T22:45:19",
+  "generated_by": "assemble_ts.py",
+  "meta": {
+    "target": {
+      "f_table": {
+        "schema": "slas",
+        "table": "dwb_after_sale_center_f",
+        "cn": "售后服务中心宽表"
+      },
+      "i_view": {
+        "schema": "slas",
+        "table": "dwb_after_sale_center_i",
+        "cn": "售后服务中心宽表"
+      }
+    },
+    "grain": "每行一个售后服务记录",
+    "load_strategy": {
+      "strategy": "全量调度",
+      "label": "",
+      "delete_mode": ""
+    },
+    "field_count": {
+      "business": 20,
+      "audit": 4,
+      "total": 24
+    },
+    "source_tables": [
+      {
+        "schema": "sdref",
+        "table": "dwd_refund_f",
+        "table_cn": "退款事实表",
+        "alias": "drf"
+      },
+      {
+        "schema": "sdord",
+        "table": "dwd_order_f",
+        "table_cn": "订单明细事实表",
+        "alias": "dof"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_user_f",
+        "table_cn": "用户维度表",
+        "alias": "duf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_product_f",
+        "table_cn": "商品维度表",
+        "alias": "dpf"
+      },
+      {
+        "schema": "sdcs",
+        "table": "dwd_service_ticket_f",
+        "table_cn": "工单事实表",
+        "alias": "dst"
+      }
+    ],
+    "schedule": {
+      "task_name": "dwb_after_sale_center_f",
+      "cron": "0 30 3 * * ?",
+      "task_group": "slas",
+      "project": "",
+      "owner": "",
+      "exec_params": {},
+      "upstream": [],
+      "execution_platform": {}
+    }
+  },
+  "design": {
+    "complexity_analysis": {
+      "join_count": 4,
+      "has_grain_change": false,
+      "grain_change_detail": "无粒度变化；需保证 JOIN 前 dof/dst 收敛至唯一粒度。",
+      "multi_step_fields": 5,
+      "aggregation_after_join": false,
+      "segmentation_decision": "不分段",
+      "segmentation_reason": "JOIN 表数量 4（远低于阈值 12）；无粒度变化、无聚合后关联、无复杂关联链； 5 个加工字段均为简单枚举值中文化映射或单行算术派生（非\"先聚合再关联\"复杂逻辑）， 单条 INSERT 即可清晰表达全部加工，无需物理中间表，亦无需 CTE 拆分。"
+    },
+    "audit_fields": {
+      "del_flag": {
+        "type": "NVARCHAR(1)",
+        "default": "'N'",
+        "source": "mapping"
+      },
+      "crt_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "last_upd_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "dw_last_update_date": {
+        "type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+        "default": "CURRENT_TIMESTAMP",
+        "source": "mapping"
+      }
+    },
+    "audit_supplemented": [],
+    "distribution_key": [
+      "refund_id"
+    ],
+    "business_key": [
+      "refund_id"
+    ]
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "售后服务中心宽表组装",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "slas.dwb_after_sale_center_f",
+      "is_view_step": false,
+      "design_intent": "以退款事实表 dwd_refund_f 为主表，左关联订单、用户、商品、工单四表拼装售后中心宽表， 保持输出粒度=一个售后服务记录；对所有加工类字段做枚举值中文化与派生指标计算， 直取字段透传，审计字段按标准赋值，单条 INSERT 完成，无需物理中间表。",
+      "source_tables": [
+        {
+          "schema": "sdref",
+          "table": "dwd_refund_f",
+          "alias": "drf"
+        },
+        {
+          "schema": "sdord",
+          "table": "dwd_order_f",
+          "alias": "dof"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_user_f",
+          "alias": "duf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_product_f",
+          "alias": "dpf"
+        },
+        {
+          "schema": "sdcs",
+          "table": "dwd_service_ticket_f",
+          "alias": "dst"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "一行=一个退款记录（drf 退款事实表，主键 refund_id）",
+        "output": "一行=一个售后服务记录",
+        "change": "无变化（前提：关联前 dof/dst 已收敛至订单级/工单级唯一粒度）"
+      },
+      "joins": [
+        {
+          "alias": "drf",
+          "type": "main",
+          "condition": "",
+          "filter": ""
+        },
+        {
+          "alias": "dof",
+          "type": "LEFT JOIN",
+          "condition": "drf.order_id = dof.order_id",
+          "filter": ""
+        },
+        {
+          "alias": "duf",
+          "type": "LEFT JOIN",
+          "condition": "drf.user_id = duf.user_id",
+          "filter": ""
+        },
+        {
+          "alias": "dpf",
+          "type": "LEFT JOIN",
+          "condition": "drf.product_id = dpf.product_id",
+          "filter": ""
+        },
+        {
+          "alias": "dst",
+          "type": "LEFT JOIN",
+          "condition": "drf.refund_id = dst.refund_id",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dof",
+          "join_key_unique": false,
+          "strategy": "JOIN 前对 dof 按 order_id 收敛至订单粒度：order_no 取唯一值、order_pay_amount 取订单实付金额单行（或订单级汇总），避免订单明细一对多导致退款记录 fan-out。",
+          "reason": "dwd_order_f 为订单明细事实表，order_id 可能一对多（一个订单多行明细）；若未收敛将破坏输出粒度（一行=一个售后服务记录）。需在编码时核实 dof 粒度，确认后按订单级取值。"
+        },
+        {
+          "table": "duf",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "dim_user_f 为用户维度表，user_id 为维度主键，限定条件下唯一，直接关联安全。"
+        },
+        {
+          "table": "dpf",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "dim_product_f 为商品维度表，product_id 为维度主键，限定条件下唯一，直接关联安全。"
+        },
+        {
+          "table": "dst",
+          "join_key_unique": false,
+          "strategy": "JOIN 前对 dst 按 refund_id 收敛：若一个退款对应多张工单，取最新一条工单（或最新有效工单）的 ticket_id/ticket_status/handler_name，避免 fan-out。",
+          "reason": "dwd_service_ticket_f 为工单事实表，一个 refund_id 可能对应多张工单；未收敛将放大行数。需在编码时核实并按业务口径收敛（取最新工单）。"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "refund_id",
+          "field_type": "bigint",
+          "field_comment": "退款ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.refund_id"
+        },
+        {
+          "target_field": "refund_no",
+          "field_type": "varchar(64)",
+          "field_comment": "退款单号",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_no",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.refund_no"
+        },
+        {
+          "target_field": "refund_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "退款类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_type",
+              "alias": ""
+            }
+          ],
+          "design_logic": "退款类型中文化映射：将退款类型英文编码映射为中文名称—— ONLY_REFUND 映射为\"仅退款\"，RETURN_REFUND 映射为\"退货退款\"， EXCHANGE 映射为\"换货\"，其余取值映射为\"其他\"。"
+        },
+        {
+          "target_field": "refund_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "退款状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_status",
+              "alias": ""
+            }
+          ],
+          "design_logic": "退款状态中文化映射：将退款状态英文编码映射为中文名称—— APPLYING 映射为\"申请中\"，APPROVED 映射为\"已同意\"， SUCCESS 映射为\"退款成功\"，REJECTED 映射为\"已拒绝\"，其余取值映射为\"其他\"。"
+        },
+        {
+          "target_field": "apply_time",
+          "field_type": "datetime",
+          "field_comment": "申请时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "apply_time",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.apply_time"
+        },
+        {
+          "target_field": "complete_time",
+          "field_type": "datetime",
+          "field_comment": "完成时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "complete_time",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.complete_time"
+        },
+        {
+          "target_field": "process_days",
+          "field_type": "int",
+          "field_comment": "处理天数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "售后处理时长（天数）：以完成时间与申请时间的日期差为准； 若该退款尚未完成（完成时间为空），则以当前日期替代完成时间参与计算， 保证未完成单据也能体现已发生处理时长。"
+        },
+        {
+          "target_field": "refund_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "退款金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_amount",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.refund_amount"
+        },
+        {
+          "target_field": "refund_reason",
+          "field_type": "varchar(200)",
+          "field_comment": "退款原因",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_reason",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.refund_reason"
+        },
+        {
+          "target_field": "order_id",
+          "field_type": "bigint",
+          "field_comment": "订单ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "order_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.order_id"
+        },
+        {
+          "target_field": "user_id",
+          "field_type": "bigint",
+          "field_comment": "用户ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "user_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.user_id"
+        },
+        {
+          "target_field": "product_id",
+          "field_type": "bigint",
+          "field_comment": "商品ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "product_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_refund_f.product_id"
+        },
+        {
+          "target_field": "order_no",
+          "field_type": "varchar(64)",
+          "field_comment": "订单号",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "order_no",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_order_f.order_no"
+        },
+        {
+          "target_field": "order_pay_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "订单实付金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "pay_amount",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_order_f.pay_amount"
+        },
+        {
+          "target_field": "refund_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "退款比例(%)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "退款比例（百分比，保留两位小数）：退款金额除以订单实付金额再乘以100； 当订单实付金额为零或为空时，退款比例记为0，以规避除零异常。"
+        },
+        {
+          "target_field": "user_name",
+          "field_type": "varchar(100)",
+          "field_comment": "用户姓名",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "user_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_user_f.user_name"
+        },
+        {
+          "target_field": "product_name",
+          "field_type": "varchar(200)",
+          "field_comment": "商品名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_product_f.product_name"
+        },
+        {
+          "target_field": "ticket_id",
+          "field_type": "bigint",
+          "field_comment": "工单ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_service_ticket_f",
+              "field": "ticket_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_service_ticket_f.ticket_id"
+        },
+        {
+          "target_field": "ticket_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "工单状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_service_ticket_f",
+              "field": "ticket_status",
+              "alias": ""
+            }
+          ],
+          "design_logic": "工单状态中文化映射：将工单状态英文编码映射为中文名称—— PENDING 映射为\"待处理\"，PROCESSING 映射为\"处理中\"， RESOLVED 映射为\"已解决\"，CLOSED 映射为\"已关闭\"，其余取值映射为\"其他\"。"
+        },
+        {
+          "target_field": "handler_name",
+          "field_type": "varchar(50)",
+          "field_comment": "处理人",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_service_ticket_f",
+              "field": "handler_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_service_ticket_f.handler_name"
+        },
+        {
+          "target_field": "del_flag",
+          "field_type": "NVARCHAR(1)",
+          "field_comment": "删除标识",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "crt_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "创建批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "last_upd_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "最后更新批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "dw_last_update_date",
+          "field_type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+          "field_comment": "数仓最后更新时间",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        }
+      ],
+      "field_count": 24
+    }
+  },
+  "data_flow": {
+    "dependencies": [],
+    "schedule_groups": [
+      {
+        "sequence": 1,
+        "rules": [
+          "R0001"
+        ]
+      }
+    ]
+  },
+  "dq_rules": []
+}

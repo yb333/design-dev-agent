@@ -1,0 +1,108 @@
+# ============================================================================
+# design_decisions.yaml - dwb_trade_order_d 设计决策
+# ----------------------------------------------------------------------------
+# 输入: rs_input.json
+#   - 目标表: dws.dwb_trade_order_d（订单汇总表），粒度=每行一个订单+客户组合
+#   - 单源表: ods.ods_trade_order_di（别名 a），无 JOIN
+#   - 7 个目标字段: order_id / cust_id（直取）+ total_amount（聚合）+ 4 审计字段
+#   - 调度: 全量 / T+1 一天一调 / SLA 3:30 / 无 DQ 要求
+# 设计结论摘要:
+#   - 单表聚合，不分段，1 个规则 R0001 直产目标 F 表
+#   - 粒度变化: 源多行 → 订单+客户粒度（GROUP BY order_id, cust_id，SUM 金额）
+#   - 分布键: order_id（业务主键/高基数/下游 JOIN 键）
+#   - 业务主键: order_id + cust_id
+#   - cron: SLA 3:30 → "0 30 3 * * ?"
+# 字段详情(类型/来源/注释)由 assemble_ts.py 从 rs_input.json 自动搬移, 此处不重复。
+# ============================================================================
+
+# === 规则拆分（核心判断）===
+rules:
+  - rule_code: R0001
+    rule_name: 订单汇总主加工
+    scenario: default
+    exec_sequence: 1
+    target_table: dwb_trade_order_d
+    is_view_step: false
+    design_intent: >
+      单源表 ods_trade_order_di 按 订单ID(order_id)+客户ID(cust_id) 分组聚合，
+      对金额求和(SUM)，收敛到"一行=一个订单+客户组合"的目标粒度，直产目标 F 表。
+      单表无 JOIN、仅 1 个聚合字段，复杂度低，无需分段建中间表。
+
+    # 该规则覆盖 rs_input 全部 7 个目标字段（2 直取 + 1 聚合 + 4 审计）
+    field_targets:
+      - order_id            # 业务：直接复制（主键）
+      - cust_id             # 业务：直接复制
+      - total_amount        # 业务：聚合 SUM(金额)
+      - del_flag            # 审计：固定 'N'
+      - crt_cycle_id        # 审计：${P_CYCLE_ID}
+      - last_upd_cycle_id   # 审计：${P_CYCLE_ID}
+      - dw_last_update_date # 审计：CURRENT_TIMESTAMP
+
+    # 仅加工类字段写 design_logic（自然语言口径，不含 SQL）。
+    # 直取字段(order_id/cust_id)脚本自动填；审计字段脚本按 mapping 的 transform_detail 自动处理。
+    field_logics:
+      total_amount: "按 order_id + cust_id 分组，对源表金额字段(DECIMAL)求和(SUM)，收敛到订单+客户粒度"
+
+    # 关联源表（单表，别名 a）
+    source_aliases: ["a"]
+
+    ctes: []
+
+    # 粒度变化（输入→输出）
+    grain:
+      input: "源表订单明细记录，同一 订单ID+客户ID 组合可能多行"
+      output: "一行=一个订单+客户组合"
+      change: "多行聚合"
+
+    # 关联策略（单表，无 JOIN）
+    joins:
+      - alias: "a"
+        type: "main"
+        condition: ""
+        filter: ""
+
+    # 关联安全分析（单表聚合，无关联放大风险）
+    join_safety:
+      - table: "ods.ods_trade_order_di"
+        join_key_unique: true
+        strategy: "无需关联对齐（单表 GROUP BY 聚合）"
+        reason: "仅单表聚合，不涉及表间 JOIN，不存在关联放大或一对多发散风险"
+
+# === 复杂度分析与分段决策 ===
+complexity_analysis:
+  join_count: 0
+  has_grain_change: true
+  grain_change_detail: "源表多行 → 目标 订单+客户 粒度，GROUP BY order_id, cust_id 求和 amount"
+  multi_step_fields: 1
+  aggregation_after_join: false
+  segmentation_decision: "不分段"
+  segmentation_reason: "单源表、无 JOIN、仅 1 个聚合字段，复杂度低，单条 INSERT 即可完成，无需中间表"
+
+# === 分布键（事实表选高基数 JOIN 字段）===
+# order_id 为业务主键、高基数字段、下游高频 JOIN 键，作哈希分布键避免数据倾斜。
+distribution_key: ["order_id"]
+
+# === 业务主键（业务唯一字段组合，供 UT 唯一性检查）===
+# 粒度=订单+客户，故业务唯一性由 order_id + cust_id 共同确定。
+# 注意：≠ 分布键。DDL 不定义物理 PRIMARY KEY（DWS 列存限制）。
+business_key: ["order_id", "cust_id"]
+
+# === 调度细化 ===
+# RS 大框架: 全量调度 / T+1 一天一调 / SLA 3:30。细化为标准 Quartz cron。
+# SLA 3:30 为就绪时点，任务定于 3:30 调起（单表聚合执行快，可在 SLA 前后微调）。
+schedule:
+  task_name: "dws_dwb_trade_order_d"
+  cron: "0 30 3 * * ?"
+  task_group: "dws_dwb"
+  project: "dws"
+  upstream_added: []   # rs_input 上游为空，单源表无新增上游
+
+# === 数据流（规则间关系）===
+data_flow:
+  dependencies: []   # 单规则无规则间依赖
+  schedule_groups:
+    - sequence: 1
+      rules: ["R0001"]
+
+# === DQ（rs_input 未提 DQ 要求，暂空）===
+dq_rules: []

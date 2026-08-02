@@ -1,0 +1,154 @@
+# ============================================================================
+# design_decisions.yaml - 交易宽表 dwb_trade_wide_f 设计决策
+# ----------------------------------------------------------------------------
+# 5 表 JOIN 宽表，复杂度未达分段阈值(JOIN<12、多步骤字段<5)，
+# pay/log 收敛与商品维取最新行用 CTE 内联处理，单规则直产目标 F 表。
+# 字段类型/来源/注释由 assemble_ts.py 从 rs_input.json 自动搬移。
+# ============================================================================
+
+# === 规则拆分（核心判断）===
+rules:
+  - rule_code: R0001
+    rule_name: "交易宽表全量装配"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "dwb_trade_wide_f"
+    is_view_step: false
+    design_intent: "5表JOIN宽表，复杂度未达分段阈值，pay/log收敛用CTE内联处理，商品维取最新有效行，单条INSERT直产目标F表"
+
+    # 该规则管所有 15 个目标字段(9 直取 + 2 加工 + 4 审计)
+    field_targets:
+      # --- 直取(直接复制)字段，脚本自动填 design_logic ---
+      - order_id
+      - cust_id
+      - product_id
+      - order_amt
+      - order_qty
+      - cust_name
+      - cust_level
+      - product_name
+      - category_code
+      # --- 加工字段(数据加工)，需写 design_logic ---
+      - total_pay_amt
+      - total_ship_fee
+      # --- 审计字段(赋值)，脚本自动处理，不写 field_logics ---
+      - del_flag
+      - crt_cycle_id
+      - last_upd_cycle_id
+      - dw_last_update_date
+
+    # ★ 仅加工类字段写 design_logic(自然语言口径，不含 SQL)。
+    # 直取字段、审计字段都不写，脚本自动填。
+    field_logics:
+      total_pay_amt: "按 order_id 汇总支付明细的支付金额(pay CTE 已按订单收敛)"
+      total_ship_fee: "按 order_id 汇总物流明细的运费(log CTE 已按订单收敛)"
+
+    # 关联的源表别名(脚本据此从 rs_input 补 schema/table)
+    source_aliases:
+      - o
+      - c
+      - p
+      - pay
+      - log
+
+    # CTE(内联临时表，处理 pay/log 收敛与商品维取最新有效行)
+    ctes:
+      - name: "pay_agg"
+        purpose: "按 order_id 汇总支付明细的支付金额，将多行支付收敛为每订单一行(total_pay_amt 来源)"
+        source_tables: ["pay"]
+      - name: "log_agg"
+        purpose: "按 order_id 汇总物流明细的运费，将多条物流收敛为每订单一行(total_ship_fee 来源)"
+        source_tables: ["log"]
+      - name: "prod_latest"
+        purpose: "对商品维表按 product_id 分组取最新有效行(ROW_NUMBER)，消除维表多版本历史行"
+        source_tables: ["p"]
+
+    # 粒度变化(输入→输出)
+    grain:
+      input: "一行=一个订单(源订单表 ods_trade_order_di)"
+      output: "一行=一个订单(宽表 dwb_trade_wide_f)"
+      change: "无变化"
+
+    # 关联策略(宽表惯例：保留全部订单，维度/支付/物流缺失用 LEFT JOIN)
+    joins:
+      - alias: "o"
+        type: "main"
+        condition: ""
+        filter: ""
+      - alias: "c"
+        type: "LEFT JOIN"
+        condition: "o.cust_id = c.cust_id"
+        filter: ""
+      - alias: "p"
+        type: "LEFT JOIN"
+        condition: "o.product_id = prod_latest.product_id"
+        filter: "prod_latest 为已取最新有效行的商品维 CTE"
+      - alias: "pay"
+        type: "LEFT JOIN"
+        condition: "o.order_id = pay_agg.order_id"
+        filter: "pay_agg 为已按 order_id 收敛的支付汇总 CTE"
+      - alias: "log"
+        type: "LEFT JOIN"
+        condition: "o.order_id = log_agg.order_id"
+        filter: "log_agg 为已按 order_id 收敛的物流汇总 CTE"
+
+    # 关联安全分析(JOIN键唯一性 → 对齐策略)
+    join_safety:
+      - table: "o"
+        join_key_unique: true
+        strategy: ""
+        reason: "主表，order_id 为业务主键，唯一"
+      - table: "c"
+        join_key_unique: true
+        strategy: ""
+        reason: "客户维表当日切片 cust_id 唯一"
+      - table: "p"
+        join_key_unique: false
+        strategy: "取最新有效行"
+        reason: "商品维表存在多版本历史行，经 prod_latest CTE 用 ROW_NUMBER 取最新有效行收敛"
+      - table: "pay"
+        join_key_unique: false
+        strategy: "GROUP BY order_id 收敛"
+        reason: "一个订单可有多笔支付，经 pay_agg CTE 按订单汇总收敛"
+      - table: "log"
+        join_key_unique: false
+        strategy: "GROUP BY order_id 收敛"
+        reason: "一个订单可有多条物流，经 log_agg CTE 按订单汇总收敛"
+
+# === 复杂度分析与分段决策 ===
+complexity_analysis:
+  join_count: 5                         # 5 张表关联(o/c/p/pay/log)
+  has_grain_change: false               # 输入输出均一行=一个订单
+  grain_change_detail: "输入输出粒度一致，均一行=一个订单"
+  multi_step_fields: 2                  # total_pay_amt、total_ship_fee 需先聚合后关联
+  aggregation_after_join: false         # 聚合在 JOIN 前(CTE 内完成)，非 JOIN 后聚合
+  segmentation_decision: "不分段"
+  segmentation_reason: "JOIN表数5<12、多步骤加工字段2<5、无粒度变化，复杂度未达分段阈值；pay/log收敛与商品维取最新行用CTE内联，无需物理中间表"
+
+# === 分布键(designer 判断，参考 design-guide.md §2.1)===
+# order_id 为业务主键、高基数、5表公共 JOIN 键 → 各表分布一致实现本地关联
+distribution_key:
+  - order_id
+
+# === 业务主键(业务唯一字段组合，供 UT 主键唯一检查)===
+business_key:
+  - order_id
+
+# === 调度细化(RS给大框架 → designer细化)===
+schedule:
+  task_name: "dws_dwb_trade_wide_f_d"
+  cron: "0 30 3 * * ?"                   # T+1 日级，SLA 3:30 → 分 时 日 月 周 ?
+  task_group: "dwb_trade"
+  project: "dws"
+  # 设计未新增中间表，无新增上游依赖(rs_input 已有的上游脚本自动带)
+  upstream_added: []
+
+# === 数据流(规则间关系)===
+data_flow:
+  dependencies: []                      # 单规则，无规则间依赖
+  schedule_groups:
+    - sequence: 1
+      rules: ["R0001"]
+
+# === DQ(可选，本表暂无设计级 DQ 要求)===
+dq_rules: []

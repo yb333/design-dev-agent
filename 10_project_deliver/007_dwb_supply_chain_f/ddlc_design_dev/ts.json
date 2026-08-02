@@ -1,0 +1,557 @@
+{
+  "version": "1.0.0",
+  "spec_type": "ts",
+  "generated_at": "2026-08-02T22:46:50",
+  "generated_by": "assemble_ts.py",
+  "meta": {
+    "target": {
+      "f_table": {
+        "schema": "slscc",
+        "table": "dwb_supply_chain_center_f",
+        "cn": "供应链中心宽表"
+      },
+      "i_view": {
+        "schema": "slscc",
+        "table": "dwb_supply_chain_center_i",
+        "cn": "供应链中心宽表"
+      }
+    },
+    "grain": "每行一个供应链记录",
+    "load_strategy": {
+      "strategy": "全量调度",
+      "label": "",
+      "delete_mode": ""
+    },
+    "field_count": {
+      "business": 19,
+      "audit": 4,
+      "total": 23
+    },
+    "source_tables": [
+      {
+        "schema": "sdinv",
+        "table": "dwd_purchase_f",
+        "table_cn": "采购事实表",
+        "alias": "dpf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_supplier_f",
+        "table_cn": "供应商维度表",
+        "alias": "dsf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_product_f",
+        "table_cn": "商品维度表",
+        "alias": "dpf4"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_warehouse_f",
+        "table_cn": "仓库维度表",
+        "alias": "dwf"
+      },
+      {
+        "schema": "sdinv",
+        "table": "dwd_inventory_f",
+        "table_cn": "库存事实表",
+        "alias": "dif"
+      }
+    ],
+    "schedule": {
+      "task_name": "dw_slscc_dwb_supply_chain_center_f",
+      "cron": "0 30 3 * * ?",
+      "task_group": "",
+      "project": "",
+      "owner": "",
+      "exec_params": {},
+      "upstream": [],
+      "execution_platform": {}
+    }
+  },
+  "design": {
+    "complexity_analysis": {
+      "join_count": 4,
+      "has_grain_change": false,
+      "grain_change_detail": "无（输出粒度=采购记录，与主表一致）",
+      "multi_step_fields": 1,
+      "aggregation_after_join": true,
+      "segmentation_decision": "不分段",
+      "segmentation_reason": "JOIN 表数 4(<12)、多步骤加工字段 1(<5)、表级粒度无变化；单条 INSERT + 内联 CTE 即可覆盖，无需物理中间表"
+    },
+    "audit_fields": {
+      "del_flag": {
+        "type": "NVARCHAR(1)",
+        "default": "'N'",
+        "source": "mapping"
+      },
+      "crt_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "last_upd_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "dw_last_update_date": {
+        "type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+        "default": "CURRENT_TIMESTAMP",
+        "source": "mapping"
+      }
+    },
+    "audit_supplemented": [],
+    "distribution_key": [
+      "purchase_id"
+    ],
+    "business_key": [
+      "purchase_id"
+    ]
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "供应链中心宽表主加工",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dwb_supply_chain_center_f",
+      "is_view_step": false,
+      "design_intent": "以采购事实表为主表，左关联供应商/商品/仓库维度及库存事实表，加工状态/等级/类型映射与金额/周转天数，产出供应链中心宽表 F 表",
+      "source_tables": [
+        {
+          "schema": "sdinv",
+          "table": "dwd_purchase_f",
+          "alias": "dpf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_supplier_f",
+          "alias": "dsf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_product_f",
+          "alias": "dpf4"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_warehouse_f",
+          "alias": "dwf"
+        },
+        {
+          "schema": "sdinv",
+          "table": "dwd_inventory_f",
+          "alias": "dif"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "一行=一条采购记录(dwd_purchase_f 按 purchase_id)",
+        "output": "一行=一条供应链中心记录(按 purchase_id)",
+        "change": "无变化"
+      },
+      "joins": [
+        {
+          "alias": "dpf",
+          "type": "main",
+          "condition": "主表（采购事实表）",
+          "filter": "全量无过滤"
+        },
+        {
+          "alias": "dsf",
+          "type": "LEFT JOIN",
+          "condition": "dpf.supplier_id = dsf.supplier_id",
+          "filter": ""
+        },
+        {
+          "alias": "dpf4",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = dpf4.product_id",
+          "filter": ""
+        },
+        {
+          "alias": "dwf",
+          "type": "LEFT JOIN",
+          "condition": "dpf.warehouse_id = dwf.warehouse_id",
+          "filter": ""
+        },
+        {
+          "alias": "dif",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = dif.product_id AND dpf.warehouse_id = dif.warehouse_id",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dpf",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "主表，JOIN键 purchase_id 为主键，唯一"
+        },
+        {
+          "table": "dsf",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "维度表按 supplier_id 唯一（一供应商一行）"
+        },
+        {
+          "table": "dpf4",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "维度表按 product_id 唯一（一商品一行）"
+        },
+        {
+          "table": "dwf",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "维度表按 warehouse_id 唯一（一仓库一行）"
+        },
+        {
+          "table": "dif",
+          "join_key_unique": false,
+          "strategy": "GROUP BY (product_id, warehouse_id) 收敛，取当前有效库存行",
+          "reason": "库存事实表可能存在多条记录，需按 product_id+warehouse_id 收敛避免主表放大"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "purchase_id",
+          "field_type": "bigint",
+          "field_comment": "采购单ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "purchase_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.purchase_id"
+        },
+        {
+          "target_field": "purchase_no",
+          "field_type": "varchar(64)",
+          "field_comment": "采购单号",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "purchase_no",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.purchase_no"
+        },
+        {
+          "target_field": "purchase_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "采购状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "purchase_status",
+              "alias": ""
+            }
+          ],
+          "design_logic": "采购状态码转中文：DRAFT→草稿、SUBMITTED→已提交、APPROVED→已审批、RECEIVED→已入库、CLOSED→已关闭，其余归'其他'（源字段 dpf.purchase_status）"
+        },
+        {
+          "target_field": "create_time",
+          "field_type": "datetime",
+          "field_comment": "创建时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "create_time",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.create_time"
+        },
+        {
+          "target_field": "supplier_id",
+          "field_type": "bigint",
+          "field_comment": "供应商ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "supplier_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.supplier_id"
+        },
+        {
+          "target_field": "supplier_name",
+          "field_type": "varchar(200)",
+          "field_comment": "供应商名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_supplier_f",
+              "field": "supplier_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_supplier_f.supplier_name"
+        },
+        {
+          "target_field": "supplier_level_name",
+          "field_type": "varchar(50)",
+          "field_comment": "供应商等级",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_supplier_f",
+              "field": "supplier_level",
+              "alias": ""
+            }
+          ],
+          "design_logic": "供应商等级码转中文：A→A级供应商、B→B级供应商、C→C级供应商，其余归'其他'（源字段 dsf.supplier_level）"
+        },
+        {
+          "target_field": "cooperation_years",
+          "field_type": "int",
+          "field_comment": "合作年限",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_supplier_f",
+              "field": "cooperation_years",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_supplier_f.cooperation_years"
+        },
+        {
+          "target_field": "product_id",
+          "field_type": "bigint",
+          "field_comment": "商品ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "product_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.product_id"
+        },
+        {
+          "target_field": "product_name",
+          "field_type": "varchar(200)",
+          "field_comment": "商品名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_product_f.product_name"
+        },
+        {
+          "target_field": "purchase_qty",
+          "field_type": "int",
+          "field_comment": "采购数量",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "purchase_qty",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.purchase_qty"
+        },
+        {
+          "target_field": "purchase_price",
+          "field_type": "decimal(18,2)",
+          "field_comment": "采购单价",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "purchase_price",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.purchase_price"
+        },
+        {
+          "target_field": "purchase_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "采购金额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "采购金额 = 采购数量 × 采购单价（dpf.purchase_qty × dpf.purchase_price）"
+        },
+        {
+          "target_field": "warehouse_id",
+          "field_type": "bigint",
+          "field_comment": "仓库ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_purchase_f",
+              "field": "warehouse_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_purchase_f.warehouse_id"
+        },
+        {
+          "target_field": "warehouse_name",
+          "field_type": "varchar(100)",
+          "field_comment": "仓库名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_warehouse_f",
+              "field": "warehouse_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_warehouse_f.warehouse_name"
+        },
+        {
+          "target_field": "warehouse_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "仓库类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_warehouse_f",
+              "field": "warehouse_type",
+              "alias": ""
+            }
+          ],
+          "design_logic": "仓库类型码转中文：SELF→自营仓、THIRD_PARTY→第三方仓，其余归'其他'（源字段 dwf.warehouse_type）"
+        },
+        {
+          "target_field": "current_stock_qty",
+          "field_type": "int",
+          "field_comment": "当前库存",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_inventory_f",
+              "field": "stock_qty",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_inventory_f.stock_qty"
+        },
+        {
+          "target_field": "locked_qty",
+          "field_type": "int",
+          "field_comment": "锁定库存",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_inventory_f",
+              "field": "locked_qty",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_inventory_f.locked_qty"
+        },
+        {
+          "target_field": "stock_days",
+          "field_type": "int",
+          "field_comment": "库存周转天数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "【多步骤·待补源】第一步：统计商品近30天销量（需销量/销售事实表，当前 rs_input 未提供，列为上游缺口）；第二步：库存可售天数 = 当前库存 ÷ 近30天日均销量。⚠️ 该字段依赖的销量源表不在 source_tables 中，coder 编码前需补全上游销量表，否则该字段无法落地"
+        },
+        {
+          "target_field": "del_flag",
+          "field_type": "NVARCHAR(1)",
+          "field_comment": "删除标识",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "crt_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "创建批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "last_upd_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "最后更新批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "dw_last_update_date",
+          "field_type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+          "field_comment": "数仓最后更新时间",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        }
+      ],
+      "field_count": 23
+    }
+  },
+  "data_flow": {
+    "dependencies": [],
+    "schedule_groups": [
+      {
+        "sequence": 1,
+        "rules": [
+          "R0001"
+        ]
+      }
+    ]
+  },
+  "dq_rules": []
+}

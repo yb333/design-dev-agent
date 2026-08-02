@@ -1,0 +1,697 @@
+{
+  "version": "1.0.0",
+  "spec_type": "ts",
+  "generated_at": "2026-08-02T22:48:45",
+  "generated_by": "assemble_ts.py",
+  "meta": {
+    "target": {
+      "f_table": {
+        "schema": "slmar",
+        "table": "dwb_marketing_center_f",
+        "cn": "营销中心宽表"
+      },
+      "i_view": {
+        "schema": "slmar",
+        "table": "dwb_marketing_center_i",
+        "cn": "营销中心宽表"
+      }
+    },
+    "grain": "每行一个营销记录",
+    "load_strategy": {
+      "strategy": "全量调度",
+      "label": "",
+      "delete_mode": ""
+    },
+    "field_count": {
+      "business": 25,
+      "audit": 4,
+      "total": 29
+    },
+    "source_tables": [
+      {
+        "schema": "sdmar",
+        "table": "dwd_activity_f",
+        "table_cn": "活动事实表",
+        "alias": "daf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_activity_type_f",
+        "table_cn": "活动类型维度表",
+        "alias": "dat"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_coupon_f",
+        "table_cn": "优惠券维度表",
+        "alias": "dcf"
+      },
+      {
+        "schema": "sdmar",
+        "table": "dwd_coupon_use_f",
+        "table_cn": "优惠券使用事实表",
+        "alias": "dcu"
+      },
+      {
+        "schema": "sdord",
+        "table": "dwd_order_f",
+        "table_cn": "订单明细事实表",
+        "alias": "dof"
+      }
+    ],
+    "schedule": {
+      "task_name": "dwb_marketing_center_f",
+      "cron": "0 30 3 * * ?",
+      "task_group": "dwb_marketing_center",
+      "project": "slmar",
+      "owner": "",
+      "exec_params": {},
+      "upstream": [],
+      "execution_platform": {}
+    }
+  },
+  "design": {
+    "complexity_analysis": {
+      "join_count": 4,
+      "has_grain_change": true,
+      "grain_change_detail": "订单明细（同一活动多笔订单）与优惠券使用（同一活动多笔使用）均为明细粒度，需先按 activity_id 聚合收口到活动粒度后再关联到活动主表（聚合后关联）",
+      "multi_step_fields": 6,
+      "aggregation_after_join": true,
+      "segmentation_decision": "分段",
+      "segmentation_reason": "多项复杂度指标触发分段：(1) 多步骤加工字段 6 个（达到阈值 5）：含 5 订单聚合指标（order_cnt/gmv_amount/participant_cnt/total_discount_amount/new_user_rate）+ 1 ROI 跨源派生；(2) 存在粒度变化：订单明细（多行/活动）需聚合收口到活动粒度；(3) 存在聚合后关联：订单与优惠券使用均需先 GROUP BY activity_id 再 JOIN 到活动主表。采用分段策略：将 5 个订单域聚合指标收口为物理中间表 dwb_marketing_order_tmp（5 字段内聚且可独立校验，被宽表人均消费/ROI 复用）；优惠券使用成本仅用于 ROI 单点计算（用一次），用 CTE coupon_cost_agg 内联即可，无需建物理表。JOIN 表数 4 张（dat/dcf/dcu-CTE/dof→tmp1）虽未超阈值，但多步骤字段与粒度变化已充分支持分段决策。"
+    },
+    "audit_fields": {
+      "del_flag": {
+        "type": "NVARCHAR(1)",
+        "default": "'N'",
+        "source": "mapping"
+      },
+      "crt_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "last_upd_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "dw_last_update_date": {
+        "type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+        "default": "CURRENT_TIMESTAMP",
+        "source": "mapping"
+      }
+    },
+    "audit_supplemented": [],
+    "distribution_key": [
+      "activity_id"
+    ],
+    "business_key": [
+      "activity_id"
+    ]
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "活动订单指标中间表",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dwb_marketing_order_tmp",
+      "is_view_step": false,
+      "design_intent": "将订单明细事实表按活动ID聚合收口到活动粒度，产出订单域核心指标（订单数/GMV/参与人数/优惠金额/新客占比），为最终宽表提供订单指标输入",
+      "source_tables": [
+        {
+          "schema": "sdord",
+          "table": "dwd_order_f",
+          "alias": "dof"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "一行=一条订单明细（同一活动多笔订单）",
+        "output": "一行=一个活动",
+        "change": "多行聚合"
+      },
+      "joins": [
+        {
+          "alias": "dof",
+          "type": "main",
+          "condition": "单源表聚合，无关联",
+          "filter": "order_status NOT IN ('CANCELLED','DELETED')，仅计入有效订单"
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dwd_order_f (dof)",
+          "join_key_unique": true,
+          "strategy": "GROUP BY activity_id 收敛",
+          "reason": "订单明细按 activity_id 分组聚合后每活动一行，聚合结果天然唯一"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "order_cnt",
+          "field_type": "int",
+          "field_comment": "活动订单数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 activity_id 分组统计关联订单数 COUNT(*)，仅计入未取消的有效订单"
+        },
+        {
+          "target_field": "gmv_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "活动GMV",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 activity_id 分组对订单支付金额求和 SUM(pay_amount)，得到活动 GMV"
+        },
+        {
+          "target_field": "participant_cnt",
+          "field_type": "int",
+          "field_comment": "参与人数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 activity_id 分组统计去重参与用户数 COUNT(DISTINCT user_id)"
+        },
+        {
+          "target_field": "total_discount_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "活动优惠金额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "按 activity_id 分组对订单优惠金额求和 SUM(discount_amount)"
+        },
+        {
+          "target_field": "new_user_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "新客占比(%)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "活动期间新用户订单数除以总订单数乘以100得到新客占比百分比。⚠️新用户识别需定义：假设以用户首次下单时间落在活动期间判定为新客，需在订单明细上按用户取首单日期比对活动起止时间（语义待人工确认）"
+        }
+      ],
+      "field_count": 5
+    },
+    "R0002": {
+      "rule_name": "营销中心宽表组装",
+      "scenario": "default",
+      "exec_sequence": 2,
+      "target_table": "dwb_marketing_center_f",
+      "is_view_step": false,
+      "design_intent": "以活动事实表为主表，LEFT JOIN 活动类型维、优惠券维、优惠券使用成本CTE、订单指标中间表，装配全部宽表字段（活动直取+字典翻译+日期差+优惠券直取与派生+订单派生指标+ROI+审计）",
+      "source_tables": [
+        {
+          "schema": "sdmar",
+          "table": "dwd_activity_f",
+          "alias": "daf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_activity_type_f",
+          "alias": "dat"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_coupon_f",
+          "alias": "dcf"
+        },
+        {
+          "schema": "sdmar",
+          "table": "dwd_coupon_use_f",
+          "alias": "dcu"
+        }
+      ],
+      "ctes": [
+        {
+          "name": "coupon_cost_agg",
+          "purpose": "按 activity_id 汇总优惠券使用事实表的抵扣金额，将一个活动的多笔优惠券使用收敛为一行，供活动ROI成本计算",
+          "source_tables": [
+            "sdmar.dwd_coupon_use_f (dcu)"
+          ]
+        }
+      ],
+      "grain": {
+        "input": "一行=一个活动（各源已收口到活动粒度）",
+        "output": "一行=一个活动",
+        "change": "无变化"
+      },
+      "joins": [
+        {
+          "alias": "daf",
+          "type": "main",
+          "condition": "活动事实表主表",
+          "filter": ""
+        },
+        {
+          "alias": "dat",
+          "type": "LEFT JOIN",
+          "condition": "daf.activity_type = dat.type_code",
+          "filter": ""
+        },
+        {
+          "alias": "dcf",
+          "type": "LEFT JOIN",
+          "condition": "daf.activity_id = dcf.activity_id",
+          "filter": ""
+        },
+        {
+          "alias": "coupon_cost_agg",
+          "type": "LEFT JOIN",
+          "condition": "daf.activity_id = coupon_cost_agg.activity_id",
+          "filter": ""
+        },
+        {
+          "alias": "dwb_marketing_order_tmp",
+          "type": "LEFT JOIN",
+          "condition": "daf.activity_id = dwb_marketing_order_tmp.activity_id",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dwd_activity_f (daf)",
+          "join_key_unique": true,
+          "strategy": "无需对齐",
+          "reason": "活动事实表主表，activity_id 为业务主键天然唯一，作为关联基表"
+        },
+        {
+          "table": "dim_activity_type_f (dat)",
+          "join_key_unique": true,
+          "strategy": "无需对齐",
+          "reason": "活动类型维度表按 type_code 关联，编码唯一（RS未标拉链，假设当前快照）"
+        },
+        {
+          "table": "dim_coupon_f (dcf)",
+          "join_key_unique": false,
+          "strategy": "假设一活动一主券或取首条/需人工确认",
+          "reason": "优惠券维度按 activity_id 关联，若一活动多券则非唯一；RS按直接复制处理假设一活动一券，需人工确认"
+        },
+        {
+          "table": "coupon_cost_agg (CTE)",
+          "join_key_unique": true,
+          "strategy": "已 GROUP BY 收敛",
+          "reason": "CTE 内已按 activity_id 分组聚合，每活动一行"
+        },
+        {
+          "table": "dwb_marketing_order_tmp",
+          "join_key_unique": true,
+          "strategy": "已 GROUP BY 收敛",
+          "reason": "R0001 产出，已按 activity_id 聚合，每活动一行"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "activity_id",
+          "field_type": "bigint",
+          "field_comment": "活动ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "activity_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.activity_id"
+        },
+        {
+          "target_field": "activity_name",
+          "field_type": "varchar(100)",
+          "field_comment": "活动名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "activity_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.activity_name"
+        },
+        {
+          "target_field": "start_time",
+          "field_type": "datetime",
+          "field_comment": "开始时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "start_time",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.start_time"
+        },
+        {
+          "target_field": "end_time",
+          "field_type": "datetime",
+          "field_comment": "结束时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "end_time",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.end_time"
+        },
+        {
+          "target_field": "create_time",
+          "field_type": "datetime",
+          "field_comment": "创建时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "create_time",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.create_time"
+        },
+        {
+          "target_field": "min_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "最低消费金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "min_amount",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.min_amount"
+        },
+        {
+          "target_field": "discount_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "折扣率(%)",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "discount_rate",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.discount_rate"
+        },
+        {
+          "target_field": "max_discount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "最高优惠金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "max_discount",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dwd_activity_f.max_discount"
+        },
+        {
+          "target_field": "activity_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "活动类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "activity_type",
+              "alias": ""
+            }
+          ],
+          "design_logic": "活动类型编码字典翻译：SECKILL转秒杀、GROUPBUY转团购、PRESALE转预售、FULL_REDUCE转满减、FULL_GIFT转满赠，其余为其他"
+        },
+        {
+          "target_field": "activity_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "活动状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_activity_f",
+              "field": "activity_status",
+              "alias": ""
+            }
+          ],
+          "design_logic": "活动状态编码字典翻译：DRAFT转草稿、PENDING转待开始、RUNNING转进行中、ENDED转已结束，其余为其他"
+        },
+        {
+          "target_field": "activity_days",
+          "field_type": "int",
+          "field_comment": "活动天数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "结束时间减开始时间的天数差"
+        },
+        {
+          "target_field": "activity_type_desc",
+          "field_type": "varchar(500)",
+          "field_comment": "活动类型说明",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_activity_type_f",
+              "field": "type_desc",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_activity_type_f.type_desc"
+        },
+        {
+          "target_field": "coupon_id",
+          "field_type": "bigint",
+          "field_comment": "优惠券ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_coupon_f",
+              "field": "coupon_id",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_coupon_f.coupon_id"
+        },
+        {
+          "target_field": "coupon_name",
+          "field_type": "varchar(100)",
+          "field_comment": "优惠券名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_coupon_f",
+              "field": "coupon_name",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_coupon_f.coupon_name"
+        },
+        {
+          "target_field": "coupon_total_qty",
+          "field_type": "int",
+          "field_comment": "优惠券发放总量",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_coupon_f",
+              "field": "total_qty",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_coupon_f.total_qty"
+        },
+        {
+          "target_field": "coupon_used_qty",
+          "field_type": "int",
+          "field_comment": "优惠券已使用量",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_coupon_f",
+              "field": "used_qty",
+              "alias": ""
+            }
+          ],
+          "design_logic": "直取 dim_coupon_f.used_qty"
+        },
+        {
+          "target_field": "coupon_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "优惠券类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_coupon_f",
+              "field": "coupon_type",
+              "alias": ""
+            }
+          ],
+          "design_logic": "优惠券类型编码字典翻译：FULL_REDUCE转满减券、DISCOUNT转折扣券、CASH转现金券，其余为其他"
+        },
+        {
+          "target_field": "coupon_use_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "优惠券使用率(%)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "优惠券已使用量除以发放总量乘以100得到使用率百分比（发放总量为0时返回空值避免除零）"
+        },
+        {
+          "target_field": "avg_order_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "人均消费",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "活动GMV除以参与人数得到人均消费（参与人数为0时返回空值避免除零），取自订单指标中间表"
+        },
+        {
+          "target_field": "activity_roi",
+          "field_type": "decimal(8,2)",
+          "field_comment": "活动ROI(%)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "活动ROI=(GMV-活动成本)/活动成本×100。活动成本=优惠券抵扣金额(优惠券使用事实表按activity_id汇总)+满减优惠金额+运营成本。⚠️源表未提供运营成本字段，需人工补充数据源或暂置0；成本项口径待人工确认"
+        },
+        {
+          "target_field": "del_flag",
+          "field_type": "NVARCHAR(1)",
+          "field_comment": "删除标识",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "crt_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "创建批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "last_upd_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "最后更新批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "dw_last_update_date",
+          "field_type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+          "field_comment": "数仓最后更新时间",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        }
+      ],
+      "field_count": 24
+    }
+  },
+  "data_flow": {
+    "dependencies": [
+      {
+        "from": "R0001",
+        "to": "R0002",
+        "type": "data_flow",
+        "intermediate_table": "dwb_marketing_order_tmp"
+      }
+    ],
+    "schedule_groups": [
+      {
+        "sequence": 1,
+        "rules": [
+          "R0001"
+        ]
+      },
+      {
+        "sequence": 2,
+        "rules": [
+          "R0002"
+        ]
+      }
+    ]
+  },
+  "dq_rules": []
+}
