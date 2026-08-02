@@ -86,7 +86,7 @@ class EvalReport:
         return len(self.issues) == 0
 
 
-def run_cmd(cmd: list[str], timeout: int = 300) -> tuple[int, str, str]:
+def run_cmd(cmd: list[str], timeout: int = 600) -> tuple[int, str, str]:
     """运行命令，返回 (退出码, stdout, stderr)"""
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(ROOT))
@@ -156,7 +156,7 @@ def step_designer(report, deliver, skip_ai):
 
     code, out, err = run_cmd(
         ["opencode", "run", "--agent", "dws-designer", "--format", "json", prompt],
-        timeout=300
+        timeout=1800  # 大案例（264字段）可能需要30分钟
     )
 
     ts_json = deliver / "ts.json"
@@ -193,7 +193,7 @@ def step_coder(report, deliver, rule_code, skip_ai):
 
     code, out, err = run_cmd(
         ["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt],
-        timeout=300
+        timeout=1800  # 大案例多规则可能需要30分钟
     )
 
     select_file = select_dir / f"{rule_code}_select.sql"
