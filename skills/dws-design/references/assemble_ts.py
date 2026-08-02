@@ -157,7 +157,7 @@ def build_field(field_rec, logic, rule_aliases):
     }
 
 
-def build_rule(rule_dec, field_map):
+def build_rule(rule_dec, field_map, rs_source_tables):
     """组装一个规则对象。"""
     code = rule_dec.get("rule_code", "")
     targets = rule_dec.get("field_targets", [])
@@ -177,10 +177,16 @@ def build_rule(rule_dec, field_map):
             missing_logic.append(t)
         fields.append(f)
 
-    # source_tables: 优先用 rule_dec.source_aliases, 否则留空(coder 从 rs_input 取)
+    # source_tables: 从 rs_input 的 source_tables 按别名补全 schema/table
+    rs_sources = {st.get("source_alias", ""): st for st in rs_source_tables}
     rule_sources = []
     for sa in (rule_dec.get("source_aliases") or []):
-        rule_sources.append({"schema": "", "table": "", "alias": sa})
+        rs_st = rs_sources.get(sa, {})
+        rule_sources.append({
+            "schema": rs_st.get("source_schema", ""),
+            "table": rs_st.get("source_table", ""),
+            "alias": sa,
+        })
 
     return {
         "rule_name": rule_dec.get("rule_name", ""),
@@ -332,7 +338,7 @@ def assemble_ts(rs_input, decisions):
     all_missing_logic = []
     for rule_dec in decisions.get("rules", []):
         code = rule_dec.get("rule_code", "")
-        rule_obj, missing_logic = build_rule(rule_dec, field_map)
+        rule_obj, missing_logic = build_rule(rule_dec, field_map, rs_input.get("source_tables", []))
         rules[code] = rule_obj
         if missing_logic:
             all_missing_logic.append((code, missing_logic))
