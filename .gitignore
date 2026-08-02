@@ -13,9 +13,9 @@ venv/
 node_modules/
 dist/
 
-# MCP 本地配置（含凭据，绝不进 git）
-mcp-servers/*/db-config.json
-mcp-servers/*/db-sources.json
+# DB 本地配置（含凭据，绝不进 git）
+# dws_db.py 内化模块的多数据源配置，放在 coding skill 的 references 下
+skills/dws-coding/references/db-sources.json
 
 # 运行时产出（skill 写入的工作目录，可重跑覆盖）
 # 注：docs/output/dwl_con_pu_any_f 作为标准示例保留，其余忽略

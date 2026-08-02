@@ -58,7 +58,7 @@ last_reviewed: 2026-07-29
 ┌──── 外网（本机/本仓）────┐      ┌──── 内网（生产）────┐
 │ zcode + GLM-5.2         │ 外网  │ codeagent(opencode套壳)│
 │ opencode 原生能力完整   │ 内容  │ + minimax-2.7/glm-5.0 │
-│ postgresql-executor MCP │ 可进  │ + 对接平台skill(自研) │
+│ dws_db.py（DB执行模块）│ 可进  │ + 对接平台skill(自研) │
 │ 能开发、能近似验证      │ ───→  │ + 也可用zcode+5.2调试 │
 └─────────────────────────┘      └───────────────────────┘
           ▲                                 │

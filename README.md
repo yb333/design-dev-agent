@@ -20,10 +20,8 @@
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 配置 MCP（连开发环境 DWS）
-cd mcp-servers/postgresql-executor
-npm install && npm run build
-cp db-config.example.json db-config.json  # 填开发库连接
+# 2. 配置数据库连接（连开发环境 DWS，可选）
+cp skills/dws-coding/references/db-sources.example.json skills/dws-coding/references/db-sources.json  # 填开发库连接
 
 # 3. 跑测试
 python -m pytest tests/ -v
@@ -38,8 +36,6 @@ python -m pytest tests/ -v
 │   └── dws-run.py                   # skill 调度器
 ├── commands/                        # 3 个编排命令
 │   ├── design.md / ulw-pipe.md / ulw-optimize.md
-├── mcp-servers/
-│   └── postgresql-executor/         # 连开发环境 DWS（螺旋回路必需）
 ├── docs/
 │   ├── architecture/                # 架构（必读）
 │   │   ├── architecture.md               # ⭐ 唯一架构文档

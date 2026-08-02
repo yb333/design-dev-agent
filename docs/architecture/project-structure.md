@@ -17,8 +17,7 @@ design-dev-agent/
 ├── docs/                设计文档（架构规范 + 格式定义 + 模板 + 产出示例）
 ├── agents/              源码：agent 定义（dws-designer / dws-coder）
 ├── commands/            源码：command（用户发起流程的编排剧本）
-├── skills/              源码：skill（设计开发能力实现）
-├── mcp-servers/         运行时：MCP server（连接层）
+├── skills/              源码：skill（设计开发能力实现，含内化的 DB 执行模块）
 ├── eval-suite/          工程能力：评测套件（针对 skill 的独立评测）
 ├── tests/               工程能力：单元测试
 ├── CLAUDE.md            项目入口（新会话先读）
@@ -84,10 +83,14 @@ docs/
 
 ---
 
-### `mcp-servers/` —— 运行时·连接层
+### DB 执行能力（内化在 coding skill）
 
-**放什么**：MCP server（连接外部系统的桥）。
-**当前**：`postgresql-executor/`（连开发环境 DWS，螺旋回路必需）。
+> 数据库执行不再是独立目录/MCP，而是**内化的 Python 模块**，放在 coding skill 的 references 下。
+
+**位置**：`skills/dws-coding/references/dws_db.py`
+**接口**：`DBExecutor`（`execute` / `execute_many` / `switch_source` / `test_connection` / `list_sources`），工厂函数 `create_executor()`。
+**配置**：同目录 `db-sources.json`（多数据源；示例见 `db-sources.example.json`）。
+**用途**：编码 skill 调用，连开发环境 DWS（螺旋回路必需）。
 
 ---
 
@@ -143,7 +146,7 @@ eval-suite/
 | 用户发起流程的剧本 | `commands/` | new-pipe |
 | 能力实现（SKILL.md+脚本） | `skills/` | dws-design/dws-coding |
 | agent 定义 | `agents/` | dws-designer/dws-coder |
-| 连接外部系统 | `mcp-servers/` | postgresql-executor |
+| 连接外部数据库 | `skills/dws-coding/references/` | dws_db.py（内化模块，非独立进程）|
 | 评测 skill 对不对 | `eval-suite/` | runner/validators |
 | 单元测试 | `tests/` | test_*.py |
 

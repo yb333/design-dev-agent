@@ -62,28 +62,6 @@ class TestSkills:
         assert shared_dir.is_dir(), f"Shared directory not found: {shared_dir}"
 
 
-class TestMCPServer:
-    """Test MCP server files."""
-
-    def test_mcp_index_ts_exists(self):
-        """Test that the MCP server index.ts exists."""
-        index_file = (
-            PROJECT_ROOT
-            / "mcp-servers"
-            / "postgresql-executor"
-            / "src"
-            / "index.ts"
-        )
-        assert index_file.exists(), f"MCP index.ts not found: {index_file}"
-
-    def test_mcp_package_json_exists(self):
-        """Test that the MCP server package.json exists."""
-        package_file = (
-            PROJECT_ROOT / "mcp-servers" / "postgresql-executor" / "package.json"
-        )
-        assert package_file.exists(), f"MCP package.json not found: {package_file}"
-
-
 class TestDownloadScripts:
     """Test download script existence and executability."""
 
@@ -236,15 +214,6 @@ class TestTauriResourcesConfig:
 
         assert "tools/" not in resource_str, "tauri.conf.json should NOT include 'tools/' in bundle.resources (migrated to excel-io MCP)"
 
-    def test_tauri_conf_json_lists_mcp_servers_resource(self):
-        """Test that tauri.conf.json bundle.resources includes mcp-servers."""
-        tauri_conf = PROJECT_ROOT / "web" / "src-tauri" / "tauri.conf.json"
-        content = json.loads(tauri_conf.read_text())
-        resources = content.get("bundle", {}).get("resources", [])
-        resource_str = json.dumps(resources)
-
-        assert "mcp-servers" in resource_str, "tauri.conf.json missing 'mcp-servers' in bundle.resources"
-
     def test_tauri_conf_json_lists_oh_my_opencode_resource(self):
         """Test that tauri.conf.json bundle.resources includes oh-my-opencode."""
         tauri_conf = PROJECT_ROOT / "web" / "src-tauri" / "tauri.conf.json"
@@ -274,16 +243,6 @@ class TestBuildResources:
         """Test that .opencode/commands exists (copied to resources/commands)."""
         commands_dir = PROJECT_ROOT / ".opencode" / "commands"
         assert commands_dir.is_dir(), f".opencode/commands not found: {commands_dir}"
-
-    def test_mcp_servers_excel_io_dir_exists(self):
-        """Test that mcp-servers/excel-io exists (copied to resources/mcp-servers/excel-io)."""
-        mcp_dir = PROJECT_ROOT / "mcp-servers" / "excel-io"
-        assert mcp_dir.is_dir(), f"mcp-servers/excel-io not found: {mcp_dir}"
-
-    def test_mcp_servers_postgresql_executor_dir_exists(self):
-        """Test that mcp-servers/postgresql-executor exists (copied to resources/mcp-servers/postgresql-executor)."""
-        mcp_dir = PROJECT_ROOT / "mcp-servers" / "postgresql-executor"
-        assert mcp_dir.is_dir(), f"mcp-servers/postgresql-executor not found: {mcp_dir}"
 
     def test_tauri_resources_dir_exists(self):
         """Test that web/src-tauri/resources exists."""

@@ -39,7 +39,7 @@
 | 9 个 skill | `skills/dws-pipeline-{designer,coder,reviewer,code-reviewer,tester,exporter,optimizer,optimizer-coder,shared}` | 设计开发流程的实现 |
 | skill 调度器 | `skills/dws-run.py` | `dws-run <skill> <action>` 入口 |
 | 3 个 command | `commands/{design,ulw-pipe,ulw-optimize}.md` | 用户发起流程的编排剧本（旧版，待重写）|
-| 1 个 MCP | `mcp-servers/postgresql-executor/` | 连开发环境 DWS（螺旋回路必需）|
+| DB 执行能力 | `skills/dws-coding/references/dws_db.py` | 内化的 Python 模块（`DBExecutor`：execute/switch_source/test_connection），连开发环境 DWS（螺旋回路必需），配置在 `db-sources.json`（同目录，多数据源）|
 | 评测套件 | `eval-suite/` | 针对 skill 的独立评测系统（runner/validators/cases/golden）|
 | 架构文档 | `docs/architecture/` | 见下方「核心文档」|
 | 格式规范 | `docs/specs/` | TS格式、mapping格式定义 |
@@ -124,14 +124,13 @@ dws-run designer path    # 输出 skill 目录
 
 > **注**：`dws-run` 在客户端仓里通过 Tauri 注册到 PATH。本仓独立后，开发期需要手动配置（待新会话处理）。
 
-### MCP server（postgresql-executor）
+### DB 执行能力（dws_db.py）
 
-```bash
-cd mcp-servers/postgresql-executor
-npm install
-npm run build
-# 配置：cp db-config.example.json db-config.json，填开发库连接
-```
+数据库执行能力已**内化为 Python 模块**（不再是独立 MCP/进程），位于 `skills/dws-coding/references/dws_db.py`。
+
+- **接口**：`DBExecutor`（`execute` / `execute_many` / `switch_source` / `test_connection` / `list_sources`），工厂函数 `create_executor()`
+- **配置**：同目录 `db-sources.json`（多数据源）。从示例拷贝：`cp skills/dws-coding/references/db-sources.example.json skills/dws-coding/references/db-sources.json`，填开发库连接
+- **用途**：编码 skill 调用，连开发环境 DWS（螺旋回路必需）
 
 ---
 
