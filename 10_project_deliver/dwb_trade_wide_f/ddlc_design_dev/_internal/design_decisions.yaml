@@ -1,0 +1,165 @@
+# ============================================================================
+# design_decisions.yaml - 交易宽表 (dwb_trade_wide_f) 设计决策
+# ----------------------------------------------------------------------------
+# 基于 rs_input.json 分析：
+#   - 目标表: dws.dwb_trade_wide_f（交易宽表），粒度=每行一个订单，全量调度 T+1
+#   - 5 源表：订单明细(主表) + 客户维 + 商品维(取最新有效行) + 支付明细(需收敛) + 物流明细(需收敛)
+#   - 15 字段：9 直取 + 2 加工(汇总收敛) + 4 审计
+#
+# 核心设计判断：
+#   1. 单场景（所有字段 scene_group=default），不分段
+#   2. JOIN 4 表（<12），多步骤加工字段 2（<5），复杂度中等偏低 → 单规则搞定
+#   3. 支付/物流多行收敛用 CTE 内联（仅用一次，无需独立校验）
+# ============================================================================
+
+# === 规则拆分（核心判断）===
+rules:
+  - rule_code: R0001
+    rule_name: "交易宽表全量加工"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "dwb_trade_wide_f"
+    is_view_step: false
+    design_intent: >-
+      以订单明细为主表，LEFT JOIN 客户维、商品维补维度属性，
+      通过 CTE 预聚合支付和物流（按 order_id 汇总收敛多行），
+      一次性产出交易宽表 F 表。
+
+    # 该规则产出全部 15 个目标字段（9 业务直取 + 2 业务加工 + 4 审计）
+    field_targets:
+      # --- 主表直取字段（来自 ods_trade_order_di） ---
+      - order_id
+      - cust_id
+      - product_id
+      - order_amt
+      - order_qty
+      # --- 客户维直取字段（来自 dim_cust_d） ---
+      - cust_name
+      - cust_level
+      # --- 商品维直取字段（来自 dim_product_d） ---
+      - product_name
+      - category_code
+      # --- 加工字段（CTE 预聚合） ---
+      - total_pay_amt
+      - total_ship_fee
+      # --- 审计字段（assemble 自动处理，不写 field_logics） ---
+      - del_flag
+      - crt_cycle_id
+      - last_upd_cycle_id
+      - dw_last_update_date
+
+    # ★ 仅加工类业务字段写 design_logic（自然语言口径，不含 SQL）。
+    # 直取字段不写（脚本自动填），审计字段不写（脚本自动处理）。
+    field_logics:
+      total_pay_amt: "按订单ID汇总支付明细表的支付金额（SUM），将一个订单的多笔支付收敛为一行"
+      total_ship_fee: "按订单ID汇总物流明细表的运费（SUM），将一个订单的多条物流收敛为一行"
+
+    # 该规则关联的源表（填别名，脚本从 rs_input 补 schema/table）
+    source_aliases:
+      - o      # ods.ods_trade_order_di（主表）
+      - c      # dwrdim.dim_cust_d
+      - p      # dwrdim.dim_product_d
+      - pay    # ods.ods_payment_di
+      - log    # ods.ods_logistics_di
+
+    # CTE（内联临时表：支付/物流预聚合收敛）
+    ctes:
+      - name: "pay_agg"
+        purpose: "按 order_id 汇总支付金额，将一个订单的多笔支付收敛为一行，避免 JOIN 后数据发散"
+        source_tables:
+          - "ods.ods_payment_di (pay)"
+      - name: "log_agg"
+        purpose: "按 order_id 汇总运费，将一个订单的多条物流收敛为一行，避免 JOIN 后数据发散"
+        source_tables:
+          - "ods.ods_logistics_di (log)"
+
+    # 粒度变化（输入→输出）
+    grain:
+      input: "主表(订单明细)一行=一个订单；支付/物流明细为多行/订单"
+      output: "一行=一个订单"
+      change: "多行聚合（支付/物流经 CTE 预聚合收敛到订单粒度）"
+
+    # 关联策略
+    joins:
+      - alias: "o"
+        type: "main"
+        condition: ""
+        filter: ""
+      - alias: "c"
+        type: "LEFT JOIN"
+        condition: "o.cust_id = c.cust_id"
+        filter: ""
+      - alias: "p"
+        type: "LEFT JOIN"
+        condition: "o.product_id = p.product_id"
+        filter: "取最新有效行（按生效日期/失效日期或有效标识过滤，仅取当前有效的商品维记录）"
+      - alias: "pay_agg"
+        type: "LEFT JOIN"
+        condition: "o.order_id = pay_agg.order_id"
+        filter: ""
+      - alias: "log_agg"
+        type: "LEFT JOIN"
+        condition: "o.order_id = log_agg.order_id"
+        filter: ""
+
+    # 关联安全分析（JOIN键唯一性 → 对齐策略）
+    join_safety:
+      - table: "dim_cust_d (c)"
+        join_key_unique: true
+        strategy: ""
+        reason: "RS 未标注需收敛，假设客户维表为当前有效快照（cust_id 唯一）。若实为拉链表需补取最新有效行过滤"
+      - table: "dim_product_d (p)"
+        join_key_unique: false
+        strategy: "取最新有效行"
+        reason: "RS 标注'取最新有效行'，商品维为拉链表，同一 product_id 有多条历史记录，需过滤到当前有效行"
+      - table: "ods_payment_di (pay)"
+        join_key_unique: false
+        strategy: "GROUP BY 收敛（CTE pay_agg 预聚合）"
+        reason: "一个订单可能有多笔支付记录，需按 order_id 汇总支付金额收敛为一行"
+      - table: "ods_logistics_di (log)"
+        join_key_unique: false
+        strategy: "GROUP BY 收敛（CTE log_agg 预聚合）"
+        reason: "一个订单可能有多条物流记录，需按 order_id 汇总运费收敛为一行"
+
+# === 复杂度分析与分段决策 ===
+complexity_analysis:
+  join_count: 4                         # 关联 4 表（c/p/pay/log，不含主表 o）
+  has_grain_change: true                # 支付/物流多行→单行收敛
+  grain_change_detail: "支付明细和物流明细为多行/订单，通过 CTE 预聚合（GROUP BY order_id）收敛到订单粒度"
+  multi_step_fields: 2                  # total_pay_amt、total_ship_fee 需先聚合再关联
+  aggregation_after_join: true          # 存在"先聚合后关联"模式（CTE 预聚合 GROUP BY → 再 JOIN）
+  segmentation_decision: "不分段"
+  segmentation_reason: >-
+    JOIN 表数 4（远低于阈值 12），多步骤加工字段 2（低于阈值 5），
+    复杂度中等偏低。支付/物流收敛用 CTE 内联——仅在本规则内使用一次、
+    无需独立校验，单条 INSERT 即可清晰表达全部加工逻辑。
+
+# === 分布键（参考 design-guide.md §2.1）===
+# order_id：业务主键、最高基数、支付/物流的 JOIN 键 → 本地关联最优
+distribution_key:
+  - order_id
+
+# === 业务主键（业务唯一字段，供 UT 主键唯一检查）===
+business_key:
+  - order_id
+
+# === 调度细化（RS给大框架 → designer细化）===
+schedule:
+  task_name: "dwb_trade_wide_f"
+  cron: "0 30 3 * * ?"                   # T+1 每天 03:30 执行（SLA 3:30）
+  task_group: "dwb_trade"
+  project: "dws"
+  # 无中间表，不引入 RS 之外的新上游依赖
+  upstream_added: []
+
+# === 数据流（规则间关系）===
+data_flow:
+  # 单规则，无规则间依赖
+  dependencies: []
+  # 执行顺序
+  schedule_groups:
+    - sequence: 1
+      rules: ["R0001"]
+
+# === DQ（RS 无 DQ 要求）===
+dq_rules: []
