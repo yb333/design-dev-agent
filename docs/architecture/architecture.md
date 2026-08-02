@@ -307,6 +307,44 @@ coder 产 SQL → [静态检查·规范] ─不通过→ 回 coder 重写
 - **规则间依赖**：data_flow.schedule_groups 定义执行顺序。生成时 coder 不需要前序表存在（它依据 ts.json 写 SQL，不是依据数据库）。
 - **业务主键 ≠ 分布键**：ts.json 要加 business_key 字段（显式业务主键），UT 用它查唯一性。distribution_key 是数据分布最优选，不一定等于业务主键。
 
+**六、coder 职责定稿（2026-08-02 讨论确定）**：
+
+> coder 的唯一产出是 **SELECT 语句**。DDL/INSERT包装/UT检查全脚本化，coder 不碰。
+
+**coder 不碰的（全脚本化）**：
+- **DDL**：assemble_ddl.py 从 ts.json 自动生成（表名/字段/类型/分布键/审计字段，全是 ts.json 里的确定性信息）
+- **INSERT 包装**：run_ut.py 内部做（读 SELECT 文件 + ts.json 字段定义 + 审计字段模板 → 拼完整 INSERT → 执行）
+- **UT 检查 SQL**：run_ut.py 自动生成（主键唯一/非空/行数/截断，从 ts.json 结构信息按模板生成）
+
+**coder 的内部流程**：
+```
+1. 调 slice_ts.py 拿规则切片（不读整个 ts.json，防止大表上下文爆炸）
+2. 读 dws-coding skill（规范+SELECT模板）
+3. 写 SELECT 语句（从切片的 design_logic 翻译成 SQL）
+4. 调 check_sql.py 静态对比（SELECT vs ts.json 切片）
+   ├─ 不过 → 自己改 → 重对比（限3轮）
+5. 落盘 SELECT 文件，回报完成
+```
+
+**编码段脚本清单**（都在 dws-coding skill 的 references）：
+
+| 脚本 | 干什么 | 谁调 |
+|------|--------|------|
+| `slice_ts.py` | ts.json 按规则切片（输出单个规则的 YAML） | coder |
+| `check_sql.py` | SELECT vs ts.json 切片静态对比 | coder |
+| `assemble_ddl.py` | 从 ts.json 生成全部规则的 DDL | command（执行阶段） |
+| `run_ut.py` | 包装INSERT + 执行DDL/INSERT + UT检查 + 报告 | command（执行阶段） |
+
+**command 编排（带会话恢复）**：
+```
+阶段1 生成：按 schedule_groups 分层，逐规则 Task(coder) → coder 产 SELECT
+           command 记住每个规则的 task_id（规则→会话映射）
+阶段2 执行：assemble_ddl.py 生成DDL → run_ut.py 执行+UT → 报告
+阶段3 执行回路：SQL错 → Task(coder, task_id=xxx, "带报错改") 恢复原会话
+           重跑 run_ut.py → 限3轮
+阶段4 闸口②：汇总报告，人确认
+```
+
 **eval-suite 设计约束（2026-07-31 讨论确定）**：
 1. **目的是找问题，不是打分**——评测是"探针"，核心价值是暴露 AI 产出和预期之间的偏差（哪里有问题、什么类型的问题），不是给一个总分排名。输出应是"问题清单"而非"分数报告"。
 2. **内网完全隔离，结果只能拍照/手敲带出**——评测结果文件无法导出。因此结果输出必须极简可读（一张截图能装下），通过项折叠成计数，只展开问题项（带类型 + 上下文，让人不用回内网翻文件就能判断严重程度）。
