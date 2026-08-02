@@ -368,6 +368,35 @@ coder 产 SQL → [静态检查·规范] ─不通过→ 回 coder 重写
 | assemble_ddl | 输出模式 | 全量 CREATE | 对比现有表结构生成 ALTER |
 | coder | agent body | 全量写 SELECT | 接受现有 SELECT + 只改变更部分 |
 
+**八、DQ 质量检查分工（2026-08-02 讨论确定）**：
+
+> DQ 不是 UT 的子集，是独立的质量维度。两者形态不同（UT 检查结构正确性，DQ 检查数据质量），但执行方式统一（都跑 SELECT 看有没有违规行）。
+
+**DQ 三层分工**：
+
+| 层次 | 例子 | 谁生成 | 什么时候 |
+|------|------|--------|---------|
+| 标准 DQ（已归入 UT） | 主键唯一/必填非空/行数 | run_ut.py 脚本自动 | UT 阶段 |
+| 模板化 DQ | 值域（del_flag 只能 Y/N）、枚举、唯一性 | run_ut.py 从 dq_rules 按模板生成 | UT 阶段 |
+| 定制 DQ | 跨表一致性、复杂业务规则 | **coder 单独产**（DQ 检查 SELECT） | DQ 阶段（编码后可选） |
+
+**DQ 设计意图来源**：RS 写 DQ 意图 → designer 细化进 ts.json 的 dq_rules（自然语言，不写SQL）。
+**定制 DQ SQL**：command 额外调一个 coder（专门干 DQ），不和加工 coder 混。
+**DQ 执行**：DQ SQL 和 UT SQL 执行方式统一（跑 SELECT 看违规行），但生成方式分层（模板/ coder 产）。
+
+**九、数据库执行能力内化（2026-08-02 讨论确定）**：
+
+> 现阶段整个 agent 项目是闭包自洽的。数据 MCP server（独立进程）是多余中间层。**内化成 Python 共享模块（dws_db.py），删掉 MCP server。**
+
+**内化设计**：
+- `dws_db.py`：数据库执行模块，放 dws-coding skill 的 references
+- **接口与实现分离**：上层（run_ut.py 等）只依赖 `DBExecutor` 接口（execute/switch_source/test_connection）
+- **现阶段实现**：PsycopgExecutor（psycopg2 直连）
+- **未来扩展**：MCPExecutor（走术加平台 2.0 MCP）/ PlatformExecutor（走平台 API）——只换实现类，上层不改
+
+**配置统一**：db-sources.json（多 schema 多账号映射），脚本和未来 agent 共用。install.py 提示用户配置。
+**MCP server 处理**：删 mcp-servers/postgresql-executor/。核心逻辑（多数据源/SQL执行/安全限制）翻译进 dws_db.py。同步更新文档和测试引用。
+
 **eval-suite 设计约束（2026-07-31 讨论确定）**：
 1. **目的是找问题，不是打分**——评测是"探针"，核心价值是暴露 AI 产出和预期之间的偏差（哪里有问题、什么类型的问题），不是给一个总分排名。输出应是"问题清单"而非"分数报告"。
 2. **内网完全隔离，结果只能拍照/手敲带出**——评测结果文件无法导出。因此结果输出必须极简可读（一张截图能装下），通过项折叠成计数，只展开问题项（带类型 + 上下文，让人不用回内网翻文件就能判断严重程度）。
