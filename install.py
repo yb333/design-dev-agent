@@ -65,22 +65,12 @@ def collect_requirements(base: Path) -> list[str]:
 
 
 def copy_dir(src: Path, dst: Path):
-    """复制目录，排除缓存。保留用户配置文件（db-sources.json）不覆盖。"""
-    # 用户配置文件（安装时不覆盖，重装后恢复）
-    USER_CONFIG_FILES = ["db-sources.json"]
-    preserved = {}
+    """复制目录，排除缓存。"""
     if dst.exists():
-        for fname in USER_CONFIG_FILES:
-            fpath = dst / fname
-            if fpath.exists():
-                preserved[fname] = fpath.read_bytes()
         shutil.rmtree(dst)
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
         "__pycache__", ".venv", ".git", ".DS_Store", "*.pyc", ".pytest_cache"
     ))
-    # 恢复用户配置
-    for fname, content in preserved.items():
-        (dst / fname).write_bytes(content)
 
 
 def run():
@@ -271,6 +261,22 @@ def run():
         shutil.copy2(src, dst)
         print(f"  ✓ command: {c}")
     print()
+
+    # ── 6. 数据库配置初始化 ──
+    db_config = config_dir / "db-sources.json"
+    db_example = SCRIPT_DIR / "skills" / "dws-coding" / "references" / "db-sources.example.json"
+    if not db_config.exists() and db_example.exists():
+        shutil.copy2(str(db_example), str(db_config))
+        print("[6/6] 数据库配置初始化...")
+        print(f"  ✓ 已创建 {db_config}")
+        print(f"  ⚠️  请编辑此文件，填入真实的数据库连接信息（host/port/user/password）")
+        print()
+    elif db_config.exists():
+        print("[6/6] 数据库配置已存在，跳过（不覆盖）")
+        print()
+    else:
+        print("[6/6] 数据库配置 example 未找到，跳过")
+        print()
 
     # ── 完成 ──
     print("=" * 55)

@@ -302,14 +302,15 @@ class PsycopgExecutor(DBExecutor):
 def create_executor(config_path: str = "", source_name: str = "") -> DBExecutor:
     """创建执行器实例。
 
-    config_path: db-sources.json 路径。默认用同目录下的 db-sources.json。
+    config_path: db-sources.json 路径。默认按以下顺序查找：
+      1. 环境变量 DB_CONFIG
+      2. ~/.config/opencode/db-sources.json（全局配置，install 不覆盖）
     source_name: 指定数据源。默认用配置文件里的 default。
     """
     if not config_path:
-        # 默认查找顺序：环境变量 DB_CONFIG → 同目录 db-sources.json
         config_path = os.environ.get(
             "DB_CONFIG",
-            str(Path(__file__).parent / "db-sources.json"),
+            str(Path.home() / ".config" / "opencode" / "db-sources.json"),
         )
     return PsycopgExecutor(config_path, source_name)
 
