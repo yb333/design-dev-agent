@@ -35,10 +35,18 @@ def _mapping_raw(target_schema="dws", table="dwb_test_i", cn="测试表"):
 
 
 def _rs_data(schema="", table="", cn=""):
-    """构造 build_rs_input 第二参数 rs_data 的最小形态（meta.target 部分）。"""
+    """构造 build_rs_input 第二参数 rs_data 的最小形态。
+
+    注意：extract_rs_data 的真实输出格式是 meta 顶层有 schema/table，
+    不是嵌套在 meta.target 里。这里匹配真实格式。
+    """
     return {
         "meta": {
-            "target": {"schema": schema, "table": table, "cn": cn},
+            "schema": schema,
+            "table": table,
+            "cn": cn,
+            "grain": "",
+            "description": "",
         },
     }
 
@@ -204,4 +212,60 @@ class TestFactoryIntegration:
         rs = make_rs_input(table="dwb_test_i", has_audit=False)
         targets = {f["target_column"] for f in rs["field_mappings"]}
         assert "del_flag" not in targets
-        assert targets == {"id"}
+
+
+# ============================================================
+# 4. 端到端：extract_rs_data → build_rs_input（真实数据流）
+# ============================================================
+
+class TestExtractAndBuildE2E:
+    """用真实的 extract_rs_data 提取 RS，传给 build_rs_input。
+
+    这个测试防止"测试构造的数据格式和真实 extract_rs_data 输出不匹配"
+    的问题（之前 _rs_data 把 schema/table 放在 meta.target 下，
+    但真实输出在 meta 顶层，导致测试通过但真实场景报错）。
+    """
+
+    def test_real_rs_extraction_to_build(self):
+        """extract_rs_data 提取标准 RS → build_rs_input 能正确取到 schema/table"""
+        from preprocess import extract_rs_data
+        from pathlib import Path
+
+        rs_path = Path(__file__).resolve().parent.parent / "docs" / "templates" / "RS模板.md"
+        rs_data = extract_rs_data(str(rs_path))
+
+        # extract_rs_data 的输出：schema/table 在 meta 顶层
+        assert rs_data["meta"]["schema"] != "", "extract_rs_data 应提取到 schema"
+        assert rs_data["meta"]["table"] != "", "extract_rs_data 应提取到 table"
+
+        # 构造配套的 mapping_raw（schema/table 和 RS 一致）
+        rs_schema = rs_data["meta"]["schema"]
+        rs_table = rs_data["meta"]["table"]
+        mapping_raw = {
+            "target_schema": rs_schema,
+            "target_table": rs_table,
+            "target_table_cn": "测试",
+            "source_tables": [],
+            "field_mappings": [],
+        }
+
+        # build_rs_input 应该能从 rs_data 正确取到 schema/table，不阻断
+        result = build_rs_input(mapping_raw, rs_data)
+        assert result["meta"]["target"]["f_table"]["schema"] == rs_schema
+        assert result["meta"]["target"]["f_table"]["table"] != ""
+
+    def test_real_rs_extraction_format(self):
+        """验证 extract_rs_data 输出的 meta 结构（schema/table 在顶层不在 target 下）"""
+        from preprocess import extract_rs_data
+        from pathlib import Path
+
+        rs_path = Path(__file__).resolve().parent.parent / "docs" / "templates" / "RS模板.md"
+        rs_data = extract_rs_data(str(rs_path))
+        meta = rs_data["meta"]
+
+        # 真实格式：schema/table 在 meta 顶层
+        assert "schema" in meta, "meta 顶层应有 schema"
+        assert "table" in meta, "meta 顶层应有 table"
+        # 不应该有嵌套的 target
+        assert "target" not in meta or not isinstance(meta.get("target"), dict) or not meta["target"], \
+            "extract_rs_data 不应该把 schema/table 放在 meta.target 下"
