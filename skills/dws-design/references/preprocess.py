@@ -879,28 +879,41 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
         f_table_name = target_table_raw
         i_view_name = target_table_raw + "_i"
 
-    # 从 RS @asset 提取目标表信息(RS 优先)
+    # 从 RS @asset 提取目标表信息
     rs_meta = rs_data.get("meta", {})
     rs_target = rs_meta.get("target", {}) if isinstance(rs_meta, dict) else {}
-    rs_schema = rs_target.get("schema", target_schema)
-    rs_table = rs_target.get("table", target_table_raw)
+    rs_schema = rs_target.get("schema", "")
+    rs_table = rs_target.get("table", "")
 
-    # RS 的 table 如果也写了 _i，同样推导
-    if rs_table.endswith("_i"):
-        rs_i_view = rs_table
-        rs_f_table = rs_table[:-2] + "_f"
-    elif rs_table.endswith("_f"):
-        rs_f_table = rs_table
-        rs_i_view = rs_table[:-2] + "_i"
+    # schema 和 table 两边互补：RS 有用 RS 的，没有用 mapping 的
+    final_schema = rs_schema or target_schema
+    final_table = rs_table or target_table_raw
+    final_cn = rs_target.get("cn", "") or target_table_cn
+
+    # 校验：两边都有但不一致时告警（不阻断）
+    if rs_schema and target_schema and rs_schema != target_schema:
+        print(f"  ⚠️ 告警: RS schema '{rs_schema}' 和 mapping schema '{target_schema}' 不一致，用 RS 的")
+    if rs_table and target_table_raw and rs_table != target_table_raw:
+        print(f"  ⚠️ 告警: RS 表名 '{rs_table}' 和 mapping 表名 '{target_table_raw}' 不一致，用 RS 的")
+    if not final_schema:
+        print(f"  ⚠️ 告警: RS 和 mapping 都没写 schema，目标表 schema 缺失")
+
+    # 推导 f_table 和 i_view（用最终表名）
+    if final_table.endswith("_i"):
+        i_view_name = final_table
+        f_table_name = final_table[:-2] + "_f"
+    elif final_table.endswith("_f"):
+        f_table_name = final_table
+        i_view_name = final_table[:-2] + "_i"
     else:
-        rs_f_table = rs_table
-        rs_i_view = rs_table + "_i"
+        f_table_name = final_table
+        i_view_name = final_table + "_i"
 
     rs_input: dict[str, Any] = {
         "meta": {
             "target": {
-                "f_table": {"schema": rs_schema, "table": rs_f_table, "cn": target_table_cn},
-                "i_view": {"schema": rs_schema, "table": rs_i_view, "cn": target_table_cn},
+                "f_table": {"schema": final_schema, "table": f_table_name, "cn": final_cn},
+                "i_view": {"schema": final_schema, "table": i_view_name, "cn": final_cn},
             },
             "owner": rs_meta.get("owner", {}) if isinstance(rs_meta, dict) else {},
             "grain": rs_meta.get("grain", "") if isinstance(rs_meta, dict) else "",
