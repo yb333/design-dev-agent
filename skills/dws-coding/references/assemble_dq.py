@@ -54,7 +54,8 @@ def generate_dq_for_table(full_table: str, code: str, business_key: list,
                           audit_fields: dict, dq_rules: list) -> str:
     """为一张表生成 DQ SQL。
 
-    优先用 RS 的 dq_rules，标准检查只补 RS 没覆盖的。
+    脚本只生成确定性的标准 DQ（主键唯一/审计非空/记录数）。
+    RS 定制的 DQ 全部留 TODO 占位交给 coder——不半吊子生成。
     """
     lines = []
     lines.append(f"-- ============================================================")
@@ -63,87 +64,36 @@ def generate_dq_for_table(full_table: str, code: str, business_key: list,
     lines.append(f"-- ============================================================")
     lines.append("")
 
-    # 判断 RS 有没有覆盖
-    has_dup = _has_duplicate_check(dq_rules)
-    has_null = _has_null_check(dq_rules)
-
-    # === RS 提供的 DQ（按 check_type + target 结构化生成，不从描述猜） ===
+    # === RS 定制的 DQ（全部留 TODO，交给 coder 写） ===
     if dq_rules:
-        lines.append(f"-- RS 提供的 DQ（{len(dq_rules)} 条）")
+        lines.append(f"-- 定制 DQ（来自 RS/ts.json，{len(dq_rules)} 条，由 coder 编写 SQL）")
+        lines.append(f"-- coder 读取 ts.json 的 dq_rules，理解每条规则的检查意图，编写对应的 DQ SQL")
         lines.append("")
         for dq in dq_rules:
             rname = dq.get("rule_name", "")
-            rdesc = dq.get("rule_desc", "")
-            rtype = (dq.get("check_type", "") or "").lower()
+            rtype = dq.get("check_type", "")
             target = dq.get("target", "")
             threshold = dq.get("threshold", "")
-            lines.append(f"-- [{rname}] 类型: {rtype}, 对象: {target}")
+            rdesc = dq.get("rule_desc", "")
+            lines.append(f"-- TODO [{rname}]")
+            lines.append(f"--   类型: {rtype}")
+            lines.append(f"--   对象: {target}")
+            if threshold:
+                lines.append(f"--   阈值: {threshold}")
+            if rdesc:
+                lines.append(f"--   描述: {rdesc}")
+            lines.append(f"--   coder 请根据上述信息编写 DQ 检查 SQL")
+            lines.append("")
+    else:
+        lines.append(f"-- 无定制 DQ（ts.json dq_rules 为空）")
+        lines.append("")
 
-            # 按 check_type 精确分类生成 SQL
-            # 唯一性检查
-            if any(k in rtype for k in ["重复", "唯一", "duplicate", "uniqueness"]):
-                key = business_key if business_key else ([target] if target else [])
-                if not key:
-                    lines.append(f"-- TODO: business_key 和 target 都为空，coder 补充唯一性检查字段")
-                else:
-                    key_cols = ", ".join(key)
-                    lines.append(f"SELECT {key_cols}, COUNT(*) AS cnt")
-                    lines.append(f"FROM {full_table}")
-                    lines.append(f"GROUP BY {key_cols}")
-                    lines.append(f"HAVING COUNT(*) > 1;")
-                lines.append("")
-
-            # 空值检查
-            elif any(k in rtype for k in ["空值", "非空", "null"]):
-                # target 是检查的字段名；如果没有，从 rule_name 提取
-                field = target if target else _extract_field_name(rname)
-                if field:
-                    lines.append(f"SELECT COUNT(*) AS null_count_{field}")
-                    lines.append(f"FROM {full_table}")
-                    lines.append(f"WHERE {field} IS NULL;")
-                else:
-                    lines.append(f"-- TODO: 未提取到检查字段，coder 根据 '{rname}' 补充")
-                lines.append("")
-
-            # 值域检查（枚举值，如 del_flag 只能 Y/N）
-            elif any(k in rtype for k in ["值域", "枚举", "value_range", "enum"]):
-                field = target if target else _extract_field_name(rname)
-                if field:
-                    # threshold 通常是合法值列表，如 "Y,N"
-                    if threshold:
-                        vals = ", ".join([f"'{v.strip()}'" for v in threshold.split(",")])
-                        lines.append(f"SELECT COUNT(*) AS invalid_count_{field}")
-                        lines.append(f"FROM {full_table}")
-                        lines.append(f"WHERE {field} NOT IN ({vals});")
-                    else:
-                        lines.append(f"-- TODO: 值域检查缺少 threshold（合法值列表），coder 补充")
-                        lines.append(f"-- 检查字段: {field}")
-                else:
-                    lines.append(f"-- TODO: 未提取到检查字段，coder 根据 '{rname}' 补充")
-                lines.append("")
-
-            # 范围检查（数值范围，如金额 >= 0）
-            elif any(k in rtype for k in ["范围", "range", "负"]):
-                field = target if target else _extract_field_name(rname)
-                if field:
-                    lines.append(f"SELECT COUNT(*) AS invalid_count_{field}")
-                    lines.append(f"FROM {full_table}")
-                    lines.append(f"WHERE {field} < 0;")
-                else:
-                    lines.append(f"-- TODO: 未提取到检查字段，coder 根据 '{rname}' 补充")
-                lines.append("")
-
-            else:
-                # 未知类型——留占位由 coder 补
-                lines.append(f"-- TODO: coder 根据规则 '{rname}'（类型: {rtype}, 对象: {target}）生成 DQ SQL")
-                lines.append("")
-
-    # === 标准检查（只补 RS 没覆盖的） ===
-    lines.append(f"-- 标准检查（补 RS 未覆盖的）")
+    # === 标准 DQ（脚本确定性生成） ===
+    lines.append(f"-- 标准 DQ（脚本自动生成）")
     lines.append("")
 
-    # 标准检查1: 主键唯一（RS 没有重复检查时才生成）
-    if not has_dup and business_key:
+    # 标准1: 主键唯一
+    if business_key:
         key_cols = ", ".join(business_key)
         lines.append(f"-- 主键唯一性（键: {key_cols}）")
         lines.append(f"SELECT {key_cols}, COUNT(*) AS cnt")
@@ -152,16 +102,15 @@ def generate_dq_for_table(full_table: str, code: str, business_key: list,
         lines.append(f"HAVING COUNT(*) > 1;")
         lines.append("")
 
-    # 标准检查2: 审计字段非空（RS 没有空值检查时才生成）
-    if not has_null:
-        lines.append(f"-- 审计字段非空")
-        for aname in audit_fields:
-            lines.append(f"SELECT COUNT(*) AS null_count_{aname}")
-            lines.append(f"FROM {full_table}")
-            lines.append(f"WHERE {aname} IS NULL;")
-        lines.append("")
+    # 标准2: 审计字段非空
+    lines.append(f"-- 审计字段非空")
+    for aname in audit_fields:
+        lines.append(f"SELECT COUNT(*) AS null_count_{aname}")
+        lines.append(f"FROM {full_table}")
+        lines.append(f"WHERE {aname} IS NULL;")
+    lines.append("")
 
-    # 标准检查3: 记录数（RS 不会覆盖这个，总是生成）
+    # 标准3: 记录数
     lines.append(f"-- 记录数合理性")
     lines.append(f"SELECT COUNT(*) AS total_count")
     lines.append(f"FROM {full_table};")
