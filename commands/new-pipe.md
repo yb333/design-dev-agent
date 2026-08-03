@@ -18,8 +18,8 @@ agent: build
 └── ddlc_design_dev/                      ← 你建（标识产出范围）
     ├── ts.json                           ← 设计产出（对外）
     ├── ts.md                             ← 设计产出（人读）
-    ├── select/                           ← 编码产出（coder 产的 SELECT）
-    │   └── R0001_select.sql
+    ├── etl/                              ← 编码产出（coder 产的 SELECT）
+    │   └── R0001.sql
     ├── ddl/                              ← 编码产出（脚本生成的 DDL）
     │   └── create_table_xxx.sql
     └── _internal/                        ← 过程产物
@@ -123,13 +123,13 @@ python {scripts}/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/ddl
 Task(
   subagent_type="dws-coder",
   description="编码 {rule_code}",
-  prompt="ts.json 路径: {deliver}/ts.json，编码规则: {rule_code}，产出 SELECT 到 {deliver}/select/。"
+  prompt="ts.json 路径: {deliver}/ts.json，编码规则: {rule_code}，产出 SELECT 到 {deliver}/etl/。"
 )
 ```
 
 **记住每个 coder 调用返回的 task_id**（规则→会话映射，执行回路要用）。
 
-coder 完成后验证 `{deliver}/select/{rule_code}_select.sql` 已生成。
+coder 完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
 > coder 内部会：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。
 > 如果 coder 报"静态对比不过"，记录失败规则，继续后面的规则（不阻塞）。
@@ -145,7 +145,7 @@ coder 完成后验证 `{deliver}/select/{rule_code}_select.sql` 已生成。
 ```bash
 python {scripts}/run_ut.py \
   --ts {deliver}/ts.json \
-  --select-dir {deliver}/select \
+  --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
   --source {数据源名}
 ```
@@ -188,7 +188,7 @@ coder 改完后重跑步骤6验证。**每个规则限 3 轮**。
 
 ### 产出文件
 - ts.json / ts.md（设计制品）
-- select/*.sql（编码制品）
+- etl/*.sql（编码制品）
 - ddl/*.sql（建表脚本）
 
 请选择：

@@ -76,7 +76,7 @@ ASSET=dwb_user_center_f
 DELIVER=10_project_deliver/$ASSET/ddlc_design_dev
 cat $DELIVER/ts.json | python3 -m json.tool | head -20
 cat $DELIVER/_internal/design_decisions.yaml | head -30
-cat $DELIVER/select/R0001_select.sql
+cat $DELIVER/etl/R0001.sql
 ```
 
 ### 第四步：发现问题自行修复

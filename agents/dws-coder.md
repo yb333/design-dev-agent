@@ -18,7 +18,7 @@ permission:
   read: allow
   edit:
     "*": deny
-    "**/ddlc_design_dev/select/*.sql": allow
+    "**/ddlc_design_dev/etl/*.sql": allow
   # 禁止 MCP 工具
   "mcp_*": deny
   skill:
@@ -50,7 +50,7 @@ python {skill目录}/references/slice_ts.py --ts {ts路径} --rule R0001
 
 # 产出
 
-**唯一产出：`10_project_deliver/{资产名}/ddlc_design_dev/select/R0001_select.sql`**
+**唯一产出：`10_project_deliver/{资产名}/ddlc_design_dev/etl/R0001.sql`**
 
 这个文件只含 SELECT 语句（加工逻辑），不含 INSERT/DDL。
 INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
@@ -82,7 +82,7 @@ INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 写完 SELECT 后，调 check_sql.py 静态对比（SELECT vs 切片）：
 
 ```bash
-python {skill目录}/references/check_sql.py --select R0001_select.sql --ts {ts路径} --rule R0001
+python {skill目录}/references/check_sql.py --select R0001.sql --ts {ts路径} --rule R0001
 ```
 
 - 对比不过 → 自己改 SELECT → 重对比（最多3轮）

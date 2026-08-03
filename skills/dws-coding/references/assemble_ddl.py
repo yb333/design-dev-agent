@@ -170,38 +170,84 @@ def type_or_empty(t: str) -> str:
     return t if t else ""
 
 
-def generate_ddl(ts: dict) -> dict[str, str]:
-    """从 ts.json 生成所有规则的 DDL。
+def generate_rollback(schema: str, table: str, is_view: bool = False) -> str:
+    """生成回退脚本（DROP）"""
+    obj_type = "VIEW" if is_view else "TABLE"
+    cn = ""
+    lines = []
+    lines.append(f"/* 回退脚本: DROP {obj_type} {schema}.{table} */")
+    lines.append(f"DROP {obj_type} IF EXISTS {schema}.{table};")
+    lines.append("")
+    return "\n".join(lines)
 
-    返回 {文件名: DDL内容}。
+
+def generate_i_view(schema: str, f_table: str, cn: str) -> str:
+    """生成 I视图 DDL（F表镜像：SELECT * FROM ..._f）"""
+    i_table = f_table[:-2] + "_i" if f_table.endswith("_f") else f_table + "_i"
+    lines = []
+    lines.append(f"/* I视图: {schema}.{i_table}（{cn}，F表镜像，对外消费接口） */")
+    lines.append(f"CREATE OR REPLACE VIEW {schema}.{i_table} AS")
+    lines.append(f"SELECT * FROM {schema}.{f_table};")
+    lines.append("")
+    lines.append(f"COMMENT ON TABLE {schema}.{i_table} IS '{cn}（视图）';")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
+    """从 ts.json 生成所有 DDL + 回退脚本。
+
+    返回 (ddl_dict, rollback_dict)。
+    ddl_dict: {文件名: 内容}，写到 ddl/
+    rollback_dict: {文件名: 内容}，写到 ddl_rollback/
     """
     rules = ts.get("rules", {})
     design = ts.get("design", {})
     meta = ts.get("meta", {})
+    target_meta = meta.get("target", {})
+    f_table_name = target_meta.get("f_table", {}).get("table", "")
+    f_schema = target_meta.get("f_table", {}).get("schema", "")
+    f_cn = target_meta.get("f_table", {}).get("cn", "")
 
-    result = {}
+    ddl_result = {}
+    rollback_result = {}
+    generated_i_views = set()  # 避免重复生成 I视图
+
     for code, rule in rules.items():
         target = rule.get("target_table", "")
-        _, table = split_table_ref(target)
+        schema, table = split_table_ref(target)
+        if not schema:
+            schema = f_schema
 
         if rule.get("is_view_step", False):
-            # 视图
+            # 显式视图步骤
             filename = f"create_view_{table}.sql"
-            result[filename] = generate_create_view(code, rule, meta)
+            ddl_result[filename] = generate_create_view(code, rule, meta)
+            rollback_result[f"rollback_create_view_{table}.sql"] = generate_rollback(schema, table, is_view=True)
         else:
             # 表
             filename = f"create_table_{table}.sql"
-            result[filename] = generate_create_table(code, rule, design, meta)
+            ddl_result[filename] = generate_create_table(code, rule, design, meta)
+            rollback_result[f"rollback_create_table_{table}.sql"] = generate_rollback(schema, table)
 
-    return result
+            # 如果是目标F表，自动配套生成 I视图（F+I成对）
+            if table == f_table_name and f_table_name:
+                i_table = f_table_name[:-2] + "_i" if f_table_name.endswith("_f") else f_table_name + "_i"
+                if i_table not in generated_i_views:
+                    generated_i_views.add(i_table)
+                    i_filename = f"create_view_{i_table}.sql"
+                    ddl_result[i_filename] = generate_i_view(schema, f_table_name, f_cn)
+                    rollback_result[f"rollback_create_view_{i_table}.sql"] = generate_rollback(schema, i_table, is_view=True)
+
+    return ddl_result, rollback_result
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DDL 生成器: 从 ts.json 自动生成 CREATE TABLE/VIEW DDL"
+        description="DDL 生成器: 从 ts.json 自动生成 CREATE TABLE/VIEW DDL + 回退脚本"
     )
     parser.add_argument("--ts", required=True, help="ts.json 路径")
-    parser.add_argument("--outdir", required=True, help="DDL 输出目录")
+    parser.add_argument("--outdir", required=True, help="DDL 输出根目录（ddl/ 和 ddl_rollback/ 在下面）")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -210,17 +256,22 @@ def main():
         sys.exit(2)
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
-    ddls = generate_ddl(ts)
+    ddls, rollbacks = generate_ddl(ts)
 
-    outdir = Path(args.outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    ddl_dir = Path(args.outdir) / "ddl"
+    rollback_dir = Path(args.outdir) / "ddl_rollback"
+    ddl_dir.mkdir(parents=True, exist_ok=True)
+    rollback_dir.mkdir(parents=True, exist_ok=True)
 
     for filename, content in ddls.items():
-        path = outdir / filename
-        path.write_text(content, encoding="utf-8")
-        print(f"  ✓ {filename}")
+        (ddl_dir / filename).write_text(content, encoding="utf-8")
+        print(f"  ✓ ddl/{filename}")
 
-    print(f"\n[完成] 生成 {len(ddls)} 个 DDL 文件到 {outdir}")
+    for filename, content in rollbacks.items():
+        (rollback_dir / filename).write_text(content, encoding="utf-8")
+        print(f"  ✓ ddl_rollback/{filename}")
+
+    print(f"\n[完成] {len(ddls)} 个 DDL + {len(rollbacks)} 个回退脚本")
 
 
 if __name__ == "__main__":

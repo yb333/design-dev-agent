@@ -179,7 +179,7 @@ def step_designer(report, deliver, skip_ai):
 
 def step_coder(report, deliver, rule_code, skip_ai):
     """步骤4: coder 产 SELECT"""
-    select_dir = deliver / "select"
+    select_dir = deliver / "etl"
     select_dir.mkdir(exist_ok=True)
 
     if skip_ai:
@@ -189,14 +189,14 @@ def step_coder(report, deliver, rule_code, skip_ai):
     abs_ts = str((ROOT / deliver / "ts.json").resolve())
     abs_select = str((ROOT / select_dir).resolve())
 
-    prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_select}/{rule_code}_select.sql"
+    prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_select}/{rule_code}.sql"
 
     code, out, err = run_cmd(
         ["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt],
         timeout=1800  # 大案例多规则可能需要30分钟
     )
 
-    select_file = select_dir / f"{rule_code}_select.sql"
+    select_file = select_dir / f"{rule_code}.sql"
     if select_file.exists():
         content = select_file.read_text(encoding="utf-8")
         n_lines = len(content.strip().splitlines())
@@ -225,7 +225,7 @@ def step_assemble_ddl(report, deliver):
 
 def step_check_sql(report, deliver, rule_code):
     """步骤6: 静态对比"""
-    select_file = deliver / "select" / f"{rule_code}_select.sql"
+    select_file = deliver / "etl" / f"{rule_code}.sql"
     if not select_file.exists():
         report.fail_step("静态对比(check_sql)", "SELECT文件不存在")
         return False

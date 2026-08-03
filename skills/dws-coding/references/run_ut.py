@@ -20,7 +20,7 @@ UT 检查项（全脚本化）：
 6. （数据截断检查留扩展）
 
 用法:
-  python run_ut.py --ts ts.json --select-dir select/ --ddl-dir ddl/ --db-config db-sources.json
+  python run_ut.py --ts ts.json --select-dir etl/ --ddl-dir ddl/ --db-config db-sources.json
 
 退出码: 0=全部通过, 1=有失败
 """
@@ -58,8 +58,8 @@ def wrap_insert(select_sql: str, target_table: str, fields: list, audit_fields: 
 
 def read_select(select_dir: Path, rule_code: str) -> str:
     """读 coder 产的 SELECT 文件"""
-    # 文件名约定：{rule_code}_select.sql
-    path = select_dir / f"{rule_code}_select.sql"
+    # 文件名约定：{rule_code}.sql
+    path = select_dir / f"{rule_code}.sql"
     if not path.exists():
         # 尝试其他命名
         candidates = list(select_dir.glob(f"*{rule_code}*.sql"))

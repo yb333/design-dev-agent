@@ -55,6 +55,7 @@ class AttributeMapping:
     source_alias: str = ''
     scene_group: str = ''
     remark: str = ''
+    source_column_cn: str = ''
 
 
 class ExcelMappingParser:
@@ -68,39 +69,28 @@ class ExcelMappingParser:
     DESIGN_CONFIG_SHEET_NAMES = ['设计配置', 'design_config']
     DATA_FLOW_SHEET_NAMES = ['数据处理步骤', 'data_flow', 'DataFlow']
 
-    # 实体级 mapping 列名映射
+    # 实体级 mapping 列名映射（按 mapping模板.xlsx 权威列名，不做模糊匹配）
     ENTITY_COLUMN_MAP = {
-        '源表schema': 'source_schema',
+        '源Schema': 'source_schema',
         '源表物理表名': 'source_table',
         '源表中文名': 'source_table_cn',
-        '源表别名': 'source_alias',
+        '源表物理表别名': 'source_alias',
         '目标表schema': 'target_schema',
         '目标表中文名': 'target_table_cn',
         '目标表物理表名': 'target_table',
         '关联&限定条件': 'join_condition',
         '备注': 'remark',
-        '调度任务名称': 'schedule_task',
-        '执行路径': 'exec_path',
-        '依赖参数': 'dep_job_params',
         '分组': 'scene_group',
-        '场景分组': 'scene_group',
-        '数据分组': 'scene_group',
-        '分组名称': 'scene_group',
-        '场景': 'scene_group',
-        '场景名称': 'scene_group',
     }
     
-    # 属性级 mapping 列名映射(支持多种列名格式)
+    # 属性级 mapping 列名映射（按 mapping模板.xlsx 权威列名，不做模糊匹配）
     ATTRIBUTE_COLUMN_MAP = {
-        '源表schema': 'source_schema',
+        '源Schema': 'source_schema',
         '源表物理表名': 'source_table',
-        '源表别名': 'source_alias',
-        '源字段名': 'source_column',
+        '源表物理表别名': 'source_alias',
         '源表字段名': 'source_column',
-        '源字段类型': 'source_type',
+        '源表字段中文名': 'source_column_cn',
         '源表字段类型': 'source_type',
-        '数据类型': 'source_type',
-        '字段类型': 'source_type',
         '映射规则': 'mapping_rule',
         '映射表达式': 'mapping_expression',
         '目标字段名': 'target_column',
@@ -108,11 +98,6 @@ class ExcelMappingParser:
         '目标字段类型': 'target_type',
         '备注': 'remark',
         '分组': 'scene_group',
-        '场景分组': 'scene_group',
-        '数据分组': 'scene_group',
-        '分组名称': 'scene_group',
-        '场景': 'scene_group',
-        '场景名称': 'scene_group',
     }
     
     def __init__(self, filepath: str):
@@ -235,6 +220,7 @@ class ExcelMappingParser:
                     source_table=self._safe_str(row.get('source_table', '')),
                     source_column=self._safe_str(row.get('source_column', '')),
                     source_type=self._safe_str(row.get('source_type', '')),
+                    source_column_cn=self._safe_str(row.get('source_column_cn', '')),
                     mapping_rule=self._safe_str(row.get('mapping_rule', '直取')),
                     mapping_expression=self._safe_str(row.get('mapping_expression', '')),
                     target_column=self._safe_str(row.get('target_column', '')),
@@ -257,6 +243,7 @@ class ExcelMappingParser:
                             source_table=inferred_table.get('table', ''),
                             source_column=mapping.source_column,
                             source_type=mapping.source_type,
+                            source_column_cn=mapping.source_column_cn,
                             mapping_rule=mapping.mapping_rule,
                             mapping_expression=mapping.mapping_expression,
                             target_column=mapping.target_column,
