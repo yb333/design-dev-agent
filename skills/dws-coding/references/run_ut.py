@@ -146,14 +146,25 @@ def main():
     business_key = design.get("business_key", [])
     data_flow = ts.get("data_flow", {})
 
-    # 连库
+    # 连库——按 schema 自动匹配数据源
     try:
-        executor = create_executor(args.db_config, args.source)
+        # 从 ts.json 读目标 schema，按 schema_mapping 自动选数据源
+        target_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
+        source = args.source
+        if not source and target_schema:
+            import os
+            config_path = args.db_config or os.environ.get(
+                "DB_CONFIG",
+                str(Path.home() / ".config" / "opencode" / "db-sources.json"),
+            )
+            from dws_db import resolve_source_by_schema
+            source = resolve_source_by_schema(config_path, target_schema)
+        executor = create_executor(args.db_config, source)
     except Exception as e:
         print(f"错误: 连库失败: {e}", file=sys.stderr)
         sys.exit(2)
 
-    print(f"数据源: {executor.get_current_source()}")
+    print(f"数据源: {executor.get_current_source()}（schema: {target_schema}）")
     print(f"规则数: {len(rules)}")
     print()
 

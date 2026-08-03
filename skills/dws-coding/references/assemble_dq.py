@@ -38,6 +38,18 @@ def _has_null_check(dq_rules: list) -> bool:
     return False
 
 
+def _extract_field_name(text: str) -> str:
+    """从规则名称/描述中提取字段名（英文字段名）。
+
+    如 'order_id非空检查' → 'order_id'
+    如 'del_flag值域检查' → 'del_flag'
+    如 '金额不能为负' → ''（中文描述提取不到英文字段名）
+    """
+    import re
+    m = re.search(r'[a-z_][a-z0-9_]*', text.lower())
+    return m.group(0) if m else ""
+
+
 def generate_dq_for_table(full_table: str, code: str, business_key: list,
                           audit_fields: dict, dq_rules: list) -> str:
     """为一张表生成 DQ SQL。
@@ -55,65 +67,75 @@ def generate_dq_for_table(full_table: str, code: str, business_key: list,
     has_dup = _has_duplicate_check(dq_rules)
     has_null = _has_null_check(dq_rules)
 
-    # === RS 提供的 DQ（全部输出，target 是检查对象不是过滤条件） ===
+    # === RS 提供的 DQ（按 check_type + target 结构化生成，不从描述猜） ===
     if dq_rules:
         lines.append(f"-- RS 提供的 DQ（{len(dq_rules)} 条）")
         lines.append("")
         for dq in dq_rules:
             rname = dq.get("rule_name", "")
             rdesc = dq.get("rule_desc", "")
-            rtype = dq.get("check_type", "")
-            lines.append(f"-- [{rname}] 类型: {rtype}")
-            lines.append(f"-- 描述: {rdesc}")
+            rtype = (dq.get("check_type", "") or "").lower()
+            target = dq.get("target", "")
+            threshold = dq.get("threshold", "")
+            lines.append(f"-- [{rname}] 类型: {rtype}, 对象: {target}")
 
-            # 根据检查类型生成 SQL
-            rtype_lower = (rtype + rname + rdesc).lower()
-
-            if any(k in rtype_lower for k in ["重复", "唯一", "unique", "duplicate"]):
-                # 唯一性检查
-                if not business_key:
-                    lines.append(f"-- TODO: business_key 为空，coder 根据 '{rdesc}' 补充唯一性检查字段")
-                    lines.append("")
-                    continue
-                key_cols = ", ".join(business_key)
-                lines.append(f"SELECT {key_cols}, COUNT(*) AS cnt")
-                lines.append(f"FROM {full_table}")
-                lines.append(f"GROUP BY {key_cols}")
-                lines.append(f"HAVING COUNT(*) > 1;")
+            # 按 check_type 精确分类生成 SQL
+            # 唯一性检查
+            if any(k in rtype for k in ["重复", "唯一", "duplicate", "uniqueness"]):
+                key = business_key if business_key else ([target] if target else [])
+                if not key:
+                    lines.append(f"-- TODO: business_key 和 target 都为空，coder 补充唯一性检查字段")
+                else:
+                    key_cols = ", ".join(key)
+                    lines.append(f"SELECT {key_cols}, COUNT(*) AS cnt")
+                    lines.append(f"FROM {full_table}")
+                    lines.append(f"GROUP BY {key_cols}")
+                    lines.append(f"HAVING COUNT(*) > 1;")
                 lines.append("")
 
-            elif any(k in rtype_lower for k in ["空值", "非空", "null"]):
-                # 空值检查——从规则描述提取字段名
-                import re
-                fields = re.findall(r'[a-z_]+', rdesc.lower())
-                # 排除常见干扰词
-                fields = [f for f in fields if f not in ["不能为空", "为空", "非空", "不", "的", "和", "与"] and len(f) > 2]
-                if not fields:
-                    fields = ["order_id"]  # 兜底
-                for f in fields[:5]:  # 最多5个字段
-                    lines.append(f"SELECT COUNT(*) AS null_count_{f}")
+            # 空值检查
+            elif any(k in rtype for k in ["空值", "非空", "null"]):
+                # target 是检查的字段名；如果没有，从 rule_name 提取
+                field = target if target else _extract_field_name(rname)
+                if field:
+                    lines.append(f"SELECT COUNT(*) AS null_count_{field}")
                     lines.append(f"FROM {full_table}")
-                    lines.append(f"WHERE {f} IS NULL;")
+                    lines.append(f"WHERE {field} IS NULL;")
+                else:
+                    lines.append(f"-- TODO: 未提取到检查字段，coder 根据 '{rname}' 补充")
                 lines.append("")
 
-            elif any(k in rtype_lower for k in ["范围", "负", "range", "负数"]):
-                # 范围检查——从描述提取字段名和条件
-                fields = re.findall(r'([a-z_]+)\s*(?:>=|<=|>|<|=)', rdesc.lower())
-                if not fields:
-                    fields = re.findall(r'([a-z_]+)', rdesc.lower())
-                    fields = [f for f in fields if len(f) > 2 and f not in ["total", "amount"][:0]]  # 保留有意义的
-                    if not fields:
-                        fields = ["total_amount"]
-                # 生成 >= 0 检查（最常见的范围检查）
-                for f in fields[:3]:
-                    lines.append(f"SELECT COUNT(*) AS negative_count_{f}")
+            # 值域检查（枚举值，如 del_flag 只能 Y/N）
+            elif any(k in rtype for k in ["值域", "枚举", "value_range", "enum"]):
+                field = target if target else _extract_field_name(rname)
+                if field:
+                    # threshold 通常是合法值列表，如 "Y,N"
+                    if threshold:
+                        vals = ", ".join([f"'{v.strip()}'" for v in threshold.split(",")])
+                        lines.append(f"SELECT COUNT(*) AS invalid_count_{field}")
+                        lines.append(f"FROM {full_table}")
+                        lines.append(f"WHERE {field} NOT IN ({vals});")
+                    else:
+                        lines.append(f"-- TODO: 值域检查缺少 threshold（合法值列表），coder 补充")
+                        lines.append(f"-- 检查字段: {field}")
+                else:
+                    lines.append(f"-- TODO: 未提取到检查字段，coder 根据 '{rname}' 补充")
+                lines.append("")
+
+            # 范围检查（数值范围，如金额 >= 0）
+            elif any(k in rtype for k in ["范围", "range", "负"]):
+                field = target if target else _extract_field_name(rname)
+                if field:
+                    lines.append(f"SELECT COUNT(*) AS invalid_count_{field}")
                     lines.append(f"FROM {full_table}")
-                    lines.append(f"WHERE {f} < 0;")
+                    lines.append(f"WHERE {field} < 0;")
+                else:
+                    lines.append(f"-- TODO: 未提取到检查字段，coder 根据 '{rname}' 补充")
                 lines.append("")
 
             else:
                 # 未知类型——留占位由 coder 补
-                lines.append(f"-- TODO: coder 根据 '{rdesc}' 生成 DQ SQL")
+                lines.append(f"-- TODO: coder 根据规则 '{rname}'（类型: {rtype}, 对象: {target}）生成 DQ SQL")
                 lines.append("")
 
     # === 标准检查（只补 RS 没覆盖的） ===

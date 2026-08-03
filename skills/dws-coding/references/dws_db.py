@@ -84,10 +84,10 @@ def resolve_password(password: str) -> str:
     return password
 
 
-def load_db_sources(config_path: str) -> tuple[dict[str, DataSource], str, SecurityConfig]:
+def load_db_sources(config_path: str) -> tuple[dict[str, DataSource], str, SecurityConfig, dict]:
     """加载 db-sources.json 配置。
 
-    返回 (数据源字典, 默认数据源名, 安全配置)。
+    返回 (数据源字典, 默认数据源名, 安全配置, schema映射)。
     """
     p = Path(config_path)
     if not p.exists():
@@ -120,7 +120,22 @@ def load_db_sources(config_path: str) -> tuple[dict[str, DataSource], str, Secur
         timeout=sec_raw.get("timeout", 0),
     )
 
-    return sources, default, security
+    schema_mapping = raw.get("schema_mapping", {})
+
+    return sources, default, security, schema_mapping
+
+
+def resolve_source_by_schema(config_path: str, schema: str) -> str:
+    """按 schema 从 schema_mapping 查找对应的数据源名。
+
+    找不到就用 default。
+    """
+    p = Path(config_path)
+    if not p.exists():
+        return ""
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    schema_mapping = raw.get("schema_mapping", {})
+    return schema_mapping.get(schema, raw.get("default", ""))
 
 
 # ============================================================
@@ -181,7 +196,7 @@ class PsycopgExecutor(DBExecutor):
                 "psycopg2 未安装。请运行: pip install psycopg2-binary"
             )
         self._config_path = config_path
-        self._sources, self._default, self._security = load_db_sources(config_path)
+        self._sources, self._default, self._security, self._schema_mapping = load_db_sources(config_path)
 
         if not self._sources:
             raise ValueError(f"db-sources.json 里没有配置任何数据源: {config_path}")

@@ -22,6 +22,12 @@
       "sslrootcert": "/path/to/dws-ca.pem"
     }
   },
+  "schema_mapping": {
+    "fin_dwl_cnb": "dws-dev",
+    "fin_dwb_isc": "dws-dev",
+    "dwrdim_dw1": "dws-dev",
+    "dws_rt": "dws-prod"
+  },
   "security": {
     "allowWriteOperations": true,
     "maxRows": 1000,
