@@ -337,11 +337,12 @@ def main():
 
     report_text = "\n".join(report_lines)
 
-    # 写 ut_report.md
+    # 写 ut_report.md（文件名带资产名）
     report_path = args.report
     if not report_path:
-        # 默认写到 ts.json 同级目录
-        report_path = str(Path(args.ts).parent / "ut_report.md")
+        # 从 ts.json 取资产名
+        f_table_name = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "ts")
+        report_path = str(Path(args.ts).parent / f"{f_table_name}_ut_report.md")
     Path(report_path).write_text(report_text, encoding="utf-8")
 
     print("=" * 50)

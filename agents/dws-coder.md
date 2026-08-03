@@ -50,7 +50,12 @@ python {skill目录}/references/slice_ts.py --ts {ts路径} --rule R0001
 
 # 产出
 
-**唯一产出：`10_project_deliver/{资产名}/ddlc_design_dev/etl/R0001.sql`**
+**唯一产出：`10_project_deliver/{资产名}/ddlc_design_dev/etl/{编号}_{规则名简称}_{写入方式}.sql`**
+
+文件命名规则：`R0001_订单汇总_truncate_table.sql`
+- 编号：R0001（从切片的 rule_code 取）
+- 规则名简称：从切片的 rule_name 取关键词（去掉空格，简短）
+- 写入方式：从切片的 load_mode 取（truncate_table / no_delete / truncate_partition）
 
 这个文件只含 SELECT 语句（加工逻辑），不含 INSERT/DDL。
 INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。

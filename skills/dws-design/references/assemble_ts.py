@@ -195,6 +195,7 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "target_table": rule_dec.get("target_table", ""),
         "is_view_step": rule_dec.get("is_view_step", False),
         "design_intent": rule_dec.get("design_intent", ""),
+        "load_mode": rule_dec.get("load_mode", "truncate_table"),
         "source_tables": rule_sources,
         "ctes": rule_dec.get("ctes", []),
         "grain": rule_dec.get("grain", {}),
@@ -653,13 +654,15 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
+    # 从 ts.json 取资产名（f_table 表名）用于 md 文件命名
+    asset_name = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "ts")
     ts_json_path = outdir / "ts.json"
     ts_json_path.write_text(json.dumps(ts, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n产出 ts.json: {ts_json_path}")
 
-    ts_md_path = outdir / "ts.md"
+    ts_md_path = outdir / f"{asset_name}_ts.md"
     ts_md_path.write_text(render_md(ts), encoding="utf-8")
-    print(f"产出 ts.md: {ts_md_path}")
+    print(f"产出 {asset_name}_ts.md: {ts_md_path}")
 
     # 6. 摘要
     rules = ts["rules"]

@@ -22,6 +22,7 @@ rules:
     target_table: ""                    # 产出表名（中间表/目标F表/视图I表）
     is_view_step: false                 # 是否视图步骤
     design_intent: ""                   # 该规则的设计意图（自然语言，一句话说清为什么这样拆）
+    load_mode: "truncate_table"         # 写入方式: truncate_table(全量) | no_delete(追加) | truncate_partition(增量分区)
 
     # 该规则产出哪些目标字段（填 target_column 名，脚本据此从 rs_input 搬字段详情）
     field_targets:
