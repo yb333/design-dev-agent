@@ -374,29 +374,8 @@ class ExcelMappingParser:
         for col in df.columns:
             col_clean = self._clean_column_name(col)
 
-            best_key = None
-
-            # Layer 1: exact match
-            if col_clean in column_map:
-                best_key = col_clean
-
-            # Layer 2: substring match (longest key first)
-            if best_key is None:
-                for key in sorted(remaining_keys, key=len, reverse=True):
-                    if key in col_clean:
-                        best_key = key
-                        break
-
-            # Layer 3: fuzzy match (SequenceMatcher, threshold 0.75)
-            if best_key is None and remaining_keys:
-                fuzzy = self._fuzzy_match(col_clean, remaining_keys)
-                if fuzzy:
-                    best_key, score = fuzzy
-                    self.diagnostics.append({
-                        'type': 'column_fuzzy_match',
-                        'sheet': '',
-                        'message': f'列 "{col}" 模糊匹配到 "{best_key}"(相似度: {score:.0%})',
-                    })
+            # 只精确匹配，不做子串/模糊匹配
+            best_key = col_clean if col_clean in column_map else None
 
             if best_key is None:
                 continue
@@ -408,8 +387,7 @@ class ExcelMappingParser:
                 self.diagnostics.append({
                     'type': 'duplicate_column_mapping',
                     'sheet': '',
-                    'message': f'列 "{col}" 映射到 "{target}" 失败: 已有其他列映射到该字段, '
-                               f'请检查 Excel 中是否存在重复或含义重叠的列(如同时存在"源字段名"和"源表字段名")',
+                    'message': f'列 "{col}" 映射到 "{target}" 失败: 已有其他列映射到该字段',
                 })
                 continue
 
@@ -426,17 +404,6 @@ class ExcelMappingParser:
             col_clean = self._clean_column_name(col)
             if col_clean in column_map:
                 actual_cols.add(column_map[col_clean])
-            else:
-                matched = False
-                for key in sorted(column_map.keys(), key=len, reverse=True):
-                    if key in col_clean and column_map[key] not in actual_cols:
-                        actual_cols.add(column_map[key])
-                        matched = True
-                        break
-                if not matched:
-                    fuzzy = self._fuzzy_match(col_clean, list(column_map.keys()))
-                    if fuzzy and column_map[fuzzy[0]] not in actual_cols:
-                        actual_cols.add(column_map[fuzzy[0]])
         
         if required:
             for req_field in required:

@@ -174,6 +174,13 @@ def main():
                 continue
 
             target = rule.get("target_table", "")
+            # 确保 target 带 schema（没有的话从 meta 补全）
+            if target and "." not in target:
+                f_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
+                if f_schema:
+                    target = f"{f_schema}.{target}"
+            # 提取纯表名（DDL 文件查找用）
+            _, table_name = (target.split(".", 1) + [""])[:2] if "." in target else ("", target)
             is_view = rule.get("is_view_step", False)
             rule_result = {"rule": rule_code, "target": target, "checks": []}
 
