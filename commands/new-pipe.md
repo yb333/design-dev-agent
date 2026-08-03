@@ -7,10 +7,6 @@ agent: build
 
 用户输入：$ARGUMENTS（资产名或 mapping/RS 文件路径）
 
-> **⚠️ 平台规则**：本项目运行环境是 Windows。所有脚本调用用 `python`（不是 `python3`）。
-> 路径用反斜杠 `\` 或让 Python 自动处理。不使用 bash 变量语法（`$()`、`$VAR`）。
-> 定位文件路径时用 Python 命令（`python -c "..."`），不用 shell 命令。
-
 ---
 
 ## 产出目录结构
