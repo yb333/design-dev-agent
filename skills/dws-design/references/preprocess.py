@@ -85,7 +85,7 @@ class ExcelMappingParser:
     
     # 属性级 mapping 列名映射（按 mapping模板.xlsx 权威列名，不做模糊匹配）
     ATTRIBUTE_COLUMN_MAP = {
-        '源Schema': 'source_schema',
+        '源schema': 'source_schema',
         '源表物理表名': 'source_table',
         '源表物理表别名': 'source_alias',
         '源表字段名': 'source_column',
@@ -480,7 +480,7 @@ class ExcelMappingParser:
 
     @staticmethod
     def _clean_column_name(col: str) -> str:
-        """预处理列名: strip 空白/尾部*, 全角->半角"""
+        """预处理列名: strip 空白/尾部*, 全角->半角, 英文统一小写"""
         s = str(col).strip()
         s = s.rstrip('*').strip()
         s = s.translate(str.maketrans(
@@ -491,9 +491,8 @@ class ExcelMappingParser:
             'abcdefghijklmnopqrstuvwxyz'
             '0123456789&',
         ))
+        s = s.lower()  # 英文统一小写，不区分 Schema/schema
         return s
-
-    @staticmethod
     def _fuzzy_match(col: str, keys: List[str], threshold: float = 0.75) -> Optional[Tuple[str, float]]:
         best_key = ''
         best_score = 0.0
