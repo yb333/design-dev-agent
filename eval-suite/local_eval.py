@@ -212,11 +212,29 @@ def step_assemble_ddl(report, deliver):
     ddl_dir = deliver / "ddl"
     code, out = run_python(
         str(CODING_REFS / "assemble_ddl.py"),
-        ["--ts", str(deliver / "ts.json"), "--outdir", str(ddl_dir)]
+        ["--ts", str(deliver / "ts.json"), "--outdir", str(deliver)]
     )
-    ddl_files = list(ddl_dir.glob("*.sql")) if ddl_dir.exists() else []
+    ddl_dir_real = deliver / "ddl"
+    rollback_dir = deliver / "ddl_rollback"
+    ddl_files = list(ddl_dir_real.glob("*.sql")) if ddl_dir_real.exists() else []
+    rollback_files = list(rollback_dir.glob("*.sql")) if rollback_dir.exists() else []
+
     if code == 0 and ddl_files:
-        report.pass_step("DDL生成(assemble_ddl)", f"{len(ddl_files)}个文件")
+        report.pass_step("DDL生成(assemble_ddl)", f"{len(ddl_files)}个DDL + {len(rollback_files)}个回退")
+
+        # DDL 内容质量检查
+        # 1. I视图不能用 SELECT *
+        for vf in ddl_dir_real.glob("create_view_*.sql"):
+            content = vf.read_text(encoding="utf-8")
+            if "SELECT *" in content and "SELECT * FROM" in content:
+                report.add_issue("DDL质量", f"{vf.name} 使用了 SELECT *（应列出全部字段）")
+
+        # 2. 每个DDL文件应有对应的回退脚本
+        for df in ddl_files:
+            rollback_name = f"rollback_{df.name}"
+            if not (rollback_dir / rollback_name).exists():
+                report.add_issue("DDL质量", f"{df.name} 缺少回退脚本 {rollback_name}")
+
         return True
     else:
         report.fail_step("DDL生成(assemble_ddl)", out[:200])
@@ -266,6 +284,17 @@ def step_validate_ts(report, deliver):
     audit = ts.get("design", {}).get("audit_fields", {})
     if len(audit) < 4:
         issues.append(f"audit_fields 不足4个: {list(audit.keys())}")
+
+    # source_column 不能是中文（preprocess 映射 bug 检查）
+    rs_input_path = deliver / "_internal" / "rs_input.json"
+    if rs_input_path.exists():
+        rs = json.loads(rs_input_path.read_text(encoding="utf-8"))
+        import re
+        for fm in rs.get("field_mappings", []):
+            sc = fm.get("source_column", "")
+            if sc and re.search(r'[\u4e00-\u9fff]', sc):
+                issues.append(f"source_column 含中文: '{sc}'（应为英文字段名，检查 preprocess 列映射）")
+                break  # 报一次就够
 
     if issues:
         for iss in issues:

@@ -65,12 +65,22 @@ def collect_requirements(base: Path) -> list[str]:
 
 
 def copy_dir(src: Path, dst: Path):
-    """复制目录，排除缓存"""
+    """复制目录，排除缓存。保留用户配置文件（db-sources.json）不覆盖。"""
+    # 用户配置文件（安装时不覆盖，重装后恢复）
+    USER_CONFIG_FILES = ["db-sources.json"]
+    preserved = {}
     if dst.exists():
+        for fname in USER_CONFIG_FILES:
+            fpath = dst / fname
+            if fpath.exists():
+                preserved[fname] = fpath.read_bytes()
         shutil.rmtree(dst)
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
         "__pycache__", ".venv", ".git", ".DS_Store", "*.pyc", ".pytest_cache"
     ))
+    # 恢复用户配置
+    for fname, content in preserved.items():
+        (dst / fname).write_bytes(content)
 
 
 def run():

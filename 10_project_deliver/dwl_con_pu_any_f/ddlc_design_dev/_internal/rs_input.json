@@ -67,170 +67,182 @@
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "合同号",
+      "source_column": "contract_no",
       "source_type": "nvarchar(500)",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "contract_no",
       "target_column_cn": "合同号",
       "target_type": "nvarchar(500)",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "合同号"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "合同ID",
+      "source_column": "contract_id",
       "source_type": "numeric",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "contract_id",
       "target_column_cn": "合同ID",
       "target_type": "numeric",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": "主键"
+      "remark": "主键",
+      "source_column_cn": "合同ID"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "pu ID",
+      "source_column": "pu_id",
       "source_type": "numeric",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "pu_id",
       "target_column_cn": "puID",
       "target_type": "numeric",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "pu ID"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "币种代码",
+      "source_column": "currency_code",
       "source_type": "nvarchar(30)",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "tc_code",
       "target_column_cn": "币种代码",
       "target_type": "nvarchar(30)",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "币种代码"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "报表值USD",
+      "source_column": "rpt_value_usd",
       "source_type": "numeric",
       "transform_rule": "数据加工",
       "transform_detail": "rpt_code='fbt_0001'对应设备订货USD金额，按合同+pu汇总",
       "target_column": "equip_org_amt_usd",
       "target_column_cn": "设备订货USD金额",
       "target_type": "numeric(38,10)",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "报表值USD"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "报表值RMB",
+      "source_column": "rpt_value_rmb",
       "source_type": "numeric",
       "transform_rule": "数据加工",
       "transform_detail": "rpt_code='fbt_0001'对应设备订货RMB金额，按合同+pu汇总",
       "target_column": "equip_org_amt_rmb",
       "target_column_cn": "设备订货RMB金额",
       "target_type": "numeric(38,10)",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "报表值RMB"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "报表值RMB",
+      "source_column": "rpt_value_rmb",
       "source_type": "numeric",
       "transform_rule": "数据加工",
       "transform_detail": "rpt_code='fbt_0002'对应设备收入RMB金额，按合同+pu汇总",
       "target_column": "equip_cfm_amt_rmb",
       "target_column_cn": "设备收入RMB金额",
       "target_type": "numeric(38,10)",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "报表值RMB"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_pu_mtr_f",
-      "source_column": "报表值USD",
+      "source_column": "rpt_value_usd",
       "source_type": "numeric",
       "transform_rule": "数据加工",
       "transform_detail": "rpt_code='fbt_0002'对应设备收入USD金额，按合同+pu汇总",
       "target_column": "equip_cfm_amt_usd",
       "target_column_cn": "设备收入USD金额",
       "target_type": "numeric(38,10)",
-      "source_alias": "",
+      "source_alias": "t",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "报表值USD"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_con_any_f",
-      "source_column": "项目key",
+      "source_column": "proj_key",
       "source_type": "numeric",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "proj_key",
       "target_column_cn": "项目key",
       "target_type": "numeric",
-      "source_alias": "",
+      "source_alias": "f",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "项目key"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_inv_mtr_i",
-      "source_column": "发票瞬时金额USD",
+      "source_column": "inv_inst_amt_usd",
       "source_type": "numeric",
       "transform_rule": "数据加工",
       "transform_detail": "对发票指标表inv_inst_amt_usd求和，排除非洲发票，按合同+pu收敛后关联",
       "target_column": "inv_tol_amt_usd",
       "target_column_cn": "发票总额USD",
       "target_type": "numeric(38,10)",
-      "source_alias": "",
+      "source_alias": "inv_mtr",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "发票瞬时金额USD"
     },
     {
       "source_schema": "fin_dwl_cnb",
       "source_table": "dwl_inv_mtr_i",
-      "source_column": "发票瞬时金额RMB",
+      "source_column": "inv_inst_amt_rmb",
       "source_type": "numeric",
       "transform_rule": "数据加工",
       "transform_detail": "对发票指标表inv_inst_amt_rmb求和，排除非洲发票，按合同+pu收敛后关联",
       "target_column": "inv_tol_amt_rmb",
       "target_column_cn": "发票总额RMB",
       "target_type": "numeric(38,10)",
-      "source_alias": "",
+      "source_alias": "inv_mtr",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "发票瞬时金额RMB"
     },
     {
       "source_schema": "dwrdim_dw1",
       "source_table": "dwr_dim_pu_d",
-      "source_column": "pu key",
+      "source_column": "pu_key",
       "source_type": "numeric",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "pu_key",
       "target_column_cn": "pu key",
       "target_type": "numeric",
-      "source_alias": "",
+      "source_alias": "pu",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "pu key"
     },
     {
       "source_schema": "",
@@ -244,7 +256,8 @@
       "target_type": "nvarchar(1)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -258,7 +271,8 @@
       "target_type": "bigint",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -272,7 +286,8 @@
       "target_type": "bigint",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -286,7 +301,8 @@
       "target_type": "timestamp(0) without time zone",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     }
   ],
   "schedule": {

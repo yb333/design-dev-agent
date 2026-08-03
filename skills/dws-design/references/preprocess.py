@@ -71,13 +71,13 @@ class ExcelMappingParser:
 
     # 实体级 mapping 列名映射（按 mapping模板.xlsx 权威列名，不做模糊匹配）
     ENTITY_COLUMN_MAP = {
-        '源Schema': 'source_schema',
+        '源表schema': 'source_schema',
         '源表物理表名': 'source_table',
         '源表中文名': 'source_table_cn',
-        '源表物理表别名': 'source_alias',
-        '目标表schema': 'target_schema',
+        '源表别名': 'source_alias',
+        '目标表逻辑schema': 'target_schema',
         '目标表中文名': 'target_table_cn',
-        '目标表物理表名': 'target_table',
+        '目标表物理名称': 'target_table',
         '关联&限定条件': 'join_condition',
         '备注': 'remark',
         '分组': 'scene_group',
