@@ -856,6 +856,59 @@ def slim_mapping_data(mapping_raw: dict[str, Any]) -> dict[str, Any]:
 # 合并 mapping + RS -> rs_input.json
 # ============================================================
 
+def validate_target_table(rs_schema: str, rs_table: str,
+                          mapping_schema: str, mapping_table: str
+                          ) -> Tuple[str, str, List[str], List[str]]:
+    """校验目标表 schema/table 在 RS 和 mapping 之间的一致性（分级）。
+
+    校验规则（schema 和 table 各自独立判定）：
+    - 两边都没写 → 阻断 error（必须确认）
+    - 两边都写了但不一致 → 阻断 error（必须确认）
+    - 一边写了一边没写 → 告警 warning（互补，不阻断）
+    - 两边都写了且一致 → 正常
+
+    Args:
+        rs_schema: RS @asset 提取的目标 schema。
+        rs_table: RS @asset 提取的目标 table。
+        mapping_schema: mapping 实体级的目标 schema。
+        mapping_table: mapping 实体级的目标 table。
+
+    Returns:
+        (final_schema, final_table, errors, warnings)
+        - final_schema/final_table: 互补后的最终值（RS 有用 RS 的，否则用 mapping 的）。
+        - errors: 阻断级问题（非空表示必须人工确认，不应继续）。
+        - warnings: 告警级问题（互补情况，不阻断）。
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    # schema 校验（4 种情况）
+    if not rs_schema and not mapping_schema:
+        errors.append("目标表 schema：RS 和 mapping 都没写，无法确定 schema")
+    elif rs_schema and mapping_schema and rs_schema != mapping_schema:
+        errors.append(f"目标表 schema 不一致：RS='{rs_schema}', mapping='{mapping_schema}'")
+    elif rs_schema and not mapping_schema:
+        warnings.append(f"目标表 schema：mapping 没写 schema，用 RS 的 '{rs_schema}'")
+    elif mapping_schema and not rs_schema:
+        warnings.append(f"目标表 schema：RS 没写 schema，用 mapping 的 '{mapping_schema}'")
+
+    # table 校验（4 种情况）
+    if not rs_table and not mapping_table:
+        errors.append("目标表名：RS 和 mapping 都没写，无法确定表名")
+    elif rs_table and mapping_table and rs_table != mapping_table:
+        errors.append(f"目标表名不一致：RS='{rs_table}', mapping='{mapping_table}'")
+    elif rs_table and not mapping_table:
+        warnings.append(f"目标表名：mapping 没写表名，用 RS 的 '{rs_table}'")
+    elif mapping_table and not rs_table:
+        warnings.append(f"目标表名：RS 没写表名，用 mapping 的 '{mapping_table}'")
+
+    # 互补：RS 有用 RS 的，否则用 mapping 的
+    final_schema = rs_schema or mapping_schema
+    final_table = rs_table or mapping_table
+
+    return final_schema, final_table, errors, warnings
+
+
 def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict[str, Any]:
     """合并 mapping 数据和 RS 数据, 产出 rs_input.json 结构。"""
     slim_mapping = slim_mapping_data(mapping_raw)
@@ -885,37 +938,15 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     rs_schema = rs_target.get("schema", "")
     rs_table = rs_target.get("table", "")
 
-    # schema 和 table 两边互补：RS 有用 RS 的，没有用 mapping 的
-    final_schema = rs_schema or target_schema
-    final_table = rs_table or target_table_raw
+    # 校验目标表 schema/table（分级：阻断 vs 告警），并得到互补后的最终值
+    final_schema, final_table, fatal_errors, warnings = validate_target_table(
+        rs_schema, rs_table, target_schema, target_table_raw
+    )
     final_cn = rs_target.get("cn", "") or target_table_cn
 
-    # 校验规则：
-    # - 两边都没写 → 阻断（必须确认）
-    # - 两边都写了但不一致 → 阻断（必须确认）
-    # - 一边写了一边没写 → 告警（互补，不阻断）
-    # - 两边都写了且一致 → 正常
-    fatal_errors = []
-
-    # schema 校验
-    if not rs_schema and not target_schema:
-        fatal_errors.append("目标表 schema：RS 和 mapping 都没写，无法确定 schema")
-    elif rs_schema and target_schema and rs_schema != target_schema:
-        fatal_errors.append(f"目标表 schema 不一致：RS='{rs_schema}', mapping='{target_schema}'")
-    elif rs_schema and not target_schema:
-        print(f"  ⚠️ 告警: mapping 没写 schema，用 RS 的 '{rs_schema}'")
-    elif target_schema and not rs_schema:
-        print(f"  ⚠️ 告警: RS 没写 schema，用 mapping 的 '{target_schema}'")
-
-    # table 校验
-    if not rs_table and not target_table_raw:
-        fatal_errors.append("目标表名：RS 和 mapping 都没写，无法确定表名")
-    elif rs_table and target_table_raw and rs_table != target_table_raw:
-        fatal_errors.append(f"目标表名不一致：RS='{rs_table}', mapping='{target_table_raw}'")
-    elif rs_table and not target_table_raw:
-        print(f"  ⚠️ 告警: mapping 没写表名，用 RS 的 '{rs_table}'")
-    elif target_table_raw and not rs_table:
-        print(f"  ⚠️ 告警: RS 没写表名，用 mapping 的 '{target_table_raw}'")
+    # 告警打印到 stdout（不阻断）
+    for w in warnings:
+        print(f"  ⚠️ 告警: {w}")
 
     if fatal_errors:
         print(f"\n❌ 目标表信息校验失败，请确认正确值：", file=sys.stderr)

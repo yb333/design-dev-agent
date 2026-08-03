@@ -210,50 +210,7 @@ class TestCheckSql:
 # assemble_ddl.py 测试
 # ============================================================
 
-class TestAssembleDdl:
-    def test_generate_ddl_produces_files(self, ts_data):
-        """生成 DDL 应产出内容"""
-        from assemble_ddl import generate_ddl
-        ddls = generate_ddl(ts_data)
-        assert len(ddls) > 0
-        for filename, content in ddls.items():
-            assert "CREATE" in content.upper()
-            assert len(content) > 0
-
-    def test_ddl_has_audit_fields(self, ts_data):
-        """DDL 应包含审计字段"""
-        from assemble_ddl import generate_ddl
-        ddls = generate_ddl(ts_data)
-        # 找 CREATE TABLE（不是 VIEW）
-        table_ddl = next((c for f, c in ddls.items() if "TABLE" in c), None)
-        if table_ddl:
-            assert "del_flag" in table_ddl
-            assert "crt_cycle_id" in table_ddl
-            assert "dw_last_update_date" in table_ddl
-
-    def test_ddl_has_distribute_by(self, ts_data):
-        """DDL 应有分布键"""
-        from assemble_ddl import generate_ddl
-        ddls = generate_ddl(ts_data)
-        table_ddl = next((c for f, c in ddls.items() if "TABLE" in c and "VIEW" not in c.upper().split("TABLE")[0]), None)
-        if table_ddl and ts_data.get("design", {}).get("distribution_key"):
-            assert "DISTRIBUTE BY" in table_ddl
-
-    def test_ddl_has_to_group(self, ts_data):
-        """DDL 应有 TO GROUP"""
-        from assemble_ddl import generate_ddl
-        ddls = generate_ddl(ts_data)
-        table_ddl = next((c for f, c in ddls.items() if "CREATE TABLE" in c), None)
-        if table_ddl:
-            assert "TO GROUP" in table_ddl
-
-    def test_ddl_has_column_comments(self, ts_data):
-        """DDL 应有字段注释"""
-        from assemble_ddl import generate_ddl
-        ddls = generate_ddl(ts_data)
-        table_ddl = next((c for f, c in ddls.items() if "CREATE TABLE" in c), None)
-        if table_ddl:
-            assert "COMMENT ON COLUMN" in table_ddl
+# TestAssembleDdl 已迁移到 test_assemble_ddl.py（更完整的覆盖）
 
 
 # ============================================================
