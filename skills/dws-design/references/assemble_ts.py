@@ -210,12 +210,19 @@ def build_meta(rs_input, decisions):
     rs_meta = rs_input.get("meta", {})
     target = rs_meta.get("target", {})
 
-    # F表 + I视图(I = F 的 _f -> _i 镜像)
-    f_table_name = target.get("table", "")
-    i_view_name = f_table_name[:-2] + "_i" if f_table_name.endswith("_f") else f_table_name + "_i"
+    # rs_input 的 target 已有 f_table 和 i_view（preprocess 从 _i 推导）
+    f_table = target.get("f_table", {})
+    i_view = target.get("i_view", {})
 
-    schema = target.get("schema", "")
-    cn = target.get("cn", "")
+    # 兜底：如果 rs_input 还是旧格式（只有 schema/table/cn），推导一下
+    if not f_table and target.get("table"):
+        table_name = target["table"]
+        if table_name.endswith("_i"):
+            f_table = {"schema": target.get("schema", ""), "table": table_name[:-2] + "_f", "cn": target.get("cn", "")}
+            i_view = {"schema": target.get("schema", ""), "table": table_name, "cn": target.get("cn", "")}
+        else:
+            f_table = {"schema": target.get("schema", ""), "table": table_name, "cn": target.get("cn", "")}
+            i_view = {"schema": target.get("schema", ""), "table": table_name[:-2] + "_i" if table_name.endswith("_f") else table_name + "_i", "cn": target.get("cn", "")}
 
     # source_tables(从 rs_input 搬, 去重)
     seen = set()
@@ -261,8 +268,8 @@ def build_meta(rs_input, decisions):
     strategy = load_strat.get("strategy", "")
     return {
         "target": {
-            "f_table": {"schema": schema, "table": f_table_name, "cn": cn},
-            "i_view":  {"schema": schema, "table": i_view_name, "cn": cn},
+            "f_table": f_table,
+            "i_view": i_view,
         },
         "grain": rs_meta.get("grain", ""),
         "load_strategy": {

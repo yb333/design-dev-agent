@@ -5,7 +5,7 @@
 | 属性 | 内容 |
 |------|------|
 | SCHEMA | slscc |
-| 资产名称 | dwb_supply_chain_center_f |
+| 资产名称 | dwb_supply_chain_center_i |
 | 资产描述 | 供应链中心宽表 |
 | 业务对象 | 供应链 |
 | 逻辑数据实体 | 每行一个供应链记录 |

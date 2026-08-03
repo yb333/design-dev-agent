@@ -5,7 +5,7 @@
 | 属性 | 内容 |
 |------|------|
 | SCHEMA | slprd |
-| 资产名称 | dwb_product_center_f |
+| 资产名称 | dwb_product_center_i |
 | 资产描述 | 商品中心宽表 |
 | 业务对象 | 商品 |
 | 逻辑数据实体 | 每行一个商品记录 |

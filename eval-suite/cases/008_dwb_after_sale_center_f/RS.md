@@ -5,7 +5,7 @@
 | 属性 | 内容 |
 |------|------|
 | SCHEMA | slas |
-| 资产名称 | dwb_after_sale_center_f |
+| 资产名称 | dwb_after_sale_center_i |
 | 资产描述 | 售后服务中心宽表 |
 | 业务对象 | 售后服务 |
 | 逻辑数据实体 | 每行一个售后服务记录 |

@@ -861,21 +861,46 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     slim_mapping = slim_mapping_data(mapping_raw)
 
     # 从 mapping 提取目标表基本信息
+    # mapping 标准写法：目标表物理名称写 I视图名（_i 结尾）
+    # 从 _i 推导 _f（F表 = I视图去掉 _i 换成 _f）
     target_schema = mapping_raw.get("target_schema", "")
-    target_table = mapping_raw.get("target_table", "")
+    target_table_raw = mapping_raw.get("target_table", "")  # 可能是 _i 或 _f
     target_table_cn = mapping_raw.get("target_table_cn", "")
+
+    # 推导 f_table 和 i_view
+    if target_table_raw.endswith("_i"):
+        i_view_name = target_table_raw
+        f_table_name = target_table_raw[:-2] + "_f"
+    elif target_table_raw.endswith("_f"):
+        f_table_name = target_table_raw
+        i_view_name = target_table_raw[:-2] + "_i"
+    else:
+        # 没有标准后缀，用原名做 f_table，推导 i
+        f_table_name = target_table_raw
+        i_view_name = target_table_raw + "_i"
 
     # 从 RS @asset 提取目标表信息(RS 优先)
     rs_meta = rs_data.get("meta", {})
     rs_target = rs_meta.get("target", {}) if isinstance(rs_meta, dict) else {}
+    rs_schema = rs_target.get("schema", target_schema)
+    rs_table = rs_target.get("table", target_table_raw)
+
+    # RS 的 table 如果也写了 _i，同样推导
+    if rs_table.endswith("_i"):
+        rs_i_view = rs_table
+        rs_f_table = rs_table[:-2] + "_f"
+    elif rs_table.endswith("_f"):
+        rs_f_table = rs_table
+        rs_i_view = rs_table[:-2] + "_i"
+    else:
+        rs_f_table = rs_table
+        rs_i_view = rs_table + "_i"
 
     rs_input: dict[str, Any] = {
         "meta": {
             "target": {
-                "schema": rs_target.get("schema", target_schema),
-                "table": rs_target.get("table", target_table),
-                "cn": rs_target.get("cn", target_table_cn),
-                "description": rs_meta.get("target", {}).get("description", "") if isinstance(rs_meta, dict) else "",
+                "f_table": {"schema": rs_schema, "table": rs_f_table, "cn": target_table_cn},
+                "i_view": {"schema": rs_schema, "table": rs_i_view, "cn": target_table_cn},
             },
             "owner": rs_meta.get("owner", {}) if isinstance(rs_meta, dict) else {},
             "grain": rs_meta.get("grain", "") if isinstance(rs_meta, dict) else "",

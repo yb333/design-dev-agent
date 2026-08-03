@@ -102,9 +102,9 @@ def check_case(mapping_path: str, rs_path: str) -> list[str]:
         if tgt:
             target_table = tgt
 
-    # 检查目标表名规则（应该是 _i 结尾）
+    # 检查目标表名规则（应该是 _i 结尾，_d 结尾的明细层豁免）
     if target_table:
-        if not target_table.endswith("_i"):
+        if not target_table.endswith("_i") and not target_table.endswith("_d"):
             issues.append(f"目标表物理名称 '{target_table}' 不是 _i 结尾（标准要求写I视图名）")
         tgt_schema_val = cells[idx_tgt_schema] if idx_tgt_schema < len(cells) else ""
         if not tgt_schema_val:

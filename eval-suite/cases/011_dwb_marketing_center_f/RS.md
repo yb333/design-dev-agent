@@ -5,7 +5,7 @@
 | 属性 | 内容 |
 |------|------|
 | SCHEMA | slmar |
-| 资产名称 | dwb_marketing_center_f |
+| 资产名称 | dwb_marketing_center_i |
 | 资产描述 | 营销中心宽表 |
 | 业务对象 | 营销 |
 | 逻辑数据实体 | 每行一个营销记录 |
