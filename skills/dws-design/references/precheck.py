@@ -65,10 +65,14 @@ def precheck(rs_input: dict[str, Any]) -> PrecheckResult:
 
     # 1. 目标表基本信息
     target = rs_input.get("meta", {}).get("target", {})
-    if not target.get("schema") or not target.get("table"):
+    # rs_input 的 target 结构是 {f_table: {schema, table, cn}, i_view: {schema, table, cn}}
+    f_table = target.get("f_table", {})
+    target_schema = f_table.get("schema", "")
+    target_table = f_table.get("table", "")
+    if not target_schema or not target_table:
         result.add_error("目标表 schema/table 缺失")
     else:
-        result.add_pass(f"目标表: {target['schema']}.{target['table']}")
+        result.add_pass(f"目标表: {target_schema}.{target_table}")
 
     # 2. 源表
     source_tables = rs_input.get("source_tables", [])
