@@ -140,27 +140,49 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict) 
     return "\n".join(lines)
 
 
-def generate_create_view(rule_code: str, rule: dict, meta: dict) -> str:
-    """生成 CREATE VIEW DDL（F表镜像 I视图）"""
+def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: dict) -> str:
+    """生成 CREATE VIEW DDL（I视图 = F表镜像，列出全部字段，不用 SELECT *）"""
     target = rule.get("target_table", "")
     schema, table = split_table_ref(target)
-    f_table = table.rstrip("i").rstrip("_") if table.endswith("_i") else table
-    if not f_table.endswith("_f"):
-        f_table = table[:-2] + "_f" if table.endswith("_i") else table
+    if not schema:
+        schema = meta.get("target", {}).get("f_table", {}).get("schema", "")
+
+    # 推导 F表名（_i → _f）
+    if table.endswith("_i"):
+        f_table = table[:-2] + "_f"
+    else:
+        f_table = table
 
     cn = meta.get("target", {}).get("f_table", {}).get("cn", "")
+
+    # rule.fields 已包含审计字段，直接用
+    all_fields = [(f.get("target_field", ""), f.get("field_comment", "")) for f in rule.get("fields", [])]
 
     lines = []
     lines.append(f"/* =====================================================")
     lines.append(f"   视图: {schema}.{table}")
     lines.append(f"   规则: {rule_code} - {rule.get('rule_name', '')}")
-    lines.append(f"   说明: F表镜像，对外消费接口")
+    lines.append(f"   说明: F表镜像，对外消费接口（列出全部字段）")
     lines.append(f"   ===================================================== */")
     lines.append("")
     lines.append(f"CREATE OR REPLACE VIEW {schema}.{table} AS")
-    lines.append(f"SELECT * FROM {schema}.{f_table};")
+    lines.append(f"SELECT")
+
+    # 列出全部字段（不用 SELECT *）
+    for i, (fname, _) in enumerate(all_fields):
+        comma = "," if i < len(all_fields) - 1 else ""
+        lines.append(f"    {fname}{comma}")
+
+    lines.append(f"FROM {schema}.{f_table};")
     lines.append("")
     lines.append(f"COMMENT ON TABLE {schema}.{table} IS '{cn}（视图）';")
+    lines.append("")
+
+    # 字段注释
+    for fname, fcomment in all_fields:
+        if fcomment:
+            lines.append(f"COMMENT ON COLUMN {schema}.{table}.{fname} IS '{fcomment}';")
+
     lines.append("")
     return "\n".join(lines)
 
@@ -181,15 +203,31 @@ def generate_rollback(schema: str, table: str, is_view: bool = False) -> str:
     return "\n".join(lines)
 
 
-def generate_i_view(schema: str, f_table: str, cn: str) -> str:
-    """生成 I视图 DDL（F表镜像：SELECT * FROM ..._f）"""
+def generate_i_view(schema: str, f_table: str, cn: str, fields: list, audit_fields: dict) -> str:
+    """生成 I视图 DDL（F表镜像，列出全部字段 + 注释，不用 SELECT *）"""
     i_table = f_table[:-2] + "_i" if f_table.endswith("_f") else f_table + "_i"
+
+    # rule.fields 已包含审计字段（assemble_ts 组装时已加入），直接用
+    all_fields = [(f.get("target_field", ""), f.get("field_comment", "")) for f in fields]
+
     lines = []
     lines.append(f"/* I视图: {schema}.{i_table}（{cn}，F表镜像，对外消费接口） */")
     lines.append(f"CREATE OR REPLACE VIEW {schema}.{i_table} AS")
-    lines.append(f"SELECT * FROM {schema}.{f_table};")
+    lines.append(f"SELECT")
+
+    for i, (fname, _) in enumerate(all_fields):
+        comma = "," if i < len(all_fields) - 1 else ""
+        lines.append(f"    {fname}{comma}")
+
+    lines.append(f"FROM {schema}.{f_table};")
     lines.append("")
     lines.append(f"COMMENT ON TABLE {schema}.{i_table} IS '{cn}（视图）';")
+    lines.append("")
+
+    for fname, fcomment in all_fields:
+        if fcomment:
+            lines.append(f"COMMENT ON COLUMN {schema}.{i_table}.{fname} IS '{fcomment}';")
+
     lines.append("")
     return "\n".join(lines)
 
@@ -197,21 +235,25 @@ def generate_i_view(schema: str, f_table: str, cn: str) -> str:
 def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
     """从 ts.json 生成所有 DDL + 回退脚本。
 
+    核心逻辑：
+    - 目标表名 _i 结尾 → 先建 F表（_i→_f），再建 I视图（列全部字段）
+    - 目标表名 _f 结尾 → 建 F表 + 自动配套 I视图
+    - 中间表（tmp）→ 只建表
+    - is_view_step=true → 按视图处理（但 _i 结尾的会被上面逻辑优先处理）
+
     返回 (ddl_dict, rollback_dict)。
-    ddl_dict: {文件名: 内容}，写到 ddl/
-    rollback_dict: {文件名: 内容}，写到 ddl_rollback/
     """
     rules = ts.get("rules", {})
     design = ts.get("design", {})
+    audit_fields = design.get("audit_fields", {})
     meta = ts.get("meta", {})
     target_meta = meta.get("target", {})
-    f_table_name = target_meta.get("f_table", {}).get("table", "")
     f_schema = target_meta.get("f_table", {}).get("schema", "")
     f_cn = target_meta.get("f_table", {}).get("cn", "")
 
     ddl_result = {}
     rollback_result = {}
-    generated_i_views = set()  # 避免重复生成 I视图
+    generated_views = set()  # 避免重复生成视图
 
     for code, rule in rules.items():
         target = rule.get("target_table", "")
@@ -219,25 +261,46 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
         if not schema:
             schema = f_schema
 
-        if rule.get("is_view_step", False):
-            # 显式视图步骤
-            filename = f"create_view_{table}.sql"
-            ddl_result[filename] = generate_create_view(code, rule, meta)
-            rollback_result[f"rollback_create_view_{table}.sql"] = generate_rollback(schema, table, is_view=True)
-        else:
-            # 表
+        # 判断目标表名后缀
+        is_i_table = table.endswith("_i")
+        is_f_table = table.endswith("_f")
+
+        if is_i_table:
+            # 目标是 I视图 → 先建 F表，再建 I视图
+            f_table = table[:-2] + "_f"
+
+            # 1. 建 F表（用同规则的字段，改 target_table 为 _f）
+            f_rule = {**rule, "target_table": f"{schema}.{f_table}"}
+            f_filename = f"create_table_{f_table}.sql"
+            ddl_result[f_filename] = generate_create_table(code, f_rule, design, meta)
+            rollback_result[f"rollback_create_table_{f_table}.sql"] = generate_rollback(schema, f_table)
+
+            # 2. 建 I视图（列全部字段，不用 SELECT *）
+            if table not in generated_views:
+                generated_views.add(table)
+                i_filename = f"create_view_{table}.sql"
+                ddl_result[i_filename] = generate_i_view(schema, f_table, f_cn or rule.get("rule_name", ""), rule.get("fields", []), audit_fields)
+                rollback_result[f"rollback_create_view_{table}.sql"] = generate_rollback(schema, table, is_view=True)
+
+        elif is_f_table:
+            # 目标是 F表 → 建 F表 + 自动配套 I视图
             filename = f"create_table_{table}.sql"
             ddl_result[filename] = generate_create_table(code, rule, design, meta)
             rollback_result[f"rollback_create_table_{table}.sql"] = generate_rollback(schema, table)
 
-            # 如果是目标F表，自动配套生成 I视图（F+I成对）
-            if table == f_table_name and f_table_name:
-                i_table = f_table_name[:-2] + "_i" if f_table_name.endswith("_f") else f_table_name + "_i"
-                if i_table not in generated_i_views:
-                    generated_i_views.add(i_table)
-                    i_filename = f"create_view_{i_table}.sql"
-                    ddl_result[i_filename] = generate_i_view(schema, f_table_name, f_cn)
-                    rollback_result[f"rollback_create_view_{i_table}.sql"] = generate_rollback(schema, i_table, is_view=True)
+            # 配套 I视图
+            i_table = table[:-2] + "_i"
+            if i_table not in generated_views:
+                generated_views.add(i_table)
+                i_filename = f"create_view_{i_table}.sql"
+                ddl_result[i_filename] = generate_i_view(schema, table, f_cn or rule.get("rule_name", ""), rule.get("fields", []), audit_fields)
+                rollback_result[f"rollback_create_view_{i_table}.sql"] = generate_rollback(schema, i_table, is_view=True)
+
+        else:
+            # 中间表或其他 → 只建表
+            filename = f"create_table_{table}.sql"
+            ddl_result[filename] = generate_create_table(code, rule, design, meta)
+            rollback_result[f"rollback_create_table_{table}.sql"] = generate_rollback(schema, table)
 
     return ddl_result, rollback_result
 
