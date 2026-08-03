@@ -2,53 +2,49 @@
 """
 旧格式 mapping → 新格式 mapping + RS.md 转换器
 
-旧格式特征：
-- 实体级：无源表别名，有调度任务/执行路径/依赖参数
-- 属性级：无序号/分组/别名/备注，映射规则用"直取/加工"
-
-新格式特征：
-- 实体级：有源表别名，调度信息归 RS
-- 属性级：有序号/分组/别名/备注，映射规则用"直接复制/数据加工/赋值/序列"
+表头严格使用标准模板（docs/templates/mapping模板.xlsx），不自己写。
+以标准模板为骨架填充数据。
 
 用法:
   python convert_old_mapping.py --input 旧mapping.xlsx --outdir cases/xxx/
 """
 
 import sys
+import shutil
 import argparse
 from pathlib import Path
 import openpyxl
-from openpyxl.styles import Font
 
-# 映射规则名转换
-RULE_MAP = {
-    "直取": "直接复制",
-    "加工": "数据加工",
-    "赋值": "赋值",
-    "序列": "序列",
-    "直接复制": "直接复制",
-    "数据加工": "数据加工",
-}
+TEMPLATE = Path(__file__).resolve().parent.parent / "docs" / "templates" / "mapping模板.xlsx"
 
-# 标准审计字段（旧mapping没有，需要补充）
+# 标准模板的实体级列顺序（按模板实际表头，含*号）
+ENTITY_HEADER = [
+    "序号", "分组", "源表schema*", "源表中文名", "源表物理表名*",
+    "源表别名*", "目标表逻辑schema*", "目标表中文名", "目标表物理名称*",
+    "取数规则", "关联&限定条件", "备注", "数据库类型"
+]
+
+# 标准模板的属性级列顺序
+ATTR_HEADER = [
+    "序号", "分组", "源Schema", "源表物理表名", "源表物理表别名",
+    "源表字段中文名", "源表字段名", "源表字段类型",
+    "映射规则*", "映射表达式", "目标字段名*", "目标字段中文名", "目标字段类型",
+    "备注", "数据标准"
+]
+
+RULE_MAP = {"直取": "直接复制", "加工": "数据加工", "赋值": "赋值", "序列": "序列"}
+
 STANDARD_AUDIT = [
-    ("del_flag", "删除标识", "NVARCHAR(1)", "'N'"),
-    ("crt_cycle_id", "创建批次ID", "BIGINT", "'${P_CYCLE_ID}'"),
-    ("last_upd_cycle_id", "最后更新批次ID", "BIGINT", "'${P_CYCLE_ID}'"),
-    ("dw_last_update_date", "数仓最后更新时间", "TIMESTAMP(0) WITHOUT TIME ZONE", "CURRENT_TIMESTAMP"),
+    ("del_flag", "删除标识", "NVARCHAR(1)", "'N'", "审计字段"),
+    ("crt_cycle_id", "创建批次ID", "BIGINT", "'${P_CYCLE_ID}'", "审计字段"),
+    ("last_upd_cycle_id", "最后更新批次ID", "BIGINT", "'${P_CYCLE_ID}'", "审计字段"),
+    ("dw_last_update_date", "数仓最后更新时间", "TIMESTAMP(0) WITHOUT TIME ZONE", "CURRENT_TIMESTAMP", "审计字段"),
 ]
 
 
 def auto_alias(table_name: str, existing: set, index: int) -> str:
-    """从表名生成别名"""
-    # 取表名首字母或前缀
     parts = table_name.replace(".", "_").split("_")
-    if len(parts) == 1:
-        alias = parts[0][:2]
-    else:
-        # 取每部分首字母
-        alias = "".join(p[0] for p in parts if p)[:3]
-    # 如果冲突，加序号
+    alias = "".join(p[0] for p in parts if p)[:3] if len(parts) > 1 else parts[0][:2]
     base = alias
     while alias in existing:
         alias = f"{base}{index}"
@@ -56,123 +52,156 @@ def auto_alias(table_name: str, existing: set, index: int) -> str:
     return alias
 
 
-def convert(input_path: str, outdir: str):
-    """转换旧格式 mapping 到新格式 + RS"""
-    wb_old = openpyxl.load_workbook(input_path, data_only=True)
-
-    # 读实体级
-    ws_entity = wb_old["实体级mapping"]
-    entity_rows = []
-    aliases = set()
-    for i, row in enumerate(ws_entity.iter_rows(values_only=True), 1):
+def read_old_entity(ws):
+    """读旧格式实体级，返回 list[dict]"""
+    rows = []
+    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
         if i == 1:
-            continue  # 跳过表头
-        cells = [str(c) if c is not None else "" for c in row]
-        if not cells[1]:  # 源表名为空跳过
             continue
-        src_schema = cells[0]
-        src_table = cells[1]
-        src_cn = cells[2]
-        tgt_schema = cells[3]
-        tgt_cn = cells[4]
-        tgt_table = cells[5]
-        join_cond = cells[6]
-        remark = cells[7]
-        alias = auto_alias(src_table, aliases, i)
-        entity_rows.append({
-            "src_schema": src_schema, "src_table": src_table, "src_cn": src_cn,
-            "tgt_schema": tgt_schema, "tgt_cn": tgt_cn, "tgt_table": tgt_table,
-            "join_cond": join_cond, "remark": remark, "alias": alias,
+        cells = [str(c) if c is not None else "" for c in row]
+        if not cells[1]:
+            continue
+        rows.append({
+            "src_schema": cells[0], "src_table": cells[1], "src_cn": cells[2],
+            "tgt_schema": cells[3] if len(cells) > 3 else "",
+            "tgt_cn": cells[4] if len(cells) > 4 else "",
+            "tgt_table": cells[5] if len(cells) > 5 else "",
+            "join_cond": cells[6] if len(cells) > 6 else "",
+            "remark": cells[7] if len(cells) > 7 else "",
         })
+    return rows
 
-    if not entity_rows:
+
+def read_old_attr(ws):
+    """读旧格式属性级，返回 list[dict]"""
+    rows = []
+    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+        if i == 1:
+            continue
+        cells = [str(c) if c is not None else "" for c in row]
+        if len(cells) < 8 or not cells[6]:
+            continue
+        rows.append({
+            "src_schema": cells[0], "src_table": cells[1],
+            "src_field": cells[2], "src_type": cells[3],
+            "old_rule": cells[4] if len(cells) > 4 else "直取",
+            "expression": cells[5] if len(cells) > 5 else "",
+            "target_field": cells[6] if len(cells) > 6 else "",
+            "target_cn": cells[7] if len(cells) > 7 else "",
+            "target_type": cells[8] if len(cells) > 8 else "",
+        })
+    return rows
+
+
+def convert(input_path: str, outdir: str):
+    # 读旧文件（用 pandas 兜底 openpyxl 格式问题）
+    try:
+        wb_old = openpyxl.load_workbook(input_path, data_only=True)
+    except Exception:
+        import pandas as pd
+        wb_old = openpyxl.Workbook()
+        for sn in ["实体级mapping", "属性级mapping"]:
+            df = pd.read_excel(input_path, sheet_name=sn)
+            ws = wb_old.create_sheet(sn)
+            for col in df.columns:
+                ws.append([col])
+            for _, row in df.iterrows():
+                ws.append([row[col] if pd.notna(row[col]) else "" for col in df.columns])
+        if "Sheet" in wb_old.sheetnames:
+            del wb_old["Sheet"]
+
+    # 读旧数据
+    old_entity = read_old_entity(wb_old["实体级mapping"])
+    old_attr = read_old_attr(wb_old["属性级mapping"])
+
+    if not old_entity:
         print("错误：实体级mapping无数据", file=sys.stderr)
         return
 
-    # 读属性级
-    ws_attr = wb_old["属性级mapping"]
-    attr_rows = []
-    # 建表名→别名映射
-    table_to_alias = {e["src_table"]: e["alias"] for e in entity_rows}
+    # 生成别名
+    aliases = set()
+    for i, e in enumerate(old_entity):
+        e["alias"] = auto_alias(e["src_table"], aliases, i)
+    table_to_alias = {e["src_table"]: e["alias"] for e in old_entity}
 
-    for i, row in enumerate(ws_attr.iter_rows(values_only=True), 1):
-        if i == 1:
-            continue
-        cells = [str(c) if c is not None else "" for c in row]
-        if not cells[6]:  # 目标字段名为空跳过
-            continue
-        src_schema = cells[0]
-        src_table = cells[1]
-        src_field_cn = cells[2] if len(cells) > 2 else ""
-        src_field = cells[2] if len(cells) > 2 else ""  # 旧格式可能是中文字段名
-        src_type = cells[3] if len(cells) > 3 else ""
-        old_rule = cells[4] if len(cells) > 4 else "直取"
-        expression = cells[5] if len(cells) > 5 else ""
-        target_field = cells[6] if len(cells) > 6 else ""
-        target_cn = cells[7] if len(cells) > 7 else ""
-        target_type = cells[8] if len(cells) > 8 else ""
-
-        rule = RULE_MAP.get(old_rule, "直接复制")
-        alias = table_to_alias.get(src_table, "")
-
-        attr_rows.append({
-            "src_schema": src_schema, "src_table": src_table, "alias": alias,
-            "src_field_cn": src_field_cn, "src_field": src_field, "src_type": src_type,
-            "rule": rule, "expression": expression,
-            "target_field": target_field, "target_cn": target_cn, "target_type": target_type,
-        })
-
-    # 检查审计字段是否已有
-    existing_targets = {a["target_field"].lower() for a in attr_rows}
-    has_audit = any(audit[0] in existing_targets for audit in STANDARD_AUDIT)
-
-    # 生成新格式 mapping
-    wb_new = openpyxl.Workbook()
-    tgt_table = entity_rows[0]["tgt_table"]
-    tgt_schema = entity_rows[0]["tgt_schema"]
-    tgt_cn = entity_rows[0]["tgt_cn"]
-
-    # Sheet1: 实体级
-    ws1 = wb_new.active
-    ws1.title = "实体级mapping"
-    ws1.append(["源表schema", "源表物理表名", "源表中文名", "源表别名",
-                "目标表schema", "目标表中文名", "目标表物理表名", "关联&限定条件", "备注"])
-    for e in entity_rows:
-        ws1.append([e["src_schema"], e["src_table"], e["src_cn"], e["alias"],
-                    e["tgt_schema"], e["tgt_cn"], e["tgt_table"], e["join_cond"], e["remark"]])
-
-    # Sheet2: 属性级
-    ws2 = wb_new.create_sheet("属性级mapping")
-    ws2.append(["序号", "分组", "源Schema", "源表物理表名", "源表物理表别名",
-                "源表字段中文名", "源表字段名", "源表字段类型",
-                "映射规则*", "映射表达式", "目标字段名*", "目标字段中文名", "目标字段类型", "备注"])
-    seq = 1
-    for a in attr_rows:
-        remark = ""
-        if seq == 1:
-            remark = "主键"  # 第一个字段通常是主键
-        ws2.append([seq, "default", a["src_schema"], a["src_table"], a["alias"],
-                    a["src_field_cn"], a["src_field"], a["src_type"],
-                    a["rule"], a["expression"] if a["expression"] else "-",
-                    a["target_field"], a["target_cn"], a["target_type"], remark])
-        seq += 1
-
-    # 补充审计字段（如果旧mapping没有）
-    if not has_audit:
-        for aname, acn, atype, aexpr in STANDARD_AUDIT:
-            ws2.append([seq, "default", "", "", "", "", "", "",
-                        "赋值", aexpr, aname, acn, atype, "审计字段"])
-            seq += 1
-
-    # 保存
+    # 以标准模板为骨架，复制一份再填数据
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     mapping_path = outdir / "mapping.xlsx"
-    wb_new.save(str(mapping_path))
+    shutil.copy2(str(TEMPLATE), str(mapping_path))
+
+    wb = openpyxl.load_workbook(str(mapping_path))
+
+    # === 实体级：清空模板样例行，填入转换数据 ===
+    ws1 = wb["实体级mapping"]
+    # 删除模板的数据行（第2行到最后）
+    for row in range(ws1.max_row, 1, -1):
+        ws1.delete_rows(row)
+
+    for idx, e in enumerate(old_entity, 1):
+        ws1.append([
+            idx,                    # 序号
+            "default",              # 分组
+            e["src_schema"],        # 源表schema*
+            e["src_cn"],            # 源表中文名
+            e["src_table"],         # 源表物理表名*
+            e["alias"],             # 源表别名*
+            e["tgt_schema"] or old_entity[0]["tgt_schema"],  # 目标表逻辑schema*
+            e["tgt_cn"] or old_entity[0]["tgt_cn"],          # 目标表中文名
+            e["tgt_table"] or old_entity[0]["tgt_table"],    # 目标表物理名称*
+            "",                     # 取数规则
+            e["join_cond"],         # 关联&限定条件
+            e["remark"],            # 备注
+            "",                     # 数据库类型
+        ])
+
+    # === 属性级：清空模板样例行，填入转换数据 ===
+    ws2 = wb["属性级mapping"]
+    for row in range(ws2.max_row, 1, -1):
+        ws2.delete_rows(row)
+
+    # 检查审计字段
+    existing_targets = {a["target_field"].lower() for a in old_attr}
+
+    seq = 1
+    for a in old_attr:
+        rule = RULE_MAP.get(a["old_rule"], "直接复制")
+        alias = table_to_alias.get(a["src_table"], "")
+        remark = "主键" if seq == 1 else ""
+        ws2.append([
+            seq,                # 序号
+            "default",          # 分组
+            a["src_schema"],    # 源Schema
+            a["src_table"],     # 源表物理表名
+            alias,              # 源表物理表别名
+            a["src_field"],     # 源表字段中文名
+            a["src_field"],     # 源表字段名
+            a["src_type"],      # 源表字段类型
+            rule,               # 映射规则*
+            a["expression"] if a["expression"] else "-",  # 映射表达式
+            a["target_field"],  # 目标字段名*
+            a["target_cn"],     # 目标字段中文名
+            a["target_type"],   # 目标字段类型
+            remark,             # 备注
+            "",                 # 数据标准
+        ])
+        seq += 1
+
+    # 补充审计字段
+    if not any(audit[0] in existing_targets for audit in STANDARD_AUDIT):
+        for aname, acn, atype, aexpr, aremark in STANDARD_AUDIT:
+            ws2.append([seq, "default", "", "", "", "", "", "",
+                        "赋值", aexpr, aname, acn, atype, aremark, ""])
+            seq += 1
+
+    wb.save(str(mapping_path))
 
     # 生成 RS.md
+    tgt_table = old_entity[0]["tgt_table"]
+    tgt_schema = old_entity[0]["tgt_schema"]
+    tgt_cn = old_entity[0]["tgt_cn"]
     rs_path = outdir / "RS.md"
-    rs_content = f"""# RS - {tgt_cn}
+    rs_path.write_text(f"""# RS - {tgt_cn}
 
 ## 1.1 资产基本信息
 
@@ -194,22 +223,17 @@ def convert(input_path: str, outdir: str):
 | 调度频率 | T+1，一天一调 |
 | 调度完成时间 | 3:30 |
 | 增量识别 | 不涉及 |
-"""
-    rs_path.write_text(rs_content, encoding="utf-8")
+""", encoding="utf-8")
 
-    n_audit = 0 if has_audit else 4
-    print(f"✅ {tgt_table}: {len(attr_rows)}业务字段 + {n_audit}审计 = {len(attr_rows)+n_audit}总, {len(entity_rows)}源表")
-    print(f"   mapping: {mapping_path}")
-    print(f"   RS: {rs_path}")
-    return tgt_table
+    n_audit = 0 if any(audit[0] in existing_targets for audit in STANDARD_AUDIT) else 4
+    print(f"✅ {tgt_table}: {len(old_attr)}业务字段 + {n_audit}审计 = {len(old_attr)+n_audit}总, {len(old_entity)}源表")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="旧格式mapping→新格式+RS转换")
+    parser = argparse.ArgumentParser(description="旧格式mapping→新格式+RS转换（表头严格按标准模板）")
     parser.add_argument("--input", required=True, help="旧格式mapping.xlsx路径")
     parser.add_argument("--outdir", required=True, help="输出目录")
     args = parser.parse_args()
-
     convert(args.input, args.outdir)
 
 
