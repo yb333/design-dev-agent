@@ -598,6 +598,7 @@ RS_SECTION_KEYWORDS = {
     "sched": ["L07", "初始化及调度"],
     "upstream": ["湖表调度"],
     "dq": ["L06", "数据质量检查规则"],
+    "explore": ["L01", "数据探索"],
 }
 
 # 资产基本信息表格: 表头列名 -> rs_input 字段名
@@ -637,6 +638,20 @@ DQ_HEADER_MAP = {
     "检查类型": "check_type",
     "规则名称": "rule_name",
     "规则描述": "rule_desc",
+}
+
+# 数据探索 - 数据量级表格: 表头列名 -> 字段名
+EXPLORE_VOLUME_HEADER_MAP = {
+    "来源表": "table",
+    "数据量": "volume",
+    "字段个数": "field_count",
+}
+
+# 数据探索 - 空值率表格: 表头列名 -> 字段名
+EXPLORE_NULL_HEADER_MAP = {
+    "字段": "field",
+    "空值率": "null_rate",
+    "说明": "note",
 }
 
 
@@ -813,6 +828,54 @@ def extract_rs_data(rs_path: str) -> dict[str, Any]:
     rs_data["dq_requirements"] = dq if dq else []
     if not dq:
         warnings.append("DQ 规则未找到(可选)")
+
+    # 5. 数据探索(可选, 容错为空)
+    section = _find_section(content, RS_SECTION_KEYWORDS["explore"])
+    data_exploration = {}
+    if section:
+        import re
+
+        # 按子标题切分 section，分别提取两个表格
+        # 数据量级子段：从"数据量级"到下一个加粗标题
+        vol_section = ""
+        null_section = ""
+        lines_list = section.split("\n")
+        current_sub = ""
+        for line in lines_list:
+            stripped = line.strip().strip("*").strip()
+            if stripped == "数据量级：":
+                current_sub = "vol"
+                continue
+            elif stripped == "核心字段空值率分析：":
+                current_sub = "null"
+                continue
+            elif stripped.startswith("关联方式") or stripped.startswith("关联路径") or stripped.startswith("筛选条件") or stripped.startswith("数据发散说明"):
+                current_sub = ""
+                continue
+
+            if current_sub == "vol":
+                vol_section += line + "\n"
+            elif current_sub == "null":
+                null_section += line + "\n"
+
+        # 数据量级表
+        volume = _extract_list_table(vol_section, EXPLORE_VOLUME_HEADER_MAP)
+        if volume:
+            data_exploration["table_stats"] = volume
+
+        # 空值率表
+        null_rates = _extract_list_table(null_section, EXPLORE_NULL_HEADER_MAP)
+        if null_rates:
+            data_exploration["null_rates"] = null_rates
+
+        # 数据发散说明
+        div_match = re.search(r'数据发散说明[：:]\s*\*{0,2}(.*?)(?:\n\n|\n\*\*|\Z)', section, re.DOTALL)
+        if div_match:
+            data_exploration["divergence_note"] = div_match.group(1).strip()
+
+    rs_data["data_exploration"] = data_exploration if data_exploration else {}
+    if not data_exploration:
+        warnings.append("数据探索信息未找到(可选)")
 
     rs_data["_extract_errors"] = errors
     rs_data["_extract_warnings"] = warnings
