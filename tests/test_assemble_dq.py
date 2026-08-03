@@ -56,61 +56,7 @@ class TestRuleTypeDetectors:
 # 2. 去重逻辑：RS 有覆盖 → 不重复生成标准检查
 # ============================================================
 
-class TestDqDeduplication:
-    def test_dq_no_duplicate_when_rs_has_dup_check(self):
-        """RS 有重复检查 → 标准主键唯一不重复生成，但记录数要有"""
-        dq_rules = [
-            {"rule_id": "DQ_001", "rule_name": "唯一性检查",
-             "check_type": "重复数据检查", "rule_desc": "主键重复"}
-        ]
-        ts = make_ts_json(table="dwb_test_i", dq_rules=dq_rules)
-        dqs = generate_dq_sql(ts)
-
-        assert len(dqs) == 1
-        content = list(dqs.values())[0]
-
-        # RS 提供的 DQ 已输出
-        assert "RS 提供的 DQ" in content
-        # 标准检查区块存在（补 RS 未覆盖的）
-        assert "标准检查" in content
-        # 主键唯一性不应再重复生成（RS 已覆盖）
-        assert "主键唯一性" not in content, \
-            "RS 已有重复检查，不应再标准生成主键唯一"
-        # 但记录数总是要生成
-        assert "total_count" in content
-
-    def test_dq_no_audit_null_when_rs_has_null_check(self):
-        """RS 有空值检查 → 标准审计非空不重复生成"""
-        dq_rules = [
-            {"rule_id": "DQ_002", "rule_name": "空值检查",
-             "check_type": "空值检查", "rule_desc": "id 不能为空"}
-        ]
-        ts = make_ts_json(table="dwb_test_i", dq_rules=dq_rules)
-        dqs = generate_dq_sql(ts)
-
-        content = list(dqs.values())[0]
-        # RS 没有重复检查 → 主键唯一要生成
-        assert "主键唯一性" in content
-        # RS 有空值检查 → 审计字段非空不再生成
-        assert "审计字段非空" not in content, \
-            "RS 已有空值检查，不应再标准生成审计字段非空"
-        # 记录数总是生成
-        assert "total_count" in content
-
-    def test_dq_both_dup_and_null_suppresses_both_standard_checks(self):
-        """RS 同时有重复+空值检查 → 两个标准检查都不生成，只剩记录数"""
-        dq_rules = [
-            {"rule_id": "DQ_001", "rule_name": "唯一性", "check_type": "重复检查", "rule_desc": ""},
-            {"rule_id": "DQ_002", "rule_name": "空值", "check_type": "空值检查", "rule_desc": ""},
-        ]
-        ts = make_ts_json(table="dwb_test_i", dq_rules=dq_rules)
-        dqs = generate_dq_sql(ts)
-        content = list(dqs.values())[0]
-
-        assert "主键唯一性" not in content
-        assert "审计字段非空" not in content
-        # 但记录数仍生成（RS 不会覆盖这个）
-        assert "total_count" in content
+# TestDqDeduplication 已删除（去重逻辑废弃，标准DQ总是生成，定制DQ全交coder）
 
 
 # ============================================================
