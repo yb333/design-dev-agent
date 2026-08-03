@@ -133,10 +133,22 @@ python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/
 
 ## 步骤 4.5：生成 DQ 检查 SQL
 
-调脚本从 ts.json 生成标准 DQ 检查 SQL：
+**4.5a 标准DQ**（脚本自动生成）：主键唯一/审计非空/记录数
 
 ```bash
 python CODING_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --outdir {deliver}/dq
+```
+
+**4.5b 定制DQ**（如果有 TODO 占位）：检查生成的 dq/*.sql 里有没有 `-- TODO`，
+如果有，说明有定制 DQ 需要 coder 生成。调 coder 补写：
+
+```
+Task(
+  subagent_type="dws-coder",
+  description="补写定制DQ SQL",
+  prompt="读取 {deliver}/dq/ 下的 DQ 文件，找到 -- TODO 标记的定制 DQ 规则，
+          根据 ts.json 的 dq_rules 描述，补写对应的 DQ 检查 SQL，替换 TODO 占位。"
+)
 ```
 
 ---
@@ -165,20 +177,24 @@ coder 完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
 ## 步骤 6：执行验证（UT，需要数据库）
 
-> 如果没有配置数据库连接（db-sources.json），跳过此步骤，直接到闸口②。
+**不要自己判断有没有数据源**——调脚本检查：
 
-调 run_ut.py 跑执行验证（DDL+INSERT+UT检查）：
+```bash
+python CODING_SCRIPTS/check_db.py
+```
+
+- 如果输出 `DB_OK` → 有数据源，继续跑 UT
+- 如果输出 `NO_DB_SOURCE` → 无数据源，跳过 UT，直接到闸口②（告知用户"UT 未执行，需配置 db-sources.json"）
+
+**有数据源时**，调 run_ut.py 跑执行验证（DDL+INSERT+UT检查）：
 
 ```bash
 python CODING_SCRIPTS/run_ut.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
-  --source {数据源名} \
   --report {deliver}/ut_report.md
 ```
-
-将 UT 报告保存到 `{deliver}/_internal/ut_report.txt`。
 
 ---
 

@@ -71,8 +71,11 @@ def generate_dq_for_table(full_table: str, code: str, business_key: list,
 
             if any(k in rtype_lower for k in ["重复", "唯一", "unique", "duplicate"]):
                 # 唯一性检查
-                key = business_key if business_key else ["order_id"]  # 兜底
-                key_cols = ", ".join(key)
+                if not business_key:
+                    lines.append(f"-- TODO: business_key 为空，coder 根据 '{rdesc}' 补充唯一性检查字段")
+                    lines.append("")
+                    continue
+                key_cols = ", ".join(business_key)
                 lines.append(f"SELECT {key_cols}, COUNT(*) AS cnt")
                 lines.append(f"FROM {full_table}")
                 lines.append(f"GROUP BY {key_cols}")
