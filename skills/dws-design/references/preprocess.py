@@ -378,6 +378,13 @@ class ExcelMappingParser:
             best_key = col_clean if col_clean in column_map else None
 
             if best_key is None:
+                # 未匹配的列要报出来，让调用方知道输入有问题
+                self.diagnostics.append({
+                    'type': 'column_unmatched',
+                    'sheet': '',
+                    'message': f'列 "{col}" 未匹配到标准列名（清理后: "{col_clean}"），'
+                               f'请检查 mapping 表头是否按标准模板填写',
+                })
                 continue
 
             target = column_map[best_key]
