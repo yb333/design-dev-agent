@@ -573,6 +573,11 @@ def parse_mapping(xlsx_path: str) -> dict[str, Any]:
         target_table = first.target_table
         target_table_cn = first.target_table_cn
 
+    # 打印诊断信息（列名没匹配上等）
+    if parser.diagnostics:
+        for d in parser.diagnostics:
+            print(f"  ⚠️ {d['type']}: {d['message']}")
+
     return {
         "target_schema": target_schema,
         "target_table": target_table,
@@ -1170,6 +1175,10 @@ def main():
         sys.exit(1)
     print(f"  源表数: {len(mapping_raw.get('source_tables', []))}")
     print(f"  字段映射数: {len(mapping_raw.get('field_mappings', []))}")
+    if not mapping_raw.get("target_schema"):
+        print(f"  ⚠️ 目标表 schema 未从 mapping 提取到（检查实体级'目标表逻辑schema'列名和数据）")
+    if not mapping_raw.get("target_table"):
+        print(f"  ⚠️ 目标表名未从 mapping 提取到（检查实体级'目标表物理名称'列名和数据）")
 
     # 2. 提取 RS(如果有)
     rs_data = {}
