@@ -32,7 +32,20 @@ agent: build
 
 > 下文用 `{deliver}` 代指 `10_project_deliver/{资产名}/ddlc_design_dev`。
 > **资产名**从 RS 资产信息或 mapping 目标表推导。
-> 脚本路径用 glob 找：`glob: **/dws-design/references/preprocess.py`。
+
+### 脚本路径定位
+
+设计段脚本在 dws-design skill，编码段脚本在 dws-coding skill。开始前先定位路径：
+
+```bash
+DESIGN_SCRIPTS=$(python3 -c "from pathlib import Path; p=Path.home()/'.config/opencode/skills/dws-design/references'; print(p if p.exists() else '')")
+CODING_SCRIPTS=$(python3 -c "from pathlib import Path; p=Path.home()/'.config/opencode/skills/dws-coding/references'; print(p if p.exists() else '')")
+```
+
+> 如果全局目录找不到（项目级安装），用当前项目目录：
+> `DESIGN_SCRIPTS=$PWD/skills/dws-design/references`
+
+下文用 `$DESIGN_SCRIPTS` 代指设计段脚本目录，`$CODING_SCRIPTS` 代指编码段脚本目录。
 
 ---
 
@@ -45,7 +58,7 @@ agent: build
 **步骤 1a：转换**（mapping + RS → rs_input.json）
 
 ```bash
-python {scripts}/preprocess.py \
+python $DESIGN_SCRIPTS/preprocess.py \
   --mapping {mapping路径} \
   --rs {RS路径} \
   --output {deliver}/_internal/rs_input.json
@@ -54,7 +67,7 @@ python {scripts}/preprocess.py \
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 
 ```bash
-python {scripts}/precheck.py \
+python $DESIGN_SCRIPTS/precheck.py \
   --input {deliver}/_internal/rs_input.json
 ```
 
@@ -94,7 +107,7 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
 调脚本从 ts.json 直接生成摘要（不需要 AI 提取）：
 
 ```bash
-python {scripts}/gate_summary.py --ts {deliver}/ts.json
+python $DESIGN_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
 ```
 
 将脚本输出用 question 展示给用户确认。
@@ -111,7 +124,7 @@ python {scripts}/gate_summary.py --ts {deliver}/ts.json
 调脚本从 ts.json 自动生成 DDL：
 
 ```bash
-python {scripts}/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/ddl
+python $CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/ddl
 ```
 
 ---
@@ -121,7 +134,7 @@ python {scripts}/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/ddl
 调脚本从 ts.json 生成标准 DQ 检查 SQL：
 
 ```bash
-python {scripts}/assemble_dq.py --ts {deliver}/ts.json --outdir {deliver}/dq
+python $CODING_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --outdir {deliver}/dq
 ```
 
 ---
@@ -155,7 +168,7 @@ coder 完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 调 run_ut.py 跑执行验证（DDL+INSERT+UT检查）：
 
 ```bash
-python {scripts}/run_ut.py \
+python $CODING_SCRIPTS/run_ut.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
