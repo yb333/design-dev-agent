@@ -7,10 +7,10 @@
       "description": ""
     },
     "owner": {},
-    "grain": "",
+    "grain": "基础类SUP销售订单订单更改电子流行粒度",
     "load_strategy": {
-      "strategy": "",
-      "incremental_key": ""
+      "strategy": "全量调度",
+      "incremental_key": "不涉及"
     }
   },
   "source_tables": [
@@ -289,7 +289,51 @@
       "remark": "审计字段"
     }
   ],
-  "schedule": {},
+  "schedule": {
+    "strategy": "全量调度",
+    "init_time_range": "ALL",
+    "frequency": "T+1调度，一天一调",
+    "sla": "SLA：3:30",
+    "incremental_key": "不涉及",
+    "upstream": []
+  },
   "data_flow_hint": {},
-  "dq_requirements": []
+  "dq_requirements": [
+    {
+      "scope": "字段级",
+      "check_type": "空值检查",
+      "rule_name": "",
+      "rule_desc": ""
+    },
+    {
+      "scope": "表级",
+      "check_type": "重复数据检查",
+      "rule_name": "",
+      "rule_desc": ""
+    },
+    {
+      "scope": "跨表级",
+      "check_type": "跨表数量一致性检查",
+      "rule_name": "",
+      "rule_desc": ""
+    },
+    {
+      "scope": "字段级",
+      "check_type": "值域约束检查",
+      "rule_name": "",
+      "rule_desc": ""
+    },
+    {
+      "scope": "表级",
+      "check_type": "时间拉链检查",
+      "rule_name": "",
+      "rule_desc": ""
+    },
+    {
+      "scope": "表级",
+      "check_type": "维度扩散检查",
+      "rule_name": "",
+      "rule_desc": ""
+    }
+  ]
 }
