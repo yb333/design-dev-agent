@@ -890,13 +890,38 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     final_table = rs_table or target_table_raw
     final_cn = rs_target.get("cn", "") or target_table_cn
 
-    # 校验：两边都有但不一致时告警（不阻断）
-    if rs_schema and target_schema and rs_schema != target_schema:
-        print(f"  ⚠️ 告警: RS schema '{rs_schema}' 和 mapping schema '{target_schema}' 不一致，用 RS 的")
-    if rs_table and target_table_raw and rs_table != target_table_raw:
-        print(f"  ⚠️ 告警: RS 表名 '{rs_table}' 和 mapping 表名 '{target_table_raw}' 不一致，用 RS 的")
-    if not final_schema:
-        print(f"  ⚠️ 告警: RS 和 mapping 都没写 schema，目标表 schema 缺失")
+    # 校验规则：
+    # - 两边都没写 → 阻断（必须确认）
+    # - 两边都写了但不一致 → 阻断（必须确认）
+    # - 一边写了一边没写 → 告警（互补，不阻断）
+    # - 两边都写了且一致 → 正常
+    fatal_errors = []
+
+    # schema 校验
+    if not rs_schema and not target_schema:
+        fatal_errors.append("目标表 schema：RS 和 mapping 都没写，无法确定 schema")
+    elif rs_schema and target_schema and rs_schema != target_schema:
+        fatal_errors.append(f"目标表 schema 不一致：RS='{rs_schema}', mapping='{target_schema}'")
+    elif rs_schema and not target_schema:
+        print(f"  ⚠️ 告警: mapping 没写 schema，用 RS 的 '{rs_schema}'")
+    elif target_schema and not rs_schema:
+        print(f"  ⚠️ 告警: RS 没写 schema，用 mapping 的 '{target_schema}'")
+
+    # table 校验
+    if not rs_table and not target_table_raw:
+        fatal_errors.append("目标表名：RS 和 mapping 都没写，无法确定表名")
+    elif rs_table and target_table_raw and rs_table != target_table_raw:
+        fatal_errors.append(f"目标表名不一致：RS='{rs_table}', mapping='{target_table_raw}'")
+    elif rs_table and not target_table_raw:
+        print(f"  ⚠️ 告警: mapping 没写表名，用 RS 的 '{rs_table}'")
+    elif target_table_raw and not rs_table:
+        print(f"  ⚠️ 告警: RS 没写表名，用 mapping 的 '{target_table_raw}'")
+
+    if fatal_errors:
+        print(f"\n❌ 目标表信息校验失败，请确认正确值：", file=sys.stderr)
+        for e in fatal_errors:
+            print(f"  - {e}", file=sys.stderr)
+        sys.exit(1)
 
     # 推导 f_table 和 i_view（用最终表名）
     if final_table.endswith("_i"):
