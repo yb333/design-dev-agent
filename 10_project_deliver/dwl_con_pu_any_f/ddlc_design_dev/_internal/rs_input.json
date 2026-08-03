@@ -1,13 +1,19 @@
 {
   "meta": {
     "target": {
-      "schema": "fin_dwl_cnb",
-      "table": "dwl_con_pu_any_f",
-      "cn": "合同pu分析表",
-      "description": ""
+      "f_table": {
+        "schema": "fin_dwl_cnb",
+        "table": "dwl_con_pu_any_f",
+        "cn": "合同pu分析表"
+      },
+      "i_view": {
+        "schema": "fin_dwl_cnb",
+        "table": "dwl_con_pu_any_i",
+        "cn": "合同pu分析表"
+      }
     },
     "owner": {},
-    "grain": "基础类SUP销售订单订单更改电子流行粒度",
+    "grain": "合同+PU粒度的合同PU分析表",
     "load_strategy": {
       "strategy": "全量调度",
       "incremental_key": "不涉及"
@@ -20,7 +26,7 @@
       "source_table_cn": "合同pu指标表",
       "target_schema": "fin_dwl_cnb",
       "target_table_cn": "合同pu分析表",
-      "target_table": "dwl_con_pu_any_f",
+      "target_table": "dwl_con_pu_any_i",
       "join_condition": "",
       "remark": "主表",
       "source_alias": "t",
@@ -32,7 +38,7 @@
       "source_table_cn": "合同分析表",
       "target_schema": "fin_dwl_cnb",
       "target_table_cn": "合同pu分析表",
-      "target_table": "dwl_con_pu_any_f",
+      "target_table": "dwl_con_pu_any_i",
       "join_condition": "t.contract_key = f.contract_key",
       "remark": "",
       "source_alias": "f",
@@ -44,7 +50,7 @@
       "source_table_cn": "发票指标表",
       "target_schema": "fin_dwl_cnb",
       "target_table_cn": "合同pu分析表",
-      "target_table": "dwl_con_pu_any_f",
+      "target_table": "dwl_con_pu_any_i",
       "join_condition": "t.contract_id = inv_mtr.contract_id AND t.pu_id = inv_mtr.pu_id",
       "remark": "需排除非洲发票",
       "source_alias": "inv_mtr",
@@ -56,7 +62,7 @@
       "source_table_cn": "pu维表",
       "target_schema": "fin_dwl_cnb",
       "target_table_cn": "合同pu分析表",
-      "target_table": "dwl_con_pu_any_f",
+      "target_table": "dwl_con_pu_any_i",
       "join_condition": "t.pu_id = pu.pu_id",
       "remark": "维度取最新有效行",
       "source_alias": "pu",
@@ -351,5 +357,6 @@
       "rule_name": "",
       "rule_desc": ""
     }
-  ]
+  ],
+  "data_exploration": {}
 }

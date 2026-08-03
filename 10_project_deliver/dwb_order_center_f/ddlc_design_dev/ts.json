@@ -1,0 +1,2896 @@
+{
+  "version": "1.0.0",
+  "spec_type": "ts",
+  "generated_at": "2026-08-03T23:17:01",
+  "generated_by": "assemble_ts.py",
+  "meta": {
+    "target": {
+      "f_table": {
+        "schema": "slord",
+        "table": "dwb_order_center_f",
+        "cn": "订单中心宽表"
+      },
+      "i_view": {
+        "schema": "slord",
+        "table": "dwb_order_center_i",
+        "cn": "订单中心宽表"
+      }
+    },
+    "grain": "每行一个订单",
+    "load_strategy": {
+      "strategy": "全量调度",
+      "label": "",
+      "delete_mode": ""
+    },
+    "field_count": {
+      "business": 146,
+      "audit": 4,
+      "total": 150
+    },
+    "source_tables": [
+      {
+        "schema": "sdord",
+        "table": "dwd_order_f",
+        "table_cn": "订单明细事实表",
+        "alias": "dof"
+      },
+      {
+        "schema": "sdord",
+        "table": "dwd_order_detail_f",
+        "table_cn": "订单商品明细事实表",
+        "alias": "dod"
+      },
+      {
+        "schema": "sdpay",
+        "table": "dwd_payment_f",
+        "table_cn": "支付事实表",
+        "alias": "dpf"
+      },
+      {
+        "schema": "sdlog",
+        "table": "dwd_logistics_f",
+        "table_cn": "物流事实表",
+        "alias": "dlf"
+      },
+      {
+        "schema": "sdmar",
+        "table": "dwd_coupon_use_f",
+        "table_cn": "优惠券使用事实表",
+        "alias": "dcu"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_user_f",
+        "table_cn": "用户维度表",
+        "alias": "duf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_user_level_f",
+        "table_cn": "用户等级维度表",
+        "alias": "dul"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_product_f",
+        "table_cn": "商品维度表",
+        "alias": "dpf7"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_product_category_f",
+        "table_cn": "商品分类维度表",
+        "alias": "dpc"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_brand_f",
+        "table_cn": "品牌维度表",
+        "alias": "dbf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_shop_f",
+        "table_cn": "店铺维度表",
+        "alias": "dsf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_region_f",
+        "table_cn": "地区维度表",
+        "alias": "drf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_warehouse_f",
+        "table_cn": "仓库维度表",
+        "alias": "dwf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_payment_method_f",
+        "table_cn": "支付方式维度表",
+        "alias": "dpm"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_logistics_company_f",
+        "table_cn": "物流公司维度表",
+        "alias": "dlc"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_coupon_f",
+        "table_cn": "优惠券维度表",
+        "alias": "dcf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_activity_f",
+        "table_cn": "营销活动维度表",
+        "alias": "daf"
+      },
+      {
+        "schema": "sdref",
+        "table": "dwd_refund_f",
+        "table_cn": "退款事实表",
+        "alias": "drf17"
+      }
+    ],
+    "schedule": {
+      "task_name": "dwb_order_center_f_load",
+      "cron": "0 30 3 * * ?",
+      "task_group": "dwb_order_center",
+      "project": "slord",
+      "owner": "",
+      "exec_params": {},
+      "upstream": [],
+      "execution_platform": {}
+    }
+  },
+  "design": {
+    "complexity_analysis": {
+      "join_count": 18,
+      "has_grain_change": true,
+      "grain_change_detail": "三类画像聚合(用户/商品/店铺)将订单粒度收敛为各自粒度后关联回订单；五张一对多事实表(明细/支付/物流/优惠券/退款)需收敛到订单粒度",
+      "multi_step_fields": 16,
+      "aggregation_after_join": true,
+      "segmentation_decision": "分段",
+      "segmentation_reason": "JOIN 表数量 18(有效关联操作约 24，dim_region_f 需 5 次别名关联、dim_product_category_f 需 3 次自关联)远超阈值 12；16 个多步骤加工字段需先聚合再关联；存在用户/商品/店铺三类粒度变化及五处一对多收敛。拆为 3 个画像中间表收口聚合，最终 F 表只做关联拼接，降低单条 INSERT 复杂度并使画像可独立校验。"
+    },
+    "audit_fields": {
+      "del_flag": {
+        "type": "NVARCHAR(1)",
+        "default": "'N'",
+        "source": "mapping"
+      },
+      "crt_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "last_upd_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "dw_last_update_date": {
+        "type": "TIMESTAMP(0)",
+        "default": "CURRENT_TIMESTAMP",
+        "source": "mapping"
+      }
+    },
+    "audit_supplemented": [],
+    "distribution_key": [
+      "order_id"
+    ],
+    "business_key": [
+      "order_id"
+    ],
+    "business_key_design": {
+      "input_key": [
+        "order_id"
+      ],
+      "adjusted": false,
+      "reason": "RS 标注主键为 order_id；产出表粒度为每行一个订单，order_id 在该粒度下唯一，无需调整。"
+    }
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "用户画像中间表",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dwb_order_center_user_tmp1",
+      "is_view_step": false,
+      "design_intent": "收口所有按 user_id 聚合的用户画像/历史指标(先聚合再关联)，输出用户粒度，避免直接关联订单发散订单粒度。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "sdord",
+          "table": "dwd_order_f",
+          "alias": "dof"
+        },
+        {
+          "schema": "sdpay",
+          "table": "dwd_payment_f",
+          "alias": "dpf"
+        },
+        {
+          "schema": "sdmar",
+          "table": "dwd_coupon_use_f",
+          "alias": "dcu"
+        },
+        {
+          "schema": "sdref",
+          "table": "dwd_refund_f",
+          "alias": "drf17"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_activity_f",
+          "alias": "daf"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "订单/支付/优惠券/退款/活动明细(多源，每源对同一用户多行)",
+        "output": "一行=一个用户",
+        "change": "多行聚合"
+      },
+      "joins": [
+        {
+          "alias": "dof",
+          "type": "main",
+          "condition": "按 user_id 分组的聚合基表",
+          "filter": "order_status NOT IN ('CANCELLED','DELETED')"
+        },
+        {
+          "alias": "dpf",
+          "type": "LEFT JOIN",
+          "condition": "dof.user_id = dpf.user_id(聚合 fav_pay_method)",
+          "filter": ""
+        },
+        {
+          "alias": "dcu",
+          "type": "LEFT JOIN",
+          "condition": "dof.user_id = dcu.user_id(聚合 user_coupon_used_cnt)",
+          "filter": "use_status='USED'"
+        },
+        {
+          "alias": "drf17",
+          "type": "LEFT JOIN",
+          "condition": "dof.user_id = drf17.user_id(聚合 user_refund_cnt)",
+          "filter": "refund_status='SUCCESS'"
+        },
+        {
+          "alias": "daf",
+          "type": "LEFT JOIN",
+          "condition": "dof.activity_id = daf.activity_id(取活动类型用于偏好统计)",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dof",
+          "join_key_unique": true,
+          "strategy": "GROUP BY user_id 收敛到用户粒度，确保 user_id 唯一",
+          "reason": "聚合后每用户一行，关联回订单不发散"
+        },
+        {
+          "table": "dpf",
+          "join_key_unique": false,
+          "strategy": "按 user_id 分组取众数收敛",
+          "reason": "一用户多笔支付，取使用最多的 pay_method 收敛到用户粒度"
+        },
+        {
+          "table": "dcu",
+          "join_key_unique": false,
+          "strategy": "按 user_id 分组 COUNT 去重收敛",
+          "reason": "一用户多用券，聚合后每用户一个计数值"
+        },
+        {
+          "table": "drf17",
+          "join_key_unique": false,
+          "strategy": "按 user_id 分组 COUNT 收敛",
+          "reason": "一用户多笔退款，聚合后每用户一个计数值"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "user_id",
+          "field_type": "bigint",
+          "field_comment": "用户ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "user_id",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.user_id"
+        },
+        {
+          "target_field": "first_order_time",
+          "field_type": "datetime",
+          "field_comment": "首次下单时间",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户首次下单时间：对 dwd_order_f 按 user_id 分组，取该用户最早的 create_time"
+        },
+        {
+          "target_field": "last_order_time",
+          "field_type": "datetime",
+          "field_comment": "最近下单时间",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户最近下单时间：对 dwd_order_f 按 user_id 分组，取该用户最新的 create_time"
+        },
+        {
+          "target_field": "history_order_cnt",
+          "field_type": "int",
+          "field_comment": "历史订单数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户历史订单总数：对 dwd_order_f 按 user_id 分组统计订单条数"
+        },
+        {
+          "target_field": "history_pay_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "历史消费金额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户历史消费总额：对 dwd_order_f 按 user_id 分组，累加各订单 pay_amount"
+        },
+        {
+          "target_field": "history_discount_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "历史优惠金额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户历史优惠总额：对 dwd_order_f 按 user_id 分组，累加各订单 discount_amount"
+        },
+        {
+          "target_field": "avg_order_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "平均客单价",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户平均客单价：历史消费金额 / 历史订单数，订单数为 0 时取 0"
+        },
+        {
+          "target_field": "rfm_segment",
+          "field_type": "varchar(20)",
+          "field_comment": "用户RFM分层",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户 RFM 分层：根据最近下单时间算 R 值(1-5 分)、历史订单数算 F 值、历史消费金额算 M 值，组合成 RFM 分层标签"
+        },
+        {
+          "target_field": "is_repeat_user",
+          "field_type": "varchar(1)",
+          "field_comment": "是否复购用户",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "是否复购用户：历史订单数 ≥ 2 标记为 Y，否则 N"
+        },
+        {
+          "target_field": "fav_pay_method",
+          "field_type": "varchar(20)",
+          "field_comment": "用户常用支付方式",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "用户常用支付方式：对 dwd_payment_f 按 user_id 分组取使用次数最多的 pay_method"
+        },
+        {
+          "target_field": "user_coupon_used_cnt",
+          "field_type": "int",
+          "field_comment": "用户优惠券使用次数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_coupon_use_f",
+              "field": "",
+              "alias": "dcu"
+            }
+          ],
+          "design_logic": "用户优惠券使用次数：对 dwd_coupon_use_f 按 user_id 分组，统计去重 coupon_id 的个数"
+        },
+        {
+          "target_field": "user_fav_activity_type",
+          "field_type": "varchar(50)",
+          "field_comment": "用户偏好活动类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "用户偏好活动类型：对 dwd_order_f 按 user_id 关联活动维表，取该用户参与订单数最多的活动类型"
+        },
+        {
+          "target_field": "user_refund_cnt",
+          "field_type": "int",
+          "field_comment": "用户历史退款次数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "用户历史退款次数：对 dwd_refund_f(退款成功) 按 user_id 分组，统计退款笔数"
+        }
+      ],
+      "field_count": 13
+    },
+    "R0002": {
+      "rule_name": "商品画像中间表",
+      "scenario": "default",
+      "exec_sequence": 2,
+      "target_table": "dwb_order_center_prod_tmp1",
+      "is_view_step": false,
+      "design_intent": "收口按 product_id 聚合的商品累计销量/销售额(先聚合再关联)，输出商品粒度，避免发散订单粒度。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "sdord",
+          "table": "dwd_order_detail_f",
+          "alias": "dod"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "订单商品明细(一商品多行)",
+        "output": "一行=一个商品",
+        "change": "多行聚合"
+      },
+      "joins": [
+        {
+          "alias": "dod",
+          "type": "main",
+          "condition": "按 product_id 分组的聚合基表",
+          "filter": "del_flag='N'"
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dod",
+          "join_key_unique": true,
+          "strategy": "GROUP BY product_id 收敛到商品粒度，确保 product_id 唯一",
+          "reason": "聚合后每商品一行，关联回订单的主商品不发散"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "product_id",
+          "field_type": "bigint",
+          "field_comment": "商品ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "product_id",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "直取 dod.product_id"
+        },
+        {
+          "target_field": "product_sales_cnt",
+          "field_type": "int",
+          "field_comment": "商品累计销量",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "商品累计销量：对 dwd_order_detail_f 按 product_id 分组，累加各明细的 qty"
+        },
+        {
+          "target_field": "product_sales_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "商品累计销售额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "商品累计销售额：对 dwd_order_detail_f 按 product_id 分组，累加各明细的 real_price 乘以 qty"
+        }
+      ],
+      "field_count": 3
+    },
+    "R0003": {
+      "rule_name": "店铺画像中间表",
+      "scenario": "default",
+      "exec_sequence": 3,
+      "target_table": "dwb_order_center_shop_tmp1",
+      "is_view_step": false,
+      "design_intent": "收口按 shop_id 聚合的店铺历史订单数(先聚合再关联)，输出店铺粒度，避免发散订单粒度。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "sdord",
+          "table": "dwd_order_f",
+          "alias": "dof"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "订单事实表(一店铺多行)",
+        "output": "一行=一个店铺",
+        "change": "多行聚合"
+      },
+      "joins": [
+        {
+          "alias": "dof",
+          "type": "main",
+          "condition": "按 shop_id 分组的聚合基表",
+          "filter": "order_status NOT IN ('CANCELLED','DELETED')"
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dof",
+          "join_key_unique": true,
+          "strategy": "GROUP BY shop_id 收敛到店铺粒度，确保 shop_id 唯一",
+          "reason": "聚合后每店铺一行，关联回订单不发散"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "shop_id",
+          "field_type": "bigint",
+          "field_comment": "店铺ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "shop_id",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.shop_id"
+        },
+        {
+          "target_field": "shop_history_order_cnt",
+          "field_type": "int",
+          "field_comment": "店铺历史订单数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "店铺历史订单数：对 dwd_order_f 按 shop_id 分组 COUNT 订单数"
+        }
+      ],
+      "field_count": 2
+    },
+    "R0004": {
+      "rule_name": "订单中心宽表F表",
+      "scenario": "default",
+      "exec_sequence": 4,
+      "target_table": "dwb_order_center_f",
+      "is_view_step": false,
+      "design_intent": "最终宽表：以订单事实表为主表，LEFT JOIN 三个画像中间表(用户/商品/店铺)及全部维表，做关联拼接与字段映射，产出订单粒度宽表。画像聚合已由 R0001-R0003 收口，本规则只做关联拼接。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "sdord",
+          "table": "dwd_order_f",
+          "alias": "dof"
+        },
+        {
+          "schema": "sdord",
+          "table": "dwd_order_detail_f",
+          "alias": "dod"
+        },
+        {
+          "schema": "sdpay",
+          "table": "dwd_payment_f",
+          "alias": "dpf"
+        },
+        {
+          "schema": "sdlog",
+          "table": "dwd_logistics_f",
+          "alias": "dlf"
+        },
+        {
+          "schema": "sdmar",
+          "table": "dwd_coupon_use_f",
+          "alias": "dcu"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_user_f",
+          "alias": "duf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_user_level_f",
+          "alias": "dul"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_product_f",
+          "alias": "dpf7"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_product_category_f",
+          "alias": "dpc"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_brand_f",
+          "alias": "dbf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_shop_f",
+          "alias": "dsf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_region_f",
+          "alias": "drf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_warehouse_f",
+          "alias": "dwf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_payment_method_f",
+          "alias": "dpm"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_logistics_company_f",
+          "alias": "dlc"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_coupon_f",
+          "alias": "dcf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_activity_f",
+          "alias": "daf"
+        },
+        {
+          "schema": "sdref",
+          "table": "dwd_refund_f",
+          "alias": "drf17"
+        }
+      ],
+      "ctes": [
+        {
+          "name": "main_product",
+          "purpose": "取每个订单的第一条商品明细作为主商品，收敛一对多(一订单多商品)到订单粒度",
+          "source_tables": [
+            "dod"
+          ]
+        },
+        {
+          "name": "latest_payment",
+          "purpose": "取每个订单支付成功的最新一条支付记录，收敛一对多(一订单多次支付)到订单粒度",
+          "source_tables": [
+            "dpf"
+          ]
+        },
+        {
+          "name": "latest_logistics",
+          "purpose": "取每个订单最新一条物流记录，收敛一对多(一订单多条物流)到订单粒度",
+          "source_tables": [
+            "dlf"
+          ]
+        },
+        {
+          "name": "latest_coupon",
+          "purpose": "取每个订单使用状态为 USED 的一张优惠券，收敛一对多(一订单多券)到订单粒度",
+          "source_tables": [
+            "dcu"
+          ]
+        },
+        {
+          "name": "latest_refund",
+          "purpose": "取每个订单退款成功的一笔退款记录，收敛一对多(一订单多次退款)到订单粒度",
+          "source_tables": [
+            "drf17"
+          ]
+        }
+      ],
+      "grain": {
+        "input": "订单事实表为主(一行=一个订单)，关联维表及画像中间表",
+        "output": "一行=一个订单",
+        "change": "无变化(一对多关联已通过 CTE 收敛到订单粒度)"
+      },
+      "joins": [
+        {
+          "alias": "dof",
+          "type": "main",
+          "condition": "订单主事实表",
+          "filter": "order_status NOT IN ('CANCELLED','DELETED')"
+        },
+        {
+          "alias": "main_product(CTE)",
+          "type": "LEFT JOIN",
+          "condition": "dof.order_id = main_product.order_id",
+          "filter": ""
+        },
+        {
+          "alias": "latest_payment(CTE)",
+          "type": "LEFT JOIN",
+          "condition": "dof.order_id = latest_payment.order_id",
+          "filter": ""
+        },
+        {
+          "alias": "latest_logistics(CTE)",
+          "type": "LEFT JOIN",
+          "condition": "dof.order_id = latest_logistics.order_id",
+          "filter": ""
+        },
+        {
+          "alias": "latest_coupon(CTE)",
+          "type": "LEFT JOIN",
+          "condition": "dof.order_id = latest_coupon.order_id",
+          "filter": ""
+        },
+        {
+          "alias": "latest_refund(CTE)",
+          "type": "LEFT JOIN",
+          "condition": "dof.order_id = latest_refund.order_id",
+          "filter": ""
+        },
+        {
+          "alias": "dwb_order_center_user_tmp1",
+          "type": "LEFT JOIN",
+          "condition": "dof.user_id = dwb_order_center_user_tmp1.user_id",
+          "filter": ""
+        },
+        {
+          "alias": "dwb_order_center_prod_tmp1",
+          "type": "LEFT JOIN",
+          "condition": "main_product.product_id = dwb_order_center_prod_tmp1.product_id",
+          "filter": ""
+        },
+        {
+          "alias": "dwb_order_center_shop_tmp1",
+          "type": "LEFT JOIN",
+          "condition": "dof.shop_id = dwb_order_center_shop_tmp1.shop_id",
+          "filter": ""
+        },
+        {
+          "alias": "duf",
+          "type": "LEFT JOIN",
+          "condition": "dof.user_id = duf.user_id",
+          "filter": ""
+        },
+        {
+          "alias": "dul",
+          "type": "LEFT JOIN",
+          "condition": "duf.level_id = dul.level_id",
+          "filter": ""
+        },
+        {
+          "alias": "dpf7",
+          "type": "LEFT JOIN",
+          "condition": "main_product.product_id = dpf7.product_id",
+          "filter": ""
+        },
+        {
+          "alias": "dpc",
+          "type": "LEFT JOIN",
+          "condition": "dpf7.category_id = dpc.category_id(一级类目)；再按 parent_id 两次自关联取二/三级类目",
+          "filter": ""
+        },
+        {
+          "alias": "dbf",
+          "type": "LEFT JOIN",
+          "condition": "dpf7.brand_id = dbf.brand_id",
+          "filter": ""
+        },
+        {
+          "alias": "dsf",
+          "type": "LEFT JOIN",
+          "condition": "dof.shop_id = dsf.shop_id",
+          "filter": ""
+        },
+        {
+          "alias": "drf(收货省)",
+          "type": "LEFT JOIN",
+          "condition": "dof.province_code = drf1.region_code",
+          "filter": ""
+        },
+        {
+          "alias": "drf(收货市)",
+          "type": "LEFT JOIN",
+          "condition": "dof.city_code = drf2.region_code",
+          "filter": ""
+        },
+        {
+          "alias": "drf(收货区)",
+          "type": "LEFT JOIN",
+          "condition": "dof.district_code = drf3.region_code",
+          "filter": ""
+        },
+        {
+          "alias": "drf(店铺省)",
+          "type": "LEFT JOIN",
+          "condition": "dsf.province_code = drf4.region_code",
+          "filter": ""
+        },
+        {
+          "alias": "drf(店铺市)",
+          "type": "LEFT JOIN",
+          "condition": "dsf.city_code = drf5.region_code",
+          "filter": ""
+        },
+        {
+          "alias": "dpm",
+          "type": "LEFT JOIN",
+          "condition": "latest_payment.pay_method = dpm.method_code",
+          "filter": ""
+        },
+        {
+          "alias": "dlc",
+          "type": "LEFT JOIN",
+          "condition": "latest_logistics.logistics_company = dlc.company_code",
+          "filter": ""
+        },
+        {
+          "alias": "dwf",
+          "type": "LEFT JOIN",
+          "condition": "latest_logistics.warehouse_id = dwf.warehouse_id",
+          "filter": ""
+        },
+        {
+          "alias": "dcf",
+          "type": "LEFT JOIN",
+          "condition": "latest_coupon.coupon_id = dcf.coupon_id",
+          "filter": ""
+        },
+        {
+          "alias": "daf",
+          "type": "LEFT JOIN",
+          "condition": "dof.activity_id = daf.activity_id",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dod(main_product CTE)",
+          "join_key_unique": false,
+          "strategy": "ROW_NUMBER 按 order_id 分区取第一条商品收敛",
+          "reason": "一订单多商品，取主商品收敛到订单粒度避免发散"
+        },
+        {
+          "table": "dpf(latest_payment CTE)",
+          "join_key_unique": false,
+          "strategy": "取支付成功中最新一条收敛",
+          "reason": "一订单多次支付，取最新成功记录收敛到订单粒度"
+        },
+        {
+          "table": "dlf(latest_logistics CTE)",
+          "join_key_unique": false,
+          "strategy": "取最新一条物流记录收敛",
+          "reason": "一订单多条物流，取最新收敛到订单粒度"
+        },
+        {
+          "table": "dcu(latest_coupon CTE)",
+          "join_key_unique": false,
+          "strategy": "取使用状态为 USED 的一张收敛",
+          "reason": "一订单多张优惠券，取一张收敛到订单粒度"
+        },
+        {
+          "table": "drf17(latest_refund CTE)",
+          "join_key_unique": false,
+          "strategy": "取退款成功的一笔收敛",
+          "reason": "一订单多次退款，取一笔收敛到订单粒度"
+        },
+        {
+          "table": "dwb_order_center_user_tmp1",
+          "join_key_unique": true,
+          "strategy": "无需额外收敛",
+          "reason": "已按 user_id GROUP BY 收敛，每用户一行，多订单→一用户安全"
+        },
+        {
+          "table": "dwb_order_center_prod_tmp1",
+          "join_key_unique": true,
+          "strategy": "无需额外收敛",
+          "reason": "已按 product_id GROUP BY 收敛，每商品一行"
+        },
+        {
+          "table": "dwb_order_center_shop_tmp1",
+          "join_key_unique": true,
+          "strategy": "无需额外收敛",
+          "reason": "已按 shop_id GROUP BY 收敛，每店铺一行"
+        },
+        {
+          "table": "duf",
+          "join_key_unique": true,
+          "strategy": "取当前有效用户",
+          "reason": "用户维表 user_id 唯一"
+        },
+        {
+          "table": "dpf7",
+          "join_key_unique": true,
+          "strategy": "取当前有效商品",
+          "reason": "商品维表 product_id 唯一"
+        },
+        {
+          "table": "dsf",
+          "join_key_unique": true,
+          "strategy": "取当前有效店铺",
+          "reason": "店铺维表 shop_id 唯一"
+        },
+        {
+          "table": "drf(地区维表多别名)",
+          "join_key_unique": true,
+          "strategy": "按各自 region_code 关联，同一地区维表通过不同别名分别关联省/市/区",
+          "reason": "region_code 唯一，需 5 次别名关联(收货省市区 + 店铺省市)"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "order_id",
+          "field_type": "bigint",
+          "field_comment": "订单ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "order_id",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.order_id"
+        },
+        {
+          "target_field": "order_no",
+          "field_type": "varchar(64)",
+          "field_comment": "订单号",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "order_no",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.order_no"
+        },
+        {
+          "target_field": "order_status",
+          "field_type": "varchar(20)",
+          "field_comment": "订单状态",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "order_status",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.order_status"
+        },
+        {
+          "target_field": "order_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "订单状态名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "order_status",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "订单状态名称：按 order_status 映射中文，PAID→已支付、SHIPPED→已发货、RECEIVED→已签收、CANCELLED→已取消，其余→其他"
+        },
+        {
+          "target_field": "order_time",
+          "field_type": "datetime",
+          "field_comment": "下单时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "create_time",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.create_time"
+        },
+        {
+          "target_field": "total_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "订单总金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "total_amount",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.total_amount"
+        },
+        {
+          "target_field": "product_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "商品金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "product_amount",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.product_amount"
+        },
+        {
+          "target_field": "pay_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "实付金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "pay_amount",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.pay_amount"
+        },
+        {
+          "target_field": "discount_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "优惠金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "discount_amount",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.discount_amount"
+        },
+        {
+          "target_field": "freight_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "运费金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "freight_amount",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.freight_amount"
+        },
+        {
+          "target_field": "product_cnt",
+          "field_type": "int",
+          "field_comment": "商品种类数",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "product_cnt",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.product_cnt"
+        },
+        {
+          "target_field": "product_qty",
+          "field_type": "int",
+          "field_comment": "商品总件数",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "product_qty",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.product_qty"
+        },
+        {
+          "target_field": "order_source_name",
+          "field_type": "varchar(50)",
+          "field_comment": "订单来源",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "order_source",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "订单来源：按 order_source 映射，APP→APP端、WEB→网页端、MINIAPP→小程序、H5→H5页面，其余→其他"
+        },
+        {
+          "target_field": "order_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "订单类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "order_type",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "订单类型：按 order_type 映射，NORMAL→普通订单、PRESALE→预售订单、GROUPBUY→团购订单、SECKILL→秒杀订单，其余→其他"
+        },
+        {
+          "target_field": "order_remark",
+          "field_type": "varchar(500)",
+          "field_comment": "订单备注",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "remark",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.remark"
+        },
+        {
+          "target_field": "order_date",
+          "field_type": "date",
+          "field_comment": "下单日期",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "create_time",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "下单日期：取 create_time 的日期部分"
+        },
+        {
+          "target_field": "receiver_name",
+          "field_type": "varchar(100)",
+          "field_comment": "收货人姓名",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "receiver_name",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.receiver_name"
+        },
+        {
+          "target_field": "receiver_phone_masked",
+          "field_type": "varchar(20)",
+          "field_comment": "收货人手机(脱敏)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "receiver_phone",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "收货人手机脱敏：保留前 3 位和后 4 位，中间用 **** 替换"
+        },
+        {
+          "target_field": "receiver_province_code",
+          "field_type": "varchar(20)",
+          "field_comment": "收货省份编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "province_code",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.province_code"
+        },
+        {
+          "target_field": "receiver_province_name",
+          "field_type": "varchar(50)",
+          "field_comment": "收货省份名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_region_f",
+              "field": "region_name",
+              "alias": "drf"
+            }
+          ],
+          "design_logic": "直取 drf.region_name"
+        },
+        {
+          "target_field": "receiver_city_code",
+          "field_type": "varchar(20)",
+          "field_comment": "收货城市编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "city_code",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.city_code"
+        },
+        {
+          "target_field": "receiver_city_name",
+          "field_type": "varchar(50)",
+          "field_comment": "收货城市名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_region_f",
+              "field": "",
+              "alias": "drf"
+            }
+          ],
+          "design_logic": "收货城市名称：通过订单 city_code 关联地区维表(dim_region_f)取城市名称"
+        },
+        {
+          "target_field": "receiver_district_code",
+          "field_type": "varchar(20)",
+          "field_comment": "收货区县编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "district_code",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.district_code"
+        },
+        {
+          "target_field": "receiver_district_name",
+          "field_type": "varchar(50)",
+          "field_comment": "收货区县名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_region_f",
+              "field": "",
+              "alias": "drf"
+            }
+          ],
+          "design_logic": "收货区县名称：通过订单 district_code 关联地区维表取区县名称"
+        },
+        {
+          "target_field": "receiver_street",
+          "field_type": "varchar(200)",
+          "field_comment": "收货街道",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "street",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.street"
+        },
+        {
+          "target_field": "receiver_address",
+          "field_type": "varchar(500)",
+          "field_comment": "详细地址",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "address",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.address"
+        },
+        {
+          "target_field": "full_address",
+          "field_type": "varchar(1000)",
+          "field_comment": "完整收货地址",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "完整收货地址：依次拼接省名称、城市名称、区县名称、街道、详细地址"
+        },
+        {
+          "target_field": "postal_code",
+          "field_type": "varchar(10)",
+          "field_comment": "邮政编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "postal_code",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.postal_code"
+        },
+        {
+          "target_field": "address_tag_name",
+          "field_type": "varchar(50)",
+          "field_comment": "地址标签",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "address_tag",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "地址标签：按 address_tag 映射，HOME→家、COMPANY→公司、SCHOOL→学校，其余→其他"
+        },
+        {
+          "target_field": "longitude",
+          "field_type": "decimal(10,6)",
+          "field_comment": "经度",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "longitude",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.longitude"
+        },
+        {
+          "target_field": "latitude",
+          "field_type": "decimal(10,6)",
+          "field_comment": "纬度",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "latitude",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.latitude"
+        },
+        {
+          "target_field": "activity_id",
+          "field_type": "bigint",
+          "field_comment": "活动ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "activity_id",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.activity_id"
+        },
+        {
+          "target_field": "activity_name",
+          "field_type": "varchar(100)",
+          "field_comment": "活动名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_activity_f",
+              "field": "activity_name",
+              "alias": "daf"
+            }
+          ],
+          "design_logic": "直取 daf.activity_name"
+        },
+        {
+          "target_field": "activity_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "活动类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_activity_f",
+              "field": "activity_type",
+              "alias": "daf"
+            }
+          ],
+          "design_logic": "活动类型：按 activity_type 映射，SECKILL→秒杀活动、GROUPBUY→团购活动、PRESALE→预售活动、FULL_GIFT→满赠活动、FULL_REDUCE→满减活动，其余→其他"
+        },
+        {
+          "target_field": "activity_discount_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "活动折扣率(%)",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_activity_f",
+              "field": "discount_rate",
+              "alias": "daf"
+            }
+          ],
+          "design_logic": "直取 daf.discount_rate"
+        },
+        {
+          "target_field": "coupon_id",
+          "field_type": "bigint",
+          "field_comment": "优惠券ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_coupon_use_f",
+              "field": "coupon_id",
+              "alias": "dcu"
+            }
+          ],
+          "design_logic": "直取 dcu.coupon_id"
+        },
+        {
+          "target_field": "coupon_name",
+          "field_type": "varchar(100)",
+          "field_comment": "优惠券名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_coupon_f",
+              "field": "coupon_name",
+              "alias": "dcf"
+            }
+          ],
+          "design_logic": "直取 dcf.coupon_name"
+        },
+        {
+          "target_field": "coupon_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "优惠券类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_coupon_f",
+              "field": "coupon_type",
+              "alias": "dcf"
+            }
+          ],
+          "design_logic": "优惠券类型：按 coupon_type 映射，FULL_REDUCE→满减券、DISCOUNT→折扣券、CASH→现金券、FREIGHT→运费券，其余→其他"
+        },
+        {
+          "target_field": "coupon_amount",
+          "field_type": "decimal(10,2)",
+          "field_comment": "优惠券金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_coupon_use_f",
+              "field": "coupon_amount",
+              "alias": "dcu"
+            }
+          ],
+          "design_logic": "直取 dcu.coupon_amount"
+        },
+        {
+          "target_field": "full_reduce_amount",
+          "field_type": "decimal(10,2)",
+          "field_comment": "满减金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "full_reduce_amount",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.full_reduce_amount"
+        },
+        {
+          "target_field": "points_deduct_amount",
+          "field_type": "decimal(10,2)",
+          "field_comment": "积分抵扣金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "points_deduct",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.points_deduct"
+        },
+        {
+          "target_field": "points_used",
+          "field_type": "int",
+          "field_comment": "使用积分数",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "points_used",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "直取 dof.points_used"
+        },
+        {
+          "target_field": "is_marketing_order",
+          "field_type": "varchar(1)",
+          "field_comment": "是否营销订单",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "是否营销订单：存在优惠券 ID 或活动 ID 标记为 Y，否则 N"
+        },
+        {
+          "target_field": "total_discount_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "总优惠金额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_f",
+              "field": "",
+              "alias": "dof"
+            }
+          ],
+          "design_logic": "总优惠金额：优惠券金额 + 满减金额 + 积分抵扣金额"
+        },
+        {
+          "target_field": "user_name",
+          "field_type": "varchar(100)",
+          "field_comment": "用户姓名",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "user_name",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.user_name"
+        },
+        {
+          "target_field": "user_phone_masked",
+          "field_type": "varchar(20)",
+          "field_comment": "用户手机(脱敏)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "user_phone",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "用户手机脱敏：保留前 3 位和后 4 位，中间用 **** 替换"
+        },
+        {
+          "target_field": "user_email_masked",
+          "field_type": "varchar(100)",
+          "field_comment": "用户邮箱(脱敏)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "user_email",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "用户邮箱脱敏：保留前 2 位和 @ 后域名，中间用 *** 替换"
+        },
+        {
+          "target_field": "gender_name",
+          "field_type": "varchar(10)",
+          "field_comment": "用户性别",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "gender",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "用户性别：按 gender 映射，M→男、F→女，其余→未知"
+        },
+        {
+          "target_field": "user_birthday",
+          "field_type": "date",
+          "field_comment": "用户生日",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "birthday",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.birthday"
+        },
+        {
+          "target_field": "user_age",
+          "field_type": "int",
+          "field_comment": "用户年龄",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "用户年龄：当前年份减去生日年份"
+        },
+        {
+          "target_field": "user_register_time",
+          "field_type": "datetime",
+          "field_comment": "注册时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "register_time",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.register_time"
+        },
+        {
+          "target_field": "user_level_id",
+          "field_type": "int",
+          "field_comment": "用户等级ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "level_id",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.level_id"
+        },
+        {
+          "target_field": "user_level_name",
+          "field_type": "varchar(50)",
+          "field_comment": "用户等级名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_level_f",
+              "field": "level_name",
+              "alias": "dul"
+            }
+          ],
+          "design_logic": "直取 dul.level_name"
+        },
+        {
+          "target_field": "member_points",
+          "field_type": "int",
+          "field_comment": "会员积分",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "member_points",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.member_points"
+        },
+        {
+          "target_field": "member_balance",
+          "field_type": "decimal(18,2)",
+          "field_comment": "会员余额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "member_balance",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.member_balance"
+        },
+        {
+          "target_field": "user_tag",
+          "field_type": "varchar(500)",
+          "field_comment": "用户标签",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "user_tag",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.user_tag"
+        },
+        {
+          "target_field": "user_source_name",
+          "field_type": "varchar(50)",
+          "field_comment": "用户来源",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "user_source",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "用户来源：按 user_source 映射，NATURAL→自然流量、AD→广告投放、REFERRAL→推荐注册、ACTIVITY→活动引流，其余→其他"
+        },
+        {
+          "target_field": "user_province_code",
+          "field_type": "varchar(20)",
+          "field_comment": "用户省份编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "province_code",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.province_code"
+        },
+        {
+          "target_field": "user_city_code",
+          "field_type": "varchar(20)",
+          "field_comment": "用户城市编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "city_code",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "直取 duf.city_code"
+        },
+        {
+          "target_field": "user_days",
+          "field_type": "int",
+          "field_comment": "用户注册天数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_user_f",
+              "field": "",
+              "alias": "duf"
+            }
+          ],
+          "design_logic": "用户注册天数：当前日期减去注册时间的天数差"
+        },
+        {
+          "target_field": "product_name",
+          "field_type": "varchar(200)",
+          "field_comment": "商品名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_name",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.product_name"
+        },
+        {
+          "target_field": "product_code",
+          "field_type": "varchar(50)",
+          "field_comment": "商品编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_code",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.product_code"
+        },
+        {
+          "target_field": "sku_code",
+          "field_type": "varchar(50)",
+          "field_comment": "SKU编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "sku_code",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "直取 dod.sku_code"
+        },
+        {
+          "target_field": "category_l1_id",
+          "field_type": "bigint",
+          "field_comment": "一级类目ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "category_id",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.category_id"
+        },
+        {
+          "target_field": "category_l1_name",
+          "field_type": "varchar(100)",
+          "field_comment": "一级类目名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_category_f",
+              "field": "category_name",
+              "alias": "dpc"
+            }
+          ],
+          "design_logic": "直取 dpc.category_name"
+        },
+        {
+          "target_field": "category_l2_id",
+          "field_type": "bigint",
+          "field_comment": "二级类目ID",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_product_category_f",
+              "field": "",
+              "alias": "dpc"
+            }
+          ],
+          "design_logic": "二级类目 ID：通过商品维表 category_id 关联分类维表，按 parent_id 上溯取二级类目 ID"
+        },
+        {
+          "target_field": "category_l2_name",
+          "field_type": "varchar(100)",
+          "field_comment": "二级类目名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_product_category_f",
+              "field": "",
+              "alias": "dpc"
+            }
+          ],
+          "design_logic": "二级类目名称：按二级类目 ID 关联分类维表取 category_name"
+        },
+        {
+          "target_field": "category_l3_id",
+          "field_type": "bigint",
+          "field_comment": "三级类目ID",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_product_category_f",
+              "field": "",
+              "alias": "dpc"
+            }
+          ],
+          "design_logic": "三级类目 ID：通过商品维表 category_id 关联分类维表，按 parent_id 两次上溯取三级类目 ID"
+        },
+        {
+          "target_field": "category_l3_name",
+          "field_type": "varchar(100)",
+          "field_comment": "三级类目名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_product_category_f",
+              "field": "",
+              "alias": "dpc"
+            }
+          ],
+          "design_logic": "三级类目名称：按三级类目 ID 关联分类维表取 category_name"
+        },
+        {
+          "target_field": "brand_id",
+          "field_type": "bigint",
+          "field_comment": "品牌ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "brand_id",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.brand_id"
+        },
+        {
+          "target_field": "brand_name",
+          "field_type": "varchar(100)",
+          "field_comment": "品牌名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_brand_f",
+              "field": "brand_name",
+              "alias": "dbf"
+            }
+          ],
+          "design_logic": "直取 dbf.brand_name"
+        },
+        {
+          "target_field": "brand_origin",
+          "field_type": "varchar(50)",
+          "field_comment": "品牌产地",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_brand_f",
+              "field": "brand_origin",
+              "alias": "dbf"
+            }
+          ],
+          "design_logic": "直取 dbf.brand_origin"
+        },
+        {
+          "target_field": "product_attr",
+          "field_type": "varchar(500)",
+          "field_comment": "商品属性",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_attr",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.product_attr"
+        },
+        {
+          "target_field": "product_spec",
+          "field_type": "varchar(200)",
+          "field_comment": "商品规格",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_spec",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.product_spec"
+        },
+        {
+          "target_field": "product_weight",
+          "field_type": "decimal(10,2)",
+          "field_comment": "商品重量(kg)",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "weight",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.weight"
+        },
+        {
+          "target_field": "product_volume",
+          "field_type": "decimal(10,4)",
+          "field_comment": "商品体积(m³)",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "volume",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.volume"
+        },
+        {
+          "target_field": "cost_price",
+          "field_type": "decimal(18,2)",
+          "field_comment": "商品成本价",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "cost_price",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "直取 dod.cost_price"
+        },
+        {
+          "target_field": "sale_price",
+          "field_type": "decimal(18,2)",
+          "field_comment": "商品售价",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "sale_price",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "直取 dod.sale_price"
+        },
+        {
+          "target_field": "real_price",
+          "field_type": "decimal(18,2)",
+          "field_comment": "商品实付单价",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "real_price",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "直取 dod.real_price"
+        },
+        {
+          "target_field": "product_tag",
+          "field_type": "varchar(200)",
+          "field_comment": "商品标签",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_tag",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "直取 dpf7.product_tag"
+        },
+        {
+          "target_field": "product_status_name",
+          "field_type": "varchar(20)",
+          "field_comment": "商品状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_status",
+              "alias": "dpf7"
+            }
+          ],
+          "design_logic": "商品状态：按 product_status 映射，ON_SHELF→上架、OFF_SHELF→下架、SOLD_OUT→售罄，其余→其他"
+        },
+        {
+          "target_field": "product_profit",
+          "field_type": "decimal(18,2)",
+          "field_comment": "单品毛利",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_order_detail_f",
+              "field": "",
+              "alias": "dod"
+            }
+          ],
+          "design_logic": "单品毛利：商品售价减去成本价"
+        },
+        {
+          "target_field": "shop_name",
+          "field_type": "varchar(200)",
+          "field_comment": "店铺名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_name",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "直取 dsf.shop_name"
+        },
+        {
+          "target_field": "shop_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "店铺类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_type",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "店铺类型：按 shop_type 映射，FLAGSHIP→旗舰店、SPECIALTY→专卖店、FRANCHISE→专营店、OFFICIAL→官方店，其余→其他"
+        },
+        {
+          "target_field": "shop_level_name",
+          "field_type": "varchar(20)",
+          "field_comment": "店铺等级",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_level",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "店铺等级：拼接 Lv. 前缀和店铺等级数字"
+        },
+        {
+          "target_field": "shop_score",
+          "field_type": "decimal(3,2)",
+          "field_comment": "店铺评分",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_score",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "直取 dsf.shop_score"
+        },
+        {
+          "target_field": "company_name",
+          "field_type": "varchar(200)",
+          "field_comment": "店铺所属公司",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "company_name",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "直取 dsf.company_name"
+        },
+        {
+          "target_field": "shop_province_code",
+          "field_type": "varchar(20)",
+          "field_comment": "店铺省份编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "province_code",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "直取 dsf.province_code"
+        },
+        {
+          "target_field": "shop_province_name",
+          "field_type": "varchar(50)",
+          "field_comment": "店铺省份名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_region_f",
+              "field": "",
+              "alias": "drf"
+            }
+          ],
+          "design_logic": "店铺省份名称：通过店铺维表 province_code 关联地区维表取省名称"
+        },
+        {
+          "target_field": "shop_city_code",
+          "field_type": "varchar(20)",
+          "field_comment": "店铺城市编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "city_code",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "直取 dsf.city_code"
+        },
+        {
+          "target_field": "shop_city_name",
+          "field_type": "varchar(50)",
+          "field_comment": "店铺城市名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_region_f",
+              "field": "",
+              "alias": "drf"
+            }
+          ],
+          "design_logic": "店铺城市名称：通过店铺维表 city_code 关联地区维表取城市名称"
+        },
+        {
+          "target_field": "shop_open_time",
+          "field_type": "datetime",
+          "field_comment": "开店时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "open_time",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "直取 dsf.open_time"
+        },
+        {
+          "target_field": "pay_time",
+          "field_type": "datetime",
+          "field_comment": "支付时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "pay_time",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.pay_time"
+        },
+        {
+          "target_field": "pay_id",
+          "field_type": "bigint",
+          "field_comment": "支付ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "pay_id",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.pay_id"
+        },
+        {
+          "target_field": "pay_no",
+          "field_type": "varchar(64)",
+          "field_comment": "支付流水号",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "pay_no",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.pay_no"
+        },
+        {
+          "target_field": "pay_method_code",
+          "field_type": "varchar(20)",
+          "field_comment": "支付方式编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "pay_method",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.pay_method"
+        },
+        {
+          "target_field": "pay_method_name",
+          "field_type": "varchar(50)",
+          "field_comment": "支付方式名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_payment_method_f",
+              "field": "method_name",
+              "alias": "dpm"
+            }
+          ],
+          "design_logic": "直取 dpm.method_name"
+        },
+        {
+          "target_field": "pay_channel_name",
+          "field_type": "varchar(50)",
+          "field_comment": "支付渠道名称",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_payment_method_f",
+              "field": "",
+              "alias": "dpm"
+            }
+          ],
+          "design_logic": "支付渠道名称：通过支付方式维表关联取支付渠道名称"
+        },
+        {
+          "target_field": "pay_status_name",
+          "field_type": "varchar(20)",
+          "field_comment": "支付状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "pay_status",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "支付状态：按 pay_status 映射，SUCCESS→支付成功、FAILED→支付失败、PENDING→支付中，其余→未知"
+        },
+        {
+          "target_field": "bank_card_masked",
+          "field_type": "varchar(20)",
+          "field_comment": "银行卡号(脱敏)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "bank_card_no",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "银行卡号脱敏：仅保留后 4 位，前面用 **** 替换"
+        },
+        {
+          "target_field": "bank_name",
+          "field_type": "varchar(50)",
+          "field_comment": "支付银行",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "bank_name",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.bank_name"
+        },
+        {
+          "target_field": "installment_num",
+          "field_type": "int",
+          "field_comment": "分期期数",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "installment_num",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.installment_num"
+        },
+        {
+          "target_field": "pay_service_fee",
+          "field_type": "decimal(10,2)",
+          "field_comment": "支付手续费",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "service_fee",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.service_fee"
+        },
+        {
+          "target_field": "pay_duration_minutes",
+          "field_type": "int",
+          "field_comment": "下单到支付时长(分钟)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_payment_f",
+              "field": "",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "下单到支付时长(分钟)：支付时间减去下单时间，换算为分钟"
+        },
+        {
+          "target_field": "ship_time",
+          "field_type": "datetime",
+          "field_comment": "发货时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "ship_time",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.ship_time"
+        },
+        {
+          "target_field": "receive_time",
+          "field_type": "datetime",
+          "field_comment": "签收时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "receive_time",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.receive_time"
+        },
+        {
+          "target_field": "delivery_days",
+          "field_type": "int",
+          "field_comment": "物流时长(天)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "物流时长(天)：签收时间减去发货时间的整数天数差"
+        },
+        {
+          "target_field": "logistics_id",
+          "field_type": "bigint",
+          "field_comment": "物流ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "logistics_id",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.logistics_id"
+        },
+        {
+          "target_field": "logistics_no",
+          "field_type": "varchar(50)",
+          "field_comment": "物流单号",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "logistics_no",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.logistics_no"
+        },
+        {
+          "target_field": "logistics_company_code",
+          "field_type": "varchar(20)",
+          "field_comment": "物流公司编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "logistics_company",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.logistics_company"
+        },
+        {
+          "target_field": "logistics_company_name",
+          "field_type": "varchar(100)",
+          "field_comment": "物流公司名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_logistics_company_f",
+              "field": "company_name",
+              "alias": "dlc"
+            }
+          ],
+          "design_logic": "直取 dlc.company_name"
+        },
+        {
+          "target_field": "logistics_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "物流类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_logistics_company_f",
+              "field": "",
+              "alias": "dlc"
+            }
+          ],
+          "design_logic": "物流类型：通过物流公司维表关联取物流类型名称"
+        },
+        {
+          "target_field": "warehouse_id",
+          "field_type": "bigint",
+          "field_comment": "发货仓库ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "warehouse_id",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.warehouse_id"
+        },
+        {
+          "target_field": "warehouse_name",
+          "field_type": "varchar(100)",
+          "field_comment": "发货仓库名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_warehouse_f",
+              "field": "warehouse_name",
+              "alias": "dwf"
+            }
+          ],
+          "design_logic": "直取 dwf.warehouse_name"
+        },
+        {
+          "target_field": "warehouse_address",
+          "field_type": "varchar(200)",
+          "field_comment": "发货仓库地址",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_warehouse_f",
+              "field": "",
+              "alias": "dwf"
+            }
+          ],
+          "design_logic": "发货仓库地址：通过仓库维表关联地区维表取仓库所在地址"
+        },
+        {
+          "target_field": "logistics_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "物流状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "logistics_status",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "物流状态：按 logistics_status 映射，PENDING→待发货、SHIPPED→已发货、IN_TRANSIT→运输中、DELIVERED→已签收，其余→其他"
+        },
+        {
+          "target_field": "pickup_time",
+          "field_type": "datetime",
+          "field_comment": "揽收时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "pickup_time",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.pickup_time"
+        },
+        {
+          "target_field": "sign_receiver_name",
+          "field_type": "varchar(100)",
+          "field_comment": "签收人",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "receiver_name",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "直取 dlf.receiver_name"
+        },
+        {
+          "target_field": "ship_duration_hours",
+          "field_type": "int",
+          "field_comment": "支付到发货时长(小时)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_logistics_f",
+              "field": "",
+              "alias": "dlf"
+            }
+          ],
+          "design_logic": "支付到发货时长(小时)：发货时间减去支付时间，换算为小时"
+        },
+        {
+          "target_field": "refund_id",
+          "field_type": "bigint",
+          "field_comment": "退款ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_id",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "直取 drf17.refund_id"
+        },
+        {
+          "target_field": "refund_no",
+          "field_type": "varchar(64)",
+          "field_comment": "退款单号",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_no",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "直取 drf17.refund_no"
+        },
+        {
+          "target_field": "refund_type_name",
+          "field_type": "varchar(50)",
+          "field_comment": "退款类型",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_type",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "退款类型：按 refund_type 映射，ONLY_REFUND→仅退款、RETURN_REFUND→退货退款、EXCHANGE→换货，其余→其他"
+        },
+        {
+          "target_field": "refund_reason",
+          "field_type": "varchar(200)",
+          "field_comment": "退款原因",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_reason",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "直取 drf17.refund_reason"
+        },
+        {
+          "target_field": "refund_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "退款金额",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_amount",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "直取 drf17.refund_amount"
+        },
+        {
+          "target_field": "refund_status_name",
+          "field_type": "varchar(50)",
+          "field_comment": "退款状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "refund_status",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "退款状态：按 refund_status 映射，APPLYING→申请中、APPROVED→已同意、SUCCESS→退款成功、REJECTED→已拒绝，其余→其他"
+        },
+        {
+          "target_field": "refund_apply_time",
+          "field_type": "datetime",
+          "field_comment": "退款申请时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "apply_time",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "直取 drf17.apply_time"
+        },
+        {
+          "target_field": "refund_complete_time",
+          "field_type": "datetime",
+          "field_comment": "退款完成时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "complete_time",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "直取 drf17.complete_time"
+        },
+        {
+          "target_field": "is_refund_order",
+          "field_type": "varchar(1)",
+          "field_comment": "是否退款订单",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dwd_refund_f",
+              "field": "",
+              "alias": "drf17"
+            }
+          ],
+          "design_logic": "是否退款订单：存在退款 ID 标记为 Y，否则 N"
+        },
+        {
+          "target_field": "del_flag",
+          "field_type": "NVARCHAR(1)",
+          "field_comment": "删除标识",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "crt_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "创建批次",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "last_upd_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "更新批次",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "dw_last_update_date",
+          "field_type": "TIMESTAMP(0)",
+          "field_comment": "更新时间",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        }
+      ],
+      "field_count": 132
+    }
+  },
+  "data_flow": {
+    "dependencies": [
+      {
+        "from": "R0001",
+        "to": "R0004",
+        "type": "data_flow",
+        "intermediate_table": "dwb_order_center_user_tmp1"
+      },
+      {
+        "from": "R0002",
+        "to": "R0004",
+        "type": "data_flow",
+        "intermediate_table": "dwb_order_center_prod_tmp1"
+      },
+      {
+        "from": "R0003",
+        "to": "R0004",
+        "type": "data_flow",
+        "intermediate_table": "dwb_order_center_shop_tmp1"
+      }
+    ],
+    "schedule_groups": [
+      {
+        "sequence": 1,
+        "rules": [
+          "R0001",
+          "R0002",
+          "R0003"
+        ]
+      },
+      {
+        "sequence": 2,
+        "rules": [
+          "R0004"
+        ]
+      }
+    ]
+  },
+  "dq_rules": []
+}

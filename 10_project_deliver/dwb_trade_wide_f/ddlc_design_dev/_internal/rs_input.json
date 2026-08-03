@@ -1,10 +1,16 @@
 {
   "meta": {
     "target": {
-      "schema": "dws",
-      "table": "dwb_trade_wide_f",
-      "cn": "交易宽表",
-      "description": ""
+      "f_table": {
+        "schema": "dws",
+        "table": "dwb_trade_wide_f",
+        "cn": "交易宽表"
+      },
+      "i_view": {
+        "schema": "dws",
+        "table": "dwb_trade_wide_i",
+        "cn": "交易宽表"
+      }
     },
     "owner": {},
     "grain": "每行一个订单",
@@ -20,219 +26,77 @@
       "source_table_cn": "订单明细",
       "target_schema": "dws",
       "target_table_cn": "交易宽表",
-      "target_table": "dwb_trade_wide_f",
-      "join_condition": "",
-      "remark": "主表",
-      "source_alias": "o",
-      "scene_group": ""
-    },
-    {
-      "source_schema": "dwrdim",
-      "source_table": "dim_cust_d",
-      "source_table_cn": "客户维表",
-      "target_schema": "dws",
-      "target_table_cn": "交易宽表",
-      "target_table": "dwb_trade_wide_f",
-      "join_condition": "o.cust_id = c.cust_id",
+      "target_table": "dwb_trade_wide_i",
+      "join_condition": "主表",
       "remark": "",
-      "source_alias": "c",
-      "scene_group": ""
-    },
-    {
-      "source_schema": "dwrdim",
-      "source_table": "dim_product_d",
-      "source_table_cn": "商品维表",
-      "target_schema": "dws",
-      "target_table_cn": "交易宽表",
-      "target_table": "dwb_trade_wide_f",
-      "join_condition": "o.product_id = p.product_id",
-      "remark": "取最新有效行",
-      "source_alias": "p",
-      "scene_group": ""
-    },
-    {
-      "source_schema": "ods",
-      "source_table": "ods_payment_di",
-      "source_table_cn": "支付明细",
-      "target_schema": "dws",
-      "target_table_cn": "交易宽表",
-      "target_table": "dwb_trade_wide_f",
-      "join_condition": "o.order_id = pay.order_id",
-      "remark": "需收敛(多行)",
-      "source_alias": "pay",
-      "scene_group": ""
-    },
-    {
-      "source_schema": "ods",
-      "source_table": "ods_logistics_di",
-      "source_table_cn": "物流明细",
-      "target_schema": "dws",
-      "target_table_cn": "交易宽表",
-      "target_table": "dwb_trade_wide_f",
-      "join_condition": "o.order_id = log.order_id",
-      "remark": "需收敛(多行)",
-      "source_alias": "log",
-      "scene_group": ""
+      "source_alias": "o",
+      "scene_group": "default"
     }
   ],
   "field_mappings": [
     {
       "source_schema": "ods",
       "source_table": "ods_trade_order_di",
-      "source_column": "订单ID",
+      "source_column": "order_id",
       "source_type": "VARCHAR(64)",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "order_id",
       "target_column_cn": "订单ID",
       "target_type": "VARCHAR(64)",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": "主键"
+      "remark": "主键",
+      "source_column_cn": "订单ID"
     },
     {
       "source_schema": "ods",
       "source_table": "ods_trade_order_di",
-      "source_column": "客户ID",
+      "source_column": "cust_id",
       "source_type": "VARCHAR(64)",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "cust_id",
       "target_column_cn": "客户ID",
       "target_type": "VARCHAR(64)",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "客户ID"
     },
     {
       "source_schema": "ods",
       "source_table": "ods_trade_order_di",
-      "source_column": "商品ID",
+      "source_column": "product_id",
       "source_type": "VARCHAR(64)",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "product_id",
       "target_column_cn": "商品ID",
       "target_type": "VARCHAR(64)",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "商品ID"
     },
     {
       "source_schema": "ods",
       "source_table": "ods_trade_order_di",
-      "source_column": "订单金额",
+      "source_column": "order_amt",
       "source_type": "DECIMAL(18,2)",
       "transform_rule": "直接复制",
       "transform_detail": "-",
       "target_column": "order_amt",
       "target_column_cn": "订单金额",
       "target_type": "DECIMAL(18,2)",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "订单金额"
     },
     {
       "source_schema": "ods",
       "source_table": "ods_trade_order_di",
-      "source_column": "订单数量",
-      "source_type": "DECIMAL(18,4)",
-      "transform_rule": "直接复制",
-      "transform_detail": "-",
-      "target_column": "order_qty",
-      "target_column_cn": "订单数量",
-      "target_type": "DECIMAL(18,4)",
-      "source_alias": "",
-      "scene_group": "default",
-      "remark": ""
-    },
-    {
-      "source_schema": "dwrdim",
-      "source_table": "dim_cust_d",
-      "source_column": "客户名称",
-      "source_type": "VARCHAR(200)",
-      "transform_rule": "直接复制",
-      "transform_detail": "-",
-      "target_column": "cust_name",
-      "target_column_cn": "客户名称",
-      "target_type": "VARCHAR(200)",
-      "source_alias": "",
-      "scene_group": "default",
-      "remark": ""
-    },
-    {
-      "source_schema": "dwrdim",
-      "source_table": "dim_cust_d",
-      "source_column": "客户等级",
-      "source_type": "VARCHAR(10)",
-      "transform_rule": "直接复制",
-      "transform_detail": "-",
-      "target_column": "cust_level",
-      "target_column_cn": "客户等级",
-      "target_type": "VARCHAR(10)",
-      "source_alias": "",
-      "scene_group": "default",
-      "remark": ""
-    },
-    {
-      "source_schema": "dwrdim",
-      "source_table": "dim_product_d",
-      "source_column": "商品名称",
-      "source_type": "VARCHAR(200)",
-      "transform_rule": "直接复制",
-      "transform_detail": "-",
-      "target_column": "product_name",
-      "target_column_cn": "商品名称",
-      "target_type": "VARCHAR(200)",
-      "source_alias": "",
-      "scene_group": "default",
-      "remark": ""
-    },
-    {
-      "source_schema": "dwrdim",
-      "source_table": "dim_product_d",
-      "source_column": "商品分类",
-      "source_type": "VARCHAR(50)",
-      "transform_rule": "直接复制",
-      "transform_detail": "-",
-      "target_column": "category_code",
-      "target_column_cn": "商品分类",
-      "target_type": "VARCHAR(50)",
-      "source_alias": "",
-      "scene_group": "default",
-      "remark": ""
-    },
-    {
-      "source_schema": "ods",
-      "source_table": "ods_payment_di",
-      "source_column": "支付金额",
-      "source_type": "DECIMAL(18,2)",
-      "transform_rule": "数据加工",
-      "transform_detail": "按订单汇总支付金额",
-      "target_column": "total_pay_amt",
-      "target_column_cn": "支付总额",
-      "target_type": "DECIMAL(18,2)",
-      "source_alias": "",
-      "scene_group": "default",
-      "remark": ""
-    },
-    {
-      "source_schema": "ods",
-      "source_table": "ods_logistics_di",
-      "source_column": "运费",
-      "source_type": "DECIMAL(18,2)",
-      "transform_rule": "数据加工",
-      "transform_detail": "按订单汇总运费",
-      "target_column": "total_ship_fee",
-      "target_column_cn": "运费总额",
-      "target_type": "DECIMAL(18,2)",
-      "source_alias": "",
-      "scene_group": "default",
-      "remark": ""
-    },
-    {
-      "source_schema": "",
-      "source_table": "",
       "source_column": "",
       "source_type": "",
       "transform_rule": "赋值",
@@ -240,13 +104,14 @@
       "target_column": "del_flag",
       "target_column_cn": "删除标识",
       "target_type": "NVARCHAR(1)",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
-      "source_schema": "",
-      "source_table": "",
+      "source_schema": "ods",
+      "source_table": "ods_trade_order_di",
       "source_column": "",
       "source_type": "",
       "transform_rule": "赋值",
@@ -254,13 +119,14 @@
       "target_column": "crt_cycle_id",
       "target_column_cn": "创建批次",
       "target_type": "BIGINT",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
-      "source_schema": "",
-      "source_table": "",
+      "source_schema": "ods",
+      "source_table": "ods_trade_order_di",
       "source_column": "",
       "source_type": "",
       "transform_rule": "赋值",
@@ -268,13 +134,14 @@
       "target_column": "last_upd_cycle_id",
       "target_column_cn": "更新批次",
       "target_type": "BIGINT",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
-      "source_schema": "",
-      "source_table": "",
+      "source_schema": "ods",
+      "source_table": "ods_trade_order_di",
       "source_column": "",
       "source_type": "",
       "transform_rule": "赋值",
@@ -282,9 +149,10 @@
       "target_column": "dw_last_update_date",
       "target_column_cn": "更新时间",
       "target_type": "TIMESTAMP(0)",
-      "source_alias": "",
+      "source_alias": "o",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     }
   ],
   "schedule": {
@@ -295,5 +163,6 @@
     "upstream": []
   },
   "data_flow_hint": {},
-  "dq_requirements": []
+  "dq_requirements": [],
+  "data_exploration": {}
 }

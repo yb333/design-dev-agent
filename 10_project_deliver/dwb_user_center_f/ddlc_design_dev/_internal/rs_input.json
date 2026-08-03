@@ -1,10 +1,16 @@
 {
   "meta": {
     "target": {
-      "schema": "slusr",
-      "table": "dwb_user_center_f",
-      "cn": "用户中心宽表",
-      "description": ""
+      "f_table": {
+        "schema": "slusr",
+        "table": "dwb_user_center_f",
+        "cn": "用户中心宽表"
+      },
+      "i_view": {
+        "schema": "slusr",
+        "table": "dwb_user_center_i",
+        "cn": "用户中心宽表"
+      }
     },
     "owner": {},
     "grain": "每行一个用户记录",
@@ -20,11 +26,11 @@
       "source_table_cn": "用户维度表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "主表",
       "remark": "场景1-用户基础属性",
       "source_alias": "duf",
-      "scene_group": ""
+      "scene_group": "default"
     },
     {
       "source_schema": "dim",
@@ -32,11 +38,11 @@
       "source_table_cn": "用户等级维度表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.level_id=ul.level_id",
       "remark": "场景1-等级信息",
       "source_alias": "dul",
-      "scene_group": ""
+      "scene_group": "default"
     },
     {
       "source_schema": "dim",
@@ -44,11 +50,11 @@
       "source_table_cn": "地区维度表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.province_code=r.region_code",
       "remark": "场景1-地区信息",
       "source_alias": "drf",
-      "scene_group": ""
+      "scene_group": "default"
     },
     {
       "source_schema": "dim",
@@ -56,11 +62,11 @@
       "source_table_cn": "用户来源维度表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.source_id=us.source_id",
       "remark": "场景1-来源渠道",
       "source_alias": "dus",
-      "scene_group": ""
+      "scene_group": "default"
     },
     {
       "source_schema": "sdord",
@@ -68,11 +74,11 @@
       "source_table_cn": "订单明细事实表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.user_id=o.user_id AND o.order_status NOT IN ('CANCELLED','DELETED')",
       "remark": "场景2-订单统计",
       "source_alias": "dof",
-      "scene_group": ""
+      "scene_group": "default"
     },
     {
       "source_schema": "sdlog",
@@ -80,11 +86,11 @@
       "source_table_cn": "用户行为事实表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.user_id=ub.user_id",
       "remark": "场景2-行为数据",
       "source_alias": "dub",
-      "scene_group": ""
+      "scene_group": "default"
     },
     {
       "source_schema": "sdmar",
@@ -92,11 +98,11 @@
       "source_table_cn": "优惠券使用事实表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.user_id=cu.user_id",
       "remark": "场景2-优惠使用",
       "source_alias": "dcu",
-      "scene_group": ""
+      "scene_group": "default"
     },
     {
       "source_schema": "sdref",
@@ -104,11 +110,11 @@
       "source_table_cn": "退款事实表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.user_id=rf.user_id",
       "remark": "场景2-退款统计",
-      "source_alias": "drf9",
-      "scene_group": ""
+      "source_alias": "drf7",
+      "scene_group": "default"
     },
     {
       "source_schema": "sdlog",
@@ -116,11 +122,11 @@
       "source_table_cn": "购物车事实表",
       "target_schema": "slusr",
       "target_table_cn": "用户中心宽表",
-      "target_table": "dwb_user_center_f",
+      "target_table": "dwb_user_center_i",
       "join_condition": "left join on u.user_id=c.user_id AND c.del_flag='N'",
       "remark": "场景2-购物车",
       "source_alias": "dcf",
-      "scene_group": ""
+      "scene_group": "default"
     }
   ],
   "field_mappings": [
@@ -134,9 +140,10 @@
       "target_column": "user_id",
       "target_column_cn": "用户ID",
       "target_type": "bigint",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": "主键"
+      "remark": "主键",
+      "source_column_cn": "user_id"
     },
     {
       "source_schema": "dim",
@@ -148,9 +155,10 @@
       "target_column": "user_name",
       "target_column_cn": "用户姓名",
       "target_type": "varchar(100)",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "user_name"
     },
     {
       "source_schema": "dim",
@@ -162,9 +170,10 @@
       "target_column": "user_phone_masked",
       "target_column_cn": "手机号(脱敏)",
       "target_type": "varchar(20)",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "user_phone"
     },
     {
       "source_schema": "dim",
@@ -176,9 +185,10 @@
       "target_column": "gender_name",
       "target_column_cn": "性别",
       "target_type": "varchar(10)",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "gender"
     },
     {
       "source_schema": "dim",
@@ -190,9 +200,10 @@
       "target_column": "birthday",
       "target_column_cn": "出生日期",
       "target_type": "date",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "birthday"
     },
     {
       "source_schema": "",
@@ -206,7 +217,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "dim",
@@ -218,9 +230,10 @@
       "target_column": "register_time",
       "target_column_cn": "注册时间",
       "target_type": "datetime",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "register_time"
     },
     {
       "source_schema": "",
@@ -234,7 +247,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "dim",
@@ -246,9 +260,10 @@
       "target_column": "last_login_time",
       "target_column_cn": "最近登录时间",
       "target_type": "datetime",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "last_login_time"
     },
     {
       "source_schema": "dim",
@@ -260,9 +275,10 @@
       "target_column": "level_id",
       "target_column_cn": "等级ID",
       "target_type": "int",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "level_id"
     },
     {
       "source_schema": "dim",
@@ -274,9 +290,10 @@
       "target_column": "level_name",
       "target_column_cn": "等级名称",
       "target_type": "varchar(50)",
-      "source_alias": "",
+      "source_alias": "dul",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "level_name"
     },
     {
       "source_schema": "dim",
@@ -288,9 +305,10 @@
       "target_column": "level_min_points",
       "target_column_cn": "等级所需积分",
       "target_type": "int",
-      "source_alias": "",
+      "source_alias": "dul",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "min_points"
     },
     {
       "source_schema": "dim",
@@ -302,9 +320,10 @@
       "target_column": "province_code",
       "target_column_cn": "省份编码",
       "target_type": "varchar(20)",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "province_code"
     },
     {
       "source_schema": "dim",
@@ -316,9 +335,10 @@
       "target_column": "province_name",
       "target_column_cn": "省份名称",
       "target_type": "varchar(50)",
-      "source_alias": "",
+      "source_alias": "drf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "region_name"
     },
     {
       "source_schema": "dim",
@@ -330,9 +350,10 @@
       "target_column": "city_code",
       "target_column_cn": "城市编码",
       "target_type": "varchar(20)",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "city_code"
     },
     {
       "source_schema": "dim",
@@ -344,9 +365,10 @@
       "target_column": "city_name",
       "target_column_cn": "城市名称",
       "target_type": "varchar(50)",
-      "source_alias": "",
+      "source_alias": "drf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "region_name"
     },
     {
       "source_schema": "dim",
@@ -358,9 +380,10 @@
       "target_column": "source_name",
       "target_column_cn": "注册来源",
       "target_type": "varchar(50)",
-      "source_alias": "",
+      "source_alias": "dus",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "source_name"
     },
     {
       "source_schema": "dim",
@@ -372,9 +395,10 @@
       "target_column": "member_points",
       "target_column_cn": "会员积分",
       "target_type": "int",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "member_points"
     },
     {
       "source_schema": "dim",
@@ -386,9 +410,10 @@
       "target_column": "member_balance",
       "target_column_cn": "会员余额",
       "target_type": "decimal(18,2)",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "member_balance"
     },
     {
       "source_schema": "dim",
@@ -400,9 +425,10 @@
       "target_column": "user_status_name",
       "target_column_cn": "用户状态",
       "target_type": "varchar(20)",
-      "source_alias": "",
+      "source_alias": "duf",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "user_status"
     },
     {
       "source_schema": "",
@@ -416,7 +442,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -430,7 +457,8 @@
       "target_type": "decimal(18,2)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -444,7 +472,8 @@
       "target_type": "decimal(18,2)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "sdord",
@@ -456,9 +485,10 @@
       "target_column": "last_order_time",
       "target_column_cn": "最近下单时间",
       "target_type": "datetime",
-      "source_alias": "",
+      "source_alias": "dof",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "create_time"
     },
     {
       "source_schema": "sdord",
@@ -470,9 +500,10 @@
       "target_column": "first_order_time",
       "target_column_cn": "首次下单时间",
       "target_type": "datetime",
-      "source_alias": "",
+      "source_alias": "dof",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "create_time"
     },
     {
       "source_schema": "",
@@ -486,7 +517,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -500,7 +532,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -514,7 +547,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -528,7 +562,8 @@
       "target_type": "varchar(20)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "sdlog",
@@ -540,9 +575,10 @@
       "target_column": "total_pv_cnt",
       "target_column_cn": "浏览次数",
       "target_type": "int",
-      "source_alias": "",
+      "source_alias": "dub",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "pv_cnt"
     },
     {
       "source_schema": "sdlog",
@@ -554,9 +590,10 @@
       "target_column": "total_collect_cnt",
       "target_column_cn": "收藏次数",
       "target_type": "int",
-      "source_alias": "",
+      "source_alias": "dub",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "collect_cnt"
     },
     {
       "source_schema": "sdlog",
@@ -568,9 +605,10 @@
       "target_column": "total_cart_cnt",
       "target_column_cn": "加购次数",
       "target_type": "int",
-      "source_alias": "",
+      "source_alias": "dub",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": "cart_cnt"
     },
     {
       "source_schema": "",
@@ -584,7 +622,8 @@
       "target_type": "decimal(5,2)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -598,7 +637,8 @@
       "target_type": "decimal(5,2)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -612,7 +652,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -626,7 +667,8 @@
       "target_type": "decimal(18,2)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -640,7 +682,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -654,7 +697,8 @@
       "target_type": "decimal(5,2)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -668,7 +712,8 @@
       "target_type": "int",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -682,7 +727,8 @@
       "target_type": "decimal(18,2)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -696,7 +742,8 @@
       "target_type": "varchar(20)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -710,7 +757,8 @@
       "target_type": "varchar(20)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": ""
+      "remark": "",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -724,7 +772,8 @@
       "target_type": "NVARCHAR(1)",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -738,7 +787,8 @@
       "target_type": "BIGINT",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -752,7 +802,8 @@
       "target_type": "BIGINT",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     },
     {
       "source_schema": "",
@@ -766,7 +817,8 @@
       "target_type": "TIMESTAMP(0) WITHOUT TIME ZONE",
       "source_alias": "",
       "scene_group": "default",
-      "remark": "审计字段"
+      "remark": "审计字段",
+      "source_column_cn": ""
     }
   ],
   "schedule": {
@@ -777,5 +829,6 @@
     "upstream": []
   },
   "data_flow_hint": {},
-  "dq_requirements": []
+  "dq_requirements": [],
+  "data_exploration": {}
 }

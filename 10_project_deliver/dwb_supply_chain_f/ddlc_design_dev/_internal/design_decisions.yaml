@@ -1,0 +1,192 @@
+# ============================================================================
+# design_decisions.yaml - 供应链中心宽表（dwb_supply_chain_center_f）
+# ----------------------------------------------------------------------------
+# 设计判断（designer 产出）。字段类型/来源别名/注释由 assemble_ts.py 从
+# rs_input.json 自动搬移，本文件不碰这些确定性数据。
+#
+# 字段覆盖核对：rs_input.json 共 23 个 target_column
+#   业务字段 19 个 + 审计字段 4 个 = 23 个，全部归属 R0001。
+# ============================================================================
+
+# === 规则拆分 ===
+# 单场景（scene_group=default）、无多来源并行加工 → 不分场景。
+# 复杂度评估后不分段（详见 complexity_analysis）→ 单规则 R0001 产出目标 F 表。
+rules:
+  - rule_code: R0001
+    rule_name: "供应链中心宽表全量加工"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "dwb_supply_chain_center_f"
+    is_view_step: false
+    design_intent: "以采购事实表(dpf)为主表，左联供应商/商品/仓库维度表与库存/销售事实表，单条 INSERT 一次性产出宽表；销售表(dsales)因 sales_product_id 多行会发散，必须经 CTE 按 product_id 聚合收敛后再 JOIN，保障产出粒度=采购单。"
+    load_mode: "truncate_table"      # 全量调度，T+1 一天一调
+
+    # 23 个 target_column 全覆盖（业务 19 + 审计 4），全部归属本规则
+    field_targets:
+      # --- 采购主表 dpf（9 个）---
+      - purchase_id                   # 主键，直接复制
+      - purchase_no                   # 直接复制
+      - purchase_status_name          # 数据加工·CASE 翻译
+      - create_time                   # 直接复制
+      - supplier_id                   # 直接复制
+      - product_id                    # 直接复制
+      - purchase_qty                  # 直接复制
+      - purchase_price                # 直接复制
+      - warehouse_id                  # 直接复制
+      # --- 供应商维度 dsf（3 个）---
+      - supplier_name                 # 直接复制
+      - supplier_level_name           # 数据加工·CASE 翻译
+      - cooperation_years             # 直接复制
+      # --- 商品维度 dpf2（1 个）---
+      - product_name                  # 直接复制
+      # --- 仓库维度 dwf（2 个）---
+      - warehouse_name                # 直接复制
+      - warehouse_type_name           # 数据加工·CASE 翻译
+      # --- 库存事实 dif（2 个）---
+      - current_stock_qty             # 直接复制（源列 stock_qty）
+      - locked_qty                    # 直接复制
+      # --- 无源加工（1 个）---
+      - purchase_amount               # 数据加工·qty*price，依赖主表字段
+      # --- 销售事实 dsales（1 个）---
+      - stock_days                    # 数据加工·多步骤（CTE 聚合 + 除法）
+      # --- 审计字段（4 个，赋值类）---
+      - del_flag
+      - crt_cycle_id
+      - last_upd_cycle_id
+      - dw_last_update_date
+
+    # ★ 仅加工类业务字段写 design_logic（自然语言口径，不含 SQL）。
+    # 直取字段不写（脚本自动填 "直取 {alias}.{column}"）。
+    # 审计字段不写（脚本按 mapping 的 transform_detail 处理）。
+    field_logics:
+      purchase_status_name: "把采购单状态英文码值翻译成中文：DRAFT→草稿、SUBMITTED→已提交、APPROVED→已审批、RECEIVED→已入库、CLOSED→已关闭，其余码值归为'其他'。"
+      supplier_level_name: "把供应商等级 A/B/C 翻译成中文等级名：A→A级供应商、B→B级供应商、C→C级供应商，其余码值归为'其他'。"
+      warehouse_type_name: "把仓库类型码值翻译成中文：SELF→自营仓、THIRD_PARTY→第三方仓，其余码值归为'其他'。"
+      purchase_amount: "采购金额 = 采购数量 × 采购单价（取主表 dpf 的 purchase_qty 与 purchase_price 相乘）。"
+      stock_days: "库存周转天数。先用 CTE(sales_agg) 把 dsales 按 product_id 聚合统计近30天销量(sales_qty_30d)，再用 (当前库存 - 锁定库存) ÷ 近30天销量计算周转天数；当近30天销量为 0 时返回 NULL（防除零）。"
+
+    # 留空 → 脚本默认用 rs_input 里所有 source_tables
+    source_aliases: []
+
+    # CTE：处理 dsales 的"先聚合后关联"，避免销售多行导致采购单发散
+    ctes:
+      - name: "sales_agg"
+        purpose: "把销售事实表(dsales)按 product_id 聚合统计近30天销量(sales_qty_30d)，聚合后 product_id 唯一，供主查询安全 LEFT JOIN 计算 stock_days。"
+        source_tables:
+          - "dsales"
+
+    # 粒度变化（输入→输出）
+    grain:
+      input: "一行=一个采购单（dpf 采购事实表粒度）"
+      output: "一行=一个采购单（供应链中心宽表记录）"
+      change: "无变化"
+
+    # 关联策略（从字段倒推，与 rs_input 关联定义对齐）
+    joins:
+      - alias: "dpf"
+        type: "main"
+        condition: "主表"
+        filter: ""
+      - alias: "dsf"
+        type: "LEFT JOIN"
+        condition: "p.supplier_id = s.supplier_id"
+        filter: ""
+      - alias: "dpf2"
+        type: "LEFT JOIN"
+        condition: "p.product_id = prd.product_id"
+        filter: ""
+      - alias: "dwf"
+        type: "LEFT JOIN"
+        condition: "p.warehouse_id = wh.warehouse_id"
+        filter: ""
+      - alias: "dif"
+        type: "LEFT JOIN"
+        condition: "p.product_id = inv.product_id AND p.warehouse_id = inv.warehouse_id"
+        filter: ""
+      - alias: "sales_agg"
+        type: "LEFT JOIN"
+        condition: "p.product_id = sales_agg.product_id"
+        filter: ""
+
+    # 关联安全分析（JOIN键唯一性 → 对齐策略）
+    join_safety:
+      - table: "dsf"
+        join_key_unique: true
+        strategy: ""
+        reason: "dim_supplier_f 供应商维度表，按 supplier_id 唯一。"
+      - table: "dpf2"
+        join_key_unique: true
+        strategy: ""
+        reason: "dim_product_f 商品维度表，按 product_id 唯一。"
+      - table: "dwf"
+        join_key_unique: true
+        strategy: ""
+        reason: "dim_warehouse_f 仓库维度表，按 warehouse_id 唯一。"
+      - table: "dif"
+        join_key_unique: true
+        strategy: ""
+        reason: "dwd_inventory_f 库存事实表，按 product_id+warehouse_id 组合一行一库存，应唯一；若实际数据存在重复需在落地前 GROUP BY 收敛（本设计按唯一假设）。"
+      - table: "dsales"
+        join_key_unique: false
+        strategy: "CTE(sales_agg) 先按 product_id 聚合 sales_qty_30d 再 JOIN，聚合后 product_id 唯一。"
+        reason: "dwd_sales_f 销售事实表，sales_product_id 多行（一个商品多条销售记录），直接 JOIN 会导致采购单因商品被多次销售而发散（purchase_id 重复）。"
+
+# === 复杂度分析与分段决策 ===
+complexity_analysis:
+  join_count: 6                       # dpf 主表 + dsf/dpf2/dwf/dif/dsales 5 个 LEFT JOIN（< 12 阈值）
+  has_grain_change: false             # 输入输出均为采购单粒度
+  grain_change_detail: "输入=采购单（dpf），输出=采购单（宽表），无聚合/展开。"
+  multi_step_fields: 1                # 仅 stock_days（先 CTE 聚合再除法），< 5 阈值
+  aggregation_after_join: false       # JOIN 后无聚合（输出粒度=输入粒度）；注意有"先聚合后关联"(dsales CTE)，见 segmentation_reason
+  segmentation_decision: "不分段"
+  segmentation_reason: >-
+    JOIN 表数量 6（< 12 阈值）、多步骤加工字段 1（< 5 阈值）、无粒度变化。
+    虽命中 design-guide §4.1 的"聚合后关联"指标（dsales 需先按 product_id 聚合销量再 JOIN），
+    但该聚合逻辑简单（单一 GROUP BY 求和）、且仅 stock_days 一处使用、无需独立校验 →
+    按 design-guide §4.2 用 CTE(sales_agg) 内联处理即可，建物理中间表属过度设计。
+    单条规则 R0001 一次性产出目标 F 表，I 视图由后续脚本/规则镜像 F 表。
+
+# === 分布键（参考 design-guide §2.1）===
+# purchase_id 是采购事实主表主键，高基数（每行不同），是宽表业务主键，
+# 也是下游与采购相关表 JOIN 的潜在分布对齐键 → 选 purchase_id。
+# 维度表 dsf/dpf2/dwf 推荐用 REPLICATION（小表广播），不在此声明。
+distribution_key:
+  - "purchase_id"
+
+# === 业务主键（供 UT 主键唯一检查；≠ 分布键）===
+business_key:
+  - "purchase_id"
+
+# 主键设计说明
+# mapping 标注 purchase_id 为主键（备注"主键"）。
+# 审视：本表粒度=采购单，dpf 一行一采购单 → purchase_id 唯一；
+#   dsales 经 CTE 聚合后 product_id 唯一不发散；
+#   dif 的 product_id+warehouse_id 组合唯一不发散；
+#   维度表主键唯一 → purchase_id 在产出粒度下唯一，无需补充字段。
+business_key_design:
+  input_key:
+    - "purchase_id"
+  adjusted: false
+  reason: "mapping 标注的主键 purchase_id 在产出表（采购单粒度）下唯一，dsales 经 CTE 聚合收敛、dif 维度组合唯一，均不会导致 purchase_id 发散，故未调整。"
+
+# === 调度细化（RS 给大框架 → designer 细化）===
+schedule:
+  task_name: "dwb_supply_chain_center_f_全量"
+  cron: "0 30 3 * * ?"                # T+1 一天一调，SLA 3:30（Quartz：秒 分 时 日 月 周）
+  task_group: "supply_chain"
+  project: "slscc"
+  # 无中间表新增上游；rs_input 已有的上游由脚本自动带
+  upstream_added: []
+
+# === 数据流（规则间关系）===
+data_flow:
+  # 单规则，无规则间依赖
+  dependencies: []
+  # 单场景单规则，顺序执行
+  schedule_groups:
+    - sequence: 1
+      rules:
+        - "R0001"
+
+# === DQ（可选，本表暂不设）===
+dq_rules: []

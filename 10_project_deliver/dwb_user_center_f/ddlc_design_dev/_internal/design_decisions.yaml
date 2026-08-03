@@ -1,29 +1,119 @@
 # ============================================================================
-# design_decisions.yaml - 用户中心宽表 (slusr.dwb_user_center_f) 设计决策
+# design_decisions.yaml - dwb_user_center_f (用户中心宽表)
 # ----------------------------------------------------------------------------
-# 只含设计判断，不含字段类型/来源等确定性数据（由 assemble_ts.py 从 rs_input.json 搬）。
+# 复杂度驱动分段：5 个事实表需先按 user_id 聚合后才能关联用户维度，
+# 且 RFM 评分需在全量用户上做窗口函数 → 拆 3 个物理中间表 + 1 个装配规则。
 #
-# 字段分配总览（46 个 target_column，无遗漏无重复）：
-#   R0001 订单画像中间表    : 4 字段  (订单聚合)
-#   R0002 行为画像中间表    : 3 字段  (行为聚合)
-#   R0003 营销画像中间表    : 5 字段  (优惠券+退款+购物车聚合)
-#   R0004 目标F表组装       : 34 字段 (dim直取14 + 加工16 + 审计4)
-# ----------------------------------------------------------------------------
+# 字段分配总览（46 字段 = 42 业务 + 4 审计）：
+#   R0001 tmp_base      20 字段（用户基础属性 + 维度关联）
+#   R0002 tmp_order_agg  4 字段（订单聚合指标）
+#   R0003 tmp_behavior   3 字段（行为聚合指标）
+#   R0004 F 表最终装配  19 字段（衍生指标 + CTE 聚合 + 审计）
+# ============================================================================
 
-# === 规则拆分（核心判断）===
 rules:
-  # --------------------------------------------------------------------------
-  # R0001 订单画像中间表
-  # 把 dwd_order_f（明细粒度）按 user_id 聚合收口到用户粒度，产出订单域画像指标。
-  # 物理中间表理由：可独立校验、可被 RFM 打分复用、语义清晰。
-  # --------------------------------------------------------------------------
+  # ==========================================================================
+  # R0001 - 用户基础属性中间表
+  # ==========================================================================
   - rule_code: R0001
-    rule_name: "订单画像中间表"
-    scenario: "用户中心"
+    rule_name: "用户基础属性中间表"
+    scenario: "default"
     exec_sequence: 1
-    target_table: "dwb_user_order_tmp"
+    target_table: "dwb_user_center_tmp1"
     is_view_step: false
-    design_intent: "将订单明细事实表按用户聚合收口为用户粒度的订单画像，为最终宽表提供订单域指标及 RFM 打分的输入"
+    design_intent: "以 dim_user_f 为主表，LEFT JOIN 等级/地区/来源维度，产出用户基础属性宽表，供最终装配规则引用。粒度不变（一行一用户）。"
+    load_mode: "truncate_table"
+
+    field_targets:
+      - user_id
+      - user_name
+      - user_phone_masked
+      - gender_name
+      - birthday
+      - age
+      - register_time
+      - register_days
+      - last_login_time
+      - level_id
+      - level_name
+      - level_min_points
+      - province_code
+      - province_name
+      - city_code
+      - city_name
+      - source_name
+      - member_points
+      - member_balance
+      - user_status_name
+
+    field_logics:
+      user_phone_masked: "手机号脱敏：取前3位拼接'****'再拼接后4位"
+      gender_name: "性别代码转中文：M→男，F→女，其余→未知"
+      age: "年龄：当前年份减去出生年份（YEAR(CURDATE()) - YEAR(birthday)）"
+      register_days: "注册天数：当前日期减去注册日期的天数差"
+      city_name: "通过 city_code 二次关联 dim_region_f 获取城市名称（省份已通过 province_code 关联，城市需用 city_code 再 JOIN 一次 dim_region_f）"
+      user_status_name: "用户状态代码转中文：ACTIVE→正常，INACTIVE→未激活，FROZEN→冻结，其余→其他"
+
+    source_aliases: ["duf", "dul", "drf", "dus"]
+
+    ctes: []
+
+    grain:
+      input: "一行=一个用户（dim_user_f 主表）"
+      output: "一行=一个用户"
+      change: "无变化（维度 LEFT JOIN 不改变粒度）"
+
+    joins:
+      - alias: "duf"
+        type: "main"
+        condition: ""
+        filter: ""
+      - alias: "dul"
+        type: "LEFT JOIN"
+        condition: "duf.level_id = dul.level_id"
+        filter: ""
+      - alias: "drf"
+        type: "LEFT JOIN"
+        condition: "duf.province_code = drf.region_code"
+        filter: ""
+      - alias: "drf_city"
+        type: "LEFT JOIN"
+        condition: "duf.city_code = drf_city.region_code"
+        filter: "第二次关联 dim_region_f（同表不同别名），用于取城市名称"
+      - alias: "dus"
+        type: "LEFT JOIN"
+        condition: "duf.source_id = dus.source_id"
+        filter: ""
+
+    join_safety:
+      - table: "dim_user_level_f"
+        join_key_unique: true
+        strategy: ""
+        reason: "等级维度表 level_id 唯一，LEFT JOIN 不会发散"
+      - table: "dim_region_f (province)"
+        join_key_unique: true
+        strategy: ""
+        reason: "地区维度表 region_code 唯一，按 province_code 关联不会发散"
+      - table: "dim_region_f (city)"
+        join_key_unique: true
+        strategy: ""
+        reason: "地区维度表 region_code 唯一，按 city_code 关联不会发散"
+      - table: "dim_user_source_f"
+        join_key_unique: true
+        strategy: ""
+        reason: "来源维度表 source_id 唯一，LEFT JOIN 不会发散"
+
+  # ==========================================================================
+  # R0002 - 订单汇总中间表
+  # ==========================================================================
+  - rule_code: R0002
+    rule_name: "订单汇总中间表"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "dwb_user_center_tmp2"
+    is_view_step: false
+    design_intent: "对 dwd_order_f 排除作废/删除订单后按 user_id 聚合，产出用户级订单汇总指标，供最终装配规则引用。粒度从订单明细收敛到用户。"
+    load_mode: "truncate_table"
 
     field_targets:
       - total_order_cnt
@@ -32,42 +122,43 @@ rules:
       - first_order_time
 
     field_logics:
-      total_order_cnt: "从订单明细事实表按用户分组，统计历史订单总数，仅计入未取消、未删除的订单"
-      total_pay_amount: "按用户分组对支付金额求和，得到历史总消费金额，仅计入未取消、未删除的订单"
-      last_order_time: "按用户分组取订单创建时间的最大值作为最近下单时间"
-      first_order_time: "按用户分组取订单创建时间的最小值作为首次下单时间"
+      total_order_cnt: "排除 CANCELLED/DELETED 状态订单后，按 user_id 统计历史订单数 COUNT(*)"
+      total_pay_amount: "排除 CANCELLED/DELETED 状态订单后，按 user_id 汇总支付金额 SUM(pay_amount)"
+      last_order_time: "排除 CANCELLED/DELETED 状态订单后，按 user_id 取最大下单时间 MAX(create_time)"
+      first_order_time: "排除 CANCELLED/DELETED 状态订单后，按 user_id 取最小下单时间 MIN(create_time)"
 
-    source_aliases:
-      - dof
+    source_aliases: ["dof"]
+
+    ctes: []
 
     grain:
-      input: "一行=一个订单明细"
+      input: "一行=一个订单（dwd_order_f，排除作废/删除）"
       output: "一行=一个用户"
-      change: "多行聚合"
+      change: "多行聚合（GROUP BY user_id）"
 
     joins:
       - alias: "dof"
         type: "main"
-        condition: "单源表聚合，无关联"
+        condition: ""
         filter: "order_status NOT IN ('CANCELLED','DELETED')"
 
     join_safety:
-      - table: "dwd_order_f (dof)"
+      - table: "dwd_order_f"
         join_key_unique: true
         strategy: "GROUP BY user_id 收敛"
-        reason: "订单明细按 user_id 分组聚合后每用户一行，聚合结果天然唯一"
+        reason: "事实表多行明细，GROUP BY user_id 聚合后 user_id 唯一"
 
-  # --------------------------------------------------------------------------
-  # R0002 行为画像中间表
-  # 把 dwd_user_behavior_f（行为粒度）按 user_id 聚合收口，产行为域指标。
-  # --------------------------------------------------------------------------
-  - rule_code: R0002
-    rule_name: "行为画像中间表"
-    scenario: "用户中心"
-    exec_sequence: 2
-    target_table: "dwb_user_behavior_tmp"
+  # ==========================================================================
+  # R0003 - 行为汇总中间表
+  # ==========================================================================
+  - rule_code: R0003
+    rule_name: "行为汇总中间表"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "dwb_user_center_tmp3"
     is_view_step: false
-    design_intent: "将用户行为事实表按用户聚合收口为用户粒度的行为画像，提供浏览/收藏/加购行为指标，支撑转化率派生计算"
+    design_intent: "对 dwd_user_behavior_f 按 user_id 聚合浏览/收藏/加购行为指标，供最终装配规则引用。粒度从行为明细收敛到用户。"
+    load_mode: "truncate_table"
 
     field_targets:
       - total_pv_cnt
@@ -75,303 +166,196 @@ rules:
       - total_cart_cnt
 
     field_logics:
-      total_pv_cnt: "从用户行为事实表按用户分组，对浏览次数求和"
-      total_collect_cnt: "按用户分组对收藏次数求和"
-      total_cart_cnt: "按用户分组对加购次数求和"
+      total_pv_cnt: "按 user_id 汇总浏览次数 SUM(pv_cnt)"
+      total_collect_cnt: "按 user_id 汇总收藏次数 SUM(collect_cnt)"
+      total_cart_cnt: "按 user_id 汇总加购行为次数 SUM(cart_cnt)"
 
-    source_aliases:
-      - dub
+    source_aliases: ["dub"]
+
+    ctes: []
 
     grain:
-      input: "一行=一条用户行为记录"
+      input: "一行=一条用户行为记录（dwd_user_behavior_f）"
       output: "一行=一个用户"
-      change: "多行聚合"
+      change: "多行聚合（GROUP BY user_id）"
 
     joins:
       - alias: "dub"
         type: "main"
-        condition: "单源表聚合，无关联"
+        condition: ""
         filter: ""
 
     join_safety:
-      - table: "dwd_user_behavior_f (dub)"
+      - table: "dwd_user_behavior_f"
         join_key_unique: true
         strategy: "GROUP BY user_id 收敛"
-        reason: "行为记录按 user_id 分组聚合后每用户一行，聚合结果天然唯一"
+        reason: "行为事实表多行明细，GROUP BY user_id 聚合后 user_id 唯一"
 
-  # --------------------------------------------------------------------------
-  # R0003 营销画像中间表
-  # 把优惠券/退款/购物车三张 fact 表各自按 user_id 聚合后合并，产营销域指标。
-  # 三源结构异构（不同度量），各自聚合后按 user_id 全外联接合并到一张营销画像。
-  # --------------------------------------------------------------------------
-  - rule_code: R0003
-    rule_name: "营销画像中间表"
-    scenario: "用户中心"
-    exec_sequence: 3
-    target_table: "dwb_user_marketing_tmp"
-    is_view_step: false
-    design_intent: "将优惠券使用、退款、购物车三张事实表各自按用户聚合后合并为用户粒度的营销画像，收口营销域指标"
-
-    field_targets:
-      - coupon_used_cnt
-      - coupon_total_amount
-      - refund_cnt
-      - cart_product_cnt
-      - cart_total_amount
-
-    field_logics:
-      coupon_used_cnt: "从优惠券使用事实表按用户分组，统计优惠券使用记录数"
-      coupon_total_amount: "按用户分组对优惠券抵扣金额求和"
-      refund_cnt: "从退款事实表按用户分组，统计退款记录数"
-      cart_product_cnt: "从购物车事实表按用户分组（仅未删除的购物车记录），统计商品件数"
-      cart_total_amount: "按用户分组（仅未删除的购物车记录），对商品数量乘以单价求和得到购物车金额"
-
-    source_aliases:
-      - dcu
-      - drf9
-      - dcf
-
-    grain:
-      input: "一行=一条优惠券/退款/购物车明细"
-      output: "一行=一个用户"
-      change: "多行聚合"
-
-    joins:
-      - alias: "dcu"
-        type: "main"
-        condition: "优惠券子聚合：按 user_id 分组"
-        filter: ""
-      - alias: "drf9"
-        type: "LEFT JOIN"
-        condition: "退款子聚合按 user_id 关联合并"
-        filter: ""
-      - alias: "dcf"
-        type: "LEFT JOIN"
-        condition: "购物车子聚合按 user_id 关联合并"
-        filter: "del_flag='N'"
-
-    join_safety:
-      - table: "dwd_coupon_use_f (dcu)"
-        join_key_unique: true
-        strategy: "GROUP BY user_id 收敛"
-        reason: "优惠券明细按 user_id 分组聚合后每用户一行"
-      - table: "dwd_refund_f (drf9)"
-        join_key_unique: true
-        strategy: "GROUP BY user_id 收敛"
-        reason: "退款明细按 user_id 分组聚合后每用户一行"
-      - table: "dwd_cart_f (dcf)"
-        join_key_unique: true
-        strategy: "GROUP BY user_id 收敛（限定 del_flag='N'）"
-        reason: "购物车明细在未删除限定下按 user_id 分组聚合后每用户一行"
-
-  # --------------------------------------------------------------------------
-  # R0004 目标F表组装
-  # 以 dim_user_f 为主表，关联 3 张 dim 维度表 + 3 张画像中间表，
-  # 装配 dim 直取字段、单步加工字段（脱敏/字典翻译/日期差/复杂关联）、
-  # 派生计算字段（均值/转化率/退款率/价值标签）、RFM 跨全量打分、审计字段。
-  # --------------------------------------------------------------------------
+  # ==========================================================================
+  # R0004 - 最终目标 F 表装配
+  # ==========================================================================
   - rule_code: R0004
-    rule_name: "用户中心宽表组装"
-    scenario: "用户中心"
-    exec_sequence: 4
+    rule_name: "用户中心宽表最终装配"
+    scenario: "default"
+    exec_sequence: 2
     target_table: "dwb_user_center_f"
     is_view_step: false
-    design_intent: "以用户维度为主表，关联等级/地区/来源维度及三张画像中间表，装配全部用户中心宽表字段（直取+加工+派生+RFM打分+审计）"
+    design_intent: "以 tmp1（用户基础）为主表，LEFT JOIN tmp2（订单）/tmp3（行为）中间表，并通过 CTE 内联聚合优惠券/退款/购物车事实表，计算 RFM 评分、转化率、价值分层等衍生字段，产出最终宽表。"
+    load_mode: "truncate_table"
 
     field_targets:
-      # --- dim 直取字段（14个，脚本自动填 design_logic，此处不写 field_logics）---
-      - user_id
-      - user_name
-      - birthday
-      - register_time
-      - last_login_time
-      - level_id
-      - level_name
-      - level_min_points
-      - province_code
-      - province_name
-      - city_code
-      - source_name
-      - member_points
-      - member_balance
-      # --- 单步加工字段（6个）---
-      - user_phone_masked
-      - gender_name
-      - age
-      - register_days
-      - user_status_name
-      - city_name
-      # --- 派生计算字段（基于中间表聚合结果的二阶加工，6个）---
       - avg_order_amount
-      - pv_to_order_rate
-      - pv_to_cart_rate
-      - refund_rate
-      - order_freq_label
-      - consume_level_label
-      # --- RFM 跨全量打分（4个，依赖订单画像中间表 + 全量用户排名）---
       - rfm_r_score
       - rfm_f_score
       - rfm_m_score
       - rfm_segment
-      # --- 审计字段（4个，assemble 自动处理，不写 field_logics）---
+      - pv_to_order_rate
+      - pv_to_cart_rate
+      - coupon_used_cnt
+      - coupon_total_amount
+      - refund_cnt
+      - refund_rate
+      - cart_product_cnt
+      - cart_total_amount
+      - order_freq_label
+      - consume_level_label
       - del_flag
       - crt_cycle_id
       - last_upd_cycle_id
       - dw_last_update_date
 
     field_logics:
-      # 单步加工
-      user_phone_masked: "对手机号脱敏，保留前3位和后4位，中间用4个星号替代"
-      gender_name: "性别编码字典翻译：M转男、F转女、其他为未知"
-      age: "用当前日期的年份减去出生日期的年份，得到年龄"
-      register_days: "计算注册时间距今的天数"
-      user_status_name: "用户状态编码字典翻译：ACTIVE转正常、INACTIVE转未激活、FROZEN转冻结、其他为其他"
-      city_name: "通过城市编码二次关联地区维度表（同一张地区表第二次按 city_code 关联），取对应城市名称"
-      # 派生计算（依赖中间表聚合结果）
-      avg_order_amount: "历史消费金额除以历史订单数（订单数为0时返回空值避免除零），得到平均客单价"
-      pv_to_order_rate: "历史订单数除以浏览次数（浏览次数为0时返回空值），乘以100得到百分比"
-      pv_to_cart_rate: "加购次数除以浏览次数（浏览次数为0时返回空值），乘以100得到百分比"
-      refund_rate: "退款次数除以历史订单数（订单数为0时返回空值），乘以100得到百分比"
-      order_freq_label: "根据历史订单数打频率标签：大于等于10为高频用户、大于等于3为中频用户、大于等于1为低频用户、0为未购买"
-      consume_level_label: "根据历史消费金额打消费能力标签：大于等于10000为高消费、大于等于1000为中消费、大于等于100为低消费、其他为无消费"
-      # RFM 跨全量打分（二阶加工：依赖订单画像中间表 + 全量用户排名分档）
-      rfm_r_score: "根据最近下单时间计算距今天数（R值），在全量用户范围内按 R 值升序分5档排名，距今越近分数越高（5档分位数排名）"
-      rfm_f_score: "根据历史订单数（F值），在全量用户范围内按 F 值降序分5档排名，订单越多分数越高（5档分位数排名）"
-      rfm_m_score: "根据历史消费金额（M值），在全量用户范围内按 M 值降序分5档排名，金额越高分数越高（5档分位数排名）"
-      rfm_segment: "组合 R/F/M 三档分数，按业务规则矩阵划分用户价值分层：高价值、中价值、低价值、流失用户"
+      avg_order_amount: "平均客单价：历史消费金额 / 历史订单数，分母为 0 或 NULL 时返回 NULL（NULLIF 防除零）"
+      coupon_used_cnt: "按 user_id 统计优惠券使用次数 COUNT(*)，来自 CTE 聚合 dwd_coupon_use_f"
+      coupon_total_amount: "按 user_id 汇总优惠券使用金额 SUM(coupon_amount)，来自 CTE 聚合 dwd_coupon_use_f"
+      refund_cnt: "按 user_id 统计退款次数 COUNT(*)，来自 CTE 聚合 dwd_refund_f"
+      refund_rate: "退款率(%)：退款次数 / 历史订单数 * 100，分母为 0 或 NULL 时返回 NULL"
+      cart_product_cnt: "有效购物车商品(del_flag='N')按 user_id 统计商品数 COUNT(*)，来自 CTE 聚合 dwd_cart_f"
+      cart_total_amount: "有效购物车商品(del_flag='N')按 user_id 汇总金额 SUM(qty*price)，来自 CTE 聚合 dwd_cart_f"
+      rfm_r_score: "R 值：计算最近下单距今天数 DATEDIFF(CURDATE(), last_order_time) 后，全量用户 NTILE(5) 窗口分组打分（天数越小分越高）。无订单用户 last_order_time 为 NULL，R 值记 NULL 或最低分"
+      rfm_f_score: "F 值：基于历史订单数 total_order_cnt，全量用户 NTILE(5) 窗口分组打分（订单越多分越高）。无订单用户记最低分"
+      rfm_m_score: "M 值：基于历史消费金额 total_pay_amount，全量用户 NTILE(5) 窗口分组打分（金额越高分越高）。无消费用户记最低分"
+      rfm_segment: "用户价值分层：组合 R/F/M 三分值，按规则划分高价值/中价值/低价值/流失四档"
+      pv_to_order_rate: "浏览-下单转化率(%)：历史订单数 / 浏览次数 * 100，分母为 0 或 NULL 时返回 NULL"
+      pv_to_cart_rate: "浏览-加购转化率(%)：加购行为次数(来自行为表 total_cart_cnt) / 浏览次数 * 100，分母为 0 或 NULL 时返回 NULL"
+      order_freq_label: "下单频率标签：total_order_cnt >= 10→高频用户，>= 3→中频用户，>= 1→低频用户，其余→未购买"
+      consume_level_label: "消费能力标签：total_pay_amount >= 10000→高消费，>= 1000→中消费，>= 100→低消费，其余→无消费"
 
-    source_aliases:
-      - duf
-      - dul
-      - drf
-      - dus
+    source_aliases: ["dcu", "drf7", "dcf"]
 
     ctes:
-      - name: "rfm_scoring"
-        purpose: "对订单画像中间表结果在全量用户范围内做 R/F/M 三维分5档排名（窗口分位数），供主查询引用打分结果"
-        source_tables:
-          - "dwb_user_order_tmp"
+      - name: "coupon_agg"
+        purpose: "按 user_id 聚合优惠券使用次数和金额"
+        source_tables: ["dwd_coupon_use_f"]
+      - name: "refund_agg"
+        purpose: "按 user_id 聚合退款次数"
+        source_tables: ["dwd_refund_f"]
+      - name: "cart_agg"
+        purpose: "按 user_id 聚合有效购物车商品数和金额(del_flag='N')"
+        source_tables: ["dwd_cart_f"]
 
     grain:
-      input: "一行=一个用户（各源已收口到用户粒度）"
+      input: "一行=一个用户（来自 tmp1 主表 + tmp2/tmp3/CTE 聚合结果 LEFT JOIN）"
       output: "一行=一个用户"
-      change: "无变化"
+      change: "无变化（用户粒度对齐后 LEFT JOIN，各聚合结果 user_id 唯一）"
 
     joins:
-      - alias: "duf"
+      - alias: "tmp1"
         type: "main"
-        condition: "用户维度主表"
+        condition: ""
         filter: ""
-      - alias: "dul"
+      - alias: "tmp2"
         type: "LEFT JOIN"
-        condition: "duf.level_id = dul.level_id"
+        condition: "tmp1.user_id = tmp2.user_id"
         filter: ""
-      - alias: "drf"
+      - alias: "tmp3"
         type: "LEFT JOIN"
-        condition: "duf.province_code = drf.region_code（地区表第一次关联：取省份名称）"
-        filter: "地区层级=省份"
-      - alias: "drf"
-        type: "LEFT JOIN"
-        condition: "duf.city_code = drf.region_code（地区表第二次关联：取城市名称，需为同表起不同别名）"
-        filter: "地区层级=城市"
-      - alias: "dus"
-        type: "LEFT JOIN"
-        condition: "duf.source_id = dus.source_id"
+        condition: "tmp1.user_id = tmp3.user_id"
         filter: ""
-      - alias: "dwb_user_order_tmp"
+      - alias: "coupon_agg"
         type: "LEFT JOIN"
-        condition: "duf.user_id = dwb_user_order_tmp.user_id"
+        condition: "tmp1.user_id = coupon_agg.user_id"
         filter: ""
-      - alias: "dwb_user_behavior_tmp"
+      - alias: "refund_agg"
         type: "LEFT JOIN"
-        condition: "duf.user_id = dwb_user_behavior_tmp.user_id"
+        condition: "tmp1.user_id = refund_agg.user_id"
         filter: ""
-      - alias: "dwb_user_marketing_tmp"
+      - alias: "cart_agg"
         type: "LEFT JOIN"
-        condition: "duf.user_id = dwb_user_marketing_tmp.user_id"
+        condition: "tmp1.user_id = cart_agg.user_id"
         filter: ""
 
     join_safety:
-      - table: "dim_user_f (duf)"
+      - table: "tmp2 (订单汇总)"
         join_key_unique: true
-        strategy: "无需对齐"
-        reason: "用户维度主表，user_id 为业务主键天然唯一，作为关联基表"
-      - table: "dim_user_level_f (dul)"
+        strategy: ""
+        reason: "R0002 已 GROUP BY user_id 聚合，user_id 唯一"
+      - table: "tmp3 (行为汇总)"
         join_key_unique: true
-        strategy: "无需对齐"
-        reason: "等级维度表 level_id 唯一"
-      - table: "dim_region_f (drf) - 省份关联"
+        strategy: ""
+        reason: "R0003 已 GROUP BY user_id 聚合，user_id 唯一"
+      - table: "coupon_agg (CTE)"
         join_key_unique: true
-        strategy: "无需对齐"
-        reason: "地区维度表在省份层级下 region_code 唯一"
-      - table: "dim_region_f (drf) - 城市关联"
+        strategy: ""
+        reason: "CTE 内 GROUP BY user_id 聚合，user_id 唯一"
+      - table: "refund_agg (CTE)"
         join_key_unique: true
-        strategy: "无需对齐"
-        reason: "地区维度表在城市层级下 region_code 唯一（同表第二次关联，编码时需起不同别名）"
-      - table: "dim_user_source_f (dus)"
+        strategy: ""
+        reason: "CTE 内 GROUP BY user_id 聚合，user_id 唯一"
+      - table: "cart_agg (CTE)"
         join_key_unique: true
-        strategy: "无需对齐"
-        reason: "来源维度表 source_id 唯一"
-      - table: "dwb_user_order_tmp"
-        join_key_unique: true
-        strategy: "已 GROUP BY 收敛"
-        reason: "R0001 产出，已按 user_id 聚合，每用户一行"
-      - table: "dwb_user_behavior_tmp"
-        join_key_unique: true
-        strategy: "已 GROUP BY 收敛"
-        reason: "R0002 产出，已按 user_id 聚合，每用户一行"
-      - table: "dwb_user_marketing_tmp"
-        join_key_unique: true
-        strategy: "已 GROUP BY 收敛"
-        reason: "R0003 产出，已按 user_id 聚合，每用户一行"
+        strategy: ""
+        reason: "CTE 内 GROUP BY user_id 聚合，user_id 唯一"
 
 # === 复杂度分析与分段决策 ===
 complexity_analysis:
-  join_count: 8
-  has_grain_change: true
-  grain_change_detail: "5 个事实表（订单/行为/优惠券/退款/购物车）均为明细粒度，需先按 user_id 聚合收口到用户粒度后再关联到用户主表（聚合后关联）"
-  multi_step_fields: 22
-  aggregation_after_join: false
+  join_count: 6                         # R0004 最多：tmp1 主表 + 5 个 LEFT JOIN
+  has_grain_change: true                # 5 个事实表从明细聚合到用户粒度
+  grain_change_detail: "dwd_order_f / dwd_user_behavior_f / dwd_coupon_use_f / dwd_refund_f / dwd_cart_f 五个事实表从多行明细聚合到一行一用户粒度"
+  multi_step_fields: 16                 # 需先聚合再关联的多步骤加工字段
+  aggregation_after_join: true          # RFM NTILE(5) 窗口函数需在全量用户 JOIN 后执行
   segmentation_decision: "分段"
-  segmentation_reason: "多项复杂度指标触发分段：(1) 5 个事实表需按 user_id 聚合收口（粒度变化+聚合后关联）；(2) 多步骤加工字段 22 个（远超阈值 5）：含 5 订单聚合+3 行为聚合+5 营销聚合+4 RFM 打分+5 派生比率/标签；(3) JOIN 表 8 张（4 dim + region 二次关联 + 3 画像中间表）。采用分段策略：将 5 个事实表的聚合收口为 3 个用户画像物理中间表（订单/行为/营销），最终在目标F表规则中组装 dim 直取字段+单步加工+派生计算+RFM 跨全量打分+审计字段。中间表可独立校验、语义清晰、被 RFM 复用，故建物理中间表而非 CTE。"
+  segmentation_reason: "5 个事实表需先按 user_id GROUP BY 聚合后才能关联用户维度（直接 JOIN 会导致笛卡尔发散）；16 个多步骤加工字段远超阈值 5；RFM 评分需在全量用户上做 NTILE(5) 窗口函数。拆 3 个物理中间表（tmp1 基础属性 / tmp2 订单汇总 / tmp3 行为汇总）+ 1 个最终装配规则（优惠券/退款/购物车用 CTE 内联）。"
 
 # === 分布键 ===
-# 所有关联键均为 user_id（高基数、各表 JOIN 键一致 → 本地关联，避免数据重分布）
-distribution_key:
-  - user_id
+distribution_key: ["user_id"]
 
-# === 业务主键（UT 唯一性检查用）===
-business_key:
-  - user_id
+# === 业务主键 ===
+business_key: ["user_id"]
+
+business_key_design:
+  input_key: ["user_id"]                # rs_input 备注"主键"
+  adjusted: false                       # 用户粒度下 user_id 唯一，无需调整
+  reason: ""
 
 # === 调度细化 ===
 schedule:
-  task_name: "dwb_user_center_f"
-  cron: "0 30 3 * * ?"
-  task_group: "dwb_user_center"
+  task_name: "dw_slusr_dwb_user_center_f"
+  cron: "0 0 2 * * ?"                   # 每天凌晨 2:00 执行，预留 1.5h 到 SLA 3:30
+  task_group: "dw_slusr_user_center"
   project: "slusr"
-  upstream_added: []
+  upstream_added: []                    # 中间表为内部依赖，不引入新外部上游
 
-# === 数据流（规则间关系）===
+# === 数据流 ===
 data_flow:
   dependencies:
     - from: "R0001"
       to: "R0004"
       type: "data_flow"
-      intermediate_table: "dwb_user_order_tmp"
+      intermediate_table: "dwb_user_center_tmp1"
     - from: "R0002"
       to: "R0004"
       type: "data_flow"
-      intermediate_table: "dwb_user_behavior_tmp"
+      intermediate_table: "dwb_user_center_tmp2"
     - from: "R0003"
       to: "R0004"
       type: "data_flow"
-      intermediate_table: "dwb_user_marketing_tmp"
+      intermediate_table: "dwb_user_center_tmp3"
   schedule_groups:
-    - sequence: 1
+    - sequence: 1                       # 基础属性 + 订单聚合 + 行为聚合 可并行
       rules: ["R0001", "R0002", "R0003"]
-    - sequence: 2
+    - sequence: 2                       # 最终装配依赖上述全部
       rules: ["R0004"]
 
-# === DQ（设计阶段不强制，留给后续）===
+# === DQ ===
 dq_rules: []

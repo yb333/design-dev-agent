@@ -180,7 +180,11 @@ def build_rule(rule_dec, field_map, rs_source_tables):
     # source_tables: 从 rs_input 的 source_tables 按别名补全 schema/table
     rs_sources = {st.get("source_alias", ""): st for st in rs_source_tables}
     rule_sources = []
-    for sa in (rule_dec.get("source_aliases") or []):
+    aliases = rule_dec.get("source_aliases") or []
+    if not aliases:
+        # designer 留空 → 默认用 rs_input 里所有 source_tables（见 design_decisions 模板注释）
+        aliases = list(rs_sources.keys())
+    for sa in aliases:
         rs_st = rs_sources.get(sa, {})
         rule_sources.append({
             "schema": rs_st.get("source_schema", ""),

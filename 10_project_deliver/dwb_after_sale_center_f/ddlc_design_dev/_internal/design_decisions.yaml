@@ -1,0 +1,181 @@
+# ============================================================================
+# design_decisions.yaml - 售后服务中心宽表 (slas.dwb_after_sale_center_f)
+# ----------------------------------------------------------------------------
+# 设计判断：单场景、单规则、不分段（CTE 内联）。
+# 5 张源表 LEFT JOIN 主表 dwd_refund_f(drf)，无聚合、无粒度变化，复杂度低-中。
+# 字段类型/来源/注释由 assemble_ts.py 从 rs_input.json 自动搬移。
+# ============================================================================
+
+rules:
+  - rule_code: R0001
+    rule_name: "售后服务中心宽表组装"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "slas.dwb_after_sale_center_f"
+    is_view_step: false
+    design_intent: >-
+      以退款事实表 dwd_refund_f 为主表，左关联订单、用户、商品、工单四表拼装售后中心宽表，
+      保持输出粒度=一个售后服务记录；对所有加工类字段做枚举值中文化与派生指标计算，
+      直取字段透传，审计字段按标准赋值，单条 INSERT 完成，无需物理中间表。
+
+    # 覆盖 rs_input 全部 24 个 target_column（不漏不重）
+    field_targets:
+      # —— 主表 drf 透传与加工字段 ——
+      - refund_id
+      - refund_no
+      - refund_type_name
+      - refund_status_name
+      - apply_time
+      - complete_time
+      - process_days
+      - refund_amount
+      - refund_reason
+      - order_id
+      - user_id
+      - product_id
+      # —— 订单表 dof ——
+      - order_no
+      - order_pay_amount
+      # —— 派生指标（跨表算术）——
+      - refund_rate
+      # —— 用户维度 duf ——
+      - user_name
+      # —— 商品维度 dpf ——
+      - product_name
+      # —— 工单表 dst ——
+      - ticket_id
+      - ticket_status_name
+      - handler_name
+      # —— 审计字段（assemble 自动处理，不写 field_logics）——
+      - del_flag
+      - crt_cycle_id
+      - last_upd_cycle_id
+      - dw_last_update_date
+
+    # ★ 仅加工类字段写 design_logic（自然语言口径，不含 SQL）。
+    # 直取字段（直接复制）不写，脚本自动填 "直取 {alias}.{column}"。
+    # 审计字段（赋值，备注"审计字段"）不写，assemble 按标准值处理。
+    field_logics:
+      refund_type_name: >-
+        退款类型中文化映射：将退款类型英文编码映射为中文名称——
+        ONLY_REFUND 映射为"仅退款"，RETURN_REFUND 映射为"退货退款"，
+        EXCHANGE 映射为"换货"，其余取值映射为"其他"。
+      refund_status_name: >-
+        退款状态中文化映射：将退款状态英文编码映射为中文名称——
+        APPLYING 映射为"申请中"，APPROVED 映射为"已同意"，
+        SUCCESS 映射为"退款成功"，REJECTED 映射为"已拒绝"，其余取值映射为"其他"。
+      process_days: >-
+        售后处理时长（天数）：以完成时间与申请时间的日期差为准；
+        若该退款尚未完成（完成时间为空），则以当前日期替代完成时间参与计算，
+        保证未完成单据也能体现已发生处理时长。
+      refund_rate: >-
+        退款比例（百分比，保留两位小数）：退款金额除以订单实付金额再乘以100；
+        当订单实付金额为零或为空时，退款比例记为0，以规避除零异常。
+      ticket_status_name: >-
+        工单状态中文化映射：将工单状态英文编码映射为中文名称——
+        PENDING 映射为"待处理"，PROCESSING 映射为"处理中"，
+        RESOLVED 映射为"已解决"，CLOSED 映射为"已关闭"，其余取值映射为"其他"。
+
+    # 关联的源表别名（脚本从 rs_input 补 schema/table）
+    source_aliases:
+      - drf
+      - dof
+      - duf
+      - dpf
+      - dst
+
+    # 单规则无中间表，不使用 CTE 内联临时表
+    ctes: []
+
+    # 粒度变化（输入→输出）
+    grain:
+      input: "一行=一个退款记录（drf 退款事实表，主键 refund_id）"
+      output: "一行=一个售后服务记录"
+      change: "无变化（前提：关联前 dof/dst 已收敛至订单级/工单级唯一粒度）"
+
+    # 关联策略
+    joins:
+      - alias: "drf"
+        type: "main"
+        condition: ""
+        filter: ""
+      - alias: "dof"
+        type: "LEFT JOIN"
+        condition: "drf.order_id = dof.order_id"
+        filter: ""
+      - alias: "duf"
+        type: "LEFT JOIN"
+        condition: "drf.user_id = duf.user_id"
+        filter: ""
+      - alias: "dpf"
+        type: "LEFT JOIN"
+        condition: "drf.product_id = dpf.product_id"
+        filter: ""
+      - alias: "dst"
+        type: "LEFT JOIN"
+        condition: "drf.refund_id = dst.refund_id"
+        filter: ""
+
+    # 关联安全分析（JOIN键唯一性 → 对齐策略）
+    join_safety:
+      - table: "dof"
+        join_key_unique: false
+        strategy: "JOIN 前对 dof 按 order_id 收敛至订单粒度：order_no 取唯一值、order_pay_amount 取订单实付金额单行（或订单级汇总），避免订单明细一对多导致退款记录 fan-out。"
+        reason: "dwd_order_f 为订单明细事实表，order_id 可能一对多（一个订单多行明细）；若未收敛将破坏输出粒度（一行=一个售后服务记录）。需在编码时核实 dof 粒度，确认后按订单级取值。"
+      - table: "duf"
+        join_key_unique: true
+        strategy: ""
+        reason: "dim_user_f 为用户维度表，user_id 为维度主键，限定条件下唯一，直接关联安全。"
+      - table: "dpf"
+        join_key_unique: true
+        strategy: ""
+        reason: "dim_product_f 为商品维度表，product_id 为维度主键，限定条件下唯一，直接关联安全。"
+      - table: "dst"
+        join_key_unique: false
+        strategy: "JOIN 前对 dst 按 refund_id 收敛：若一个退款对应多张工单，取最新一条工单（或最新有效工单）的 ticket_id/ticket_status/handler_name，避免 fan-out。"
+        reason: "dwd_service_ticket_f 为工单事实表，一个 refund_id 可能对应多张工单；未收敛将放大行数。需在编码时核实并按业务口径收敛（取最新工单）。"
+
+# === 复杂度分析与分段决策 ===
+complexity_analysis:
+  join_count: 4                         # 4 张 LEFT JOIN 表（不含主表）
+  has_grain_change: false               # 输入输出均为"一个售后记录"粒度
+  grain_change_detail: "无粒度变化；需保证 JOIN 前 dof/dst 收敛至唯一粒度。"
+  multi_step_fields: 5                  # refund_type_name/refund_status_name/process_days/refund_rate/ticket_status_name
+  aggregation_after_join: false         # JOIN 后无聚合
+  segmentation_decision: "不分段"
+  segmentation_reason: >-
+    JOIN 表数量 4（远低于阈值 12）；无粒度变化、无聚合后关联、无复杂关联链；
+    5 个加工字段均为简单枚举值中文化映射或单行算术派生（非"先聚合再关联"复杂逻辑），
+    单条 INSERT 即可清晰表达全部加工，无需物理中间表，亦无需 CTE 拆分。
+
+# === 分布键（参考 design-guide.md §2.1：高基数 JOIN 字段）===
+distribution_key:
+  - refund_id                            # 主表主键，bigint，高基数，确保哈希分布不倾斜
+
+# === 业务主键（UT 唯一性检查用，≠ 分布键）===
+business_key:
+  - refund_id                            # 售后服务记录业务唯一键
+
+# 主键设计说明（未调整 mapping 标注的主键）
+business_key_design:
+  input_key: ["refund_id"]               # mapping/RS 备注"主键"
+  adjusted: false
+  reason: ""
+
+# === 调度细化（RS 全量 T+1 一天一调 SLA 3:30 → 标准 cron）===
+schedule:
+  task_name: "dwb_after_sale_center_f"
+  cron: "0 30 3 * * ?"                   # 每天 03:30:00 执行
+  task_group: "slas"
+  project: ""
+  upstream_added: []                     # 全量调度无增量键，无设计新增上游；5 张源表为既有上游
+
+# === 数据流（规则间关系）===
+data_flow:
+  dependencies: []                       # 单规则，无规则间依赖
+  schedule_groups:
+    - sequence: 1
+      rules: ["R0001"]
+
+# === DQ（设计意图，SQL 由 coder 生成；本表暂不强制）===
+dq_rules: []

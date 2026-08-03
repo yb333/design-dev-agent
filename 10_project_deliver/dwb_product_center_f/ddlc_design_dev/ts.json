@@ -1,0 +1,927 @@
+{
+  "version": "1.0.0",
+  "spec_type": "ts",
+  "generated_at": "2026-08-03T23:02:39",
+  "generated_by": "assemble_ts.py",
+  "meta": {
+    "target": {
+      "f_table": {
+        "schema": "slprd",
+        "table": "dwb_product_center_f",
+        "cn": "商品中心宽表"
+      },
+      "i_view": {
+        "schema": "slprd",
+        "table": "dwb_product_center_i",
+        "cn": "商品中心宽表"
+      }
+    },
+    "grain": "每行一个商品记录",
+    "load_strategy": {
+      "strategy": "全量调度",
+      "label": "",
+      "delete_mode": ""
+    },
+    "field_count": {
+      "business": 35,
+      "audit": 4,
+      "total": 39
+    },
+    "source_tables": [
+      {
+        "schema": "dim",
+        "table": "dim_product_f",
+        "table_cn": "商品维度表",
+        "alias": "dpf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_product_category_f",
+        "table_cn": "商品分类维度表",
+        "alias": "dpc"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_brand_f",
+        "table_cn": "品牌维度表",
+        "alias": "dbf"
+      },
+      {
+        "schema": "dim",
+        "table": "dim_shop_f",
+        "table_cn": "店铺维度表",
+        "alias": "dsf"
+      },
+      {
+        "schema": "sdinv",
+        "table": "dwd_inventory_f",
+        "table_cn": "库存事实表",
+        "alias": "dif"
+      },
+      {
+        "schema": "sdord",
+        "table": "dwd_order_detail_f",
+        "table_cn": "订单商品明细事实表",
+        "alias": "dod"
+      },
+      {
+        "schema": "sdrev",
+        "table": "dwd_review_f",
+        "table_cn": "评价事实表",
+        "alias": "drf"
+      }
+    ],
+    "schedule": {
+      "task_name": "task_dwb_product_center_f",
+      "cron": "0 30 3 * * ?",
+      "task_group": "",
+      "project": "",
+      "owner": "",
+      "exec_params": {},
+      "upstream": [],
+      "execution_platform": {}
+    }
+  },
+  "design": {
+    "complexity_analysis": {
+      "join_count": 6,
+      "has_grain_change": true,
+      "grain_change_detail": "订单明细表/评价表粒度细于商品粒度，在中间表 R0001/R0002 中按 product_id GROUP BY 收敛；R0003 主规则本身无粒度变化",
+      "multi_step_fields": 7,
+      "aggregation_after_join": true,
+      "segmentation_decision": "分段",
+      "segmentation_reason": "多步骤加工字段=7（≥5阈值），且订单明细/评价表粒度细于商品粒度需先聚合后关联。 拆为3个规则：R0001订单销售聚合中间表、R0002评价聚合中间表（可并行）， R0003主宽表关联（依赖R0001/R0002）。聚合逻辑独立于关联逻辑，中间表可独立校验。"
+    },
+    "audit_fields": {
+      "del_flag": {
+        "type": "NVARCHAR(1)",
+        "default": "'N'",
+        "source": "mapping"
+      },
+      "crt_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "last_upd_cycle_id": {
+        "type": "BIGINT",
+        "default": "'${P_CYCLE_ID}'",
+        "source": "mapping"
+      },
+      "dw_last_update_date": {
+        "type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+        "default": "CURRENT_TIMESTAMP",
+        "source": "mapping"
+      }
+    },
+    "audit_supplemented": [],
+    "distribution_key": [
+      "product_id"
+    ],
+    "business_key": [
+      "product_id"
+    ],
+    "business_key_design": {
+      "input_key": [
+        "product_id"
+      ],
+      "adjusted": false,
+      "reason": "商品粒度下 product_id 唯一，无需调整"
+    }
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "订单销售汇总",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dwb_product_center_tmp1",
+      "is_view_step": false,
+      "design_intent": "从订单商品明细表按商品ID聚合销售指标，产出中间表供主规则关联。 订单明细粒度（一行=一条明细）细于商品粒度，直接JOIN会导致行数发散， 需先聚合收敛为商品粒度。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "sdord",
+          "table": "dwd_order_detail_f",
+          "alias": "dod"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "一行=一条订单商品明细",
+        "output": "一行=一个商品的销售汇总",
+        "change": "多行聚合"
+      },
+      "joins": [
+        {
+          "alias": "dod",
+          "type": "main",
+          "condition": "从 dwd_order_detail_f 读取全部订单明细数据",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dwd_order_detail_f",
+          "join_key_unique": false,
+          "strategy": "GROUP BY product_id 收敛",
+          "reason": "订单明细表每个商品有多行明细记录，按 product_id 聚合收敛为一行"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "total_sales_qty",
+          "field_type": "int",
+          "field_comment": "累计销量",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "从订单明细表按商品ID汇总累计销售数量，SUM(qty)"
+        },
+        {
+          "target_field": "total_sales_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "累计销售额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "从订单明细表按商品ID汇总累计销售额，SUM(real_price * qty)"
+        },
+        {
+          "target_field": "buyer_cnt",
+          "field_type": "int",
+          "field_comment": "购买人数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "从订单明细表按商品ID统计去重购买用户数，COUNT(DISTINCT user_id)"
+        },
+        {
+          "target_field": "sales_qty_30d",
+          "field_type": "int",
+          "field_comment": "近30天销量",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "从订单明细表按商品ID统计近30天销售数量，限定订单时间在当前日期前30天内，SUM(qty)"
+        }
+      ],
+      "field_count": 4
+    },
+    "R0002": {
+      "rule_name": "评价汇总",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dwb_product_center_tmp2",
+      "is_view_step": false,
+      "design_intent": "从评价事实表按商品ID聚合评价指标，产出中间表供主规则关联。 评价粒度（一行=一条评价）细于商品粒度，直接JOIN会导致行数发散， 需先聚合收敛为商品粒度。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "sdrev",
+          "table": "dwd_review_f",
+          "alias": "drf"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "一行=一条评价",
+        "output": "一行=一个商品的评价汇总",
+        "change": "多行聚合"
+      },
+      "joins": [
+        {
+          "alias": "drf",
+          "type": "main",
+          "condition": "从 dwd_review_f 读取全部评价数据",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dwd_review_f",
+          "join_key_unique": false,
+          "strategy": "GROUP BY product_id 收敛",
+          "reason": "评价表每个商品有多条评价，按 product_id 聚合收敛为一行"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "review_cnt",
+          "field_type": "int",
+          "field_comment": "评价数",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "从评价表按商品ID统计评价总数，COUNT(*)"
+        },
+        {
+          "target_field": "avg_rating",
+          "field_type": "decimal(2,1)",
+          "field_comment": "平均评分",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "从评价表按商品ID计算平均评分，AVG(rating)"
+        },
+        {
+          "target_field": "good_review_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "好评率(%)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "从评价表按商品ID计算好评率，好评数（rating >= 4 的行数）/ 总评价数 * 100"
+        }
+      ],
+      "field_count": 3
+    },
+    "R0003": {
+      "rule_name": "商品中心宽表加工",
+      "scenario": "default",
+      "exec_sequence": 2,
+      "target_table": "dwb_product_center_f",
+      "is_view_step": false,
+      "design_intent": "以商品维度表为主表，LEFT JOIN 分类/品牌/店铺维度表补全属性， LEFT JOIN 库存表取库存指标，LEFT JOIN 订单销售聚合中间表(R0001)和 评价聚合中间表(R0002)取汇总指标，计算价格/库存衍生字段， 产出商品中心宽表（每行一个商品）。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "dim",
+          "table": "dim_product_f",
+          "alias": "dpf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_product_category_f",
+          "alias": "dpc"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_brand_f",
+          "alias": "dbf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_shop_f",
+          "alias": "dsf"
+        },
+        {
+          "schema": "sdinv",
+          "table": "dwd_inventory_f",
+          "alias": "dif"
+        }
+      ],
+      "ctes": [],
+      "grain": {
+        "input": "一行=一个商品（主表 dim_product_f 粒度）",
+        "output": "一行=一个商品",
+        "change": "无变化"
+      },
+      "joins": [
+        {
+          "alias": "dpf",
+          "type": "main",
+          "condition": "dim_product_f 为主表，粒度锚点：商品",
+          "filter": ""
+        },
+        {
+          "alias": "dpc",
+          "type": "LEFT JOIN",
+          "condition": "dpf.category_id = dpc.category_id",
+          "filter": ""
+        },
+        {
+          "alias": "dbf",
+          "type": "LEFT JOIN",
+          "condition": "dpf.brand_id = dbf.brand_id",
+          "filter": ""
+        },
+        {
+          "alias": "dsf",
+          "type": "LEFT JOIN",
+          "condition": "dpf.shop_id = dsf.shop_id",
+          "filter": ""
+        },
+        {
+          "alias": "dif",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = dif.product_id",
+          "filter": ""
+        },
+        {
+          "alias": "dwb_product_center_tmp1",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = tmp1.product_id",
+          "filter": "R0001 产出的订单销售聚合中间表"
+        },
+        {
+          "alias": "dwb_product_center_tmp2",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = tmp2.product_id",
+          "filter": "R0002 产出的评价聚合中间表"
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dim_product_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "商品维度表主表，product_id 唯一"
+        },
+        {
+          "table": "dim_product_category_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "分类维度表按 category_id 唯一"
+        },
+        {
+          "table": "dim_brand_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "品牌维度表按 brand_id 唯一"
+        },
+        {
+          "table": "dim_shop_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "店铺维度表按 shop_id 唯一"
+        },
+        {
+          "table": "dwd_inventory_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "库存事实表按 product_id 一行一商品（假设无多仓拆行）；若实际多仓需改为 GROUP BY 收敛"
+        },
+        {
+          "table": "dwb_product_center_tmp1",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "中间表已按 product_id GROUP BY 收敛，唯一"
+        },
+        {
+          "table": "dwb_product_center_tmp2",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "中间表已按 product_id GROUP BY 收敛，唯一"
+        }
+      ],
+      "fields": [
+        {
+          "target_field": "product_id",
+          "field_type": "bigint",
+          "field_comment": "商品ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_id",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.product_id"
+        },
+        {
+          "target_field": "product_name",
+          "field_type": "varchar(200)",
+          "field_comment": "商品名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_name",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.product_name"
+        },
+        {
+          "target_field": "product_code",
+          "field_type": "varchar(50)",
+          "field_comment": "商品编码",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_code",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.product_code"
+        },
+        {
+          "target_field": "product_status_name",
+          "field_type": "varchar(20)",
+          "field_comment": "商品状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_status",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "商品状态编码翻译为中文：ON_SHELF→上架、OFF_SHELF→下架、SOLD_OUT→售罄、其他值→其他"
+        },
+        {
+          "target_field": "create_time",
+          "field_type": "datetime",
+          "field_comment": "创建时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "create_time",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.create_time"
+        },
+        {
+          "target_field": "on_shelf_time",
+          "field_type": "datetime",
+          "field_comment": "上架时间",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "on_shelf_time",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.on_shelf_time"
+        },
+        {
+          "target_field": "cost_price",
+          "field_type": "decimal(18,2)",
+          "field_comment": "成本价",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "cost_price",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.cost_price"
+        },
+        {
+          "target_field": "sale_price",
+          "field_type": "decimal(18,2)",
+          "field_comment": "销售价",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "sale_price",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.sale_price"
+        },
+        {
+          "target_field": "market_price",
+          "field_type": "decimal(18,2)",
+          "field_comment": "市场价",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "market_price",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.market_price"
+        },
+        {
+          "target_field": "discount_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "折扣率(%)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "折扣率=(市场价-销售价)/市场价*100"
+        },
+        {
+          "target_field": "gross_profit",
+          "field_type": "decimal(18,2)",
+          "field_comment": "单品毛利",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "单品毛利=销售价-成本价"
+        },
+        {
+          "target_field": "gross_profit_rate",
+          "field_type": "decimal(5,2)",
+          "field_comment": "毛利率(%)",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "毛利率=(销售价-成本价)/销售价*100"
+        },
+        {
+          "target_field": "category_id",
+          "field_type": "bigint",
+          "field_comment": "分类ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "category_id",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.category_id"
+        },
+        {
+          "target_field": "category_name",
+          "field_type": "varchar(100)",
+          "field_comment": "分类名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_category_f",
+              "field": "category_name",
+              "alias": "dpc"
+            }
+          ],
+          "design_logic": "直取 dpc.category_name"
+        },
+        {
+          "target_field": "category_path",
+          "field_type": "varchar(200)",
+          "field_comment": "分类路径",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_category_f",
+              "field": "category_path",
+              "alias": "dpc"
+            }
+          ],
+          "design_logic": "直取 dpc.category_path"
+        },
+        {
+          "target_field": "brand_id",
+          "field_type": "bigint",
+          "field_comment": "品牌ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "brand_id",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.brand_id"
+        },
+        {
+          "target_field": "brand_name",
+          "field_type": "varchar(100)",
+          "field_comment": "品牌名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_brand_f",
+              "field": "brand_name",
+              "alias": "dbf"
+            }
+          ],
+          "design_logic": "直取 dbf.brand_name"
+        },
+        {
+          "target_field": "brand_origin",
+          "field_type": "varchar(50)",
+          "field_comment": "品牌产地",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_brand_f",
+              "field": "brand_origin",
+              "alias": "dbf"
+            }
+          ],
+          "design_logic": "直取 dbf.brand_origin"
+        },
+        {
+          "target_field": "shop_id",
+          "field_type": "bigint",
+          "field_comment": "店铺ID",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "shop_id",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.shop_id"
+        },
+        {
+          "target_field": "shop_name",
+          "field_type": "varchar(200)",
+          "field_comment": "店铺名称",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_shop_f",
+              "field": "shop_name",
+              "alias": "dsf"
+            }
+          ],
+          "design_logic": "直取 dsf.shop_name"
+        },
+        {
+          "target_field": "stock_qty",
+          "field_type": "int",
+          "field_comment": "库存数量",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_inventory_f",
+              "field": "stock_qty",
+              "alias": "dif"
+            }
+          ],
+          "design_logic": "直取 dif.stock_qty"
+        },
+        {
+          "target_field": "locked_qty",
+          "field_type": "int",
+          "field_comment": "锁定数量",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_inventory_f",
+              "field": "locked_qty",
+              "alias": "dif"
+            }
+          ],
+          "design_logic": "直取 dif.locked_qty"
+        },
+        {
+          "target_field": "available_qty",
+          "field_type": "int",
+          "field_comment": "可售数量",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "可售数量=库存数量-锁定数量"
+        },
+        {
+          "target_field": "warning_qty",
+          "field_type": "int",
+          "field_comment": "库存预警值",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dwd_inventory_f",
+              "field": "warning_qty",
+              "alias": "dif"
+            }
+          ],
+          "design_logic": "直取 dif.warning_qty"
+        },
+        {
+          "target_field": "stock_status",
+          "field_type": "varchar(20)",
+          "field_comment": "库存状态",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "库存状态判定：可售数量<=0→缺货，可售数量<=库存预警值→低库存，否则→正常"
+        },
+        {
+          "target_field": "weight",
+          "field_type": "decimal(10,2)",
+          "field_comment": "重量(kg)",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "weight",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.weight"
+        },
+        {
+          "target_field": "volume",
+          "field_type": "decimal(10,4)",
+          "field_comment": "体积(m³)",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "volume",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.volume"
+        },
+        {
+          "target_field": "product_tag",
+          "field_type": "varchar(200)",
+          "field_comment": "商品标签",
+          "transform_type": "direct",
+          "source_fields": [
+            {
+              "table": "dim_product_f",
+              "field": "product_tag",
+              "alias": "dpf"
+            }
+          ],
+          "design_logic": "直取 dpf.product_tag"
+        },
+        {
+          "target_field": "del_flag",
+          "field_type": "NVARCHAR(1)",
+          "field_comment": "删除标识",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "crt_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "创建批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "last_upd_cycle_id",
+          "field_type": "BIGINT",
+          "field_comment": "最后更新批次ID",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        },
+        {
+          "target_field": "dw_last_update_date",
+          "field_type": "TIMESTAMP(0) WITHOUT TIME ZONE",
+          "field_comment": "数仓最后更新时间",
+          "transform_type": "assign",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "固定赋值"
+        }
+      ],
+      "field_count": 32
+    }
+  },
+  "data_flow": {
+    "dependencies": [
+      {
+        "from": "R0001",
+        "to": "R0003",
+        "type": "data_flow",
+        "intermediate_table": "dwb_product_center_tmp1"
+      },
+      {
+        "from": "R0002",
+        "to": "R0003",
+        "type": "data_flow",
+        "intermediate_table": "dwb_product_center_tmp2"
+      }
+    ],
+    "schedule_groups": [
+      {
+        "sequence": 1,
+        "rules": [
+          "R0001",
+          "R0002"
+        ]
+      },
+      {
+        "sequence": 2,
+        "rules": [
+          "R0003"
+        ]
+      }
+    ]
+  },
+  "dq_rules": []
+}

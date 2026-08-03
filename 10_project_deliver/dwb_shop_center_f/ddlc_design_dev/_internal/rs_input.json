@@ -1,10 +1,16 @@
 {
   "meta": {
     "target": {
-      "schema": "dim",
-      "table": "dwb_shop_center_f",
-      "cn": "店铺中心宽表",
-      "description": ""
+      "f_table": {
+        "schema": "slshp",
+        "table": "dwb_shop_center_f",
+        "cn": "店铺中心宽表"
+      },
+      "i_view": {
+        "schema": "slshp",
+        "table": "dwb_shop_center_i",
+        "cn": "店铺中心宽表"
+      }
     },
     "owner": {},
     "grain": "每行一个店铺记录",
@@ -15,52 +21,52 @@
   },
   "source_tables": [
     {
-      "source_schema": "",
+      "source_schema": "dim",
       "source_table": "dim_shop_f",
       "source_table_cn": "店铺维度表",
-      "target_schema": "dim",
+      "target_schema": "slshp",
       "target_table_cn": "店铺中心宽表",
-      "target_table": "dwb_shop_center_f",
+      "target_table": "dwb_shop_center_i",
       "join_condition": "主表",
       "remark": "店铺基础信息",
-      "source_alias": "",
-      "scene_group": ""
+      "source_alias": "dsf",
+      "scene_group": "default"
     },
     {
-      "source_schema": "",
+      "source_schema": "dim",
       "source_table": "dim_region_f",
       "source_table_cn": "地区维度表",
-      "target_schema": "dim",
+      "target_schema": "slshp",
       "target_table_cn": "店铺中心宽表",
-      "target_table": "dwb_shop_center_f",
+      "target_table": "dwb_shop_center_i",
       "join_condition": "left join on s.province_code=r.region_code",
       "remark": "地区信息",
-      "source_alias": "",
-      "scene_group": ""
+      "source_alias": "drf",
+      "scene_group": "default"
     },
     {
-      "source_schema": "",
+      "source_schema": "sdord",
       "source_table": "dwd_order_f",
       "source_table_cn": "订单明细事实表",
-      "target_schema": "sdord",
+      "target_schema": "slshp",
       "target_table_cn": "店铺中心宽表",
-      "target_table": "dwb_shop_center_f",
+      "target_table": "dwb_shop_center_i",
       "join_condition": "left join on s.shop_id=o.shop_id",
       "remark": "订单统计",
-      "source_alias": "",
-      "scene_group": ""
+      "source_alias": "dof",
+      "scene_group": "default"
     },
     {
-      "source_schema": "",
+      "source_schema": "sdrev",
       "source_table": "dwd_review_f",
       "source_table_cn": "评价事实表",
-      "target_schema": "sdrev",
+      "target_schema": "slshp",
       "target_table_cn": "店铺中心宽表",
-      "target_table": "dwb_shop_center_f",
+      "target_table": "dwb_shop_center_i",
       "join_condition": "left join on s.shop_id=r.shop_id",
       "remark": "评价统计",
-      "source_alias": "",
-      "scene_group": ""
+      "source_alias": "drf3",
+      "scene_group": "default"
     }
   ],
   "field_mappings": [
@@ -373,5 +379,6 @@
     "upstream": []
   },
   "data_flow_hint": {},
-  "dq_requirements": []
+  "dq_requirements": [],
+  "data_exploration": {}
 }
