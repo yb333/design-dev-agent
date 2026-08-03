@@ -82,7 +82,15 @@ distribution_key: []
 # === 业务主键（业务唯一字段组合，供 UT 主键唯一检查）===
 # 注意：≠ 分布键。分布键是数据分布最优选，业务主键是业务唯一性。
 # DDL 不定义物理 PRIMARY KEY（DWS 列存限制），UT 用 business_key 查唯一性。
+# ★ 审视：mapping/RS 标注的主键（备注列标"主键"的字段）在产出表粒度下是否唯一？
+#   如头行整合后头表主键会发散，需补充字段。调整了就在下面说明原因。
 business_key: []
+
+# 主键设计说明（如果调整了 mapping/RS 标注的主键，必须说明）
+business_key_design:
+  input_key: []                          # mapping/RS 标注的主键（从备注列提取）
+  adjusted: false                        # 是否调整过
+  reason: ""                             # 调整原因（adjusted=true 时必填）
 
 # === 调度细化（RS给大框架 → designer细化）===
 schedule:

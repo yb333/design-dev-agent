@@ -34,6 +34,15 @@ def generate_gate1_summary(ts: dict) -> str:
     lines.append(f"- **规则数**: {len(rules)} 个")
     lines.append(f"- **场景数**: {len(set(r.get('scenario','') for r in rules.values() if r.get('scenario')))} 个")
     lines.append(f"- **字段统计**: 业务 {fc.get('business',0)} + 审计 {fc.get('audit',0)} = 总计 {fc.get('total',0)}")
+
+    # 主键设计说明（如果调整过主键，展示出来）
+    bk_design = design.get("business_key_design", {})
+    if bk_design.get("adjusted"):
+        input_key = bk_design.get("input_key", [])
+        reason = bk_design.get("reason", "")
+        lines.append(f"- **⚠️ 主键已调整**: 输入标注({', '.join(input_key)}) → 实际({', '.join(design.get('business_key', []))})")
+        if reason:
+            lines.append(f"  原因: {reason}")
     lines.append("")
 
     # 分段决策
