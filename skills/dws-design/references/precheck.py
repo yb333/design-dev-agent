@@ -205,12 +205,9 @@ def _check_audit_fields(field_mappings: list, result: PrecheckResult):
         target_type = (fm.get("target_type") or "").strip().lower()
 
         if target_lower == "del_flag":
-            # del_flag 可以有逻辑（赋值或直接复制），不强制
-            if rule and rule not in ("直接复制", "赋值"):
-                result.add_warn(
-                    f"审计字段 {target} 的映射规则是 '{rule}'，"
-                    f"del_flag 通常是赋值或直接复制，请确认"
-                )
+            # del_flag 可以有逻辑：赋值（固定值）、直接复制（取源字段）、
+            # 数据加工（多表整合判断，如 IF(status='已作废','Y','N')）—— 都是合理的
+            pass  # 不限制映射规则类型
         else:
             # 其他三个审计字段应是标准赋值
             if rule and rule not in ("赋值", "直接复制"):
