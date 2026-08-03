@@ -935,14 +935,15 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     # 从 RS @asset 提取目标表信息
     rs_meta = rs_data.get("meta", {})
     rs_target = rs_meta.get("target", {}) if isinstance(rs_meta, dict) else {}
-    rs_schema = rs_target.get("schema", "")
-    rs_table = rs_target.get("table", "")
+    # RS 提取的 schema/table 在 meta 顶层（extract_rs_data 的输出格式）
+    rs_schema = rs_meta.get("schema", "") or rs_target.get("schema", "")
+    rs_table = rs_meta.get("table", "") or rs_target.get("table", "")
 
     # 校验目标表 schema/table（分级：阻断 vs 告警），并得到互补后的最终值
     final_schema, final_table, fatal_errors, warnings = validate_target_table(
         rs_schema, rs_table, target_schema, target_table_raw
     )
-    final_cn = rs_target.get("cn", "") or target_table_cn
+    final_cn = rs_meta.get("cn", "") or rs_target.get("cn", "") or target_table_cn
 
     # 告警打印到 stdout（不阻断）
     for w in warnings:
