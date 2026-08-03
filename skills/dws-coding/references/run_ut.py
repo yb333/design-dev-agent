@@ -135,6 +135,7 @@ def main():
     parser.add_argument("--db-config", default="", help="db-sources.json 路径")
     parser.add_argument("--source", default="", help="数据源名（多schema多账号）")
     parser.add_argument("--skip-ddl", action="store_true", help="跳过DDL执行（表已存在）")
+    parser.add_argument("--report", default="", help="UT 报告输出路径（ut_report.md）")
     args = parser.parse_args()
 
     # 读 ts.json
@@ -277,11 +278,59 @@ def main():
     failed = sum(1 for r in all_results if r["status"] == "FAIL")
     skipped = sum(1 for r in all_results if r["status"] == "SKIP")
 
+    report_lines = []
+    report_lines.append("# UT 报告")
+    report_lines.append(f"> 时间: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    report_lines.append("")
+    report_lines.append(f"**汇总**: ✅{passed} 通过  ❌{failed} 失败  ⏭️{skipped} 跳过")
+    report_lines.append("")
+    report_lines.append("## 规则明细")
+    report_lines.append("")
+    report_lines.append("| 规则 | 目标表 | 状态 | 详情 |")
+    report_lines.append("|------|--------|------|------|")
+    for r in all_results:
+        symbol = {"PASS": "✅", "FAIL": "❌", "SKIP": "⏭️"}[r["status"]]
+        report_lines.append(f"| {r['rule']} | `{r['target']}` | {symbol} | {r.get('detail', '')} |")
+    report_lines.append("")
+
+    # UT 检查明细（有 checks 的规则）
+    has_checks = any(r.get("checks") for r in all_results)
+    if has_checks:
+        report_lines.append("## UT 检查明细")
+        report_lines.append("")
+        for r in all_results:
+            if r.get("checks"):
+                report_lines.append(f"### {r['rule']}（{r['target']}）")
+                report_lines.append("")
+                report_lines.append("| 检查项 | 结果 | 详情 |")
+                report_lines.append("|--------|------|------|")
+                for c in r["checks"]:
+                    symbol = {"PASS": "✅", "FAIL": "❌", "WARN": "⚠️"}.get(c["status"], "?")
+                    report_lines.append(f"| {c['check']} | {symbol} | {c['detail']} |")
+                report_lines.append("")
+
+    # 问题清单
+    if failed:
+        report_lines.append("## ⚠️ 问题清单")
+        report_lines.append("")
+        for r in all_results:
+            if r["status"] == "FAIL":
+                report_lines.append(f"- ❌ **{r['rule']}**（{r['target']}）: {r['detail']}")
+
+    report_text = "\n".join(report_lines)
+
+    # 写 ut_report.md
+    report_path = args.report
+    if not report_path:
+        # 默认写到 ts.json 同级目录
+        report_path = str(Path(args.ts).parent / "ut_report.md")
+    Path(report_path).write_text(report_text, encoding="utf-8")
+
     print("=" * 50)
     print(f"UT 汇总: ✅{passed} 通过  ❌{failed} 失败  ⏭️{skipped} 跳过")
+    print(f"UT 报告: {report_path}")
     print("=" * 50)
 
-    # 问题清单（给拍照用——只列失败的）
     if failed:
         print("\n⚠️ 问题清单:")
         for r in all_results:

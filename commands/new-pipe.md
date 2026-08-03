@@ -20,6 +20,8 @@ agent: build
     ├── ts.md                             ← 设计产出（人读）
     ├── etl/                              ← 编码产出（coder 产的 SELECT）
     │   └── R0001.sql
+    ├── dq/                               ← DQ 检查 SQL（脚本生成）
+    ├── ut_report.md                      ← UT 报告（执行验证后生成）
     ├── ddl/                              ← 编码产出（脚本生成的 DDL）
     │   └── create_table_xxx.sql
     └── _internal/                        ← 过程产物
@@ -114,6 +116,16 @@ python {scripts}/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/ddl
 
 ---
 
+## 步骤 4.5：生成 DQ 检查 SQL
+
+调脚本从 ts.json 生成标准 DQ 检查 SQL：
+
+```bash
+python {scripts}/assemble_dq.py --ts {deliver}/ts.json --outdir {deliver}/dq
+```
+
+---
+
 ## 步骤 5：逐规则调 coder 产 SELECT
 
 读 ts.json 的 rules，按 `data_flow.schedule_groups` 顺序逐规则调 coder。
@@ -147,7 +159,8 @@ python {scripts}/run_ut.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
-  --source {数据源名}
+  --source {数据源名} \
+  --report {deliver}/ut_report.md
 ```
 
 将 UT 报告保存到 `{deliver}/_internal/ut_report.txt`。
@@ -189,7 +202,9 @@ coder 改完后重跑步骤6验证。**每个规则限 3 轮**。
 ### 产出文件
 - ts.json / ts.md（设计制品）
 - etl/*.sql（编码制品）
+- dq/*.sql（DQ 检查脚本）
 - ddl/*.sql（建表脚本）
+- ut_report.md（UT 报告）
 
 请选择：
 - ✅ 确认，流程完成

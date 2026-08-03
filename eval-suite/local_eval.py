@@ -241,6 +241,24 @@ def step_assemble_ddl(report, deliver):
         return False
 
 
+def step_assemble_dq(report, deliver):
+    """步骤5.5: 生成 DQ 检查 SQL"""
+    dq_dir = deliver / "dq"
+    dq_dir.mkdir(parents=True, exist_ok=True)
+    code, out = run_python(
+        str(CODING_REFS / "assemble_dq.py"),
+        ["--ts", str(deliver / "ts.json"), "--outdir", str(dq_dir)]
+    )
+    dq_files = list(dq_dir.glob("*.sql")) if dq_dir.exists() else []
+
+    if code == 0 and dq_files:
+        report.pass_step("DQ生成(assemble_dq)", f"{len(dq_files)}个DQ检查SQL")
+        return True
+    else:
+        report.fail_step("DQ生成(assemble_dq)", out[:200])
+        return False
+
+
 def step_check_sql(report, deliver, rule_code):
     """步骤6: 静态对比"""
     select_file = deliver / "etl" / f"{rule_code}.sql"
@@ -362,6 +380,9 @@ def main():
 
         # 步骤5: DDL
         step_assemble_ddl(report, deliver_base)
+
+        # 步骤5.5: DQ 检查 SQL
+        step_assemble_dq(report, deliver_base)
 
         # 步骤6: 静态对比
         step_check_sql(report, deliver_base, rule_code)
