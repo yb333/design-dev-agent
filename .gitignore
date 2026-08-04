@@ -37,3 +37,6 @@ docs/templates/RS（图转文）.md
 *.tmp
 *.bak
 *.backup
+
+# 编辑器产物
+.zcode/
