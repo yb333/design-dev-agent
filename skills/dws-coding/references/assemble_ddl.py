@@ -88,10 +88,10 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
     # CREATE TABLE
     lines.append(f"CREATE TABLE IF NOT EXISTS {schema}.{table} (")
 
-    # 业务字段
+    # 业务字段（用已从 tables/rule 取好的 fields 变量，不再重复从 rule 取）
     field_lines = []
     max_field_len = 0
-    for f in rule.get("fields", []):
+    for f in fields:
         fname = f.get("target_field", "")
         ftype = f.get("field_type", "")
         fcomment = f.get("field_comment", "")

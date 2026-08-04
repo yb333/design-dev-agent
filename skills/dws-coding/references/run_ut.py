@@ -293,23 +293,23 @@ def main():
                 rb_dir = Path(args.rollback_dir) if args.rollback_dir else ddl_dir.parent / "ddl_rollback"
                 _, view_name = (target.split(".", 1) + [""])[:2] if "." in target else ("", target)
 
-                # 先跑回退（DROP VIEW，清理残留）
-                rb_files = list(rb_dir.glob(f"*{view_name}*.sql"))
-                for rb in rb_files:
-                    rb_sql = substitute_params(rb.read_text(encoding="utf-8"), param_values)
-                    executor.execute(rb_sql)  # 回退失败不阻断（表可能不存在）
+                # 先跑回退（DROP VIEW，确定文件名）
+                rb_file = rb_dir / f"rollback_create_view_{view_name}.sql"
+                if rb_file.exists():
+                    rb_sql = substitute_params(rb_file.read_text(encoding="utf-8"), param_values)
+                    executor.execute(rb_sql)  # 回退失败不阻断
 
-                # 再跑 DDL（CREATE VIEW）
-                view_ddls = list(ddl_dir.glob(f"create_view*{view_name}*.sql"))
-                if view_ddls:
-                    ddl_sql = substitute_params(view_ddls[0].read_text(encoding="utf-8"), param_values)
+                # 再跑 DDL（CREATE VIEW，确定文件名）
+                view_file = ddl_dir / f"create_view_{view_name}.sql"
+                if view_file.exists():
+                    ddl_sql = substitute_params(view_file.read_text(encoding="utf-8"), param_values)
                     r = executor.execute(ddl_sql)
                     rule_result["status"] = "PASS" if r.success else "FAIL"
                     rule_result["detail"] = r.summary()
                     print(f"  {'✅' if r.success else '❌'} {r.summary()}")
                 else:
                     rule_result["status"] = "SKIP"
-                    rule_result["detail"] = "视图DDL文件未找到"
+                    rule_result["detail"] = f"视图DDL文件未找到: {view_file.name}"
                 all_results.append(rule_result)
                 continue
 
@@ -320,20 +320,20 @@ def main():
                 rb_dir = Path(args.rollback_dir) if args.rollback_dir else ddl_dir.parent / "ddl_rollback"
                 _, table = (target.split(".", 1) + [""])[:2] if "." in target else ("", target)
 
-                # 先跑回退（DROP TABLE）
-                rb_files = list(rb_dir.glob(f"rollback*{table}*.sql"))
-                for rb in rb_files:
-                    rb_sql = substitute_params(rb.read_text(encoding="utf-8"), param_values)
+                # 先跑回退（DROP TABLE，确定文件名）
+                rb_file = rb_dir / f"rollback_create_table_{table}.sql"
+                if rb_file.exists():
+                    rb_sql = substitute_params(rb_file.read_text(encoding="utf-8"), param_values)
                     r_rb = executor.execute(rb_sql)
                     if r_rb.success:
-                        print(f"  🔄 回退: {rb.name}")
+                        print(f"  🔄 回退: {rb_file.name}")
                     else:
                         print(f"  ⚠️ 回退失败(忽略): {r_rb.error[:80]}")
 
-                # 步骤1: DDL（CREATE TABLE）
-                table_ddls = list(ddl_dir.glob(f"create_table*{table}*.sql"))
-                if table_ddls:
-                    ddl_sql = substitute_params(table_ddls[0].read_text(encoding="utf-8"), param_values)
+                # 步骤1: DDL（CREATE TABLE，确定文件名）
+                ddl_file = ddl_dir / f"create_table_{table}.sql"
+                if ddl_file.exists():
+                    ddl_sql = substitute_params(ddl_file.read_text(encoding="utf-8"), param_values)
                     r = executor.execute(ddl_sql)
                     if not r.success:
                         rule_result["status"] = "FAIL"
@@ -345,7 +345,7 @@ def main():
                         continue
                     print(f"  ✅ DDL: {r.summary()}")
                 else:
-                    print(f"  ⚠️ DDL文件未找到（create_table*{table}*.sql），跳过建表")
+                    print(f"  ⚠️ DDL文件未找到: {ddl_file.name}，跳过建表")
 
             # 步骤2: 包装 + 执行 INSERT
             select_sql = read_select(Path(args.select_dir), rule_code)
