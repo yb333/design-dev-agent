@@ -21,6 +21,7 @@ designer agent 产出 design_decisions.yaml(纯设计判断),
 """
 
 import sys
+import re
 import json
 import argparse
 from pathlib import Path
@@ -88,6 +89,172 @@ def is_audit_field(fm: dict) -> bool:
         return True
     target = (fm.get("target_column") or "").strip().lower()
     return target in STANDARD_AUDIT_NAMES
+
+
+# ============================================================
+# 数据流图渲染（ts.md §5 用 mermaid 呈现）
+# ============================================================
+
+# 维度表 schema（OR 关系：表名含 dim 或 schema 在此集合里，即判为维表）
+DIM_SCHEMAS = {"dim", "dwrdim", "dwrdim_dw1"}
+
+
+def is_dim_table(schema: str, table: str) -> bool:
+    """判断是否维表（任一命中即维表）：
+    1. 表名包含 'dim'
+    2. schema ∈ {dim, dwrdim, dwrdim_dw1}
+
+    维表在数据流图里不画节点，降级为步骤节点的标注（避免源表过多拥挤）。
+    """
+    if "dim" in (table or "").lower():
+        return True
+    if (schema or "").lower() in DIM_SCHEMAS:
+        return True
+    return False
+
+
+def _sanitize_node_id(text: str) -> str:
+    """mermaid 节点 ID 只能字母/数字/下划线。把 . - 等替换成 _。"""
+    return re.sub(r'[^A-Za-z0-9_]', '_', text or "")
+
+
+def render_data_flow_mermaid(ts: dict) -> str:
+    """从 ts.json 的 rules + data_flow 生成 mermaid flowchart TD 代码块。
+
+    布局：上到下（TD），按 schedule_groups 分层。
+    节点：表（源表/中间表/目标表/视图）+ 步骤（规则）混合。
+    维表不画节点，降级为步骤标注。
+    无规则时返回空串。
+    """
+    rules = ts.get("rules", {})
+    if not rules:
+        return ""
+
+    df = ts.get("data_flow", {})
+    schedule_groups = df.get("schedule_groups", [])
+    # 没有 schedule_groups → 按 exec_sequence 兜底
+    if not schedule_groups:
+        schedule_groups = [{"sequence": r.get("exec_sequence", 1), "rules": [code]}
+                           for code, r in rules.items()]
+
+    lines = ['```mermaid']
+    lines.append('%%{init: {"theme":"base", "themeVariables": {')
+    lines.append('  "primaryColor":"#dbeafe","primaryTextColor":"#1e3a5f",')
+    lines.append('  "primaryBorderColor":"#3b82f6","lineColor":"#64748b",')
+    lines.append('  "fontSize":"13px"')
+    lines.append('}}}%%')
+    lines.append('flowchart TD')
+    lines.append('')
+
+    # --- 收集源表节点（全局去重，跨规则共享） ---
+    # source_table_key → (schema, table, node_id)
+    declared_sources = {}  # 已声明画过节点
+    declared_targets = set()  # 已声明的产出表 node_id（防多规则写同一表时重复声明）
+    edges = []  # [(from_id, to_id, dashed)]
+
+    for code in list(rules.keys()):
+        rule = rules[code]
+        for st in rule.get("source_tables", []):
+            sch = st.get("schema", "")
+            tbl = st.get("table", "")
+            if not tbl:
+                continue
+            key = f"{sch}.{tbl}"
+            if key in declared_sources:
+                continue
+            declared_sources[key] = {
+                "schema": sch,
+                "table": tbl,
+                "node_id": "src_" + _sanitize_node_id(tbl),
+            }
+
+    # --- 按 schedule_groups 分层画节点和边 ---
+    for group in schedule_groups:
+        for code in group.get("rules", []):
+            rule = rules.get(code)
+            if not rule:
+                continue
+
+            rule_name = rule.get("rule_name", "")
+            target = rule.get("target_table", "")
+            is_view = rule.get("is_view_step", False)
+            step_id = "step_" + _sanitize_node_id(code)
+
+            # 分类该规则的 source_tables
+            dim_names = []      # 维表名（标注用）
+            fact_sources = []   # 非维表（画节点）
+
+            for st in rule.get("source_tables", []):
+                sch = st.get("schema", "")
+                tbl = st.get("table", "")
+                if not tbl:
+                    continue
+                if is_dim_table(sch, tbl):
+                    dim_names.append(tbl)
+                else:
+                    fact_sources.append((sch, tbl))
+
+            # 步骤节点（含规则名 + 维表标注）
+            step_label = f'{code}'
+            if rule_name:
+                step_label += f' / {rule_name}'
+            if dim_names:
+                dim_text = ", ".join(dim_names[:4])
+                if len(dim_names) > 4:
+                    dim_text += f" 等{len(dim_names)}张"
+                step_label += f'<br/>关联维表: {dim_text}'
+            lines.append(f'  {step_id}("{step_label}"):::step')
+
+            # 画非维表源表节点 + 源表→步骤的边（源表节点首次出现才声明）
+            for sch, tbl in fact_sources:
+                src_info = declared_sources.get(f"{sch}.{tbl}")
+                if src_info:
+                    src_id = src_info["node_id"]
+                    if not src_info.get("_drawn"):
+                        lines.append(f'  {src_id}["{tbl}<br/><small>{sch}</small>"]:::source')
+                        src_info["_drawn"] = True
+                    edges.append((src_id, step_id, False))
+
+            # 画产出表节点 + 步骤→产出表的边（产出表节点首次出现才声明）
+            if target:
+                tgt_id = "tbl_" + _sanitize_node_id(target)
+                if tgt_id not in declared_targets:
+                    if is_view:
+                        cls = "view"
+                    elif "tmp" in target.lower():
+                        cls = "intermediate"
+                    else:
+                        cls = "target"
+                    lines.append(f'  {tgt_id}["{target}"]:::{cls}')
+                    declared_targets.add(tgt_id)
+                edges.append((step_id, tgt_id, is_view))   # 视图虚线，其余实线
+
+        lines.append('')
+
+    # --- 画中间表→后续步骤的边（跨步骤数据传递）---
+    for dep in df.get("dependencies", []):
+        inter_tbl = dep.get("intermediate_table", "")
+        to_code = dep.get("to", "")
+        if inter_tbl and to_code:
+            inter_id = "tbl_" + _sanitize_node_id(inter_tbl)
+            step_id = "step_" + _sanitize_node_id(to_code)
+            edges.append((inter_id, step_id, False))
+
+    # --- 输出所有边 ---
+    for from_id, to_id, dashed in edges:
+        arrow = "-.->" if dashed else "-->"
+        lines.append(f'  {from_id} {arrow} {to_id}')
+
+    # --- classDef 样式 ---
+    lines.append('')
+    lines.append('  classDef source fill:#dbeafe,stroke:#3b82f6,stroke-width:1.5px,color:#1e3a5f')
+    lines.append('  classDef step fill:#ede9fe,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95')
+    lines.append('  classDef intermediate fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#334155,stroke-dasharray:5 3')
+    lines.append('  classDef target fill:#dcfce7,stroke:#22c55e,stroke-width:2.5px,color:#166534')
+    lines.append('  classDef view fill:#e0e7ff,stroke:#6366f1,stroke-width:1.5px,color:#3730a3,stroke-dasharray:5 3')
+    lines.append('```')
+
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -562,6 +729,16 @@ def render_md(ts):
     lines.append("## 5. 数据流向")
     lines.append("")
     df = ts.get("data_flow", {})
+
+    # 5.1 数据流图（mermaid，脚本自动生成）
+    mermaid_graph = render_data_flow_mermaid(ts)
+    if mermaid_graph:
+        lines.append("### 数据流图")
+        lines.append("")
+        lines.append(mermaid_graph)
+        lines.append("")
+
+    # 5.2 血缘关系表
     deps = df.get("dependencies", [])
     if deps:
         lines.append("**血缘关系**:")
@@ -571,6 +748,8 @@ def render_md(ts):
         for d in deps:
             lines.append(f"| {d.get('from', '')} | {d.get('to', '')} | {d.get('intermediate_table', '-')} |")
         lines.append("")
+
+    # 5.3 执行顺序表
     groups = df.get("schedule_groups", [])
     if groups:
         lines.append("**执行顺序**:")
