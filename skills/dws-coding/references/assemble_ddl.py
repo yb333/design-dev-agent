@@ -41,8 +41,12 @@ def split_table_ref(table_ref: str) -> tuple[str, str]:
     return "", table_ref
 
 
-def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict) -> str:
-    """生成 CREATE TABLE DDL"""
+def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, tables: dict = None) -> str:
+    """生成 CREATE TABLE DDL。
+
+    字段来源优先级：tables[target_table].fields → rule.fields（旧格式兼容）
+    分布键来源优先级：tables[target].distribution_key → design.distribution_key（旧格式兼容）
+    """
     target = rule.get("target_table", "")
     schema, table = split_table_ref(target)
 
@@ -50,8 +54,22 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict) 
         schema = meta.get("target", {}).get("f_table", {}).get("schema", "")
 
     cn = meta.get("target", {}).get("f_table", {}).get("cn", "")
-    logical_group = infer_logical_group(schema)
-    dist_key = ", ".join(design.get("distribution_key", []))
+
+    # 字段来源：优先 tables 段，fallback rule.fields（旧格式）
+    table_short = table
+    if tables and table_short in tables:
+        tbl_info = tables[table_short]
+        fields = tbl_info.get("fields", [])
+        dist_key = ", ".join(tbl_info.get("distribution_key", []))
+        logical_group = tbl_info.get("logical_group", "") or infer_logical_group(schema)
+        storage = tbl_info.get("storage", "column")
+    else:
+        # 旧格式兼容：字段和分布键从 rule/design 取
+        fields = rule.get("fields", [])
+        dist_key = ", ".join(design.get("distribution_key", []))
+        logical_group = infer_logical_group(schema)
+        storage = "column"
+
     audit_fields = design.get("audit_fields", {})
 
     lines = []
@@ -140,7 +158,7 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict) 
     return "\n".join(lines)
 
 
-def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: dict) -> str:
+def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: dict, tables: dict = None) -> str:
     """生成 CREATE VIEW DDL（I视图 = F表镜像，列出全部字段，不用 SELECT *）"""
     target = rule.get("target_table", "")
     schema, table = split_table_ref(target)
@@ -155,8 +173,12 @@ def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: d
 
     cn = meta.get("target", {}).get("f_table", {}).get("cn", "")
 
-    # rule.fields 已包含审计字段，直接用
-    all_fields = [(f.get("target_field", ""), f.get("field_comment", "")) for f in rule.get("fields", [])]
+    # 字段来源：优先 tables[f_table].fields，fallback rule.fields（旧格式）
+    if tables and f_table in tables:
+        fields = tables[f_table].get("fields", [])
+    else:
+        fields = rule.get("fields", [])
+    all_fields = [(f.get("target_field", ""), f.get("field_comment", "")) for f in fields]
 
     lines = []
     lines.append(f"/* =====================================================")
@@ -245,6 +267,7 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
     """
     rules = ts.get("rules", {})
     design = ts.get("design", {})
+    tables = ts.get("tables", {})
     audit_fields = design.get("audit_fields", {})
     meta = ts.get("meta", {})
     target_meta = meta.get("target", {})
@@ -272,20 +295,22 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
             # 1. 建 F表（用同规则的字段，改 target_table 为 _f）
             f_rule = {**rule, "target_table": f"{schema}.{f_table}"}
             f_filename = f"create_table_{f_table}.sql"
-            ddl_result[f_filename] = generate_create_table(code, f_rule, design, meta)
+            ddl_result[f_filename] = generate_create_table(code, f_rule, design, meta, tables)
             rollback_result[f"rollback_create_table_{f_table}.sql"] = generate_rollback(schema, f_table)
 
             # 2. 建 I视图（列全部字段，不用 SELECT *）
             if table not in generated_views:
                 generated_views.add(table)
                 i_filename = f"create_view_{table}.sql"
-                ddl_result[i_filename] = generate_i_view(schema, f_table, f_cn or rule.get("rule_name", ""), rule.get("fields", []), audit_fields)
+                # 字段从 tables[f_table] 取，fallback rule
+                view_fields = tables.get(f_table, {}).get("fields", rule.get("fields", []))
+                ddl_result[i_filename] = generate_i_view(schema, f_table, f_cn or rule.get("rule_name", ""), view_fields, audit_fields)
                 rollback_result[f"rollback_create_view_{table}.sql"] = generate_rollback(schema, table, is_view=True)
 
         elif is_f_table:
             # 目标是 F表 → 建 F表 + 自动配套 I视图
             filename = f"create_table_{table}.sql"
-            ddl_result[filename] = generate_create_table(code, rule, design, meta)
+            ddl_result[filename] = generate_create_table(code, rule, design, meta, tables)
             rollback_result[f"rollback_create_table_{table}.sql"] = generate_rollback(schema, table)
 
             # 配套 I视图
@@ -293,13 +318,14 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
             if i_table not in generated_views:
                 generated_views.add(i_table)
                 i_filename = f"create_view_{i_table}.sql"
-                ddl_result[i_filename] = generate_i_view(schema, table, f_cn or rule.get("rule_name", ""), rule.get("fields", []), audit_fields)
+                view_fields = tables.get(table, {}).get("fields", rule.get("fields", []))
+                ddl_result[i_filename] = generate_i_view(schema, table, f_cn or rule.get("rule_name", ""), view_fields, audit_fields)
                 rollback_result[f"rollback_create_view_{i_table}.sql"] = generate_rollback(schema, i_table, is_view=True)
 
         else:
             # 中间表或其他 → 只建表
             filename = f"create_table_{table}.sql"
-            ddl_result[filename] = generate_create_table(code, rule, design, meta)
+            ddl_result[filename] = generate_create_table(code, rule, design, meta, tables)
             rollback_result[f"rollback_create_table_{table}.sql"] = generate_rollback(schema, table)
 
     return ddl_result, rollback_result

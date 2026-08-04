@@ -125,7 +125,10 @@ FIXED_PARAMS = ["V_CYCLE_ID", "V_GROUP_CODE"]
 # ============================================================
 
 def load_platform_config(config_path: str = "") -> dict:
-    """读 platform_config.json。未找到用 default 兜底。"""
+    """读 platform_config.json 原始内容。未找到返回空 dict。
+
+    结构：{ default: {shujia, lts}, schema_mappings: {schema: {shujia, lts}} }
+    """
     if not config_path:
         config_path = os.environ.get(
             "PLATFORM_CONFIG",
@@ -135,8 +138,25 @@ def load_platform_config(config_path: str = "") -> dict:
     if not p.exists():
         return {}
     raw = json.loads(p.read_text(encoding="utf-8"))
-    projects = raw.get("projects", {})
-    return projects.get("default", projects.get("default", {}))
+    # 过滤掉 _comment / _structure 等说明字段
+    return {k: v for k, v in raw.items() if not k.startswith("_")}
+
+
+def resolve_config_by_schema(raw_config: dict, schema: str) -> dict:
+    """按 schema 从 platform_config 取两套平台配置。
+
+    查找顺序：schema_mappings[schema] → default
+    返回 {shujia: {...}, lts: {...}}
+    """
+    if not raw_config:
+        return {"shujia": {}, "lts": {}}
+    default_cfg = raw_config.get("default", {})
+    mappings = raw_config.get("schema_mappings", {})
+    schema_cfg = mappings.get(schema, {})
+    # schema 没配的字段用 default 兜底
+    shujia = {**default_cfg.get("shujia", {}), **schema_cfg.get("shujia", {})}
+    lts = {**default_cfg.get("lts", {}), **schema_cfg.get("lts", {})}
+    return {"shujia": shujia, "lts": lts}
 
 
 def _cfg(config: dict, key: str, fallback: str = "待配置") -> str:
@@ -160,7 +180,10 @@ def _split_schema_table(full: str) -> tuple[str, str]:
 def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> list[list]:
     """构建 RULE sheet 行。顺序：取数规则 → 视图规则 → 参数变量规则。
 
+    config: resolve_config_by_schema 返回的 {shujia, lts} 结构。
+    术加执行平台配置从 config["shujia"] 取。
     编码（规则组编码/规则编码）全部留空，内网回填。
+    子项目编码留空（schema 对不齐，人工填）。
     """
     rules = ts.get("rules", {})
     meta = ts.get("meta", {})
@@ -170,14 +193,17 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
     target_short = f_table.get("table", "")
     target_full = f"{f_table.get('schema', '')}.{target_short}" if f_table.get("schema") else target_short
     group_desc = f_table.get("cn", "") or target_short
-    data_source = _cfg(config, "datasource")
-    business_owner = _cfg(config, "business_owner", "")
-    project_code = _cfg(config, "project_code")
-    project_cn = _cfg(config, "project_cn", project_code)
-    project_en = _cfg(config, "project_en", project_code)
-    sub_code = _cfg(config, "subproject_code")
-    sub_cn = _cfg(config, "subproject_cn", sub_code)
-    sub_en = _cfg(config, "subproject_en", sub_code)
+
+    shujia = config.get("shujia", {})
+    data_source = _cfg(shujia, "datasource")
+    business_owner = _cfg(shujia, "business_owner", "")
+    project_code = _cfg(shujia, "project_code")
+    project_cn = _cfg(shujia, "project_cn", project_code)
+    project_en = _cfg(shujia, "project_en", project_code)
+    # 子项目编码留空（schema 对不齐，人工填）
+    sub_code = ""
+    sub_cn = ""
+    sub_en = ""
 
     rows = []
 
@@ -309,16 +335,24 @@ def build_group_variables(ts: dict) -> list[list]:
 
 
 def build_target_fields(ts: dict) -> list[list]:
-    """构建 TargetFields sheet 行。从 ts.json rules[].fields 取，过滤审计字段。
+    """构建 TargetFields sheet 行。从 tables 段取字段定义，过滤审计字段。
 
+    字段来源优先级：tables[target_table].fields → rule.fields（旧格式兼容）
     规则编码留空。
     """
     rules = ts.get("rules", {})
+    tables = ts.get("tables", {})
     rows = []
     for code, rule in rules.items():
         if rule.get("is_view_step"):
             continue
-        for field in rule.get("fields", []):
+        # 字段来源：优先 tables 段
+        target_tbl = rule.get("target_table", "")
+        target_short = target_tbl.rsplit(".", 1)[-1] if "." in target_tbl else target_tbl
+        tbl_fields = tables.get(target_short, {}).get("fields", [])
+        fields = tbl_fields if tbl_fields else rule.get("fields", [])
+
+        for field in fields:
             target_field = field.get("target_field", "")
             if not target_field or target_field.lower() in AUDIT_FIELDS:
                 continue
@@ -389,17 +423,22 @@ def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, ddl_dir: Pat
 # ============================================================
 
 def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
-    """生成 schedule_tasks.xlsx（3 sheet）。"""
+    """生成 schedule_tasks.xlsx（3 sheet）。
+
+    config: resolve_config_by_schema 返回的 {shujia, lts} 结构。
+    LTS 调度平台配置从 config["lts"] 取。
+    """
     meta = ts.get("meta", {})
     f_table = meta.get("target", {}).get("f_table", {})
     i_view = meta.get("target", {}).get("i_view", {})
     sched = meta.get("schedule", {})
 
     target_short = f_table.get("table", "")
-    project_name = _cfg(config, "project_code")
-    task_group = _cfg(config, "subproject_code")
+    lts = config.get("lts", {})
+    project_name = _cfg(lts, "project_name")
+    task_group = _cfg(lts, "task_group")
     cron = sched.get("cron", "")
-    owner = sched.get("owner", "") or _cfg(config, "business_owner", "")
+    owner = sched.get("owner", "") or _cfg(config.get("shujia", {}), "business_owner", "")
     upstream = sched.get("upstream", [])
 
     wb = openpyxl.Workbook()
@@ -522,8 +561,8 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
         "view_task_name": f"task_{i_view.get('table', '')}" if has_view else "",
         "view_job_name": f"Pjob_{i_view.get('table', '')}" if has_view else "",
         "cron_expr": sched.get("cron", ""),
-        "project_name": _cfg(config, "project_code"),
-        "task_group": _cfg(config, "subproject_code"),
+        "project_name": _cfg(config.get("lts", {}), "project_name"),
+        "task_group": _cfg(config.get("lts", {}), "task_group"),
         "params": sorted(ts.get("meta", {}).get("schedule", {}).get("exec_params", {}).keys()),
         "upstream_tasks": upstream_tasks,
         "rule_codes_needed": rule_codes_needed,
@@ -559,8 +598,10 @@ def main():
         sys.exit(1)
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
-    # 读配置
-    config = load_platform_config(args.config)
+    # 读配置（按目标表 schema 映射两套平台配置）
+    raw_config = load_platform_config(args.config)
+    target_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
+    config = resolve_config_by_schema(raw_config, target_schema)
 
     # 产出
     exec_path = export_dir / "execution_tasks.xlsx"

@@ -103,16 +103,22 @@ def resolve_all_params(ts: dict, config_path: str) -> dict:
     return values
 
 
-def wrap_insert(select_sql: str, target_table: str, fields: list, audit_fields: dict) -> str:
+def wrap_insert(select_sql: str, target_table: str, fields, audit_fields: dict) -> str:
     """把 SELECT 包装成完整 INSERT（按平台固定规则）。
 
     平台规则：
     - INSERT INTO 目标表 (字段列表)
     - SELECT 内容不变
     - 审计字段已在 SELECT 里带上了（coder 产的 SELECT 含审计字段赋值）
+
+    fields 可以是 field_targets（字段名列表 str）或旧格式 fields（dict 列表）。
     """
     # 字段列表（业务字段 + 审计字段）
-    field_names = [f["target_field"] for f in fields]
+    # 兼容两种格式：field_targets（str 列表）或 fields（dict 列表含 target_field）
+    if fields and isinstance(fields[0], str):
+        field_names = list(fields)
+    else:
+        field_names = [f["target_field"] for f in fields]
     field_names.extend(audit_fields.keys())
     columns = ",\n    ".join(field_names)
 
@@ -329,7 +335,7 @@ def main():
                 all_results.append(rule_result)
                 continue
 
-            insert_sql = wrap_insert(select_sql, target, rule.get("fields", []), audit_fields)
+            insert_sql = wrap_insert(select_sql, target, rule.get("field_targets") or rule.get("fields", []), audit_fields)
             insert_sql = substitute_params(insert_sql, param_values)
             r = executor.execute(insert_sql)
 

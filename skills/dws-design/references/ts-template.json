@@ -40,8 +40,6 @@
     "schedule": {
       "task_name": "",                   // designer 命名
       "cron": "",                        // designer 细化为标准表达式(如 "0 30 3 * * ?")
-      "task_group": "",
-      "project": "",
       "owner": "",
       "exec_params": {                    // 资产级参数声明。P_CYCLE_ID 脚本自动注入；业务参数 designer 声明
         "P_CYCLE_ID": { "value_type": "string", "desc": "批次号", "standard": true }
@@ -50,8 +48,9 @@
       "upstream": [                      // 上游依赖(RS给 + 中间表增量)
         // source: "rs"(RS 提供) | "designer"(设计新增的中间表)
         { "table": "", "task": "", "source": "" }
-      ],
-      "execution_platform": { "project_code": "", "datasource": "" }
+      ]
+      // 注意：项目/任务组/数据源/执行平台 等部署配置不在 ts.json 里
+      // 它们是平台概念（非设计概念），由 platform_config.json 按schema映射，exporter 读取
     }
   },
 
@@ -79,8 +78,35 @@
       "last_upd_cycle_id":   { "type": "bigint",                         "default": "'${P_CYCLE_ID}'", "source": "mapping|supplemented" },
       "dw_last_update_date": { "type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP", "source": "mapping|supplemented" }
     },
-    "distribution_key": [],               // 分布键(目标表+中间表统一管,只在 design 层定义)
-    "business_key": []                    // 业务主键(业务唯一字段组合,供UT主键唯一检查。≠分布键。DDL不定义物理PRIMARY KEY)
+    "business_key": []                    // 业务主键(业务唯一字段组合,供UT主键唯一检查。≠分布键)
+  },
+
+  // ============================================================================
+  // tables —— ★ 表实体（字段定义 + 物理属性）
+  // 每张表（目标F表/中间表）各自定义。I视图不在此（无物理属性，字段=F表镜像）
+  // 字段定义由 assemble_ts.py 从 rs_input 按 rule→target_table 分组自动搬入
+  // 物理属性由 designer 在 design_decisions.tables 里声明（主要是 distribution_key）
+  // ============================================================================
+  "tables": {
+    "dwb_xxx_f": {
+      "type": "target",                   // target(目标F表) | intermediate(中间表)
+      "distribution_key": ["id"],         // ★ 分布键（每表各自，设计师在 decisions.tables 声明）
+      "partition": "",                    // 分区表达式（无则空）
+      "storage": "column",                // column | row（默认列存）
+      "logical_group": "LC_DW1",          // TO GROUP（默认按 schema 推断）
+      "fields": [                         // 字段定义（脚本从 rs_input 自动搬入）
+        {
+          "target_field": "",             // 字段名
+          "field_type": "",               // 字段类型
+          "field_comment": "",            // 字段中文名
+          "transform_type": "",           // direct(直取) | pivot(行转列) | aggregate(聚合) | assign(赋值)
+          "source_fields": [              // 源字段来源
+            { "table": "", "field": "", "alias": "" }
+          ],
+          "design_logic": ""              // 自然语言口径（直取类由脚本自动生成默认值）
+        }
+      ]
+    }
   },
 
   // ============================================================================
@@ -123,23 +149,13 @@
         { "table": "", "join_key_unique": true, "strategy": "", "reason": "" }
       ],
 
-      // fields —— ★ 该规则产出的字段(内嵌,天然按规则分组)
-      // design_logic = 自然语言口径(不含SQL表达式),SQL 由 coder 翻译
-      // transform_type + source_fields = 结构化(支撑机读校验:静态检查SQL与TS一致性)
-      // 审计字段不在此列出(用 design.audit_fields 模板)
-      "fields": [
-        {
-          "target_field": "",
-          "field_type": "",
-          "field_comment": "",
-          "transform_type": "",          // direct(直取) | pivot(行转列) | aggregate(聚合) | assign(赋值)
-          "source_fields": [             // 源字段来源
-            { "table": "", "field": "", "alias": "" }
-          ],
-          "design_logic": ""             // ★ 自然语言口径,不含SQL表达式
-        }
-      ],
-      "field_count": 0
+      // ★ 该规则产出哪些字段（字段名列表，引用 tables 段的字段定义）
+      "field_targets": ["field_a", "field_b"],
+      // ★ 加工口径（仅加工类字段写；直取字段不写，脚本自动填默认）
+      // key=字段名，value=自然语言口径（不含SQL表达式，coder 翻译）
+      "field_logics": {
+        "field_b": "口径描述"
+      }
     }
   },
 

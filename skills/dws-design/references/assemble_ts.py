@@ -350,31 +350,28 @@ def build_field(field_rec, logic, rule_aliases):
 
 
 def build_rule(rule_dec, field_map, rs_source_tables):
-    """组装一个规则对象。"""
+    """组装一个规则对象。字段定义不在此产出（由 build_tables 按表汇总）。"""
     code = rule_dec.get("rule_code", "")
     targets = rule_dec.get("field_targets", [])
     logics = rule_dec.get("field_logics") or {}
 
-    fields = []
+    # 检查加工类字段是否写了 logic（字段定义已搬到 tables，这里只做口径完整性校验）
     missing_logic = []
     for t in targets:
         rec = field_map.get(t)
         if not rec:
-            continue  # validate 阶段已报错
+            continue
         logic = logics.get(t)
-        f = build_field(rec, logic, rule_dec.get("source_aliases"))
-        # 加工/赋值/序列类字段没写 logic -> 记录警告
-        # 排除审计字段（赋值类审计字段的逻辑已从 mapping 的 transform_detail 搬入）
-        if f["transform_type"] != "direct" and not logic and not is_audit_field(rec):
+        transform_rule = rec.get("transform_rule", "直接复制")
+        transform_type = TRANSFORM_MAP.get(transform_rule, "direct")
+        if transform_type != "direct" and not logic and not is_audit_field(rec):
             missing_logic.append(t)
-        fields.append(f)
 
     # source_tables: 从 rs_input 的 source_tables 按别名补全 schema/table
     rs_sources = {st.get("source_alias", ""): st for st in rs_source_tables}
     rule_sources = []
     aliases = rule_dec.get("source_aliases") or []
     if not aliases:
-        # designer 留空 → 默认用 rs_input 里所有 source_tables（见 design_decisions 模板注释）
         aliases = list(rs_sources.keys())
     for sa in aliases:
         rs_st = rs_sources.get(sa, {})
@@ -397,9 +394,105 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "grain": rule_dec.get("grain", {}),
         "joins": rule_dec.get("joins", []),
         "join_safety": rule_dec.get("join_safety", []),
-        "fields": fields,
-        "field_count": len(fields),
+        "field_targets": targets,
+        "field_logics": logics,
     }, missing_logic
+
+
+def infer_logical_group(schema: str) -> str:
+    """按 schema 推断逻辑集群（TO GROUP）。"""
+    if not schema:
+        return "LC_DW1"
+    s = schema.lower()
+    if "drt" in s:
+        return "gtoup_version1"
+    return "LC_DW1"
+
+
+def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, target_f_table: str) -> dict:
+    """组装 tables 段（表实体，含字段定义 + 物理属性）。
+
+    - 字段定义从 rs_input.field_mappings 按 rule→target_table→field_targets 分组搬入
+    - 物理属性从 decisions.tables 取，缺失用默认
+    - 审计字段补充到最终目标表的 fields
+    - I 视图不放 tables（无物理属性，字段=F表镜像）
+    """
+    dec_tables = decisions.get("tables", {})
+    supplemented = []  # 审计字段补充（由 build_design 算出，这里通过参数传入更解耦，但简化处理从 design 读不到）
+    # 审计字段：从 rs_input 识别来源提供的 + 标准模板
+    all_fm = rs_input.get("field_mappings", [])
+    source_audit = [fm for fm in all_fm if is_audit_field(fm)]
+    source_audit_names = {(fm.get("target_column") or "").lower() for fm in source_audit}
+    supplemented_names = STANDARD_AUDIT_NAMES - source_audit_names
+
+    # 最终目标表名（短名，不含 schema）
+    final_table_short = target_f_table.rsplit(".", 1)[-1] if "." in target_f_table else target_f_table
+
+    tables = {}
+    for code, rule in rules.items():
+        tbl = rule.get("target_table", "")
+        if not tbl or rule.get("is_view_step"):
+            continue
+        tbl_short = tbl.rsplit(".", 1)[-1] if "." in tbl else tbl
+
+        # 跳过已处理的表（多 rule 写同表，只建一次字段集）
+        if tbl_short in tables:
+            continue
+
+        # 判断表类型
+        is_final = (tbl_short == final_table_short)
+        tbl_type = "target" if is_final else "intermediate"
+
+        # 字段定义：从 field_map 按 field_targets 组装
+        fields = []
+        for tname in rule.get("field_targets", []):
+            rec = field_map.get(tname)
+            if not rec:
+                continue
+            f = build_field(rec, None, rule.get("source_aliases"))
+            fields.append(f)
+
+        # 目标表补充审计字段
+        if is_final:
+            for aname in supplemented_names:
+                spec = STANDARD_AUDIT_TEMPLATE.get(aname, {})
+                # 检查是否已在 fields 里（防重复）
+                existing_names = {f["target_field"].lower() for f in fields}
+                if aname.lower() not in existing_names:
+                    fields.append({
+                        "target_field": aname,
+                        "field_type": spec.get("type", ""),
+                        "field_comment": "审计字段（自动补充）",
+                        "transform_type": "assign",
+                        "source_fields": [],
+                        "design_logic": f"固定赋值 {spec.get('default', '')}",
+                    })
+
+        # 物理属性
+        dec_tbl = dec_tables.get(tbl_short, {})
+        # schema 用于推断逻辑集群
+        tbl_schema = ""
+        for fm in all_fm:
+            pass  # schema 从 target_table 或 meta 取更准
+        # 从 target_table 拆 schema
+        if "." in tbl:
+            tbl_schema = tbl.split(".")[0]
+
+        # 分布键：per-table 声明优先；没填则用旧版全局 distribution_key 兜底
+        dec_dist = dec_tbl.get("distribution_key", [])
+        if not dec_dist:
+            dec_dist = decisions.get("distribution_key", [])
+
+        tables[tbl_short] = {
+            "type": tbl_type,
+            "distribution_key": dec_dist,
+            "partition": dec_tbl.get("partition", ""),
+            "storage": dec_tbl.get("storage", "column"),
+            "logical_group": dec_tbl.get("logical_group", "") or infer_logical_group(tbl_schema),
+            "fields": fields,
+        }
+
+    return tables
 
 
 def build_meta(rs_input, decisions):
@@ -444,12 +537,9 @@ def build_meta(rs_input, decisions):
     schedule = {
         "task_name": dec_sched.get("task_name", ""),
         "cron": dec_sched.get("cron", ""),
-        "task_group": dec_sched.get("task_group", ""),
-        "project": dec_sched.get("project", ""),
         "owner": rs_meta.get("owner", {}).get("person", ""),
         "exec_params": build_exec_params(decisions),
         "upstream": rs_sched.get("upstream", []),
-        "execution_platform": {},
     }
 
     # 字段统计：识别审计字段（来源提供的），其余为业务字段
@@ -520,8 +610,7 @@ def build_design(decisions, rs_input):
             "segmentation_reason": comp.get("segmentation_reason", ""),
         },
         "audit_fields": audit_fields,
-        "audit_supplemented": sorted(supplemented),  # 记录哪些是补充的（ts.md 标注用）
-        "distribution_key": decisions.get("distribution_key", []),
+        "audit_supplemented": sorted(supplemented),
         "business_key": decisions.get("business_key", []),
         "business_key_design": decisions.get("business_key_design", {}),
     }
@@ -548,22 +637,9 @@ def assemble_ts(rs_input, decisions):
         if missing_logic:
             all_missing_logic.append((code, missing_logic))
 
-    # 补充审计字段：来源没提供的，加到最终规则（产出目标F表的最后规则）的 fields 里
-    supplemented = design.get("audit_supplemented", [])
-    if supplemented and rules:
-        # 找最终规则：exec_sequence 最大的规则
-        final_code = max(rules.keys(), key=lambda c: rules[c].get("exec_sequence", 0))
-        for name in supplemented:
-            spec = STANDARD_AUDIT_TEMPLATE.get(name, {})
-            rules[final_code]["fields"].append({
-                "target_field": name,
-                "field_type": spec.get("type", ""),
-                "field_comment": "审计字段（自动补充）",
-                "transform_type": "assign",
-                "source_fields": [],
-                "design_logic": f"固定赋值 {spec.get('default', '')}",
-            })
-            rules[final_code]["field_count"] += 1
+    # 组装 tables 段（表实体：字段定义 + 物理属性）
+    f_table_full = meta.get("target", {}).get("f_table", {}).get("table", "")
+    tables = build_tables(rules, decisions, field_map, rs_input, f_table_full)
 
     ts = {
         "version": "1.0.0",
@@ -572,6 +648,7 @@ def assemble_ts(rs_input, decisions):
         "generated_by": "assemble_ts.py",
         "meta": meta,
         "design": design,
+        "tables": tables,
         "rules": rules,
         "data_flow": decisions.get("data_flow", {}),
         "dq_rules": decisions.get("dq_rules", []),
@@ -588,6 +665,7 @@ def render_md(ts):
     target = meta["target"]
     rules = ts["rules"]
     design = ts["design"]
+    tables = ts.get("tables", {})
 
     lines = []
     lines.append(f"# ETL 技术规格(TS)")
@@ -603,20 +681,23 @@ def render_md(ts):
     lines.append("")
     lines.append("| 项目 | 内容 |")
     lines.append("|------|------|")
-    lines.append(f"| **F 表** | `{target['f_table']['schema']}.{target['f_table']['table']}`({target['f_table']['cn']}) |")
-    lines.append(f"| **I 视图** | `{target['i_view']['schema']}.{target['i_view']['table']}`(F表镜像) |")
-    lines.append(f"| **目标粒度** | {meta['grain']} |")
-    lines.append(f"| **写入策略** | {meta['load_strategy']['strategy']} |")
-    lines.append(f"| **分布键** | {', '.join(design['distribution_key']) or '-'} |")
+    lines.append(f"| **F 表** | `{target['f_table']['schema']}.{target['f_table']['table']}`（{target['f_table']['cn']}） |")
+    lines.append(f"| **I 视图** | `{target['i_view']['schema']}.{target['i_view']['table']}`（F表镜像，对外查询） |")
+    # 业务主键（替代原"目标粒度"——主键即粒度定义）
+    bk = design.get("business_key", [])
+    lines.append(f"| **业务主键** | {', '.join(bk) if bk else '-'} |")
+    # 写入策略：全量可重刷 / 增量（详见规则详情）
+    all_truncate = all(r.get("load_mode") == "truncate_table" for r in rules.values())
+    load_label = "全量（可随时重刷）" if all_truncate else "增量（详见规则详情）"
+    lines.append(f"| **写入策略** | {load_label} |")
     fc = meta["field_count"]
     lines.append(f"| **字段统计** | 业务 {fc['business']} + 审计 {fc['audit']} = 总计 {fc['total']} |")
-    # 标注补充的审计字段
-    supplemented = design.get("audit_supplemented", [])
-    if supplemented:
-        lines.append(f"| **审计字段来源** | RS/mapping 未提供 {len(supplemented)} 个审计字段（{'、'.join(supplemented)}），已自动补充 |")
-    else:
-        lines.append(f"| **审计字段来源** | 全部来自 RS/mapping |")
-    lines.append(f"| **规则数** | {len(rules)} |")
+    # 规则数（含直封视图提示）
+    has_view = any(r.get("is_view_step") for r in rules.values())
+    rule_label = f"{len(rules)}"
+    if has_view:
+        rule_label += "（含直封视图）"
+    lines.append(f"| **规则数** | {rule_label} |")
     lines.append("")
     lines.append("**来源表**:")
     lines.append("")
@@ -628,24 +709,41 @@ def render_md(ts):
     lines.append("---")
     lines.append("")
 
-    # §2 表模型设计
+    # §2 表模型设计（统一表格，目标表优先）
     lines.append("## 2. 表模型设计")
     lines.append("")
-    lines.append(f"- **F表**: `{target['f_table']['table']}`(存数据)")
-    lines.append(f"- **I视图**: `{target['i_view']['table']}`(F表镜像, 对外查询)")
-    lines.append(f"- **分布键**: {', '.join(design['distribution_key']) or '待定'}")
+    f_table_short = target["f_table"]["table"]
+    i_view_short = target["i_view"].get("table", "")
+
+    # 排序：目标F表 → 中间表 → 视图（视图单独列在表后）
+    lines.append("| 表名 | 类型 | 分布键 | 分区 | 字段数 | 说明 |")
+    lines.append("|------|------|--------|------|--------|------|")
+    # 目标 F 表
+    if f_table_short in tables:
+        t = tables[f_table_short]
+        dist = ", ".join(t.get("distribution_key", [])) or "—"
+        part = t.get("partition") or "—"
+        fcount = len(t.get("fields", []))
+        lines.append(f"| `{f_table_short}` | 目标F表 | {dist} | {part} | {fcount} | {target['f_table'].get('cn', '')} |")
+    # 中间表
+    for tname, t in tables.items():
+        if t.get("type") == "intermediate":
+            dist = ", ".join(t.get("distribution_key", [])) or "—"
+            part = t.get("partition") or "—"
+            fcount = len(t.get("fields", []))
+            # 找对应规则的 design_intent
+            intent = ""
+            for r in rules.values():
+                rt = r.get("target_table", "")
+                if rt.rsplit(".", 1)[-1] == tname or rt == tname:
+                    intent = r.get("design_intent", "")
+                    break
+            lines.append(f"| `{tname}` | 中间表 | {dist} | {part} | {fcount} | {intent} |")
+    # 视图（无物理属性）
+    if i_view_short:
+        f_fields = len(tables.get(f_table_short, {}).get("fields", []))
+        lines.append(f"| `{i_view_short}` | 直封视图 | — | — | 同F表 | F表镜像，对外查询 |")
     lines.append("")
-    # 中间表(非目标表的规则产出)
-    mid_rules = [c for c, r in rules.items() if r["target_table"] and r["target_table"] != target["f_table"]["table"]]
-    if mid_rules:
-        lines.append("**中间表**:")
-        lines.append("")
-        lines.append("| 规则 | 表名 | 粒度 | 用途 |")
-        lines.append("|------|------|------|------|")
-        for c in mid_rules:
-            r = rules[c]
-            lines.append(f"| {c} | {r['target_table']} | {r['grain'].get('output', '-')} | {r['design_intent']} |")
-        lines.append("")
     lines.append("---")
     lines.append("")
 
@@ -678,7 +776,7 @@ def render_md(ts):
         lines.append(f"| 执行序 | {r['exec_sequence']} |")
         lines.append(f"| 产出表 | `{r['target_table']}` |")
         lines.append(f"| 设计意图 | {r['design_intent']} |")
-        lines.append(f"| 字段数 | {r['field_count']} |")
+        lines.append(f"| 字段数 | {len(r.get('field_targets', []))} |")
         lines.append("")
         # 关联策略
         if r.get("joins"):
@@ -698,9 +796,14 @@ def render_md(ts):
             for js in r["join_safety"]:
                 lines.append(f"| {js.get('table', '')} | {'是' if js.get('join_key_unique') else '否'} | {js.get('strategy', '')} |")
             lines.append("")
-        # 字段概要(只统计+抽样, 不全列)
+        # 字段概要：从 tables 取该表字段，统计 transform_type
+        rt_short = r["target_table"].rsplit(".", 1)[-1] if "." in r["target_table"] else r["target_table"]
+        tbl_fields = tables.get(rt_short, {}).get("fields", [])
+        # 按该规则的 field_targets 过滤
+        rule_targets = set(r.get("field_targets", []))
+        rule_fields = [f for f in tbl_fields if f.get("target_field") in rule_targets]
         from collections import Counter
-        type_counts = Counter(f["transform_type"] for f in r["fields"])
+        type_counts = Counter(f["transform_type"] for f in rule_fields)
         lines.append("**字段概要**:")
         lines.append("")
         lines.append("| 转换类型 | 数量 |")
@@ -709,15 +812,16 @@ def render_md(ts):
             lines.append(f"| {tt} | {cnt} |")
         lines.append(f"| assign(审计) | {len(design['audit_fields'])} |")
         lines.append("")
-        # 加工字段抽样(design_logic)
-        logic_fields = [f for f in r["fields"] if f["transform_type"] != "direct"]
-        if logic_fields:
+        # 加工字段抽样：从 field_logics 取口径
+        logics = r.get("field_logics", {})
+        logic_items = [(name, logic) for name, logic in logics.items()]
+        if logic_items:
             lines.append("**加工字段抽样**(完整字段见 ts.json):")
             lines.append("")
-            for f in logic_fields[:5]:
-                lines.append(f"- `{f['target_field']}`: {f['design_logic']}")
-            if len(logic_fields) > 5:
-                lines.append(f"- ...(共 {len(logic_fields)} 个加工字段)")
+            for name, logic in logic_items[:5]:
+                lines.append(f"- `{name}`: {logic}")
+            if len(logic_items) > 5:
+                lines.append(f"- ...(共 {len(logic_items)} 个加工字段)")
             lines.append("")
         lines.append("---")
         lines.append("")
@@ -765,9 +869,9 @@ def render_md(ts):
     sched = meta["schedule"]
     lines.append("| 配置项 | 值 |")
     lines.append("|--------|-----|")
-    lines.append(f"| 调度任务 | {sched['task_name'] or '-'} |")
-    lines.append(f"| 调度周期 | {sched['cron'] or '-'} |")
-    lines.append(f"| 任务组 | {sched['task_group'] or '-'} |")
+    lines.append(f"| 调度任务 | {sched.get('task_name') or '-'} |")
+    lines.append(f"| 调度周期 | {sched.get('cron') or '-'} |")
+    # 项目/任务组不在此展示——它们是平台部署概念，由 platform_config.json 配置
     if sched.get("upstream"):
         lines.append("")
         lines.append("**上游依赖**:")

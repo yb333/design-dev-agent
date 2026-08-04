@@ -218,7 +218,11 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
         issues.append(f"[规范] {msg}")
 
     # 4. 字段覆盖：SELECT 输出的字段 vs ts.json 定义的目标字段
-    ts_fields = {f["target_field"].lower() for f in rule.get("fields", [])}
+    # 字段名来源：优先 rule.field_targets，fallback rule.fields（旧格式兼容）
+    if "field_targets" in rule:
+        ts_fields = {t.lower() for t in rule.get("field_targets", [])}
+    else:
+        ts_fields = {f["target_field"].lower() for f in rule.get("fields", [])}
     # 加审计字段
     audit_fields = {k.lower() for k in design.get("audit_fields", {}).keys()}
     # 加业务主键字段（中间表需要带关联键，即使不在 fields 列表里）

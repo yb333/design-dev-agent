@@ -1,14 +1,52 @@
 {
-  "projects": {
-    "default": {
+  "_comment": "平台部署配置。按 schema 映射两个平台的项目/任务组。exporter 读取。",
+  "_structure": "schema_mappings: schema → { shujia(术加执行平台), lts(调度平台) }。未命中的 schema 用 default。",
+
+  "default": {
+    "shujia": {
       "project_code": "SRP_ETL",
       "project_cn": "ETL项目",
       "project_en": "ETL_Project",
-      "subproject_code": "SUB_001",
-      "subproject_cn": "子项目",
-      "subproject_en": "Sub_Project",
+      "subproject_code": "",
+      "subproject_cn": "",
+      "subproject_en": "",
       "datasource": "SRP_DWS",
-      "business_owner": "zhangsan"
+      "business_owner": ""
+    },
+    "lts": {
+      "project_name": "SRP_DAILY",
+      "task_group": "GROUP_SPRD"
+    }
+  },
+
+  "schema_mappings": {
+    "slprd": {
+      "shujia": {
+        "project_code": "SRP_ETL",
+        "project_cn": "售配ETL",
+        "project_en": "SLPRD_ETL",
+        "subproject_code": "",
+        "datasource": "SRP_DWS",
+        "business_owner": ""
+      },
+      "lts": {
+        "project_name": "SLPRD_DAILY",
+        "task_group": "GROUP_SLPRD"
+      }
+    },
+    "fin": {
+      "shujia": {
+        "project_code": "FIN_ETL",
+        "project_cn": "财务ETL",
+        "project_en": "FIN_ETL",
+        "subproject_code": "",
+        "datasource": "FIN_DWS",
+        "business_owner": ""
+      },
+      "lts": {
+        "project_name": "FIN_DAILY",
+        "task_group": "GROUP_FIN"
+      }
     }
   }
 }

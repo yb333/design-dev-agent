@@ -88,8 +88,18 @@ complexity_analysis:
   segmentation_decision: ""             # "不分段" / "分段"
   segmentation_reason: ""               # 决策理由
 
-# === 分布键（designer 判断，参考 design-guide.md §2.1）===
-distribution_key: []
+# === 表物理属性（per-table）===
+# 每张表各自定义分布键。大部分情况下分布键跟业务主键一致，
+# 但中间表可能不同（如按 user_id 聚合的 tmp 表用 user_id 做分布键）。
+# 只需填 distribution_key，其余属性不填走默认（列存 / 按 schema 推断逻辑集群）。
+# 字段定义由 assemble_ts.py 从 rs_input 自动搬入 tables.{表名}.fields，designer 不碰。
+tables:
+  # 目标F表的短名（不含schema）:
+  # dwb_xxx_f:
+  #   distribution_key: [id]
+  # 中间表：
+  # dwb_xxx_tmp1:
+  #   distribution_key: [id]
 
 # === 业务主键（业务唯一字段组合，供 UT 主键唯一检查）===
 # 注意：≠ 分布键。分布键是数据分布最优选，业务主键是业务唯一性。
@@ -108,8 +118,7 @@ business_key_design:
 schedule:
   task_name: ""                         # designer 命名
   cron: ""                              # 细化为标准表达式，如 "0 30 3 * * ?"
-  task_group: ""
-  project: ""
+  # 注意：项目/任务组不在这里配——它们是平台部署概念，由 platform_config.json 按 schema 映射
   # 设计新增的上游依赖（中间表引入的新上游）；rs_input 已有的上游脚本会自动带
   upstream_added: []
 

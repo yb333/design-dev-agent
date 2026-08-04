@@ -42,6 +42,33 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
 
     rule = rules[rule_code]
     design = ts.get("design", {})
+    tables = ts.get("tables", {})
+
+    # 字段来源：tables[target_table].fields，按 field_targets 过滤，合并 field_logics 口径
+    target_tbl = rule.get("target_table", "")
+    target_short = target_tbl.rsplit(".", 1)[-1] if "." in target_tbl else target_tbl
+    tbl_fields = tables.get(target_short, {}).get("fields", [])
+    field_targets = set(rule.get("field_targets", []))
+    field_logics = rule.get("field_logics", {})
+
+    # 旧格式兼容：如果没有 tables，fallback 到 rule.fields
+    if not tbl_fields and "fields" in rule:
+        slice_fields = rule.get("fields", [])
+    else:
+        # 按该规则的 field_targets 过滤，把 field_logics 口径覆盖进去
+        slice_fields = []
+        for f in tbl_fields:
+            fname = f.get("target_field", "")
+            if fname in field_targets:
+                # 合并口径：field_logics 优先（rule 级口径），其次 field 自带的 design_logic
+                merged = dict(f)
+                if fname in field_logics:
+                    merged["design_logic"] = field_logics[fname]
+                slice_fields.append(merged)
+
+    # 分布键从 tables 取，fallback design.distribution_key
+    tbl_dist = tables.get(target_short, {}).get("distribution_key", [])
+    dist_key = tbl_dist if tbl_dist else design.get("distribution_key", [])
 
     # 组装切片
     return {
@@ -66,9 +93,9 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
         "ctes": rule.get("ctes", []),
 
         # ★ 字段列表（coder 写 SELECT 的核心依据）
-        # 每个字段的 design_logic 是自然语言口径，coder 翻译成 SQL
-        "fields": rule.get("fields", []),
-        "field_count": rule.get("field_count", 0),
+        # 从 tables 段取字段定义，合并 rule 的 field_logics 口径
+        "fields": slice_fields,
+        "field_count": len(slice_fields),
 
         # 全局信息（coder 需要参考的）
         "_global": {
@@ -76,8 +103,8 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
             "audit_fields": design.get("audit_fields", {}),
             # 业务主键（coder 写 GROUP BY 时参考，确保不发散）
             "business_key": design.get("business_key", []),
-            # 分布键（参考）
-            "distribution_key": design.get("distribution_key", []),
+            # 分布键（本表的，从 tables 段取）
+            "distribution_key": dist_key,
             # 目标表 schema（从 meta 取）
             "target_schema": ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", ""),
         },

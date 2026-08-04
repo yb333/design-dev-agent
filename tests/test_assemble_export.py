@@ -16,6 +16,7 @@ import openpyxl
 # conftest 已把 coding references 加入 sys.path
 from assemble_export import (
     load_platform_config,
+    resolve_config_by_schema,
     build_rule_rows,
     build_group_variables,
     build_target_fields,
@@ -51,8 +52,6 @@ def sample_ts():
             "schedule": {
                 "task_name": "dws_dwb_xxx_f",
                 "cron": "0 30 3 * * ?",
-                "task_group": "dws_dwb",
-                "project": "dws",
                 "owner": "zhangsan",
                 "exec_params": {"P_CYCLE_ID": {"value_type": "string", "desc": "批次号", "standard": True}},
                 "upstream": [
@@ -81,13 +80,19 @@ def sample_ts():
 
 @pytest.fixture
 def sample_config():
+    """resolve_config_by_schema 返回的结构"""
     return {
-        "project_code": "SRP_ETL",
-        "project_cn": "ETL项目",
-        "project_en": "ETL_Project",
-        "subproject_code": "SUB_001",
-        "datasource": "SRP_DWS",
-        "business_owner": "zhangsan",
+        "shujia": {
+            "project_code": "SRP_ETL",
+            "project_cn": "ETL项目",
+            "project_en": "ETL_Project",
+            "datasource": "SRP_DWS",
+            "business_owner": "zhangsan",
+        },
+        "lts": {
+            "project_name": "SRP_DAILY",
+            "task_group": "GROUP_SPRD",
+        },
     }
 
 
@@ -119,9 +124,11 @@ class TestLoadPlatformConfig:
 
     def test_load_config(self, tmp_path):
         cfg_file = tmp_path / "platform_config.json"
-        cfg_file.write_text(json.dumps({"projects": {"default": {"project_code": "XXX"}}}), encoding="utf-8")
+        cfg_file.write_text(json.dumps({
+            "default": {"shujia": {"project_code": "XXX"}, "lts": {"project_name": "P"}},
+        }), encoding="utf-8")
         result = load_platform_config(str(cfg_file))
-        assert result["project_code"] == "XXX"
+        assert result["default"]["shujia"]["project_code"] == "XXX"
 
     def test_missing_file_returns_empty(self):
         assert load_platform_config("/nonexistent/path.json") == {}
@@ -131,6 +138,47 @@ class TestLoadPlatformConfig:
         assert _cfg({}, "project_code", "FALLBACK") == "FALLBACK"
         assert _cfg({"project_code": ""}, "project_code", "FALLBACK") == "FALLBACK"
         assert _cfg({"project_code": "SRP"}, "project_code", "FALLBACK") == "SRP"
+
+
+class TestResolveConfigBySchema:
+
+    def test_schema_mapping_hit(self):
+        """schema 在 mappings 里有 → 用 schema 的配置"""
+        raw = {
+            "default": {"shujia": {"project_code": "DEFAULT"}, "lts": {"project_name": "DEF"}},
+            "schema_mappings": {
+                "slprd": {"shujia": {"project_code": "SLPRD"}, "lts": {"project_name": "SLPRD_DAILY"}},
+            },
+        }
+        result = resolve_config_by_schema(raw, "slprd")
+        assert result["shujia"]["project_code"] == "SLPRD"
+        assert result["lts"]["project_name"] == "SLPRD_DAILY"
+
+    def test_schema_miss_use_default(self):
+        """schema 在 mappings 里没有 → 用 default"""
+        raw = {
+            "default": {"shujia": {"project_code": "DEFAULT"}, "lts": {"project_name": "DEF"}},
+            "schema_mappings": {},
+        }
+        result = resolve_config_by_schema(raw, "unknown_schema")
+        assert result["shujia"]["project_code"] == "DEFAULT"
+
+    def test_partial_override(self):
+        """schema 只配了部分字段，其余用 default 兜底"""
+        raw = {
+            "default": {"shujia": {"project_code": "DEFAULT", "datasource": "DWS"}, "lts": {"project_name": "DEF"}},
+            "schema_mappings": {
+                "slprd": {"shujia": {"project_code": "SLPRD"}},  # 只覆盖 project_code
+            },
+        }
+        result = resolve_config_by_schema(raw, "slprd")
+        assert result["shujia"]["project_code"] == "SLPRD"
+        assert result["shujia"]["datasource"] == "DWS"  # default 兜底
+
+    def test_empty_config(self):
+        """空配置返回空结构"""
+        result = resolve_config_by_schema({}, "slprd")
+        assert result == {"shujia": {}, "lts": {}}
 
 
 # ============================================================
