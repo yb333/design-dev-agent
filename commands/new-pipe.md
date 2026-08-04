@@ -188,19 +188,38 @@ python CODING_SCRIPTS/check_db.py
 - 如果输出 `DB_OK` → 有数据源，继续跑 UT
 - 如果输出 `NO_DB_SOURCE` → 无数据源，跳过 UT，直接到闸口②（告知用户"UT 未执行，需配置 db-sources.json"）
 
-**有数据源时**，调 run_ut.py 跑执行验证（回退→DDL→SELECT预检→load_mode预处理→INSERT→UT检查）：
+### 步骤 6a：UT 预检（快，秒级）
+
+回退 + DDL + SELECT 预检。不写数据，只验证建表和查询能跑通。
 
 ```bash
-python CODING_SCRIPTS/run_ut.py \
+python CODING_SCRIPTS/ut_precheck.py \
+  --ts {deliver}/ts.json \
+  --select-dir {deliver}/etl \
+  --ddl-dir {deliver}/ddl \
+  --result {deliver}/ut_precheck_result.json
+```
+
+**读预检结果，判断下一步**：
+- 全通过 → 继续步骤 6b
+- 有失败 → 看失败原因（DDL/SELECT），区分 SQL 问题/环境问题：
+  - **SQL 问题**（字段/类型/语法）→ 回调 coder 改，改完重跑 6a
+  - **环境问题**（权限/连接/源表不存在）→ 不回调 coder，闸口②报告给人
+
+### 步骤 6b：UT 执行（慢，分钟级）
+
+按 load_mode 预处理 + INSERT 灌数据 + UT 检查 + 出报告。
+
+```bash
+python CODING_SCRIPTS/ut_execute.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
   --report {deliver}/ut_report.md
 ```
 
-> **UT 是长耗时操作**（大表 INSERT 可能 10-30 分钟）。run_ut.py 输出行缓冲，
-> 每个节点（DDL/SELECT预检/INSERT/UT检查）完成时实时打印进度。
-> 主控 agent 不要急于超时——DDL 和 INSERT 成功是有进度的标志，等待是正常的。
+> INSERT 是长耗时操作（大表可能 10-30 分钟）。agent 调脚本后等待返回即可。
+> 预检已通过的规则才会执行 INSERT，预检失败的不浪费时间。
 
 ---
 
