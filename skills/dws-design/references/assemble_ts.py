@@ -534,12 +534,44 @@ def build_meta(rs_input, decisions):
     # 调度: rs_input 给大框架 + designer 细化
     rs_sched = rs_input.get("schedule", {})
     dec_sched = decisions.get("schedule", {})
+
+    # LTS 调度参数（designer 声明，默认含 V_CYCLE_ID→P_CYCLE_ID + V_GROUP_CODE）
+    default_lts_params = [
+        {"lts_var": "V_CYCLE_ID", "etl_param": "P_CYCLE_ID", "desc": "批次号"},
+        {"lts_var": "V_GROUP_CODE", "etl_param": "", "desc": "规则组编码"},
+    ]
+    lts_params = dec_sched.get("lts_params", default_lts_params)
+
+    # upstream: rs_input 已有的 + designer 新增的
+    upstream = list(rs_sched.get("upstream", []))
+    for u in dec_sched.get("upstream_added", []):
+        upstream.append({"table": u.get("table", ""), "task": u.get("task", ""), "source": "designer"})
+
+    # I 视图调度（如有直封视图）
+    view_sched = {}
+    i_view = target.get("i_view", {})
+    if i_view and i_view.get("table"):
+        dec_view = dec_sched.get("view", {})
+        view_task = dec_view.get("task_name", "")
+        view_cron = dec_view.get("cron", "")
+        # 视图上游自动补：依赖 F 表任务
+        f_task = dec_sched.get("task_name", "")
+        f_table_short = target.get("f_table", {}).get("table", "")
+        view_upstream = [{"table": f_table_short, "task": f_task}] if f_task else []
+        view_sched = {
+            "task_name": view_task,
+            "cron": view_cron,
+            "upstream": view_upstream,
+        }
+
     schedule = {
         "task_name": dec_sched.get("task_name", ""),
         "cron": dec_sched.get("cron", ""),
         "owner": rs_meta.get("owner", {}).get("person", ""),
         "exec_params": build_exec_params(decisions),
-        "upstream": rs_sched.get("upstream", []),
+        "lts_params": lts_params,
+        "upstream": upstream,
+        "view": view_sched,
     }
 
     # 字段统计：识别审计字段（来源提供的），其余为业务字段
@@ -682,7 +714,9 @@ def render_md(ts):
     lines.append("| 项目 | 内容 |")
     lines.append("|------|------|")
     lines.append(f"| **F 表** | `{target['f_table']['schema']}.{target['f_table']['table']}`（{target['f_table']['cn']}） |")
-    lines.append(f"| **I 视图** | `{target['i_view']['schema']}.{target['i_view']['table']}`（F表镜像，对外查询） |")
+    i_view = target.get("i_view", {})
+    if i_view and i_view.get("table"):
+        lines.append(f"| **I 视图** | `{i_view.get('schema', '')}.{i_view.get('table', '')}`（F表镜像，对外查询） |")
     # 业务主键（替代原"目标粒度"——主键即粒度定义）
     bk = design.get("business_key", [])
     lines.append(f"| **业务主键** | {', '.join(bk) if bk else '-'} |")
@@ -691,7 +725,7 @@ def render_md(ts):
     load_label = "全量（可随时重刷）" if all_truncate else "增量（详见规则详情）"
     lines.append(f"| **写入策略** | {load_label} |")
     fc = meta["field_count"]
-    lines.append(f"| **字段统计** | 业务 {fc['business']} + 审计 {fc['audit']} = 总计 {fc['total']} |")
+    lines.append(f"| **字段统计** | {fc['total']} |")
     # 规则数（含直封视图提示）
     has_view = any(r.get("is_view_step") for r in rules.values())
     rule_label = f"{len(rules)}"
@@ -715,7 +749,17 @@ def render_md(ts):
     f_table_short = target["f_table"]["table"]
     i_view_short = target["i_view"].get("table", "")
 
-    # 排序：目标F表 → 中间表 → 视图（视图单独列在表后）
+    def _short_desc(text: str, limit: int = 30) -> str:
+        """截短说明：取第一个逗号/句号前的内容，或限制长度。"""
+        if not text:
+            return ""
+        for sep in ["，", "。", ",", "."]:
+            if sep in text:
+                text = text.split(sep)[0]
+                break
+        return text[:limit] + "…" if len(text) > limit else text
+
+    # 排序：目标F表 → 中间表 → 视图
     lines.append("| 表名 | 类型 | 分布键 | 分区 | 字段数 | 说明 |")
     lines.append("|------|------|--------|------|--------|------|")
     # 目标 F 表
@@ -731,12 +775,12 @@ def render_md(ts):
             dist = ", ".join(t.get("distribution_key", [])) or "—"
             part = t.get("partition") or "—"
             fcount = len(t.get("fields", []))
-            # 找对应规则的 design_intent
+            # 找对应规则的 design_intent，截短成简述
             intent = ""
             for r in rules.values():
                 rt = r.get("target_table", "")
                 if rt.rsplit(".", 1)[-1] == tname or rt == tname:
-                    intent = r.get("design_intent", "")
+                    intent = _short_desc(r.get("design_intent", ""))
                     break
             lines.append(f"| `{tname}` | 中间表 | {dist} | {part} | {fcount} | {intent} |")
     # 视图（无物理属性）
@@ -751,16 +795,23 @@ def render_md(ts):
     lines.append("## 3. 复杂度分析与分段决策")
     lines.append("")
     comp = design["complexity_analysis"]
-    lines.append("| 因素 | 值 |")
-    lines.append("|------|-----|")
-    lines.append(f"| JOIN 表数量 | {comp['join_count']} |")
-    lines.append(f"| 粒度变化 | {'有' if comp['has_grain_change'] else '无'} ({comp['grain_change_detail']}) |")
-    lines.append(f"| 多步骤加工字段 | {comp['multi_step_fields']} |")
-    lines.append(f"| 聚合后关联 | {'是' if comp['aggregation_after_join'] else '否'} |")
+    lines.append("| 因素 | 值 | 阈值 |")
+    lines.append("|------|-----|------|")
+    lines.append(f"| JOIN 表数量 | {comp['join_count']} | >12 触发分段 |")
+    grain_label = "有" if comp['has_grain_change'] else "无"
+    lines.append(f"| 粒度变化 | {grain_label} | 有即评估分段 |")
+    lines.append(f"| 多步骤加工字段 | {comp['multi_step_fields']} | ≥5 触发分段 |")
+    lines.append(f"| 聚合后关联 | {'是' if comp['aggregation_after_join'] else '否'} | 是即评估分段 |")
     lines.append("")
-    lines.append(f"**分段结论**: {comp['segmentation_decision']}")
-    lines.append(f"**理由**: {comp['segmentation_reason']}")
+    if comp.get("grain_change_detail"):
+        lines.append(f"> 粒度变化说明: {comp['grain_change_detail']}")
+        lines.append("")
+    seg = comp.get("segmentation_decision", "")
+    lines.append(f"**分段结论**: **{seg}**")
     lines.append("")
+    if comp.get("segmentation_reason"):
+        lines.append(f"> {comp['segmentation_reason']}")
+        lines.append("")
     lines.append("---")
     lines.append("")
 
@@ -772,124 +823,119 @@ def render_md(ts):
         lines.append("")
         lines.append("| 项目 | 内容 |")
         lines.append("|------|------|")
-        lines.append(f"| 场景 | {r['scenario'] or '-'} |")
+        # 场景：默认(default)不展示，非默认才显示
+        scenario = r.get("scenario", "")
+        if scenario and scenario != "default":
+            lines.append(f"| 场景 | {scenario} |")
         lines.append(f"| 执行序 | {r['exec_sequence']} |")
         lines.append(f"| 产出表 | `{r['target_table']}` |")
-        lines.append(f"| 设计意图 | {r['design_intent']} |")
+        lines.append(f"| 写入方式 | {r.get('load_mode', '-')} |")
+        if r.get("design_intent"):
+            lines.append(f"| 设计意图 | {r['design_intent']} |")
         lines.append(f"| 字段数 | {len(r.get('field_targets', []))} |")
         lines.append("")
-        # 关联策略
-        if r.get("joins"):
-            lines.append("**关联策略**:")
+
+        # 关联安全：只有有风险的（join_key_unique=false）才展示
+        risky_joins = [js for js in r.get("join_safety", []) if not js.get("join_key_unique")]
+        if risky_joins:
+            lines.append("**关联风险**:")
             lines.append("")
-            lines.append("| 别名 | JOIN | 条件 |")
-            lines.append("|------|------|------|")
-            for j in r["joins"]:
-                lines.append(f"| {j.get('alias', '')} | {j.get('type', '')} | {j.get('condition', '')} |")
+            for js in risky_joins:
+                tbl = js.get("table", "")
+                strategy = js.get("strategy", "")
+                lines.append(f"- `{tbl}`: {strategy}")
             lines.append("")
-        # 关联安全
-        if r.get("join_safety"):
-            lines.append("**关联安全**:")
-            lines.append("")
-            lines.append("| 表 | JOIN键唯一 | 对齐策略 |")
-            lines.append("|------|-----------|----------|")
-            for js in r["join_safety"]:
-                lines.append(f"| {js.get('table', '')} | {'是' if js.get('join_key_unique') else '否'} | {js.get('strategy', '')} |")
-            lines.append("")
-        # 字段概要：从 tables 取该表字段，统计 transform_type
-        rt_short = r["target_table"].rsplit(".", 1)[-1] if "." in r["target_table"] else r["target_table"]
-        tbl_fields = tables.get(rt_short, {}).get("fields", [])
-        # 按该规则的 field_targets 过滤
-        rule_targets = set(r.get("field_targets", []))
-        rule_fields = [f for f in tbl_fields if f.get("target_field") in rule_targets]
-        from collections import Counter
-        type_counts = Counter(f["transform_type"] for f in rule_fields)
-        lines.append("**字段概要**:")
-        lines.append("")
-        lines.append("| 转换类型 | 数量 |")
-        lines.append("|----------|------|")
-        for tt, cnt in type_counts.most_common():
-            lines.append(f"| {tt} | {cnt} |")
-        lines.append(f"| assign(审计) | {len(design['audit_fields'])} |")
-        lines.append("")
-        # 加工字段抽样：从 field_logics 取口径
+
+        # 重要字段逻辑：只写有口径的、非审计字段
         logics = r.get("field_logics", {})
-        logic_items = [(name, logic) for name, logic in logics.items()]
-        if logic_items:
-            lines.append("**加工字段抽样**(完整字段见 ts.json):")
+        if logics:
+            lines.append("**字段逻辑**:")
             lines.append("")
-            for name, logic in logic_items[:5]:
+            for name, logic in logics.items():
                 lines.append(f"- `{name}`: {logic}")
-            if len(logic_items) > 5:
-                lines.append(f"- ...(共 {len(logic_items)} 个加工字段)")
             lines.append("")
         lines.append("---")
         lines.append("")
 
-    # §5 数据流向
+    # §5 数据流向（只留数据流图，血缘/执行顺序已被图覆盖）
     lines.append("## 5. 数据流向")
     lines.append("")
-    df = ts.get("data_flow", {})
-
-    # 5.1 数据流图（mermaid，脚本自动生成）
     mermaid_graph = render_data_flow_mermaid(ts)
     if mermaid_graph:
-        lines.append("### 数据流图")
-        lines.append("")
         lines.append(mermaid_graph)
-        lines.append("")
-
-    # 5.2 血缘关系表
-    deps = df.get("dependencies", [])
-    if deps:
-        lines.append("**血缘关系**:")
-        lines.append("")
-        lines.append("| from | to | 中间表 |")
-        lines.append("|------|-----|--------|")
-        for d in deps:
-            lines.append(f"| {d.get('from', '')} | {d.get('to', '')} | {d.get('intermediate_table', '-')} |")
-        lines.append("")
-
-    # 5.3 执行顺序表
-    groups = df.get("schedule_groups", [])
-    if groups:
-        lines.append("**执行顺序**:")
-        lines.append("")
-        lines.append("| 顺序 | 规则 |")
-        lines.append("|------|------|")
-        for g in groups:
-            lines.append(f"| {g.get('sequence', '')} | {', '.join(g.get('rules', []))} |")
         lines.append("")
     lines.append("---")
     lines.append("")
 
-    # §6 调度
+    # §6 调度配置
     lines.append("## 6. 调度配置")
     lines.append("")
-    sched = meta["schedule"]
+    sched = meta.get("schedule", {})
+
+    # F 表调度
+    lines.append("### F 表调度")
+    lines.append("")
     lines.append("| 配置项 | 值 |")
     lines.append("|--------|-----|")
     lines.append(f"| 调度任务 | {sched.get('task_name') or '-'} |")
     lines.append(f"| 调度周期 | {sched.get('cron') or '-'} |")
-    # 项目/任务组不在此展示——它们是平台部署概念，由 platform_config.json 配置
-    if sched.get("upstream"):
-        lines.append("")
-        lines.append("**上游依赖**:")
-        for u in sched["upstream"]:
-            lines.append(f"- {u.get('table', '')} <- {u.get('task', '')}")
     lines.append("")
+
+    # LTS 参数
+    lts_params = sched.get("lts_params", [])
+    if lts_params:
+        lines.append("**LTS 参数**:")
+        lines.append("")
+        lines.append("| LTS 变量 | 赋值给 ETL 参数 | 说明 |")
+        lines.append("|----------|----------------|------|")
+        for p in lts_params:
+            etl = p.get("etl_param", "") or "—"
+            lines.append(f"| {p.get('lts_var', '')} | {etl} | {p.get('desc', '')} |")
+        lines.append("")
+
+    # 上游依赖
+    upstream = sched.get("upstream", [])
+    if upstream:
+        lines.append("**上游依赖**:")
+        lines.append("")
+        lines.append("| 源表 | 调度任务 |")
+        lines.append("|------|---------|")
+        for u in upstream:
+            lines.append(f"| {u.get('table', '')} | {u.get('task', '') or '-'} |")
+        lines.append("")
+
+    # I 视图调度
+    view_sched = sched.get("view", {})
+    if view_sched and view_sched.get("task_name"):
+        lines.append("### I 视图调度")
+        lines.append("")
+        lines.append("| 配置项 | 值 |")
+        lines.append("|--------|-----|")
+        lines.append(f"| 调度任务 | {view_sched.get('task_name', '-')} |")
+        lines.append(f"| 调度周期 | {view_sched.get('cron', '-') or '-'} |")
+        lines.append("")
+        v_upstream = view_sched.get("upstream", [])
+        if v_upstream:
+            lines.append("**上游依赖**:")
+            lines.append("")
+            lines.append("| 源表 | 调度任务 |")
+            lines.append("|------|---------|")
+            for u in v_upstream:
+                lines.append(f"| {u.get('table', '')} | {u.get('task', '') or '-'} |")
+            lines.append("")
+
     lines.append("---")
     lines.append("")
 
-    # §7 DQ
+    # §7 DQ（从 RS L06 搬入，类型跟 RS 保持一致）
     lines.append("## 7. 数据质量检查(DQ)")
     lines.append("")
     dq = ts.get("dq_rules", [])
     if dq:
-        lines.append("| 规则ID | 名称 | 类型 | 对象 |")
-        lines.append("|--------|------|------|------|")
+        lines.append("| 检查范围 | 检查类型 | 规则名称 | 规则描述 |")
+        lines.append("|----------|----------|----------|----------|")
         for d in dq:
-            lines.append(f"| {d.get('rule_id', '')} | {d.get('rule_name', '')} | {d.get('check_type', '')} | {d.get('target', '')} |")
+            lines.append(f"| {d.get('scope', '')} | {d.get('check_type', '')} | {d.get('rule_name', '')} | {d.get('rule_desc', '')} |")
     else:
         lines.append("*(本表无 DQ 要求)*")
     lines.append("")

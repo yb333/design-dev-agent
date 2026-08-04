@@ -510,13 +510,17 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     ws = wb.create_sheet("taskParams")
     ws.append(TASKPARAMS_COLUMNS)
 
-    # 每个任务 × 固定参数
+    # 参数从 ts.json 的 lts_params 取（LTS 侧变量名），值留空（内网回填）
+    lts_params = sched.get("lts_params", [])
+    param_names = [p.get("lts_var", "") for p in lts_params] if lts_params else list(FIXED_PARAMS)
+
+    # 每个任务 × 参数
     all_tasks = [f_task_name]
     if view_task_name:
         all_tasks.append(view_task_name)
     for task_name in all_tasks:
-        for param in FIXED_PARAMS:
-            value = ""  # V_CYCLE_ID 和 V_GROUP_CODE 都留空
+        for param in param_names:
+            value = ""  # 值留空（内网回填）
             ws.append([project_name, task_group, task_name, param, value])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

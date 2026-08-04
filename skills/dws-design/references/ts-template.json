@@ -38,19 +38,26 @@
 
     // schedule —— 调度。RS 给大框架(日级) -> designer 细化为标准 cron + 补中间表增量上游
     "schedule": {
-      "task_name": "",                   // designer 命名
+      "task_name": "",                   // F表调度任务名
       "cron": "",                        // designer 细化为标准表达式(如 "0 30 3 * * ?")
       "owner": "",
-      "exec_params": {                    // 资产级参数声明。P_CYCLE_ID 脚本自动注入；业务参数 designer 声明
+      "exec_params": {                    // ETL 参数（SQL 里的 ${占位符}）。P_CYCLE_ID 脚本自动注入
         "P_CYCLE_ID": { "value_type": "string", "desc": "批次号", "standard": true }
-        // 业务参数按需追加，如 BIZ_DATE / ACCT_PERIOD
       },
+      "lts_params": [                    // LTS 调度参数（运行时生成值，赋值给 ETL 参数）
+        { "lts_var": "V_CYCLE_ID", "etl_param": "P_CYCLE_ID", "desc": "批次号" },
+        { "lts_var": "V_GROUP_CODE", "etl_param": "", "desc": "规则组编码" }
+      ],
       "upstream": [                      // 上游依赖(RS给 + 中间表增量)
-        // source: "rs"(RS 提供) | "designer"(设计新增的中间表)
         { "table": "", "task": "", "source": "" }
-      ]
-      // 注意：项目/任务组/数据源/执行平台 等部署配置不在 ts.json 里
-      // 它们是平台概念（非设计概念），由 platform_config.json 按schema映射，exporter 读取
+      ],
+      "view": {                          // I 视图调度（如有直封视图，独立调度任务）
+        "task_name": "",                 // 视图调度任务名
+        "cron": "",                      // 通常比 F 表晚，等 F 表完成
+        "upstream": []                   // 脚本自动补（依赖 F 表任务）
+      }
+      // 注意：项目/任务组/数据源等部署配置不在 ts.json 里
+      // 它们是平台概念，由 platform_config.json 按schema映射，exporter 读取
     }
   },
 
@@ -178,9 +185,11 @@
   },
 
   // ============================================================================
-  // dq_rules —— DQ(可选,预制占位,不是每表必须)
-  // 只放设计意图(规则/类型/对象/阈值/告警级),DQ SQL 由 coder 生成
-  // 标准模板检查(主键唯一/非空/行数)在 tester skill 自动套用,不在此重复
+  // dq_rules —— DQ（从 RS L06 搬入，字段跟 RS 表头一致）
+  // designer 不改类型，只做设计判断。DQ SQL 由 assemble_dq/coder 生成
+  // 标准检查(主键唯一/非空/行数)由脚本自动套用，不在此重复
   // ============================================================================
   "dq_rules": []
+  // 示例：
+  // [{ "scope": "字段级", "check_type": "空值检查", "rule_name": "", "rule_desc": "" }]
 }

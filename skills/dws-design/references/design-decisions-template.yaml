@@ -116,11 +116,28 @@ business_key_design:
 
 # === 调度细化（RS给大框架 → designer细化）===
 schedule:
-  task_name: ""                         # designer 命名
+  task_name: ""                         # F表调度任务名
   cron: ""                              # 细化为标准表达式，如 "0 30 3 * * ?"
-  # 注意：项目/任务组不在这里配——它们是平台部署概念，由 platform_config.json 按 schema 映射
+
+  # LTS 调度参数（运行时生成值，赋值给术加 ETL 参数）
+  # lts_var: LTS 侧变量名（运行时生成值）
+  # etl_param: 赋值给术加的参数名（= SQL 里的 ${占位符}）；空表示仅 LTS 侧用
+  lts_params:
+    - lts_var: "V_CYCLE_ID"
+      etl_param: "P_CYCLE_ID"
+      desc: "批次号"
+    - lts_var: "V_GROUP_CODE"
+      etl_param: ""
+      desc: "规则组编码"
+
   # 设计新增的上游依赖（中间表引入的新上游）；rs_input 已有的上游脚本会自动带
   upstream_added: []
+
+  # I 视图调度（如有直封视图，需独立调度任务）
+  view:
+    task_name: ""                       # 视图调度任务名
+    cron: ""                            # 通常比 F 表晚几分钟，等 F 表完成
+    # upstream 由脚本自动补（依赖 F 表任务）
 
 # === 数据流（规则间关系）===
 data_flow:
@@ -138,9 +155,14 @@ data_flow:
 # === DQ（可选，不是每表必须）===
 # 只放设计意图，DQ SQL 由 coder 生成
 dq_rules: []
+# DQ 规则从 RS L06 直接搬入（designer 不改类型，只做设计判断）
+# 字段跟 RS L06 表头一致（中文原值）：
+#   - scope: 检查范围（字段级 / 表级 / 跨表级）
+#   - check_type: 检查类型（空值检查 / 重复数据检查 / 跨表数量一致性检查 / 值域约束检查 / 时间拉链检查 / 维度扩散检查）
+#   - rule_name: 规则名称
+#   - rule_desc: 规则描述（检查口径/阈值/告警级等）
 #   - rule_id: "DQ_001"
+#     scope: "字段级"
+#     check_type: "空值检查"
 #     rule_name: ""
-#     check_type: ""                    # uniqueness / range / consistency ...
-#     target: ""
-#     threshold: ""
-#     alert_level: ""                   # high / medium / low
+#     rule_desc: ""
