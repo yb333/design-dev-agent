@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "spec_type": "ts",
-  "generated_at": "2026-08-03T22:58:09",
+  "generated_at": "2026-08-04T22:00:07",
   "generated_by": "assemble_ts.py",
   "meta": {
     "target": {
@@ -36,25 +36,50 @@
       }
     ],
     "schedule": {
-      "task_name": "dws_dwb_trade_wide_f_d",
-      "cron": "0 30 3 * * ?",
-      "task_group": "dwb_trade",
-      "project": "dws",
+      "task_name": "DWS_DWB_TRADE_WIDE_F",
+      "cron": "0 0 3 * * ?",
       "owner": "",
-      "exec_params": {},
+      "exec_params": {
+        "P_CYCLE_ID": {
+          "value_type": "string",
+          "desc": "批次号",
+          "standard": true
+        }
+      },
+      "lts_params": [
+        {
+          "lts_var": "V_CYCLE_ID",
+          "etl_param": "P_CYCLE_ID",
+          "desc": "批次号"
+        },
+        {
+          "lts_var": "V_GROUP_CODE",
+          "etl_param": "",
+          "desc": "规则组编码"
+        }
+      ],
       "upstream": [],
-      "execution_platform": {}
+      "view": {
+        "task_name": "",
+        "cron": "",
+        "upstream": [
+          {
+            "table": "dwb_trade_wide_f",
+            "task": "DWS_DWB_TRADE_WIDE_F"
+          }
+        ]
+      }
     }
   },
   "design": {
     "complexity_analysis": {
       "join_count": 0,
       "has_grain_change": false,
-      "grain_change_detail": "输入输出粒度一致，均一行=一个订单",
+      "grain_change_detail": "",
       "multi_step_fields": 0,
       "aggregation_after_join": false,
       "segmentation_decision": "不分段",
-      "segmentation_reason": "单源表无JOIN、无粒度变化、无多步骤加工字段、无聚合，复杂度远低于分段阈值，单条INSERT搞定，无需中间表/CTE"
+      "segmentation_reason": "单源主表无关联（join_count=0），无粒度变化，所有字段为直接复制或审计赋值，单条 INSERT 即可完成，无需中间表/分段。"
     },
     "audit_fields": {
       "del_flag": {
@@ -79,9 +104,6 @@
       }
     },
     "audit_supplemented": [],
-    "distribution_key": [
-      "order_id"
-    ],
     "business_key": [
       "order_id"
     ],
@@ -93,44 +115,16 @@
       "reason": ""
     }
   },
-  "rules": {
-    "R0001": {
-      "rule_name": "交易宽表全量装配",
-      "scenario": "default",
-      "exec_sequence": 1,
-      "target_table": "dwb_trade_wide_f",
-      "is_view_step": false,
-      "design_intent": "单源表无JOIN，字段全部直接复制或固定赋值，无粒度变化，单条INSERT直产目标F表",
-      "load_mode": "truncate_table",
-      "source_tables": [
-        {
-          "schema": "ods",
-          "table": "ods_trade_order_di",
-          "alias": "o"
-        }
+  "tables": {
+    "dwb_trade_wide_f": {
+      "type": "target",
+      "distribution_key": [
+        "order_id"
       ],
-      "ctes": [],
-      "grain": {
-        "input": "一行=一个订单(源 ods_trade_order_di)",
-        "output": "一行=一个订单(dwb_trade_wide_f)",
-        "change": "无变化"
-      },
-      "joins": [
-        {
-          "alias": "o",
-          "type": "main",
-          "condition": "",
-          "filter": ""
-        }
-      ],
-      "join_safety": [
-        {
-          "table": "o",
-          "join_key_unique": true,
-          "strategy": "",
-          "reason": "主表，order_id 为业务主键，唯一"
-        }
-      ],
+      "distribute_type": "HASH",
+      "partition": "",
+      "storage": "column",
+      "logical_group": "LC_DW1",
       "fields": [
         {
           "target_field": "order_id",
@@ -244,8 +238,51 @@
           ],
           "design_logic": "固定赋值"
         }
+      ]
+    }
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "交易宽表主表加载",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dws.dwb_trade_wide_f",
+      "is_view_step": false,
+      "design_intent": "单源主表直加载，无关联无加工，全量覆盖写入目标F表。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "ods",
+          "table": "ods_trade_order_di",
+          "alias": "o"
+        }
       ],
-      "field_count": 8
+      "ctes": [],
+      "grain": {
+        "input": "一行=一个订单",
+        "output": "一行=一个订单",
+        "change": "无变化"
+      },
+      "joins": [
+        {
+          "alias": "o",
+          "type": "main",
+          "condition": "",
+          "filter": ""
+        }
+      ],
+      "join_safety": [],
+      "field_targets": [
+        "order_id",
+        "cust_id",
+        "product_id",
+        "order_amt",
+        "del_flag",
+        "crt_cycle_id",
+        "last_upd_cycle_id",
+        "dw_last_update_date"
+      ],
+      "field_logics": {}
     }
   },
   "data_flow": {

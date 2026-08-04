@@ -1,23 +1,31 @@
 # ============================================================================
 # design_decisions.yaml - dwb_trade_order_d 订单汇总表
 # ----------------------------------------------------------------------------
-# 单源表(ods_trade_order_di 订单明细接入表) → 订单汇总表
-# 加工实质: 按订单+客户维度对 amount 求和，从明细行收敛到订单行
+# RS 分析：
+#   - 单源表 ods.ods_trade_order_di（订单明细接入表），无关联表
+#   - 单场景 default
+#   - 粒度变化：明细行（一行=一个订单明细）→ 订单级（一行=一个订单）
+#   - 加工逻辑：对同一 order_id+cust_id 的 amount 求和汇总成 total_amount
+#   - 其余业务字段直取（order_id/cust_id），4 个审计字段固定赋值
+# 设计结论：单规则 R0001 即可覆盖，不分段、不建中间表。
 # ============================================================================
 
+# === 参数声明 ===
+# 无业务参数；P_CYCLE_ID 由脚本自动注入。
+params: []
+
 # === 规则拆分 ===
-# 单源表、无 JOIN、单次 GROUP BY 聚合 → 不分段，一条规则直达目标 F 表
 rules:
   - rule_code: R0001
-    rule_name: "订单汇总"
+    rule_name: "订单汇总聚合"
     scenario: "default"
     exec_sequence: 1
     target_table: "dwb_trade_order_d"
     is_view_step: false
-    design_intent: "从订单明细接入表按订单+客户维度聚合 amount，收敛到订单粒度产出目标 F 表"
+    design_intent: "从订单明细接入表按 order_id+cust_id 聚合到订单粒度，汇总金额，直取订单与客户标识，补审计字段"
     load_mode: "truncate_table"
 
-    # 该规则管全部 7 个目标字段（3 业务 + 4 审计）
+    # 该规则管所有目标字段（7 个 = 3 业务 + 4 审计）
     field_targets:
       - order_id
       - cust_id
@@ -27,63 +35,83 @@ rules:
       - last_upd_cycle_id
       - dw_last_update_date
 
-    # 仅加工类业务字段写 design_logic；直取字段(order_id/cust_id)和审计字段脚本自动处理
+    # 仅加工类业务字段写 design_logic；直取字段脚本自动填，审计字段脚本自动处理
     field_logics:
-      total_amount: "按订单ID(order_id)和客户ID(cust_id)分组，对源表 amount 字段求和汇总，得到订单总额"
+      total_amount: "对同一 order_id + cust_id 的 amount 求和汇总（SUM(amount) GROUP BY order_id, cust_id）"
 
-    source_aliases: ["a"]
+    # 源表：留空用 rs_input 默认（alias a = ods.ods_trade_order_di）
+    source_aliases: []
 
+    # 无 CTE
     ctes: []
 
+    # 粒度变化：明细 → 订单级
     grain:
-      input: "一行=一条订单明细"
+      input: "一行=一个订单明细"
       output: "一行=一个订单"
       change: "多行聚合"
 
+    # 单主表，无 JOIN
     joins:
       - alias: "a"
         type: "main"
-        condition: ""
+        condition: "主表，无关联"
         filter: ""
 
+    # 无关联风险（单表聚合，GROUP BY 天然收敛）
     join_safety: []
 
 # === 复杂度分析与分段决策 ===
 complexity_analysis:
-  join_count: 0
-  has_grain_change: true
-  grain_change_detail: "订单明细行(ods_trade_order_di) → 订单汇总行(GROUP BY order_id, cust_id 聚合收敛)"
-  multi_step_fields: 0
-  aggregation_after_join: false
+  join_count: 0                         # 单源表，无 JOIN
+  has_grain_change: true                # 明细 → 订单级，多行聚合
+  grain_change_detail: "源为订单明细行（一单多行），目标为订单级（一单一行），按 order_id+cust_id 聚合收敛"
+  multi_step_fields: 1                  # 仅 total_amount 一处聚合
+  aggregation_after_join: false         # 无 JOIN
   segmentation_decision: "不分段"
-  segmentation_reason: "单源表无 JOIN 关联，仅一次 GROUP BY 聚合收敛，单条 INSERT 即可完成全部加工"
+  segmentation_reason: "单源表、零 JOIN、仅 1 个聚合字段，复杂度低，单条 INSERT 即可完成"
 
-# === 分布键（事实表选业务主键 order_id，高基数，避免倾斜）===
-distribution_key: ["order_id"]
+# === 表物理属性 ===
+tables:
+  dwb_trade_order_d:
+    distribution_key: [order_id]        # 业务主键，高基数，避免倾斜
+    distribute_type: HASH
 
 # === 业务主键 ===
-# RS 标注 order_id 为"主键"，目标粒度"每行一个订单"，聚合后 order_id 唯一
-business_key: ["order_id"]
+business_key: [order_id]
 
 business_key_design:
-  input_key: ["order_id"]
+  input_key: [order_id]                 # RS 备注列标注 order_id 为"主键"
   adjusted: false
   reason: ""
 
-# === 调度细化（RS: T+1 一天一调, SLA 3:30）===
+# === 调度细化 ===
 schedule:
-  task_name: "dws_dwb_trade_order_d"
-  cron: "0 30 3 * * ?"
-  task_group: "dws_dwb"
-  project: "trade"
+  task_name: "dwb_trade_order_d"
+  cron: "0 30 3 * * ?"                   # T+1，SLA 3:30，标准 cron 表达式
+
+  lts_params:
+    - lts_var: "V_CYCLE_ID"
+      etl_param: "P_CYCLE_ID"
+      desc: "批次号"
+    - lts_var: "V_GROUP_CODE"
+      etl_param: ""
+      desc: "规则组编码"
+
   upstream_added: []
+
+  # I 视图调度（F表镜像，晚于 F 表完成）
+  view:
+    task_name: "dwb_trade_order_d_i"
+    cron: "0 35 3 * * ?"                 # 比 F 表晚 5 分钟，等 F 表完成
 
 # === 数据流 ===
 data_flow:
-  dependencies: []
+  dependencies: []                       # 单规则，无规则间依赖
   schedule_groups:
     - sequence: 1
       rules: ["R0001"]
 
 # === DQ ===
+# RS 无 DQ 要求
 dq_rules: []

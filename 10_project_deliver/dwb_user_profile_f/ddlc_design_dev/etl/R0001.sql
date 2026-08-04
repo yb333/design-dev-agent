@@ -1,42 +1,51 @@
 /* =====================================================
-   ETL 转换脚本（纯 SELECT，DDL/INSERT/UT 由脚本处理）
-   规则: R0001 - 用户画像宽表写入
+   ETL 转换脚本（纯 SELECT，由调度/UT 包装 INSERT）
+   规则: R0001 - 用户画像宽表全量加工
    目标表: slusr.dwb_user_profile_f
    来源表:
-     - ods.ods_user_basic_f (oub) 主表，粒度锚点：用户
-     - dim.dim_user_level_d  (dul) LEFT JOIN ON level_id      一对一不发散
-     - dim.dim_region_d      (drd) LEFT JOIN ON province_code=region_code 一对一不发散
-     - dim.dim_user_source_d (dus) LEFT JOIN ON source_id     一对一不发散
-   粒度: 无变化（一行=一个用户画像记录）
-   写入方式: 全量 truncate
-   说明: 以用户基础信息为主表，LEFT JOIN 三张维度表补充画像属性；
-         字段以直取为主，少量字段做脱敏/代码翻译/时间提取加工。
+     - ods.ods_user_basic_f (oub) - 用户基础主表
+     - dim.dim_user_level_d  (dul) - 用户等级维
+     - dim.dim_region_d      (drd) - 地区维
+     - dim.dim_user_source_d (dus) - 用户来源维
+   写入方式: 全量重写（truncate_table）
+   设计意图: 以 oub 为主表，LEFT JOIN 三张维表补齐画像属性，
+             对敏感字段脱敏、枚举字段转中文、派生时间维度字段。
+             无粒度变化、无聚合，单条 SELECT 即可完成。
    ===================================================== */
 SELECT
-    /* ---- ods.ods_user_basic_f (oub) ---- */
     oub.user_id AS user_id,
     COALESCE(oub.user_name, '') AS user_name,
-    /* 手机号脱敏：保留前3后4，中间 ****（NULL→''，||遇NULL整体为NULL触发COALESCE） */
-    COALESCE(LEFT(oub.user_phone, 3) || '****' || RIGHT(oub.user_phone, 4), '') AS user_phone_processed,
+    /* 手机号脱敏：保留前3位+后4位，中间4个星号屏蔽；NULL 安全兜底为空串 */
+    COALESCE(
+        LEFT(oub.user_phone, 3) || '****' || RIGHT(oub.user_phone, 4),
+        ''
+    ) AS user_phone_processed,
     COALESCE(oub.user_phone_masked, '') AS user_phone_masked,
     COALESCE(oub.email, '') AS email,
-    /* 性别代码翻译：M→男、F→女、其余（含NULL）→未知 */
+    /* 性别代码转中文：M→男 F→女 其余→未知（NULL 走 ELSE 兜底为未知） */
     CASE oub.gender
         WHEN 'M' THEN '男'
         WHEN 'F' THEN '女'
         ELSE '未知'
     END AS gender_processed,
     oub.birthday AS birthday,
-    /* 年龄：当前年份 - 出生日期所在年份 */
-    COALESCE(CAST(EXTRACT(YEAR FROM CURRENT_DATE) AS INT) - CAST(EXTRACT(YEAR FROM oub.birthday) AS INT), 0) AS age_processed,
+    /* 年龄：当前年份减出生年份（birthday 为 NULL 时返回 0） */
+    COALESCE(
+        EXTRACT(YEAR FROM CURRENT_DATE)::int - EXTRACT(YEAR FROM oub.birthday)::int,
+        0
+    ) AS age_processed,
     COALESCE(oub.id_card, '') AS id_card,
-    /* 身份证脱敏：保留前6后4，中间 ********（输入取原始 id_card，避免对已脱敏值二次脱敏） */
-    COALESCE(LEFT(oub.id_card, 6) || '********' || RIGHT(oub.id_card, 4), '') AS id_card_masked_processed,
+    /* 身份证脱敏：保留前6位+后4位，中间8个星号屏蔽；NULL 安全兜底为空串 */
+    COALESCE(
+        LEFT(oub.id_card_masked, 6) || '********' || RIGHT(oub.id_card_masked, 4),
+        ''
+    ) AS id_card_masked_processed,
     COALESCE(oub.real_name, '') AS real_name,
     COALESCE(oub.nick_name, '') AS nick_name,
     COALESCE(oub.avatar_url, '') AS avatar_url,
     COALESCE(oub.user_status, '') AS user_status,
-    /* 用户状态翻译：ACTIVE→正常、INACTIVE→未激活、BANNED→封禁、其余→未知（按状态码翻译） */
+    /* 用户状态代码转中文：ACTIVE→正常 INACTIVE→未激活 BANNED→封禁 其余→未知
+       注：切片 source_fields 标记为 user_status_name，但 oub 表无此字段，按 design_logic 用 user_status */
     CASE oub.user_status
         WHEN 'ACTIVE' THEN '正常'
         WHEN 'INACTIVE' THEN '未激活'
@@ -44,11 +53,14 @@ SELECT
         ELSE '未知'
     END AS user_status_name_processed,
     oub.register_time AS register_time,
-    /* 注册日期/小时/星期：取注册时间的对应部分 */
+    /* 注册日期：从注册时间戳提取日期部分 */
     CAST(oub.register_time AS DATE) AS register_date_processed,
-    COALESCE(CAST(EXTRACT(HOUR FROM oub.register_time) AS INT), 0) AS register_hour_processed,
-    COALESCE(CAST(EXTRACT(DOW FROM oub.register_time) AS INT), 0) AS register_weekday_processed,
+    /* 注册小时：从注册时间戳提取小时（24小时制），NULL 时返回 0 */
+    COALESCE(EXTRACT(HOUR FROM oub.register_time)::int, 0) AS register_hour_processed,
+    /* 注册星期：从注册时间戳提取星期几（DOW：0=周日,1=周一...6=周六），NULL 时返回 0 */
+    COALESCE(EXTRACT(DOW FROM oub.register_time)::int, 0) AS register_weekday_processed,
     oub.last_login_time AS last_login_time,
+    /* 最后登录日期：从最后登录时间戳提取日期部分 */
     CAST(oub.last_login_time AS DATE) AS last_login_date_processed,
     COALESCE(oub.login_count, 0) AS login_count,
     COALESCE(oub.province_code, '') AS province_code,
@@ -73,14 +85,16 @@ SELECT
     COALESCE(oub.currency, '') AS currency,
     COALESCE(oub.vip_level, 0) AS vip_level,
     oub.vip_expire_time AS vip_expire_time,
-    /* 是否VIP：VIP到期时间晚于当前时间判1，否则0 */
-    CASE WHEN oub.vip_expire_time > CURRENT_TIMESTAMP THEN 1 ELSE 0 END AS is_vip_processed,
+    /* 是否VIP：VIP到期时间 > 当前时间则为 1，否则为 0（NULL 走 ELSE 返回 0） */
+    CASE
+        WHEN oub.vip_expire_time > CURRENT_TIMESTAMP THEN 1
+        ELSE 0
+    END AS is_vip_processed,
     COALESCE(oub.member_points, 0) AS member_points,
     COALESCE(oub.balance, 0) AS balance,
     COALESCE(oub.credit_score, 0) AS credit_score,
     COALESCE(oub.risk_level, '') AS risk_level,
     COALESCE(oub.verify_status, '') AS verify_status,
-    /* ---- dim.dim_user_level_d (dul) ---- */
     COALESCE(dul.level_id, 0) AS level_id,
     COALESCE(dul.level_name, '') AS level_name,
     COALESCE(dul.level_code, '') AS level_code,
@@ -92,10 +106,11 @@ SELECT
     COALESCE(dul.upgrade_points, 0) AS upgrade_points,
     COALESCE(dul.current_level_points, 0) AS current_level_points,
     COALESCE(dul.next_level_points, 0) AS next_level_points,
-    /* 升级进度百分比：当前等级积分 / 升级所需积分 * 100（除零保护） */
+    /* 升级进度百分比：当前等级积分 / 升级所需积分 * 100，防 NULL 除零 */
     CASE
-        WHEN COALESCE(dul.upgrade_points, 0) = 0 THEN 0
-        ELSE COALESCE(dul.current_level_points, 0) * 100.0 / dul.upgrade_points
+        WHEN COALESCE(dul.upgrade_points, 0) > 0
+        THEN ROUND(COALESCE(dul.current_level_points, 0) * 100.0 / dul.upgrade_points, 2)
+        ELSE 0
     END AS progress_percentage,
     COALESCE(dul.privilege_list, '') AS privilege_list,
     COALESCE(dul.discount_rate, 0) AS discount_rate,
@@ -135,7 +150,6 @@ SELECT
     COALESCE(dul.engagement_score, 0) AS engagement_score,
     COALESCE(dul.satisfaction_score, 0) AS satisfaction_score,
     COALESCE(dul.retention_score, 0) AS retention_score,
-    /* ---- dim.dim_region_d (drd) ---- */
     COALESCE(drd.region_id, 0) AS region_id,
     COALESCE(drd.region_code, '') AS region_code,
     COALESCE(drd.region_name, '') AS region_name,
@@ -176,7 +190,6 @@ SELECT
     COALESCE(drd.customs_code, '') AS customs_code,
     COALESCE(drd.statistical_code, '') AS statistical_code,
     COALESCE(drd.iso_code, '') AS iso_code,
-    /* ---- dim.dim_user_source_d (dus) ---- */
     COALESCE(dus.source_code, '') AS source_code,
     COALESCE(dus.source_category, '') AS source_category,
     COALESCE(dus.channel_id, 0) AS channel_id,
@@ -220,7 +233,7 @@ SELECT
     COALESCE(dus.lookback_days, 0) AS lookback_days,
     COALESCE(dus.priority, 0) AS priority,
     COALESCE(dus.is_paid, 0) AS is_paid,
-    /* ---- 审计字段 ---- */
+    /* 审计字段（4个，全部必带） */
     'N' AS del_flag,
     '${P_CYCLE_ID}' AS crt_cycle_id,
     '${P_CYCLE_ID}' AS last_upd_cycle_id,
@@ -228,11 +241,11 @@ SELECT
 FROM ods.ods_user_basic_f oub
 LEFT JOIN dim.dim_user_level_d dul
     ON oub.level_id = dul.level_id
-    AND dul.del_flag = 'N'
+    AND COALESCE(dul.del_flag, 'N') = 'N'
 LEFT JOIN dim.dim_region_d drd
     ON oub.province_code = drd.region_code
-    AND drd.del_flag = 'N'
+    AND COALESCE(drd.del_flag, 'N') = 'N'
 LEFT JOIN dim.dim_user_source_d dus
     ON oub.source_id = dus.source_id
-    AND dus.del_flag = 'N'
-WHERE oub.del_flag = 'N';
+    AND COALESCE(dus.del_flag, 'N') = 'N'
+WHERE COALESCE(oub.del_flag, 'N') = 'N';

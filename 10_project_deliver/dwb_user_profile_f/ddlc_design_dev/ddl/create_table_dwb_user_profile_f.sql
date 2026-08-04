@@ -1,200 +1,200 @@
 /* =====================================================
    表名: slusr.dwb_user_profile_f
-   规则: R0001 - 用户画像宽表写入
+   规则: R0001 - 用户画像宽表全量加工
    分布键: user_id
    逻辑集群: LC_DW1
-   生成时间: 2026-08-03
-   说明: 以用户基础信息表(oub)为主表（粒度锚点：一个用户），LEFT JOIN 用户等级维度(dul)、地区维度(drd)、用户来源维度(dus)三张维度表补充画像属性，按用户粒度一次性全量写入画像宽表；字段以直取为主，少量字段做脱敏/代码翻译/时间提取加工。单场景、不分段。
+   生成时间: 2026-08-04
+   说明: 用户画像宽表全量重写：以 oub 用户基础表为主表，LEFT JOIN 等级/地区/来源三张维表补齐画像属性，并对敏感字段脱敏、枚举字段转中文、派生时间维度字段。无粒度变化、无聚合，单条 INSERT 即可完成。
    ===================================================== */
 
 CREATE TABLE IF NOT EXISTS slusr.dwb_user_profile_f (
-    user_id                    bigint,  /* 用户ID */
-    user_name                  varchar(100),  /* 用户姓名 */
-    user_phone_processed       varchar(20),  /* 手机号 */
-    user_phone_masked          varchar(20),  /* 手机号(脱敏) */
-    email                      varchar(100),  /* 电子邮箱 */
-    gender_processed           varchar(10),  /* 性别 */
-    birthday                   date,  /* 出生日期 */
-    age_processed              int,  /* 年龄 */
-    id_card                    varchar(20),  /* 身份证号 */
-    id_card_masked_processed   varchar(20),  /* 身份证号(脱敏) */
-    real_name                  varchar(50),  /* 真实姓名 */
-    nick_name                  varchar(50),  /* 昵称 */
-    avatar_url                 varchar(500),  /* 头像URL */
-    user_status                varchar(20),  /* 用户状态 */
-    user_status_name_processed varchar(20),  /* 用户状态名称 */
-    register_time              timestamp,  /* 注册时间 */
-    register_date_processed    date,  /* 注册日期 */
-    register_hour_processed    int,  /* 注册小时 */
-    register_weekday_processed int,  /* 注册星期 */
-    last_login_time            timestamp,  /* 最后登录时间 */
-    last_login_date_processed  date,  /* 最后登录日期 */
-    login_count                int,  /* 登录次数 */
-    province_code              varchar(20),  /* 省份代码 */
-    province_name              varchar(50),  /* 省份名称 */
-    city_code                  varchar(20),  /* 城市代码 */
-    city_name                  varchar(50),  /* 城市名称 */
-    district_code              varchar(20),  /* 区县代码 */
-    district_name              varchar(50),  /* 区县名称 */
-    address                    varchar(500),  /* 详细地址 */
-    zip_code                   varchar(10),  /* 邮政编码 */
-    source_id                  int,  /* 来源渠道ID */
-    source_name                varchar(50),  /* 来源渠道名称 */
-    source_type                varchar(20),  /* 来源类型 */
-    device_type                varchar(20),  /* 设备类型 */
-    os_type                    varchar(20),  /* 操作系统 */
-    app_version                varchar(20),  /* APP版本 */
-    ip_address                 varchar(50),  /* IP地址 */
-    longitude                  decimal(10,6),  /* 经度 */
-    latitude                   decimal(10,6),  /* 纬度 */
-    language                   varchar(20),  /* 语言 */
-    timezone                   varchar(50),  /* 时区 */
-    currency                   varchar(10),  /* 货币 */
-    vip_level                  int,  /* VIP等级 */
-    vip_expire_time            timestamp,  /* VIP到期时间 */
-    is_vip_processed           int,  /* 是否VIP */
-    member_points              int,  /* 会员积分 */
-    balance                    decimal(18,2),  /* 账户余额 */
-    credit_score               int,  /* 信用分 */
-    risk_level                 varchar(20),  /* 风险等级 */
-    verify_status              varchar(20),  /* 认证状态 */
-    level_id                   int,  /* 等级ID */
-    level_name                 varchar(50),  /* 等级名称 */
-    level_code                 varchar(20),  /* 等级代码 */
-    level_rank                 int,  /* 等级排序 */
-    min_points                 int,  /* 最小积分 */
-    max_points                 int,  /* 最大积分 */
-    level_icon                 varchar(500),  /* 等级图标 */
-    level_color                varchar(20),  /* 等级颜色 */
-    upgrade_points             int,  /* 升级所需积分 */
-    current_level_points       int,  /* 当前等级积分 */
-    next_level_points          int,  /* 下一等级积分 */
-    progress_percentage        decimal(5,2),  /* 升级进度百分比 */
-    privilege_list             varchar(1000),  /* 权限列表 */
-    discount_rate              decimal(5,2),  /* 折扣率 */
-    points_rate                decimal(5,2),  /* 积分倍率 */
-    free_shipping              int,  /* 免费配送 */
-    exclusive_products         int,  /* 专属商品 */
-    priority_support           int,  /* 优先客服 */
-    birthday_bonus             int,  /* 生日礼金 */
-    monthly_coupon             int,  /* 月度优惠券 */
-    annual_gift                int,  /* 年度礼品 */
-    vip_service                int,  /* VIP服务 */
-    invite_quota               int,  /* 邀请名额 */
-    max_orders_per_day         int,  /* 每日最大订单数 */
-    max_return_days            int,  /* 最大退货天数 */
-    level_benefits             varchar(1000),  /* 等级权益 */
-    upgrade_time               timestamp,  /* 升级时间 */
-    downgrade_time             timestamp,  /* 降级时间 */
-    maintain_days              int,  /* 维持天数 */
-    level_status               varchar(20),  /* 等级状态 */
-    create_time                timestamp,  /* 创建时间 */
-    update_time                timestamp,  /* 更新时间 */
-    valid_from                 timestamp,  /* 生效开始时间 */
-    valid_to                   timestamp,  /* 生效结束时间 */
-    is_active                  int,  /* 是否激活 */
-    level_tier                 int,  /* 等级层级 */
-    level_group                varchar(50),  /* 等级分组 */
-    level_category             varchar(50),  /* 等级分类 */
-    points_required            int,  /* 所需积分 */
-    orders_required            int,  /* 所需订单数 */
-    amount_required            decimal(18,2),  /* 所需金额 */
-    days_required              int,  /* 所需天数 */
-    growth_value               int,  /* 成长值 */
-    experience_value           int,  /* 经验值 */
-    contribution_value         int,  /* 贡献值 */
-    activity_value             int,  /* 活跃值 */
-    loyalty_score              decimal(5,2),  /* 忠诚度分数 */
-    engagement_score           decimal(5,2),  /* 参与度分数 */
-    satisfaction_score         decimal(5,2),  /* 满意度分数 */
-    retention_score            decimal(5,2),  /* 留存率分数 */
-    region_id                  int,  /* 地区ID */
-    region_code                varchar(20),  /* 地区代码 */
-    region_name                varchar(100),  /* 地区名称 */
-    parent_id                  int,  /* 父级ID */
-    region_level               int,  /* 地区层级 */
-    region_path                varchar(500),  /* 地区路径 */
-    province_id                int,  /* 省份ID */
-    province_abbr              varchar(20),  /* 省份简称 */
-    city_id                    int,  /* 城市ID */
-    city_abbr                  varchar(20),  /* 城市简称 */
-    district_id                int,  /* 区县ID */
-    district_abbr              varchar(20),  /* 区县简称 */
-    street_id                  int,  /* 街道ID */
-    street_code                varchar(20),  /* 街道代码 */
-    street_name                varchar(50),  /* 街道名称 */
-    center_longitude           decimal(10,6),  /* 中心经度 */
-    center_latitude            decimal(10,6),  /* 中心纬度 */
-    area_size                  decimal(18,2),  /* 区域面积 */
-    population                 int,  /* 人口数量 */
-    gdp                        decimal(18,2),  /* GDP */
-    gdp_per_capita             decimal(18,2),  /* 人均GDP */
-    climate_type               varchar(50),  /* 气候类型 */
-    economy_level              varchar(50),  /* 经济水平 */
-    development_level          varchar(50),  /* 发展水平 */
-    urban_rate                 decimal(5,2),  /* 城镇化率 */
-    region_type                varchar(50),  /* 地区类型 */
-    is_coastal                 int,  /* 是否沿海 */
-    is_border                  int,  /* 是否边境 */
-    is_capital                 int,  /* 是否省会 */
-    is_special                 int,  /* 是否特区 */
-    postal_code_prefix         varchar(10),  /* 邮编前缀 */
-    phone_area_code            varchar(20),  /* 电话区号 */
-    car_plate_prefix           varchar(10),  /* 车牌前缀 */
-    airport_code               varchar(10),  /* 机场代码 */
-    railway_station_code       varchar(20),  /* 火车站代码 */
-    port_code                  varchar(20),  /* 港口代码 */
-    weather_station_code       varchar(20),  /* 气象站代码 */
-    customs_code               varchar(20),  /* 海关代码 */
-    statistical_code           varchar(20),  /* 统计代码 */
-    iso_code                   varchar(20),  /* ISO代码 */
-    source_code                varchar(50),  /* 来源代码 */
-    source_category            varchar(50),  /* 来源分类 */
-    channel_id                 int,  /* 渠道ID */
-    channel_code               varchar(50),  /* 渠道代码 */
-    channel_name               varchar(100),  /* 渠道名称 */
-    channel_type               varchar(50),  /* 渠道类型 */
-    channel_category           varchar(50),  /* 渠道分类 */
-    campaign_id                int,  /* 活动ID */
-    campaign_code              varchar(50),  /* 活动代码 */
-    campaign_name              varchar(100),  /* 活动名称 */
-    campaign_type              varchar(50),  /* 活动类型 */
-    medium_id                  int,  /* 媒介ID */
-    medium_code                varchar(50),  /* 媒介代码 */
-    medium_name                varchar(100),  /* 媒介名称 */
-    medium_type                varchar(50),  /* 媒介类型 */
-    term_id                    int,  /* 搜索词ID */
-    term_keyword               varchar(200),  /* 搜索关键词 */
-    content_id                 int,  /* 内容ID */
-    content_name               varchar(200),  /* 内容名称 */
-    referral_url               varchar(500),  /* 来源URL */
-    landing_page               varchar(500),  /* 落地页 */
-    utm_source                 varchar(100),  /* UTM来源 */
-    utm_medium                 varchar(100),  /* UTM媒介 */
-    utm_campaign               varchar(100),  /* UTM活动 */
-    utm_term                   varchar(100),  /* UTM关键词 */
-    utm_content                varchar(100),  /* UTM内容 */
-    cost_per_acquisition       decimal(18,2),  /* 获客成本 */
-    conversion_rate            decimal(5,2),  /* 转化率 */
-    quality_score              decimal(5,2),  /* 质量分数 */
-    retention_rate_7d          decimal(5,2),  /* 7日留存率 */
-    retention_rate_30d         decimal(5,2),  /* 30日留存率 */
-    lifetime_value             decimal(18,2),  /* 生命周期价值 */
-    first_order_amount         decimal(18,2),  /* 首单金额 */
-    first_order_days           int,  /* 首单天数 */
-    register_device            varchar(50),  /* 注册设备 */
-    register_os                varchar(50),  /* 注册系统 */
-    register_browser           varchar(50),  /* 注册浏览器 */
-    register_network           varchar(50),  /* 注册网络 */
-    register_location          varchar(200),  /* 注册地点 */
-    attribution_model          varchar(50),  /* 归因模型 */
-    lookback_days              int,  /* 回溯天数 */
-    priority                   int,  /* 优先级 */
-    is_paid                    int,  /* 是否付费 */
-    del_flag                   NVARCHAR(1),  /* 删除标识 */
-    crt_cycle_id               BIGINT,  /* 创建批次ID */
-    last_upd_cycle_id          BIGINT,  /* 最后更新批次ID */
-    dw_last_update_date        TIMESTAMP(0) WITHOUT TIME ZONE  /* 数仓最后更新时间 */
+    user_id                    bigint,
+    user_name                  varchar(100),
+    user_phone_processed       varchar(20),
+    user_phone_masked          varchar(20),
+    email                      varchar(100),
+    gender_processed           varchar(10),
+    birthday                   date,
+    age_processed              int,
+    id_card                    varchar(20),
+    id_card_masked_processed   varchar(20),
+    real_name                  varchar(50),
+    nick_name                  varchar(50),
+    avatar_url                 varchar(500),
+    user_status                varchar(20),
+    user_status_name_processed varchar(20),
+    register_time              timestamp,
+    register_date_processed    date,
+    register_hour_processed    int,
+    register_weekday_processed int,
+    last_login_time            timestamp,
+    last_login_date_processed  date,
+    login_count                int,
+    province_code              varchar(20),
+    province_name              varchar(50),
+    city_code                  varchar(20),
+    city_name                  varchar(50),
+    district_code              varchar(20),
+    district_name              varchar(50),
+    address                    varchar(500),
+    zip_code                   varchar(10),
+    source_id                  int,
+    source_name                varchar(50),
+    source_type                varchar(20),
+    device_type                varchar(20),
+    os_type                    varchar(20),
+    app_version                varchar(20),
+    ip_address                 varchar(50),
+    longitude                  decimal(10,6),
+    latitude                   decimal(10,6),
+    language                   varchar(20),
+    timezone                   varchar(50),
+    currency                   varchar(10),
+    vip_level                  int,
+    vip_expire_time            timestamp,
+    is_vip_processed           int,
+    member_points              int,
+    balance                    decimal(18,2),
+    credit_score               int,
+    risk_level                 varchar(20),
+    verify_status              varchar(20),
+    level_id                   int,
+    level_name                 varchar(50),
+    level_code                 varchar(20),
+    level_rank                 int,
+    min_points                 int,
+    max_points                 int,
+    level_icon                 varchar(500),
+    level_color                varchar(20),
+    upgrade_points             int,
+    current_level_points       int,
+    next_level_points          int,
+    progress_percentage        decimal(5,2),
+    privilege_list             varchar(1000),
+    discount_rate              decimal(5,2),
+    points_rate                decimal(5,2),
+    free_shipping              int,
+    exclusive_products         int,
+    priority_support           int,
+    birthday_bonus             int,
+    monthly_coupon             int,
+    annual_gift                int,
+    vip_service                int,
+    invite_quota               int,
+    max_orders_per_day         int,
+    max_return_days            int,
+    level_benefits             varchar(1000),
+    upgrade_time               timestamp,
+    downgrade_time             timestamp,
+    maintain_days              int,
+    level_status               varchar(20),
+    create_time                timestamp,
+    update_time                timestamp,
+    valid_from                 timestamp,
+    valid_to                   timestamp,
+    is_active                  int,
+    level_tier                 int,
+    level_group                varchar(50),
+    level_category             varchar(50),
+    points_required            int,
+    orders_required            int,
+    amount_required            decimal(18,2),
+    days_required              int,
+    growth_value               int,
+    experience_value           int,
+    contribution_value         int,
+    activity_value             int,
+    loyalty_score              decimal(5,2),
+    engagement_score           decimal(5,2),
+    satisfaction_score         decimal(5,2),
+    retention_score            decimal(5,2),
+    region_id                  int,
+    region_code                varchar(20),
+    region_name                varchar(100),
+    parent_id                  int,
+    region_level               int,
+    region_path                varchar(500),
+    province_id                int,
+    province_abbr              varchar(20),
+    city_id                    int,
+    city_abbr                  varchar(20),
+    district_id                int,
+    district_abbr              varchar(20),
+    street_id                  int,
+    street_code                varchar(20),
+    street_name                varchar(50),
+    center_longitude           decimal(10,6),
+    center_latitude            decimal(10,6),
+    area_size                  decimal(18,2),
+    population                 int,
+    gdp                        decimal(18,2),
+    gdp_per_capita             decimal(18,2),
+    climate_type               varchar(50),
+    economy_level              varchar(50),
+    development_level          varchar(50),
+    urban_rate                 decimal(5,2),
+    region_type                varchar(50),
+    is_coastal                 int,
+    is_border                  int,
+    is_capital                 int,
+    is_special                 int,
+    postal_code_prefix         varchar(10),
+    phone_area_code            varchar(20),
+    car_plate_prefix           varchar(10),
+    airport_code               varchar(10),
+    railway_station_code       varchar(20),
+    port_code                  varchar(20),
+    weather_station_code       varchar(20),
+    customs_code               varchar(20),
+    statistical_code           varchar(20),
+    iso_code                   varchar(20),
+    source_code                varchar(50),
+    source_category            varchar(50),
+    channel_id                 int,
+    channel_code               varchar(50),
+    channel_name               varchar(100),
+    channel_type               varchar(50),
+    channel_category           varchar(50),
+    campaign_id                int,
+    campaign_code              varchar(50),
+    campaign_name              varchar(100),
+    campaign_type              varchar(50),
+    medium_id                  int,
+    medium_code                varchar(50),
+    medium_name                varchar(100),
+    medium_type                varchar(50),
+    term_id                    int,
+    term_keyword               varchar(200),
+    content_id                 int,
+    content_name               varchar(200),
+    referral_url               varchar(500),
+    landing_page               varchar(500),
+    utm_source                 varchar(100),
+    utm_medium                 varchar(100),
+    utm_campaign               varchar(100),
+    utm_term                   varchar(100),
+    utm_content                varchar(100),
+    cost_per_acquisition       decimal(18,2),
+    conversion_rate            decimal(5,2),
+    quality_score              decimal(5,2),
+    retention_rate_7d          decimal(5,2),
+    retention_rate_30d         decimal(5,2),
+    lifetime_value             decimal(18,2),
+    first_order_amount         decimal(18,2),
+    first_order_days           int,
+    register_device            varchar(50),
+    register_os                varchar(50),
+    register_browser           varchar(50),
+    register_network           varchar(50),
+    register_location          varchar(200),
+    attribution_model          varchar(50),
+    lookback_days              int,
+    priority                   int,
+    is_paid                    int,
+    del_flag                   NVARCHAR(1),
+    crt_cycle_id               BIGINT,
+    last_upd_cycle_id          BIGINT,
+    dw_last_update_date        TIMESTAMP(0) WITHOUT TIME ZONE
 )
 WITH (
     ORIENTATION = COLUMN,

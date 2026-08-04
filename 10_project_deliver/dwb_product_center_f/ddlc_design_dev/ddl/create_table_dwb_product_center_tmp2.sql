@@ -3,14 +3,14 @@
    规则: R0002 - 评价汇总
    分布键: product_id
    逻辑集群: LC_DW1
-   生成时间: 2026-08-03
-   说明: 从评价事实表按商品ID聚合评价指标，产出中间表供主规则关联。 评价粒度（一行=一条评价）细于商品粒度，直接JOIN会导致行数发散， 需先聚合收敛为商品粒度。
+   生成时间: 2026-08-04
+   说明: 将评价明细按商品粒度聚合，收口为每商品一行的评价指标，与订单汇总并行执行
    ===================================================== */
 
 CREATE TABLE IF NOT EXISTS slprd.dwb_product_center_tmp2 (
-    review_cnt       int,  /* 评价数 */
-    avg_rating       decimal(2,1),  /* 平均评分 */
-    good_review_rate decimal(5,2),  /* 好评率(%) */
+    review_cnt       int,
+    avg_rating       decimal(2,1),
+    good_review_rate decimal(5,2),
     /* 审计字段 */
     del_flag         NVARCHAR(1),
     crt_cycle_id     BIGINT,

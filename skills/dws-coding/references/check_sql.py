@@ -229,15 +229,22 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
     business_key_fields = {k.lower() for k in design.get("business_key", [])}
     # 加本规则的分组/收敛键（中间表聚合规则的 GROUP BY 键必须 SELECT 出来供下游关联，
     # 但它未必等于全局 business_key，例如订单中心按 user_id 聚合的 tmp 表）。
-    # 从 grain.output 与 join_safety.strategy 文本里抽标识符作为合法键。
+    # 从 grain.output 与 join_safety 文本里抽标识符作为合法键。
     grain_key_fields = set()
     grain = rule.get("grain", {}) or {}
     if isinstance(grain, dict):
         for m in re.finditer(r'([A-Za-z_]\w*)', str(grain.get("output", ""))):
             grain_key_fields.add(m.group(1).lower())
+    # designer 把收敛策略写在 strategy 或 reason 任一字段里（中文 reason 里也会带
+    # 英文标识符，如 "按 user_id GROUP BY 聚合"），两个字段都扫，避免漏判。
+    # 兼容两种语序：英文 "GROUP BY user_id" 和中文 "按 user_id GROUP BY"。
     for js in rule.get("join_safety", []) or []:
-        for m in re.finditer(r'(?:GROUP BY|PARTITION BY)\s+([A-Za-z_]\w*)', str(js.get("strategy", "")), re.IGNORECASE):
-            grain_key_fields.add(m.group(1).lower())
+        for field in ("strategy", "reason"):
+            text = str(js.get(field, ""))
+            for m in re.finditer(r'(?:GROUP BY|PARTITION BY)\s+([A-Za-z_]\w*)', text, re.IGNORECASE):
+                grain_key_fields.add(m.group(1).lower())
+            for m in re.finditer(r'([A-Za-z_]\w*)\s+(?:GROUP BY|PARTITION BY)', text, re.IGNORECASE):
+                grain_key_fields.add(m.group(1).lower())
     ts_all_fields = ts_fields | audit_fields | business_key_fields | grain_key_fields
 
     select_aliases = set(extract_select_aliases(sql_text))

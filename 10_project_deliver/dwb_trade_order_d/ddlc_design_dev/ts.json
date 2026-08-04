@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "spec_type": "ts",
-  "generated_at": "2026-08-03T22:58:09",
+  "generated_at": "2026-08-05T00:12:42",
   "generated_by": "assemble_ts.py",
   "meta": {
     "target": {
@@ -36,25 +36,50 @@
       }
     ],
     "schedule": {
-      "task_name": "dws_dwb_trade_order_d",
+      "task_name": "dwb_trade_order_d",
       "cron": "0 30 3 * * ?",
-      "task_group": "dws_dwb",
-      "project": "trade",
       "owner": "",
-      "exec_params": {},
+      "exec_params": {
+        "P_CYCLE_ID": {
+          "value_type": "string",
+          "desc": "批次号",
+          "standard": true
+        }
+      },
+      "lts_params": [
+        {
+          "lts_var": "V_CYCLE_ID",
+          "etl_param": "P_CYCLE_ID",
+          "desc": "批次号"
+        },
+        {
+          "lts_var": "V_GROUP_CODE",
+          "etl_param": "",
+          "desc": "规则组编码"
+        }
+      ],
       "upstream": [],
-      "execution_platform": {}
+      "view": {
+        "task_name": "dwb_trade_order_d_i",
+        "cron": "0 35 3 * * ?",
+        "upstream": [
+          {
+            "table": "dwb_trade_order_d",
+            "task": "dwb_trade_order_d"
+          }
+        ]
+      }
     }
   },
   "design": {
     "complexity_analysis": {
       "join_count": 0,
       "has_grain_change": true,
-      "grain_change_detail": "订单明细行(ods_trade_order_di) → 订单汇总行(GROUP BY order_id, cust_id 聚合收敛)",
-      "multi_step_fields": 0,
+      "grain_change_detail": "源为订单明细行（一单多行），目标为订单级（一单一行），按 order_id+cust_id 聚合收敛",
+      "multi_step_fields": 1,
       "aggregation_after_join": false,
       "segmentation_decision": "不分段",
-      "segmentation_reason": "单源表无 JOIN 关联，仅一次 GROUP BY 聚合收敛，单条 INSERT 即可完成全部加工"
+      "segmentation_reason": "单源表、零 JOIN、仅 1 个聚合字段，复杂度低，单条 INSERT 即可完成"
     },
     "audit_fields": {
       "del_flag": {
@@ -79,9 +104,6 @@
       }
     },
     "audit_supplemented": [],
-    "distribution_key": [
-      "order_id"
-    ],
     "business_key": [
       "order_id"
     ],
@@ -93,37 +115,16 @@
       "reason": ""
     }
   },
-  "rules": {
-    "R0001": {
-      "rule_name": "订单汇总",
-      "scenario": "default",
-      "exec_sequence": 1,
-      "target_table": "dwb_trade_order_d",
-      "is_view_step": false,
-      "design_intent": "从订单明细接入表按订单+客户维度聚合 amount，收敛到订单粒度产出目标 F 表",
-      "load_mode": "truncate_table",
-      "source_tables": [
-        {
-          "schema": "ods",
-          "table": "ods_trade_order_di",
-          "alias": "a"
-        }
+  "tables": {
+    "dwb_trade_order_d": {
+      "type": "target",
+      "distribution_key": [
+        "order_id"
       ],
-      "ctes": [],
-      "grain": {
-        "input": "一行=一条订单明细",
-        "output": "一行=一个订单",
-        "change": "多行聚合"
-      },
-      "joins": [
-        {
-          "alias": "a",
-          "type": "main",
-          "condition": "",
-          "filter": ""
-        }
-      ],
-      "join_safety": [],
+      "distribute_type": "HASH",
+      "partition": "",
+      "storage": "column",
+      "logical_group": "LC_DW1",
       "fields": [
         {
           "target_field": "order_id",
@@ -165,7 +166,7 @@
               "alias": "a"
             }
           ],
-          "design_logic": "按订单ID(order_id)和客户ID(cust_id)分组，对源表 amount 字段求和汇总，得到订单总额"
+          "design_logic": "对同一 order_id + cust_id 的 amount 求和汇总（SUM(amount) GROUP BY order_id, cust_id）"
         },
         {
           "target_field": "del_flag",
@@ -223,8 +224,52 @@
           ],
           "design_logic": "固定赋值"
         }
+      ]
+    }
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "订单汇总聚合",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "dwb_trade_order_d",
+      "is_view_step": false,
+      "design_intent": "从订单明细接入表按 order_id+cust_id 聚合到订单粒度，汇总金额，直取订单与客户标识，补审计字段",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "ods",
+          "table": "ods_trade_order_di",
+          "alias": "a"
+        }
       ],
-      "field_count": 7
+      "ctes": [],
+      "grain": {
+        "input": "一行=一个订单明细",
+        "output": "一行=一个订单",
+        "change": "多行聚合"
+      },
+      "joins": [
+        {
+          "alias": "a",
+          "type": "main",
+          "condition": "主表，无关联",
+          "filter": ""
+        }
+      ],
+      "join_safety": [],
+      "field_targets": [
+        "order_id",
+        "cust_id",
+        "total_amount",
+        "del_flag",
+        "crt_cycle_id",
+        "last_upd_cycle_id",
+        "dw_last_update_date"
+      ],
+      "field_logics": {
+        "total_amount": "对同一 order_id + cust_id 的 amount 求和汇总（SUM(amount) GROUP BY order_id, cust_id）"
+      }
     }
   },
   "data_flow": {

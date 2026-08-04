@@ -1,111 +1,129 @@
 # ============================================================================
-# design_decisions.yaml - 交易宽表 dwb_trade_wide_f 设计决策
+# design_decisions.yaml - 设计决策（designer agent 产出）
+# 资产：dws.dwb_trade_wide_f（交易宽表）
 # ----------------------------------------------------------------------------
-# 极简单源表场景：仅 1 张源表 ods_trade_order_di(主表 o)，无 JOIN、无粒度变化、
-# 无加工字段(全部直接复制或固定赋值)。单规则单条 INSERT 直产目标 F 表。
-# 字段类型/来源/注释由 assemble_ts.py 从 rs_input.json 自动搬移。
+# 单源主表直加载：无关联、无加工、无粒度变化。
+# 全部字段为直接复制或审计赋值， assembler 自动填充 design_logic。
 # ============================================================================
 
+# === 参数声明（资产级统一声明）===
+# P_CYCLE_ID(批次号) 由脚本自动注入，无需在此声明。
+# 本资产无业务参数（全量调度，无增量起止时间/会计期等场景参数）。
+params: []
+
 # === 规则拆分（核心判断）===
+# 单规则：单源主表直加载，无分段。
 rules:
   - rule_code: R0001
-    rule_name: "交易宽表全量装配"
+    rule_name: "交易宽表主表加载"
     scenario: "default"
     exec_sequence: 1
-    target_table: "dwb_trade_wide_f"
+    target_table: "dws.dwb_trade_wide_f"
     is_view_step: false
-    design_intent: "单源表无JOIN，字段全部直接复制或固定赋值，无粒度变化，单条INSERT直产目标F表"
-    load_mode: "truncate_table"          # 全量调度，全量覆盖
+    design_intent: "单源主表直加载，无关联无加工，全量覆盖写入目标F表。"
+    load_mode: "truncate_table"
 
-    # 该规则管所有 8 个目标字段(4 直取 + 4 审计)
+    # 覆盖 rs_input 全部 8 个 target_column
     field_targets:
-      # --- 直取(直接复制)字段，脚本自动填 design_logic ---
       - order_id
       - cust_id
       - product_id
       - order_amt
-      # --- 审计字段(赋值)，脚本自动处理，不写 field_logics ---
       - del_flag
       - crt_cycle_id
       - last_upd_cycle_id
       - dw_last_update_date
 
-    # ★ 本规则无加工类业务字段，field_logics 留空。
-    # 直取字段(直接复制)脚本自动填 "直取 o.{column}"；
-    # 审计字段(赋值)脚本自动从 rs_input 的 transform_detail 搬入
-    # ('N' / '${P_CYCLE_ID}' / CURRENT_TIMESTAMP)。
+    # 不写 field_logics：4 个字段为直接复制（assembler 自动填"直取 o.<col>"），
+    # 4 个为审计赋值字段（assembler 自动从 rs_input.transform_detail 取值）。
     field_logics: {}
 
-    # 关联的源表别名(脚本据此从 rs_input 补 schema/table)
+    # 关联源表别名（主表）
     source_aliases:
-      - o
+      - "o"
 
-    # CTE：单源表无聚合/无维表取最新行，无需 CTE
+    # CTE：无
     ctes: []
 
-    # 粒度变化(输入→输出)
+    # 粒度变化：输入输出均为"一行=一个订单"，无变化
     grain:
-      input: "一行=一个订单(源 ods_trade_order_di)"
-      output: "一行=一个订单(dwb_trade_wide_f)"
+      input: "一行=一个订单"
+      output: "一行=一个订单"
       change: "无变化"
 
-    # 关联策略：仅主表 o，无其他关联
+    # 关联策略：仅主表，无 JOIN
     joins:
       - alias: "o"
         type: "main"
         condition: ""
         filter: ""
 
-    # 关联安全分析(JOIN键唯一性 → 对齐策略)
-    join_safety:
-      - table: "o"
-        join_key_unique: true
-        strategy: ""
-        reason: "主表，order_id 为业务主键，唯一"
+    # 关联安全分析：单主表无 JOIN，无发散风险
+    join_safety: []
 
 # === 复杂度分析与分段决策 ===
 complexity_analysis:
-  join_count: 0                          # 单源表，无 JOIN
-  has_grain_change: false                # 输入输出均一行=一个订单
-  grain_change_detail: "输入输出粒度一致，均一行=一个订单"
-  multi_step_fields: 0                   # 无多步骤加工字段
-  aggregation_after_join: false          # 无聚合
+  join_count: 0
+  has_grain_change: false
+  grain_change_detail: ""
+  multi_step_fields: 0
+  aggregation_after_join: false
   segmentation_decision: "不分段"
-  segmentation_reason: "单源表无JOIN、无粒度变化、无多步骤加工字段、无聚合，复杂度远低于分段阈值，单条INSERT搞定，无需中间表/CTE"
+  segmentation_reason: "单源主表无关联（join_count=0），无粒度变化，所有字段为直接复制或审计赋值，单条 INSERT 即可完成，无需中间表/分段。"
 
-# === 分布键(designer 判断，参考 design-guide.md §2.1)===
-# order_id 为业务主键、高基数 → 单表直产也按主键分布，与下游宽表惯例对齐
-distribution_key:
-  - order_id
+# === 表物理属性（per-table）===
+tables:
+  # 目标F表：分布键取业务主键 order_id（高基数，避免倾斜）
+  dwb_trade_wide_f:
+    distribution_key:
+      - order_id
+    distribute_type: HASH
 
-# === 业务主键(业务唯一字段组合，供 UT 主键唯一检查)===
+# === 业务主键（业务唯一字段组合，供 UT 主键唯一检查）===
+# order_id 在"每行一个订单"粒度下唯一，无需调整。
 business_key:
   - order_id
 
-# 主键设计说明
-# rs_input 备注列标注 order_id 为"主键"；产出粒度一行=一个订单，
-# order_id 在产出表下唯一，无需补充字段调整主键。
 business_key_design:
   input_key:
     - order_id
   adjusted: false
   reason: ""
 
-# === 调度细化(RS给大框架 → designer细化)===
+# === 调度细化 ===
 schedule:
-  task_name: "dws_dwb_trade_wide_f_d"
-  cron: "0 30 3 * * ?"                    # T+1 日级，SLA 3:30 → 分 时 日 月 周 ?
-  task_group: "dwb_trade"
-  project: "dws"
-  # 设计未新增中间表，无新增上游依赖(rs_input 已有的上游脚本自动带)
+  # F表任务名
+  task_name: "DWS_DWB_TRADE_WIDE_F"
+  # SLA 3:30，T+1 一天一调，cron 细化为每日 03:00 执行（SLA 前完成）
+  cron: "0 0 3 * * ?"
+
+  # LTS 调度参数（运行时生成值，赋值给术加 ETL 参数）
+  lts_params:
+    - lts_var: "V_CYCLE_ID"
+      etl_param: "P_CYCLE_ID"
+      desc: "批次号"
+    - lts_var: "V_GROUP_CODE"
+      etl_param: ""
+      desc: "规则组编码"
+
+  # 设计新增的上游依赖：无（单源主表，rs_input.upstream 已为空）
   upstream_added: []
 
-# === 数据流(规则间关系)===
+  # I 视图调度：标准 F 镜像视图，无需独立直封调度任务
+  view:
+    task_name: ""
+    cron: ""
+
+# === 数据流（规则间关系）===
 data_flow:
-  dependencies: []                       # 单规则，无规则间依赖
+  # 依赖：单规则，无规则间数据流
+  dependencies: []
+  # 执行顺序：单一顺序组
   schedule_groups:
     - sequence: 1
-      rules: ["R0001"]
+      rules:
+        - R0001
 
-# === DQ(可选，本表暂无设计级 DQ 要求)===
+# === DQ（可选）===
+# rs_input 未声明 DQ 需求
 dq_rules: []

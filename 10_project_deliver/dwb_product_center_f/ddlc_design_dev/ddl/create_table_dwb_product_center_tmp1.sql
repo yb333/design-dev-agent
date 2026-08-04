@@ -3,15 +3,15 @@
    规则: R0001 - 订单销售汇总
    分布键: product_id
    逻辑集群: LC_DW1
-   生成时间: 2026-08-03
-   说明: 从订单商品明细表按商品ID聚合销售指标，产出中间表供主规则关联。 订单明细粒度（一行=一条明细）细于商品粒度，直接JOIN会导致行数发散， 需先聚合收敛为商品粒度。
+   生成时间: 2026-08-04
+   说明: 将订单明细按商品粒度聚合，收口为每商品一行的销售指标，解耦主规则的聚合复杂度
    ===================================================== */
 
 CREATE TABLE IF NOT EXISTS slprd.dwb_product_center_tmp1 (
-    total_sales_qty    int,  /* 累计销量 */
-    total_sales_amount decimal(18,2),  /* 累计销售额 */
-    buyer_cnt          int,  /* 购买人数 */
-    sales_qty_30d      int,  /* 近30天销量 */
+    total_sales_qty    int,
+    total_sales_amount decimal(18,2),
+    buyer_cnt          int,
+    sales_qty_30d      int,
     /* 审计字段 */
     del_flag           NVARCHAR(1),
     crt_cycle_id       BIGINT,

@@ -1,6 +1,6 @@
 # ETL 技术规格(TS)
 
-> 目标表: `slas.dwb_after_sale_center_f`(售后服务中心宽表) - 生成 2026-08-03T22:58:09
+> 目标表: `slas.dwb_after_sale_center_f`(售后服务中心宽表) - 生成 2026-08-04T22:17:30
 
 ---
 
@@ -8,13 +8,11 @@
 
 | 项目 | 内容 |
 |------|------|
-| **F 表** | `slas.dwb_after_sale_center_f`(售后服务中心宽表) |
-| **I 视图** | `slas.dwb_after_sale_center_i`(F表镜像) |
-| **目标粒度** | 每行一个售后服务记录 |
-| **写入策略** | 全量调度 |
-| **分布键** | refund_id |
-| **字段统计** | 业务 20 + 审计 4 = 总计 24 |
-| **审计字段来源** | 全部来自 RS/mapping |
+| **F 表** | `slas.dwb_after_sale_center_f`（售后服务中心宽表） |
+| **I 视图** | `slas.dwb_after_sale_center_i`（F表镜像，对外查询） |
+| **业务主键** | refund_id |
+| **写入策略** | 全量（可随时重刷） |
+| **字段统计** | 24 |
 | **规则数** | 1 |
 
 **来源表**:
@@ -31,100 +29,111 @@
 
 ## 2. 表模型设计
 
-- **F表**: `dwb_after_sale_center_f`(存数据)
-- **I视图**: `dwb_after_sale_center_i`(F表镜像, 对外查询)
-- **分布键**: refund_id
-
-**中间表**:
-
-| 规则 | 表名 | 粒度 | 用途 |
-|------|------|------|------|
-| R0001 | slas.dwb_after_sale_center_f | 一行=一个售后服务记录 | 以退款事实表 dwd_refund_f 为主表，左关联订单、用户、商品、工单四表拼装售后中心宽表， 保持输出粒度=一个售后服务记录；对所有加工类字段做枚举值中文化与派生指标计算， 直取字段透传，审计字段按标准赋值，单条 INSERT 完成，无需物理中间表。 |
+| 表名 | 类型 | 分布 | 分区 | 字段数 | 说明 |
+|------|------|------|------|--------|------|
+| `dwb_after_sale_center_f` | 目标F表 | HASH(refund_id) | — | 24 | 售后服务中心宽表 |
+| `dwb_after_sale_center_i` | 直封视图 | — | — | 同F表 | F表镜像，对外查询 |
 
 ---
 
 ## 3. 复杂度分析与分段决策
 
-| 因素 | 值 |
-|------|-----|
-| JOIN 表数量 | 4 |
-| 粒度变化 | 无 (无粒度变化；需保证 JOIN 前 dof/dst 收敛至唯一粒度。) |
-| 多步骤加工字段 | 5 |
-| 聚合后关联 | 否 |
+| 因素 | 值 | 阈值 |
+|------|-----|------|
+| JOIN 表数量 | 4 | >12 触发分段 |
+| 粒度变化 | 无 | 有即评估分段 |
+| 多步骤加工字段 | 2 | ≥5 触发分段 |
+| 聚合后关联 | 否 | 是即评估分段 |
 
-**分段结论**: 不分段
-**理由**: JOIN 表数量 4（远低于阈值 12）；无粒度变化、无聚合后关联、无复杂关联链； 5 个加工字段均为简单枚举值中文化映射或单行算术派生（非"先聚合再关联"复杂逻辑）， 单条 INSERT 即可清晰表达全部加工，无需物理中间表，亦无需 CTE 拆分。
+**分段结论**: **不分段**
+
+> 4 个 JOIN 远低于 12 阈值；无粒度变化（退款粒度进→退款粒度出）；2 个加工字段（process_days/refund_rate）为内联单步表达式（码值映射/简单运算），无需先聚合再关联；单条 INSERT 可一次写对，不建中间表
 
 ---
 
 ## 4. 规则详情
 
-### R0001 - 售后服务中心宽表组装
+### R0001 - 售后服务中心宽表装配
 
 | 项目 | 内容 |
 |------|------|
-| 场景 | default |
 | 执行序 | 1 |
-| 产出表 | `slas.dwb_after_sale_center_f` |
-| 设计意图 | 以退款事实表 dwd_refund_f 为主表，左关联订单、用户、商品、工单四表拼装售后中心宽表， 保持输出粒度=一个售后服务记录；对所有加工类字段做枚举值中文化与派生指标计算， 直取字段透传，审计字段按标准赋值，单条 INSERT 完成，无需物理中间表。 |
+| 产出表 | `dwb_after_sale_center_f` |
+| 写入方式 | truncate_table |
+| 设计意图 | 以退款事实表为主表，左关联订单/用户/商品/工单四表，一次性拼装售后服务中心宽表全量字段；单场景全量覆盖，无分段 |
 | 字段数 | 24 |
 
-**关联策略**:
+**关联风险**:
 
-| 别名 | JOIN | 条件 |
-|------|------|------|
-| drf | main |  |
-| dof | LEFT JOIN | drf.order_id = dof.order_id |
-| duf | LEFT JOIN | drf.user_id = duf.user_id |
-| dpf | LEFT JOIN | drf.product_id = dpf.product_id |
-| dst | LEFT JOIN | drf.refund_id = dst.refund_id |
+- `dwd_order_f`: 若 order_id 在订单明细表不唯一（多商品行），需先按 order_id 聚合到订单粒度（取订单号、汇总实付金额）再关联，避免退款行发散
+- `dwd_service_ticket_f`: 若一个退款存在多张工单，取最新一条有效工单（按工单创建时间倒序取首条），保证每个退款 1:1 关联
 
-**关联安全**:
+**字段逻辑**:
 
-| 表 | JOIN键唯一 | 对齐策略 |
-|------|-----------|----------|
-| dof | 否 | JOIN 前对 dof 按 order_id 收敛至订单粒度：order_no 取唯一值、order_pay_amount 取订单实付金额单行（或订单级汇总），避免订单明细一对多导致退款记录 fan-out。 |
-| duf | 是 |  |
-| dpf | 是 |  |
-| dst | 否 | JOIN 前对 dst 按 refund_id 收敛：若一个退款对应多张工单，取最新一条工单（或最新有效工单）的 ticket_id/ticket_status/handler_name，避免 fan-out。 |
-
-**字段概要**:
-
-| 转换类型 | 数量 |
-|----------|------|
-| direct | 15 |
-| aggregate | 5 |
-| assign | 4 |
-| assign(审计) | 4 |
-
-**加工字段抽样**(完整字段见 ts.json):
-
-- `refund_type_name`: 退款类型中文化映射：将退款类型英文编码映射为中文名称—— ONLY_REFUND 映射为"仅退款"，RETURN_REFUND 映射为"退货退款"， EXCHANGE 映射为"换货"，其余取值映射为"其他"。
-- `refund_status_name`: 退款状态中文化映射：将退款状态英文编码映射为中文名称—— APPLYING 映射为"申请中"，APPROVED 映射为"已同意"， SUCCESS 映射为"退款成功"，REJECTED 映射为"已拒绝"，其余取值映射为"其他"。
-- `process_days`: 售后处理时长（天数）：以完成时间与申请时间的日期差为准； 若该退款尚未完成（完成时间为空），则以当前日期替代完成时间参与计算， 保证未完成单据也能体现已发生处理时长。
-- `refund_rate`: 退款比例（百分比，保留两位小数）：退款金额除以订单实付金额再乘以100； 当订单实付金额为零或为空时，退款比例记为0，以规避除零异常。
-- `ticket_status_name`: 工单状态中文化映射：将工单状态英文编码映射为中文名称—— PENDING 映射为"待处理"，PROCESSING 映射为"处理中"， RESOLVED 映射为"已解决"，CLOSED 映射为"已关闭"，其余取值映射为"其他"。
-- ...(共 9 个加工字段)
+- `refund_type_name`: 退款类型码值转换：ONLY_REFUND→仅退款，RETURN_REFUND→退货退款，EXCHANGE→换货，其余→其他
+- `refund_status_name`: 退款状态码值转换：APPLYING→申请中，APPROVED→已同意，SUCCESS→退款成功，REJECTED→已拒绝，其余→其他
+- `ticket_status_name`: 工单状态码值转换：PENDING→待处理，PROCESSING→处理中，RESOLVED→已解决，CLOSED→已关闭，其余→其他
+- `process_days`: 处理天数=完成时间与申请时间相差天数；完成时间为空时按当天计算（COALESCE 兜底当前日期）
+- `refund_rate`: 退款比例(%)=退款金额 / 订单实付金额 × 100；订单实付金额为空或为0时需防除零
 
 ---
 
 ## 5. 数据流向
 
-**执行顺序**:
+```mermaid
+flowchart TD
 
-| 顺序 | 规则 |
-|------|------|
-| 1 | R0001 |
+  step_R0001("R0001 / 售后服务中心宽表装配<br/>关联维表: dim_user_f, dim_product_f")
+  src_dwd_refund_f["dwd_refund_f<br/><small>sdref</small>"]
+  src_dwd_order_f["dwd_order_f<br/><small>sdord</small>"]
+  src_dwd_service_ticket_f["dwd_service_ticket_f<br/><small>sdcs</small>"]
+  tbl_dwb_after_sale_center_f["dwb_after_sale_center_f"]
+
+  src_dwd_refund_f --> step_R0001
+  src_dwd_order_f --> step_R0001
+  src_dwd_service_ticket_f --> step_R0001
+  step_R0001 --> tbl_dwb_after_sale_center_f
+
+  classDef source fill:#dbeafe,stroke:#3b82f6,stroke-width:1.5px,color:#1e3a5f
+  classDef step fill:#ede9fe,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95
+  classDef intermediate fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#334155,stroke-dasharray:5 3
+  classDef target fill:#dcfce7,stroke:#22c55e,stroke-width:2.5px,color:#166534
+  classDef view fill:#e0e7ff,stroke:#6366f1,stroke-width:1.5px,color:#3730a3,stroke-dasharray:5 3
+  class step_R0001 step
+  class src_dwd_refund_f,src_dwd_order_f,src_dwd_service_ticket_f source
+  class tbl_dwb_after_sale_center_f target
+```
 
 ---
 
 ## 6. 调度配置
 
+### F 表调度
+
 | 配置项 | 值 |
 |--------|-----|
-| 调度任务 | dwb_after_sale_center_f |
+| 调度任务 | dw_slas_dwb_after_sale_center_f |
 | 调度周期 | 0 30 3 * * ? |
-| 任务组 | slas |
+
+**LTS 参数**:
+
+| LTS 变量 | 赋值给 ETL 参数 | 说明 |
+|----------|----------------|------|
+| V_CYCLE_ID | P_CYCLE_ID | 批次号 |
+| V_GROUP_CODE | — | 规则组编码 |
+
+### I 视图调度
+
+| 配置项 | 值 |
+|--------|-----|
+| 调度任务 | dw_slas_dwb_after_sale_center_i |
+| 调度周期 | 0 35 3 * * ? |
+
+**上游依赖**:
+
+| 源表 | 调度任务 |
+|------|---------|
+| dwb_after_sale_center_f | dw_slas_dwb_after_sale_center_f |
 
 ---
 

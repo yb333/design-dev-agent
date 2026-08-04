@@ -17,34 +17,7 @@ SELECT
     order_type_name,
     order_remark,
     order_date,
-    receiver_name,
-    receiver_phone_masked,
-    receiver_province_code,
-    receiver_province_name,
-    receiver_city_code,
-    receiver_city_name,
-    receiver_district_code,
-    receiver_district_name,
-    receiver_street,
-    receiver_address,
-    full_address,
-    postal_code,
-    address_tag_name,
-    longitude,
-    latitude,
-    activity_id,
-    activity_name,
-    activity_type_name,
-    activity_discount_rate,
-    coupon_id,
-    coupon_name,
-    coupon_type_name,
-    coupon_amount,
-    full_reduce_amount,
-    points_deduct_amount,
-    points_used,
-    is_marketing_order,
-    total_discount_amount,
+    user_id,
     user_name,
     user_phone_masked,
     user_email_masked,
@@ -61,6 +34,7 @@ SELECT
     user_province_code,
     user_city_code,
     user_days,
+    product_id,
     product_name,
     product_code,
     sku_code,
@@ -83,6 +57,7 @@ SELECT
     product_tag,
     product_status_name,
     product_profit,
+    shop_id,
     shop_name,
     shop_type_name,
     shop_level_name,
@@ -93,6 +68,22 @@ SELECT
     shop_city_code,
     shop_city_name,
     shop_open_time,
+    shop_history_order_cnt,
+    receiver_name,
+    receiver_phone_masked,
+    receiver_province_code,
+    receiver_province_name,
+    receiver_city_code,
+    receiver_city_name,
+    receiver_district_code,
+    receiver_district_name,
+    receiver_street,
+    receiver_address,
+    full_address,
+    postal_code,
+    address_tag_name,
+    longitude,
+    latitude,
     pay_time,
     pay_id,
     pay_no,
@@ -120,6 +111,19 @@ SELECT
     pickup_time,
     sign_receiver_name,
     ship_duration_hours,
+    coupon_id,
+    coupon_name,
+    coupon_type_name,
+    coupon_amount,
+    activity_id,
+    activity_name,
+    activity_type_name,
+    activity_discount_rate,
+    full_reduce_amount,
+    points_deduct_amount,
+    points_used,
+    is_marketing_order,
+    total_discount_amount,
     refund_id,
     refund_no,
     refund_type_name,
@@ -153,34 +157,7 @@ COMMENT ON COLUMN slord.dwb_order_center_i.order_source_name IS '订单来源';
 COMMENT ON COLUMN slord.dwb_order_center_i.order_type_name IS '订单类型';
 COMMENT ON COLUMN slord.dwb_order_center_i.order_remark IS '订单备注';
 COMMENT ON COLUMN slord.dwb_order_center_i.order_date IS '下单日期';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_name IS '收货人姓名';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_phone_masked IS '收货人手机(脱敏)';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_province_code IS '收货省份编码';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_province_name IS '收货省份名称';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_city_code IS '收货城市编码';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_city_name IS '收货城市名称';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_district_code IS '收货区县编码';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_district_name IS '收货区县名称';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_street IS '收货街道';
-COMMENT ON COLUMN slord.dwb_order_center_i.receiver_address IS '详细地址';
-COMMENT ON COLUMN slord.dwb_order_center_i.full_address IS '完整收货地址';
-COMMENT ON COLUMN slord.dwb_order_center_i.postal_code IS '邮政编码';
-COMMENT ON COLUMN slord.dwb_order_center_i.address_tag_name IS '地址标签';
-COMMENT ON COLUMN slord.dwb_order_center_i.longitude IS '经度';
-COMMENT ON COLUMN slord.dwb_order_center_i.latitude IS '纬度';
-COMMENT ON COLUMN slord.dwb_order_center_i.activity_id IS '活动ID';
-COMMENT ON COLUMN slord.dwb_order_center_i.activity_name IS '活动名称';
-COMMENT ON COLUMN slord.dwb_order_center_i.activity_type_name IS '活动类型';
-COMMENT ON COLUMN slord.dwb_order_center_i.activity_discount_rate IS '活动折扣率(%)';
-COMMENT ON COLUMN slord.dwb_order_center_i.coupon_id IS '优惠券ID';
-COMMENT ON COLUMN slord.dwb_order_center_i.coupon_name IS '优惠券名称';
-COMMENT ON COLUMN slord.dwb_order_center_i.coupon_type_name IS '优惠券类型';
-COMMENT ON COLUMN slord.dwb_order_center_i.coupon_amount IS '优惠券金额';
-COMMENT ON COLUMN slord.dwb_order_center_i.full_reduce_amount IS '满减金额';
-COMMENT ON COLUMN slord.dwb_order_center_i.points_deduct_amount IS '积分抵扣金额';
-COMMENT ON COLUMN slord.dwb_order_center_i.points_used IS '使用积分数';
-COMMENT ON COLUMN slord.dwb_order_center_i.is_marketing_order IS '是否营销订单';
-COMMENT ON COLUMN slord.dwb_order_center_i.total_discount_amount IS '总优惠金额';
+COMMENT ON COLUMN slord.dwb_order_center_i.user_id IS '用户ID';
 COMMENT ON COLUMN slord.dwb_order_center_i.user_name IS '用户姓名';
 COMMENT ON COLUMN slord.dwb_order_center_i.user_phone_masked IS '用户手机(脱敏)';
 COMMENT ON COLUMN slord.dwb_order_center_i.user_email_masked IS '用户邮箱(脱敏)';
@@ -197,6 +174,7 @@ COMMENT ON COLUMN slord.dwb_order_center_i.user_source_name IS '用户来源';
 COMMENT ON COLUMN slord.dwb_order_center_i.user_province_code IS '用户省份编码';
 COMMENT ON COLUMN slord.dwb_order_center_i.user_city_code IS '用户城市编码';
 COMMENT ON COLUMN slord.dwb_order_center_i.user_days IS '用户注册天数';
+COMMENT ON COLUMN slord.dwb_order_center_i.product_id IS '商品ID';
 COMMENT ON COLUMN slord.dwb_order_center_i.product_name IS '商品名称';
 COMMENT ON COLUMN slord.dwb_order_center_i.product_code IS '商品编码';
 COMMENT ON COLUMN slord.dwb_order_center_i.sku_code IS 'SKU编码';
@@ -219,6 +197,7 @@ COMMENT ON COLUMN slord.dwb_order_center_i.real_price IS '商品实付单价';
 COMMENT ON COLUMN slord.dwb_order_center_i.product_tag IS '商品标签';
 COMMENT ON COLUMN slord.dwb_order_center_i.product_status_name IS '商品状态';
 COMMENT ON COLUMN slord.dwb_order_center_i.product_profit IS '单品毛利';
+COMMENT ON COLUMN slord.dwb_order_center_i.shop_id IS '店铺ID';
 COMMENT ON COLUMN slord.dwb_order_center_i.shop_name IS '店铺名称';
 COMMENT ON COLUMN slord.dwb_order_center_i.shop_type_name IS '店铺类型';
 COMMENT ON COLUMN slord.dwb_order_center_i.shop_level_name IS '店铺等级';
@@ -229,6 +208,22 @@ COMMENT ON COLUMN slord.dwb_order_center_i.shop_province_name IS '店铺省份�
 COMMENT ON COLUMN slord.dwb_order_center_i.shop_city_code IS '店铺城市编码';
 COMMENT ON COLUMN slord.dwb_order_center_i.shop_city_name IS '店铺城市名称';
 COMMENT ON COLUMN slord.dwb_order_center_i.shop_open_time IS '开店时间';
+COMMENT ON COLUMN slord.dwb_order_center_i.shop_history_order_cnt IS '店铺历史订单数';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_name IS '收货人姓名';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_phone_masked IS '收货人手机(脱敏)';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_province_code IS '收货省份编码';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_province_name IS '收货省份名称';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_city_code IS '收货城市编码';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_city_name IS '收货城市名称';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_district_code IS '收货区县编码';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_district_name IS '收货区县名称';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_street IS '收货街道';
+COMMENT ON COLUMN slord.dwb_order_center_i.receiver_address IS '详细地址';
+COMMENT ON COLUMN slord.dwb_order_center_i.full_address IS '完整收货地址';
+COMMENT ON COLUMN slord.dwb_order_center_i.postal_code IS '邮政编码';
+COMMENT ON COLUMN slord.dwb_order_center_i.address_tag_name IS '地址标签';
+COMMENT ON COLUMN slord.dwb_order_center_i.longitude IS '经度';
+COMMENT ON COLUMN slord.dwb_order_center_i.latitude IS '纬度';
 COMMENT ON COLUMN slord.dwb_order_center_i.pay_time IS '支付时间';
 COMMENT ON COLUMN slord.dwb_order_center_i.pay_id IS '支付ID';
 COMMENT ON COLUMN slord.dwb_order_center_i.pay_no IS '支付流水号';
@@ -256,6 +251,19 @@ COMMENT ON COLUMN slord.dwb_order_center_i.logistics_status_name IS '物流状�
 COMMENT ON COLUMN slord.dwb_order_center_i.pickup_time IS '揽收时间';
 COMMENT ON COLUMN slord.dwb_order_center_i.sign_receiver_name IS '签收人';
 COMMENT ON COLUMN slord.dwb_order_center_i.ship_duration_hours IS '支付到发货时长(小时)';
+COMMENT ON COLUMN slord.dwb_order_center_i.coupon_id IS '优惠券ID';
+COMMENT ON COLUMN slord.dwb_order_center_i.coupon_name IS '优惠券名称';
+COMMENT ON COLUMN slord.dwb_order_center_i.coupon_type_name IS '优惠券类型';
+COMMENT ON COLUMN slord.dwb_order_center_i.coupon_amount IS '优惠券金额';
+COMMENT ON COLUMN slord.dwb_order_center_i.activity_id IS '活动ID';
+COMMENT ON COLUMN slord.dwb_order_center_i.activity_name IS '活动名称';
+COMMENT ON COLUMN slord.dwb_order_center_i.activity_type_name IS '活动类型';
+COMMENT ON COLUMN slord.dwb_order_center_i.activity_discount_rate IS '活动折扣率(%)';
+COMMENT ON COLUMN slord.dwb_order_center_i.full_reduce_amount IS '满减金额';
+COMMENT ON COLUMN slord.dwb_order_center_i.points_deduct_amount IS '积分抵扣金额';
+COMMENT ON COLUMN slord.dwb_order_center_i.points_used IS '使用积分数';
+COMMENT ON COLUMN slord.dwb_order_center_i.is_marketing_order IS '是否营销订单';
+COMMENT ON COLUMN slord.dwb_order_center_i.total_discount_amount IS '总优惠金额';
 COMMENT ON COLUMN slord.dwb_order_center_i.refund_id IS '退款ID';
 COMMENT ON COLUMN slord.dwb_order_center_i.refund_no IS '退款单号';
 COMMENT ON COLUMN slord.dwb_order_center_i.refund_type_name IS '退款类型';

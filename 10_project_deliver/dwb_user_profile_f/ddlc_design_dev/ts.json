@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "spec_type": "ts",
-  "generated_at": "2026-08-03T23:13:10",
+  "generated_at": "2026-08-04T23:27:14",
   "generated_by": "assemble_ts.py",
   "meta": {
     "target": {
@@ -54,25 +54,45 @@
       }
     ],
     "schedule": {
-      "task_name": "task_dwb_user_profile_f",
-      "cron": "0 0 1 * * ?",
-      "task_group": "",
-      "project": "",
+      "task_name": "dwb_user_profile_f",
+      "cron": "0 30 3 * * ?",
       "owner": "",
-      "exec_params": {},
+      "exec_params": {
+        "P_CYCLE_ID": {
+          "value_type": "string",
+          "desc": "批次号",
+          "standard": true
+        }
+      },
+      "lts_params": [
+        {
+          "lts_var": "V_CYCLE_ID",
+          "etl_param": "P_CYCLE_ID",
+          "desc": "批次号"
+        }
+      ],
       "upstream": [],
-      "execution_platform": {}
+      "view": {
+        "task_name": "dwb_user_profile_i",
+        "cron": "0 35 3 * * ?",
+        "upstream": [
+          {
+            "table": "dwb_user_profile_f",
+            "task": "dwb_user_profile_f"
+          }
+        ]
+      }
     }
   },
   "design": {
     "complexity_analysis": {
       "join_count": 3,
       "has_grain_change": false,
-      "grain_change_detail": "",
-      "multi_step_fields": 0,
+      "grain_change_detail": "输入用户行，输出用户行，粒度无变化",
+      "multi_step_fields": 11,
       "aggregation_after_join": false,
       "segmentation_decision": "不分段",
-      "segmentation_reason": "仅3张维度表关联（远低于12表阈值），无粒度变化、无聚合、无聚合后关联，字段加工均为单步直接加工（脱敏/翻译/时间提取），单条INSERT即可完成，无需中间表或CTE"
+      "segmentation_reason": "JOIN 表数量 3（远低于阈值 12），无粒度变化，加工字段均为单字段变换无聚合后关联，复杂度低，单条 INSERT 即可完成全量重写"
     },
     "audit_fields": {
       "del_flag": {
@@ -97,9 +117,6 @@
       }
     },
     "audit_supplemented": [],
-    "distribution_key": [
-      "user_id"
-    ],
     "business_key": [
       "user_id"
     ],
@@ -111,89 +128,16 @@
       "reason": ""
     }
   },
-  "rules": {
-    "R0001": {
-      "rule_name": "用户画像宽表写入",
-      "scenario": "default",
-      "exec_sequence": 1,
-      "target_table": "slusr.dwb_user_profile_f",
-      "is_view_step": false,
-      "design_intent": "以用户基础信息表(oub)为主表（粒度锚点：一个用户），LEFT JOIN 用户等级维度(dul)、地区维度(drd)、用户来源维度(dus)三张维度表补充画像属性，按用户粒度一次性全量写入画像宽表；字段以直取为主，少量字段做脱敏/代码翻译/时间提取加工。单场景、不分段。",
-      "load_mode": "truncate_table",
-      "source_tables": [
-        {
-          "schema": "ods",
-          "table": "ods_user_basic_f",
-          "alias": "oub"
-        },
-        {
-          "schema": "dim",
-          "table": "dim_user_level_d",
-          "alias": "dul"
-        },
-        {
-          "schema": "dim",
-          "table": "dim_region_d",
-          "alias": "drd"
-        },
-        {
-          "schema": "dim",
-          "table": "dim_user_source_d",
-          "alias": "dus"
-        }
+  "tables": {
+    "dwb_user_profile_f": {
+      "type": "target",
+      "distribution_key": [
+        "user_id"
       ],
-      "ctes": [],
-      "grain": {
-        "input": "一行=一个用户（ods.ods_user_basic_f）",
-        "output": "一行=一个用户画像记录",
-        "change": "无变化"
-      },
-      "joins": [
-        {
-          "alias": "oub",
-          "type": "main",
-          "condition": "主表（粒度锚点：用户）",
-          "filter": ""
-        },
-        {
-          "alias": "dul",
-          "type": "LEFT JOIN",
-          "condition": "oub.level_id = dul.level_id",
-          "filter": ""
-        },
-        {
-          "alias": "drd",
-          "type": "LEFT JOIN",
-          "condition": "oub.province_code = drd.region_code",
-          "filter": ""
-        },
-        {
-          "alias": "dus",
-          "type": "LEFT JOIN",
-          "condition": "oub.source_id = dus.source_id",
-          "filter": ""
-        }
-      ],
-      "join_safety": [
-        {
-          "table": "dim.dim_user_level_d",
-          "join_key_unique": true,
-          "strategy": "直接关联",
-          "reason": "用户等级维度按 level_id 唯一，与主表等级键一对一，LEFT JOIN 不发散"
-        },
-        {
-          "table": "dim.dim_region_d",
-          "join_key_unique": true,
-          "strategy": "直接关联",
-          "reason": "地区维度按 region_code 唯一，主表按 province_code 关联，一对一不发散"
-        },
-        {
-          "table": "dim.dim_user_source_d",
-          "join_key_unique": true,
-          "strategy": "直接关联",
-          "reason": "用户来源维度按 source_id 唯一，与主表来源键一对一，LEFT JOIN 不发散"
-        }
-      ],
+      "distribute_type": "HASH",
+      "partition": "",
+      "storage": "column",
+      "logical_group": "LC_DW1",
       "fields": [
         {
           "target_field": "user_id",
@@ -235,7 +179,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "手机号脱敏：保留前3位和后4位，中间以 **** 屏蔽"
+          "design_logic": "手机号脱敏：保留前3位和后4位，中间用4个星号屏蔽"
         },
         {
           "target_field": "user_phone_masked",
@@ -277,7 +221,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "性别代码翻译：M→男、F→女、其余→未知"
+          "design_logic": "性别代码转中文：M转男、F转女，其余值转未知"
         },
         {
           "target_field": "birthday",
@@ -305,7 +249,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "年龄：以当前年份减去出生日期所在年份计算"
+          "design_logic": "由出生日期计算年龄：当前年份减去出生年份"
         },
         {
           "target_field": "id_card",
@@ -333,7 +277,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "身份证号脱敏：保留前6位和后4位，中间以 ******** 屏蔽"
+          "design_logic": "身份证号脱敏：保留前6位和后4位，中间用8个星号屏蔽"
         },
         {
           "target_field": "real_name",
@@ -403,7 +347,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "用户状态翻译：ACTIVE→正常、INACTIVE→未激活、BANNED→封禁、其余→未知"
+          "design_logic": "用户状态代码转中文名称：ACTIVE转正常、INACTIVE转未激活、BANNED转封禁，其余值转未知"
         },
         {
           "target_field": "register_time",
@@ -431,7 +375,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "注册日期：取注册时间的日期部分"
+          "design_logic": "从注册时间戳提取日期部分"
         },
         {
           "target_field": "register_hour_processed",
@@ -445,7 +389,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "注册小时：取注册时间的小时部分（0-23）"
+          "design_logic": "从注册时间戳提取小时（24小时制）"
         },
         {
           "target_field": "register_weekday_processed",
@@ -459,7 +403,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "注册星期：取注册时间为星期几"
+          "design_logic": "从注册时间戳提取星期几"
         },
         {
           "target_field": "last_login_time",
@@ -487,7 +431,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "最后登录日期：取最后登录时间的日期部分"
+          "design_logic": "从最后登录时间戳提取日期部分"
         },
         {
           "target_field": "login_count",
@@ -823,7 +767,7 @@
               "alias": "oub"
             }
           ],
-          "design_logic": "是否VIP：VIP到期时间晚于当前时间判为1，否则为0"
+          "design_logic": "判断是否VIP：VIP到期时间大于当前时间则为1，否则为0"
         },
         {
           "target_field": "member_points",
@@ -2813,8 +2757,294 @@
           ],
           "design_logic": "固定赋值"
         }
+      ]
+    }
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "用户画像宽表全量加工",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "slusr.dwb_user_profile_f",
+      "is_view_step": false,
+      "design_intent": "用户画像宽表全量重写：以 oub 用户基础表为主表，LEFT JOIN 等级/地区/来源三张维表补齐画像属性，并对敏感字段脱敏、枚举字段转中文、派生时间维度字段。无粒度变化、无聚合，单条 INSERT 即可完成。",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "ods",
+          "table": "ods_user_basic_f",
+          "alias": "oub"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_user_level_d",
+          "alias": "dul"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_region_d",
+          "alias": "drd"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_user_source_d",
+          "alias": "dus"
+        }
       ],
-      "field_count": 187
+      "ctes": [],
+      "grain": {
+        "input": "一行=一个用户（ods_user_basic_f）",
+        "output": "一行=一个用户画像记录",
+        "change": "无变化"
+      },
+      "joins": [
+        {
+          "alias": "oub",
+          "type": "main",
+          "condition": "",
+          "filter": ""
+        },
+        {
+          "alias": "dul",
+          "type": "LEFT JOIN",
+          "condition": "oub.level_id = dul.level_id",
+          "filter": ""
+        },
+        {
+          "alias": "drd",
+          "type": "LEFT JOIN",
+          "condition": "oub.province_code = drd.region_code",
+          "filter": ""
+        },
+        {
+          "alias": "dus",
+          "type": "LEFT JOIN",
+          "condition": "oub.source_id = dus.source_id",
+          "filter": ""
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dul",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "dim_user_level_d 按 level_id 唯一（维表主键）"
+        },
+        {
+          "table": "drd",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "dim_region_d 按 region_code 唯一（维表主键），关联键 province_code 对应 region_code"
+        },
+        {
+          "table": "dus",
+          "join_key_unique": true,
+          "strategy": "",
+          "reason": "dim_user_source_d 按 source_id 唯一（维表主键）"
+        }
+      ],
+      "field_targets": [
+        "user_id",
+        "user_name",
+        "user_phone_processed",
+        "user_phone_masked",
+        "email",
+        "gender_processed",
+        "birthday",
+        "age_processed",
+        "id_card",
+        "id_card_masked_processed",
+        "real_name",
+        "nick_name",
+        "avatar_url",
+        "user_status",
+        "user_status_name_processed",
+        "register_time",
+        "register_date_processed",
+        "register_hour_processed",
+        "register_weekday_processed",
+        "last_login_time",
+        "last_login_date_processed",
+        "login_count",
+        "province_code",
+        "province_name",
+        "city_code",
+        "city_name",
+        "district_code",
+        "district_name",
+        "address",
+        "zip_code",
+        "source_id",
+        "source_name",
+        "source_type",
+        "device_type",
+        "os_type",
+        "app_version",
+        "ip_address",
+        "longitude",
+        "latitude",
+        "language",
+        "timezone",
+        "currency",
+        "vip_level",
+        "vip_expire_time",
+        "is_vip_processed",
+        "member_points",
+        "balance",
+        "credit_score",
+        "risk_level",
+        "verify_status",
+        "level_id",
+        "level_name",
+        "level_code",
+        "level_rank",
+        "min_points",
+        "max_points",
+        "level_icon",
+        "level_color",
+        "upgrade_points",
+        "current_level_points",
+        "next_level_points",
+        "progress_percentage",
+        "privilege_list",
+        "discount_rate",
+        "points_rate",
+        "free_shipping",
+        "exclusive_products",
+        "priority_support",
+        "birthday_bonus",
+        "monthly_coupon",
+        "annual_gift",
+        "vip_service",
+        "invite_quota",
+        "max_orders_per_day",
+        "max_return_days",
+        "level_benefits",
+        "upgrade_time",
+        "downgrade_time",
+        "maintain_days",
+        "level_status",
+        "create_time",
+        "update_time",
+        "valid_from",
+        "valid_to",
+        "is_active",
+        "level_tier",
+        "level_group",
+        "level_category",
+        "points_required",
+        "orders_required",
+        "amount_required",
+        "days_required",
+        "growth_value",
+        "experience_value",
+        "contribution_value",
+        "activity_value",
+        "loyalty_score",
+        "engagement_score",
+        "satisfaction_score",
+        "retention_score",
+        "region_id",
+        "region_code",
+        "region_name",
+        "parent_id",
+        "region_level",
+        "region_path",
+        "province_id",
+        "province_abbr",
+        "city_id",
+        "city_abbr",
+        "district_id",
+        "district_abbr",
+        "street_id",
+        "street_code",
+        "street_name",
+        "center_longitude",
+        "center_latitude",
+        "area_size",
+        "population",
+        "gdp",
+        "gdp_per_capita",
+        "climate_type",
+        "economy_level",
+        "development_level",
+        "urban_rate",
+        "region_type",
+        "is_coastal",
+        "is_border",
+        "is_capital",
+        "is_special",
+        "postal_code_prefix",
+        "phone_area_code",
+        "car_plate_prefix",
+        "airport_code",
+        "railway_station_code",
+        "port_code",
+        "weather_station_code",
+        "customs_code",
+        "statistical_code",
+        "iso_code",
+        "source_code",
+        "source_category",
+        "channel_id",
+        "channel_code",
+        "channel_name",
+        "channel_type",
+        "channel_category",
+        "campaign_id",
+        "campaign_code",
+        "campaign_name",
+        "campaign_type",
+        "medium_id",
+        "medium_code",
+        "medium_name",
+        "medium_type",
+        "term_id",
+        "term_keyword",
+        "content_id",
+        "content_name",
+        "referral_url",
+        "landing_page",
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "cost_per_acquisition",
+        "conversion_rate",
+        "quality_score",
+        "retention_rate_7d",
+        "retention_rate_30d",
+        "lifetime_value",
+        "first_order_amount",
+        "first_order_days",
+        "register_device",
+        "register_os",
+        "register_browser",
+        "register_network",
+        "register_location",
+        "attribution_model",
+        "lookback_days",
+        "priority",
+        "is_paid",
+        "del_flag",
+        "crt_cycle_id",
+        "last_upd_cycle_id",
+        "dw_last_update_date"
+      ],
+      "field_logics": {
+        "user_phone_processed": "手机号脱敏：保留前3位和后4位，中间用4个星号屏蔽",
+        "gender_processed": "性别代码转中文：M转男、F转女，其余值转未知",
+        "age_processed": "由出生日期计算年龄：当前年份减去出生年份",
+        "id_card_masked_processed": "身份证号脱敏：保留前6位和后4位，中间用8个星号屏蔽",
+        "user_status_name_processed": "用户状态代码转中文名称：ACTIVE转正常、INACTIVE转未激活、BANNED转封禁，其余值转未知",
+        "register_date_processed": "从注册时间戳提取日期部分",
+        "register_hour_processed": "从注册时间戳提取小时（24小时制）",
+        "register_weekday_processed": "从注册时间戳提取星期几",
+        "last_login_date_processed": "从最后登录时间戳提取日期部分",
+        "is_vip_processed": "判断是否VIP：VIP到期时间大于当前时间则为1，否则为0",
+        "progress_percentage": "升级进度百分比：当前等级积分除以升级所需积分再乘以100"
+      }
     }
   },
   "data_flow": {

@@ -1,134 +1,134 @@
-/* R0001: 用户画像中间表（收口所有按 user_id 聚合的用户画像/历史指标，先聚合再关联，输出用户粒度，避免直接关联订单发散订单粒度） */
-WITH
-/* CTE 1: 订单主聚合 - 对 dwd_order_f 按 user_id 收敛，产出首末下单时间/订单数/消费金额/优惠金额 */
-dof_agg AS (
+/* R0001: 用户画像汇总
+   将订单/支付/优惠券/退款四类事实表按 user_id 聚合，
+   产出用户级画像指标（首次/最近下单、历史消费、RFM分层、复购、偏好），
+   避免主装配阶段聚合导致粒度发散。目标表: slord.dwb_order_center_tmp1 */
+
+/* CTE 1: 订单核心统计 - 按 user_id 聚合订单时间/订单数/金额汇总 */
+WITH cte_order_stats AS (
     SELECT
-        dof.user_id AS user_id,
-        MIN(dof.create_time) AS first_order_time,
-        MAX(dof.create_time) AS last_order_time,
-        COUNT(1) AS history_order_cnt,
-        COALESCE(SUM(dof.pay_amount), 0) AS history_pay_amount,
-        COALESCE(SUM(dof.discount_amount), 0) AS history_discount_amount
-    FROM sdord.dwd_order_f dof
-    WHERE dof.order_status NOT IN ('CANCELLED', 'DELETED')
-      AND dof.del_flag = 'N'
-    GROUP BY dof.user_id
+        user_id,
+        MIN(create_time)                  AS first_order_time,
+        MAX(create_time)                  AS last_order_time,
+        COUNT(*)                          AS history_order_cnt,
+        COALESCE(SUM(pay_amount), 0)      AS history_pay_amount,
+        COALESCE(SUM(discount_amount), 0) AS history_discount_amount
+    FROM sdord.dwd_order_f
+    WHERE del_flag = 'N'
+      AND order_status NOT IN ('CANCELLED', 'DELETED')
+    GROUP BY user_id
 ),
-/* CTE 2: 支付方式众数 - 对 dwd_payment_f 按 user_id 分组取使用次数最多的 pay_method，收敛到用户粒度 */
-dpf_mode AS (
+
+/* CTE 2: 订单衍生指标 - 客单价 / 复购标识 / RFM 三分量(NTILE 自动5等分) */
+cte_order_rfm AS (
     SELECT
-        t.user_id AS user_id,
-        t.pay_method AS fav_pay_method
+        os.user_id,
+        os.first_order_time,
+        os.last_order_time,
+        os.history_order_cnt,
+        os.history_pay_amount,
+        os.history_discount_amount,
+        /* 平均客单价 = 历史消费金额 / 历史订单数 (防除零) */
+        CASE
+            WHEN os.history_order_cnt = 0 THEN 0
+            ELSE ROUND(os.history_pay_amount / os.history_order_cnt, 2)
+        END AS avg_order_amount,
+        /* 复购用户: 历史订单数 >= 2 */
+        CASE WHEN os.history_order_cnt >= 2 THEN 'Y' ELSE 'N' END AS is_repeat_user,
+        /* R/F/M 各按数据分布自动5等分 (设计未给阈值, 用 NTILE 兜底) */
+        NTILE(5) OVER (ORDER BY os.last_order_time ASC)     AS r_score,
+        NTILE(5) OVER (ORDER BY os.history_order_cnt ASC)   AS f_score,
+        NTILE(5) OVER (ORDER BY os.history_pay_amount ASC)  AS m_score
+    FROM cte_order_stats os
+),
+
+/* CTE 3: 活动偏好 - 按 user_id+activity_type 统计参与订单数, 取最多的活动类型 */
+cte_activity_pref AS (
+    SELECT user_id, activity_type
     FROM (
         SELECT
-            dpf.user_id AS user_id,
-            dpf.pay_method AS pay_method,
+            user_id,
+            activity_type,
             ROW_NUMBER() OVER (
-                PARTITION BY dpf.user_id
-                ORDER BY COUNT(1) DESC, MAX(dpf.pay_time) DESC
+                PARTITION BY user_id
+                ORDER BY COUNT(*) DESC, MAX(create_time) DESC
             ) AS rn
-        FROM sdpay.dwd_payment_f dpf
-        WHERE dpf.del_flag = 'N'
-        GROUP BY dpf.user_id, dpf.pay_method
+        FROM sdord.dwd_order_f
+        WHERE del_flag = 'N'
+          AND order_status NOT IN ('CANCELLED', 'DELETED')
+          AND activity_type IS NOT NULL
+        GROUP BY user_id, activity_type
     ) t
-    WHERE t.rn = 1
+    WHERE rn = 1
 ),
-/* CTE 3: 优惠券使用次数 - 对 dwd_coupon_use_f 按 user_id COUNT(DISTINCT coupon_id) 收敛，仅统计已使用 */
-dcu_cnt AS (
-    SELECT
-        dcu.user_id AS user_id,
-        COUNT(DISTINCT dcu.coupon_id) AS user_coupon_used_cnt
-    FROM sdmar.dwd_coupon_use_f dcu
-    WHERE dcu.use_status = 'USED'
-      AND dcu.del_flag = 'N'
-    GROUP BY dcu.user_id
-),
-/* CTE 4: 退款次数 - 对 dwd_refund_f 按 user_id COUNT 收敛，仅统计退款成功 */
-drf_cnt AS (
-    SELECT
-        drf17.user_id AS user_id,
-        COUNT(1) AS user_refund_cnt
-    FROM sdref.dwd_refund_f drf17
-    WHERE drf17.refund_status = 'SUCCESS'
-      AND drf17.del_flag = 'N'
-    GROUP BY drf17.user_id
-),
-/* CTE 5: 偏好活动类型 - dwd_order_f 关联活动维表后按 user_id 取参与订单数最多的 activity_type */
-fav_act AS (
-    SELECT
-        t.user_id AS user_id,
-        t.activity_type AS user_fav_activity_type
+
+/* CTE 4: 支付偏好 - 按 user_id+pay_method 统计次数, 取使用最多的支付方式 */
+cte_pay_pref AS (
+    SELECT user_id, pay_method
     FROM (
         SELECT
-            dof.user_id AS user_id,
-            daf.activity_type AS activity_type,
+            user_id,
+            pay_method,
             ROW_NUMBER() OVER (
-                PARTITION BY dof.user_id
-                ORDER BY COUNT(1) DESC, MAX(dof.create_time) DESC
+                PARTITION BY user_id
+                ORDER BY COUNT(*) DESC, MAX(create_time) DESC
             ) AS rn
-        FROM sdord.dwd_order_f dof
-        LEFT JOIN dim.dim_activity_f daf
-            ON dof.activity_id = daf.activity_id
-            AND daf.del_flag = 'N'
-        WHERE dof.order_status NOT IN ('CANCELLED', 'DELETED')
-          AND dof.del_flag = 'N'
-          AND daf.activity_type IS NOT NULL
-        GROUP BY dof.user_id, daf.activity_type
+        FROM sdpay.dwd_payment_f
+        WHERE del_flag = 'N'
+          AND pay_status = 'SUCCESS'
+        GROUP BY user_id, pay_method
     ) t
-    WHERE t.rn = 1
+    WHERE rn = 1
+),
+
+/* CTE 5: 优惠券统计 - 按 user_id 统计 DISTINCT coupon_id 使用次数 */
+cte_coupon_stats AS (
+    SELECT
+        user_id,
+        COUNT(DISTINCT coupon_id) AS user_coupon_used_cnt
+    FROM sdmar.dwd_coupon_use_f
+    WHERE del_flag = 'N'
+      AND use_status = 'USED'
+    GROUP BY user_id
+),
+
+/* CTE 6: 退款统计 - 按 user_id 统计退款成功次数 */
+cte_refund_stats AS (
+    SELECT
+        user_id,
+        COUNT(*) AS user_refund_cnt
+    FROM sdref.dwd_refund_f
+    WHERE del_flag = 'N'
+      AND refund_status = 'SUCCESS'
+    GROUP BY user_id
 )
 
-/* 主查询: 以 dof_agg 为基，LEFT JOIN 各收敛后的用户粒度 CTE，再计算派生指标 */
+/* 最终组装: 以 cte_order_rfm 为主表, LEFT JOIN 各 user_id 粒度子聚合 */
 SELECT
-    da.user_id AS user_id,
-    da.first_order_time AS first_order_time,
-    da.last_order_time AS last_order_time,
-    da.history_order_cnt AS history_order_cnt,
-    da.history_pay_amount AS history_pay_amount,
-    da.history_discount_amount AS history_discount_amount,
-    CASE
-        WHEN COALESCE(da.history_order_cnt, 0) = 0 THEN 0
-        ELSE ROUND(da.history_pay_amount / da.history_order_cnt, 2)
-    END AS avg_order_amount,
-    CONCAT(
-        CASE
-            WHEN da.last_order_time IS NULL THEN '1'
-            WHEN (CURRENT_DATE - CAST(da.last_order_time AS DATE)) <= 30 THEN '5'
-            WHEN (CURRENT_DATE - CAST(da.last_order_time AS DATE)) <= 90 THEN '4'
-            WHEN (CURRENT_DATE - CAST(da.last_order_time AS DATE)) <= 180 THEN '3'
-            WHEN (CURRENT_DATE - CAST(da.last_order_time AS DATE)) <= 365 THEN '2'
-            ELSE '1'
-        END,
-        CASE
-            WHEN da.history_order_cnt >= 20 THEN '5'
-            WHEN da.history_order_cnt >= 10 THEN '4'
-            WHEN da.history_order_cnt >= 5 THEN '3'
-            WHEN da.history_order_cnt >= 2 THEN '2'
-            ELSE '1'
-        END,
-        CASE
-            WHEN da.history_pay_amount >= 10000 THEN '5'
-            WHEN da.history_pay_amount >= 5000 THEN '4'
-            WHEN da.history_pay_amount >= 2000 THEN '3'
-            WHEN da.history_pay_amount >= 500 THEN '2'
-            ELSE '1'
-        END
-    ) AS rfm_segment,
-    CASE
-        WHEN da.history_order_cnt >= 2 THEN 'Y'
-        ELSE 'N'
-    END AS is_repeat_user,
-    COALESCE(pm.fav_pay_method, '') AS fav_pay_method,
-    COALESCE(dcc.user_coupon_used_cnt, 0) AS user_coupon_used_cnt,
-    COALESCE(fa.user_fav_activity_type, '') AS user_fav_activity_type,
-    COALESCE(drc.user_refund_cnt, 0) AS user_refund_cnt,
+    rf.user_id AS user_id,
+    rf.first_order_time AS first_order_time,
+    rf.last_order_time AS last_order_time,
+    rf.history_order_cnt AS history_order_cnt,
+    rf.history_pay_amount AS history_pay_amount,
+    rf.history_discount_amount AS history_discount_amount,
+    rf.avg_order_amount AS avg_order_amount,
+    /* RFM 三分量组合标签: R{r}F{f}M{m} */
+    CONCAT('R', rf.r_score, 'F', rf.f_score, 'M', rf.m_score) AS rfm_segment,
+    rf.is_repeat_user AS is_repeat_user,
+    /* 常用支付方式, 无支付记录兜底空串 */
+    COALESCE(pp.pay_method, '') AS fav_pay_method,
+    /* 优惠券使用次数, 无记录兜底 0 */
+    COALESCE(cs.user_coupon_used_cnt, 0) AS user_coupon_used_cnt,
+    /* 偏好活动类型, 无活动记录兜底空串 */
+    COALESCE(ap.activity_type, '') AS user_fav_activity_type,
+    /* 历史退款次数, 无退款记录兜底 0 */
+    COALESCE(rs.user_refund_cnt, 0) AS user_refund_cnt,
+    /* 审计字段 (assemble_ddl.py 会给 tmp 表追加审计列, 必带) */
     'N' AS del_flag,
     '${P_CYCLE_ID}' AS crt_cycle_id,
     '${P_CYCLE_ID}' AS last_upd_cycle_id,
     CURRENT_TIMESTAMP AS dw_last_update_date
-FROM dof_agg da
-LEFT JOIN dpf_mode pm ON da.user_id = pm.user_id
-LEFT JOIN dcu_cnt dcc ON da.user_id = dcc.user_id
-LEFT JOIN drf_cnt drc ON da.user_id = drc.user_id
-LEFT JOIN fav_act fa ON da.user_id = fa.user_id
-;
+FROM cte_order_rfm rf
+LEFT JOIN cte_activity_pref ap ON rf.user_id = ap.user_id
+LEFT JOIN cte_pay_pref pp     ON rf.user_id = pp.user_id
+LEFT JOIN cte_coupon_stats cs ON rf.user_id = cs.user_id
+LEFT JOIN cte_refund_stats rs ON rf.user_id = rs.user_id

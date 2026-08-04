@@ -1,6 +1,6 @@
 # ETL 技术规格(TS)
 
-> 目标表: `slusr.dwb_user_center_f`(用户中心宽表) - 生成 2026-08-03T23:03:50
+> 目标表: `slusr.dwb_user_center_f`(用户中心宽表) - 生成 2026-08-05T00:01:22
 
 ---
 
@@ -8,14 +8,12 @@
 
 | 项目 | 内容 |
 |------|------|
-| **F 表** | `slusr.dwb_user_center_f`(用户中心宽表) |
-| **I 视图** | `slusr.dwb_user_center_i`(F表镜像) |
-| **目标粒度** | 每行一个用户记录 |
-| **写入策略** | 全量调度 |
-| **分布键** | user_id |
-| **字段统计** | 业务 42 + 审计 4 = 总计 46 |
-| **审计字段来源** | 全部来自 RS/mapping |
-| **规则数** | 4 |
+| **F 表** | `slusr.dwb_user_center_f`（用户中心宽表） |
+| **I 视图** | `slusr.dwb_user_center_i`（F表镜像，对外查询） |
+| **业务主键** | user_id |
+| **写入策略** | 全量（可随时重刷） |
+| **字段统计** | 46 |
+| **规则数** | 3 |
 
 **来源表**:
 
@@ -35,235 +33,191 @@
 
 ## 2. 表模型设计
 
-- **F表**: `dwb_user_center_f`(存数据)
-- **I视图**: `dwb_user_center_i`(F表镜像, 对外查询)
-- **分布键**: user_id
-
-**中间表**:
-
-| 规则 | 表名 | 粒度 | 用途 |
-|------|------|------|------|
-| R0001 | dwb_user_center_tmp1 | 一行=一个用户 | 以 dim_user_f 为主表，LEFT JOIN 等级/地区/来源维度，产出用户基础属性宽表，供最终装配规则引用。粒度不变（一行一用户）。 |
-| R0002 | dwb_user_center_tmp2 | 一行=一个用户 | 对 dwd_order_f 排除作废/删除订单后按 user_id 聚合，产出用户级订单汇总指标，供最终装配规则引用。粒度从订单明细收敛到用户。 |
-| R0003 | dwb_user_center_tmp3 | 一行=一个用户 | 对 dwd_user_behavior_f 按 user_id 聚合浏览/收藏/加购行为指标，供最终装配规则引用。粒度从行为明细收敛到用户。 |
+| 表名 | 类型 | 分布 | 分区 | 字段数 | 说明 |
+|------|------|------|------|--------|------|
+| `dwb_user_center_f` | 目标F表 | HASH(user_id) | — | 37 | 用户中心宽表 |
+| `dwb_user_center_f_tmp1` | 中间表 | HASH(user_id) | — | 5 | 将订单明细事实表聚合到用户粒度 |
+| `dwb_user_center_f_tmp2` | 中间表 | HASH(user_id) | — | 4 | 基于订单聚合指标用 NTILE(5) 窗口函数跨全量用户打分 |
+| `dwb_user_center_i` | 直封视图 | — | — | 同F表 | F表镜像，对外查询 |
 
 ---
 
 ## 3. 复杂度分析与分段决策
 
-| 因素 | 值 |
-|------|-----|
-| JOIN 表数量 | 6 |
-| 粒度变化 | 有 (dwd_order_f / dwd_user_behavior_f / dwd_coupon_use_f / dwd_refund_f / dwd_cart_f 五个事实表从多行明细聚合到一行一用户粒度) |
-| 多步骤加工字段 | 16 |
-| 聚合后关联 | 是 |
+| 因素 | 值 | 阈值 |
+|------|-----|------|
+| JOIN 表数量 | 10 | >12 触发分段 |
+| 粒度变化 | 有 | 有即评估分段 |
+| 多步骤加工字段 | 11 | ≥5 触发分段 |
+| 聚合后关联 | 是 | 是即评估分段 |
 
-**分段结论**: 分段
-**理由**: 5 个事实表需先按 user_id GROUP BY 聚合后才能关联用户维度（直接 JOIN 会导致笛卡尔发散）；16 个多步骤加工字段远超阈值 5；RFM 评分需在全量用户上做 NTILE(5) 窗口函数。拆 3 个物理中间表（tmp1 基础属性 / tmp2 订单汇总 / tmp3 行为汇总）+ 1 个最终装配规则（优惠券/退款/购物车用 CTE 内联）。
+> 粒度变化说明: 5 张事实表（订单/行为/优惠券/退款/购物车）从明细粒度聚合到用户粒度；RFM 评分需跨全量用户 NTILE(5) 窗口排序
+
+**分段结论**: **分段**
+
+> 命中多个分段阈值：多步骤加工字段≥5（RFM 三维评分+分层、转化率、退款率、客单价等 11 个）、有粒度变化（5 表聚合）、聚合后关联。订单聚合被 RFM 评分与最终装配复用→建物理中间表 tmp1；RFM 窗口评分独立加工且为关键属性→建物理中间表 tmp2；行为/优惠/退款/购物车聚合仅用一次→CTE 内联
 
 ---
 
 ## 4. 规则详情
 
-### R0001 - 用户基础属性中间表
+### R0001 - 订单聚合中间表
 
 | 项目 | 内容 |
 |------|------|
-| 场景 | default |
+| 场景 | 订单统计 |
 | 执行序 | 1 |
-| 产出表 | `dwb_user_center_tmp1` |
-| 设计意图 | 以 dim_user_f 为主表，LEFT JOIN 等级/地区/来源维度，产出用户基础属性宽表，供最终装配规则引用。粒度不变（一行一用户）。 |
-| 字段数 | 20 |
+| 产出表 | `dwb_user_center_f_tmp1` |
+| 写入方式 | truncate_table |
+| 设计意图 | 将订单明细事实表聚合到用户粒度，产出历史订单统计指标，供 RFM 评分与最终宽表复用 |
+| 字段数 | 5 |
 
-**关联策略**:
+**关联风险**:
 
-| 别名 | JOIN | 条件 |
-|------|------|------|
-| duf | main |  |
-| dul | LEFT JOIN | duf.level_id = dul.level_id |
-| drf | LEFT JOIN | duf.province_code = drf.region_code |
-| drf_city | LEFT JOIN | duf.city_code = drf_city.region_code |
-| dus | LEFT JOIN | duf.source_id = dus.source_id |
+- `dwd_order_f`: GROUP BY user_id 收敛聚合（一个用户多条订单→一行统计）
 
-**关联安全**:
+**字段逻辑**:
 
-| 表 | JOIN键唯一 | 对齐策略 |
-|------|-----------|----------|
-| dim_user_level_f | 是 |  |
-| dim_region_f (province) | 是 |  |
-| dim_region_f (city) | 是 |  |
-| dim_user_source_f | 是 |  |
-
-**字段概要**:
-
-| 转换类型 | 数量 |
-|----------|------|
-| direct | 14 |
-| aggregate | 6 |
-| assign(审计) | 4 |
-
-**加工字段抽样**(完整字段见 ts.json):
-
-- `user_phone_masked`: 手机号脱敏：取前3位拼接'****'再拼接后4位
-- `gender_name`: 性别代码转中文：M→男，F→女，其余→未知
-- `age`: 年龄：当前年份减去出生年份（YEAR(CURDATE()) - YEAR(birthday)）
-- `register_days`: 注册天数：当前日期减去注册日期的天数差
-- `city_name`: 通过 city_code 二次关联 dim_region_f 获取城市名称（省份已通过 province_code 关联，城市需用 city_code 再 JOIN 一次 dim_region_f）
-- ...(共 6 个加工字段)
+- `total_order_cnt`: 从 dwd_order_f 按 user_id 分组，COUNT(*) 统计历史有效订单数（过滤 order_status NOT IN ('CANCELLED','DELETED')）
+- `total_pay_amount`: 从 dwd_order_f 按 user_id 分组，SUM(pay_amount) 统计历史有效订单消费金额（过滤 order_status NOT IN ('CANCELLED','DELETED')）
+- `avg_order_amount`: 平均客单价 = 总消费金额 / 历史订单数，分母为 0 时返回 NULL（NULLIF 防除零）
+- `last_order_time`: 从 dwd_order_f 按 user_id 分组，MAX(create_time) 取最近一次下单时间
+- `first_order_time`: 从 dwd_order_f 按 user_id 分组，MIN(create_time) 取首次下单时间
 
 ---
 
-### R0002 - 订单汇总中间表
+### R0002 - RFM 评分中间表
 
 | 项目 | 内容 |
 |------|------|
-| 场景 | default |
-| 执行序 | 1 |
-| 产出表 | `dwb_user_center_tmp2` |
-| 设计意图 | 对 dwd_order_f 排除作废/删除订单后按 user_id 聚合，产出用户级订单汇总指标，供最终装配规则引用。粒度从订单明细收敛到用户。 |
+| 场景 | 用户价值分层 |
+| 执行序 | 2 |
+| 产出表 | `dwb_user_center_f_tmp2` |
+| 写入方式 | truncate_table |
+| 设计意图 | 基于订单聚合指标用 NTILE(5) 窗口函数跨全量用户打分，产出 RFM 三维分数与价值分层 |
 | 字段数 | 4 |
 
-**关联策略**:
+**字段逻辑**:
 
-| 别名 | JOIN | 条件 |
-|------|------|------|
-| dof | main |  |
-
-**关联安全**:
-
-| 表 | JOIN键唯一 | 对齐策略 |
-|------|-----------|----------|
-| dwd_order_f | 是 | GROUP BY user_id 收敛 |
-
-**字段概要**:
-
-| 转换类型 | 数量 |
-|----------|------|
-| aggregate | 4 |
-| assign(审计) | 4 |
-
-**加工字段抽样**(完整字段见 ts.json):
-
-- `total_order_cnt`: 排除 CANCELLED/DELETED 状态订单后，按 user_id 统计历史订单数 COUNT(*)
-- `total_pay_amount`: 排除 CANCELLED/DELETED 状态订单后，按 user_id 汇总支付金额 SUM(pay_amount)
-- `last_order_time`: 排除 CANCELLED/DELETED 状态订单后，按 user_id 取最大下单时间 MAX(create_time)
-- `first_order_time`: 排除 CANCELLED/DELETED 状态订单后，按 user_id 取最小下单时间 MIN(create_time)
+- `rfm_r_score`: 第一步：DATEDIFF(CURDATE(), last_order_time) 计算最近下单距今天数（R 值，越小越优）；第二步：NTILE(5) 窗口函数按 R 值升序分 5 组，天数越小分数越高（5→1）
+- `rfm_f_score`: 第一步：取 total_order_cnt 作为消费频次（F 值）；第二步：NTILE(5) 窗口函数按 F 值降序分 5 组，订单越多分数越高
+- `rfm_m_score`: 第一步：取 total_pay_amount 作为消费金额（M 值）；第二步：NTILE(5) 窗口函数按 M 值降序分 5 组，金额越高分数越高
+- `rfm_segment`: 组合 RFM 三维分数划分价值分层：高价值（R/F/M 均≥4）、中价值（任两维≥4）、低价值（任一维≥3）、流失（R≤2 且 F≤2）
 
 ---
 
-### R0003 - 行为汇总中间表
+### R0003 - 用户中心宽表装配
 
 | 项目 | 内容 |
 |------|------|
-| 场景 | default |
-| 执行序 | 1 |
-| 产出表 | `dwb_user_center_tmp3` |
-| 设计意图 | 对 dwd_user_behavior_f 按 user_id 聚合浏览/收藏/加购行为指标，供最终装配规则引用。粒度从行为明细收敛到用户。 |
-| 字段数 | 3 |
-
-**关联策略**:
-
-| 别名 | JOIN | 条件 |
-|------|------|------|
-| dub | main |  |
-
-**关联安全**:
-
-| 表 | JOIN键唯一 | 对齐策略 |
-|------|-----------|----------|
-| dwd_user_behavior_f | 是 | GROUP BY user_id 收敛 |
-
-**字段概要**:
-
-| 转换类型 | 数量 |
-|----------|------|
-| aggregate | 3 |
-| assign(审计) | 4 |
-
-**加工字段抽样**(完整字段见 ts.json):
-
-- `total_pv_cnt`: 按 user_id 汇总浏览次数 SUM(pv_cnt)
-- `total_collect_cnt`: 按 user_id 汇总收藏次数 SUM(collect_cnt)
-- `total_cart_cnt`: 按 user_id 汇总加购行为次数 SUM(cart_cnt)
-
----
-
-### R0004 - 用户中心宽表最终装配
-
-| 项目 | 内容 |
-|------|------|
-| 场景 | default |
-| 执行序 | 2 |
+| 场景 | 用户基础属性 |
+| 执行序 | 3 |
 | 产出表 | `dwb_user_center_f` |
-| 设计意图 | 以 tmp1（用户基础）为主表，LEFT JOIN tmp2（订单）/tmp3（行为）中间表，并通过 CTE 内联聚合优惠券/退款/购物车事实表，计算 RFM 评分、转化率、价值分层等衍生字段，产出最终宽表。 |
-| 字段数 | 19 |
+| 写入方式 | truncate_table |
+| 设计意图 | 以 dim_user_f 为主表左联维度表与中间表，CTE 聚合行为/优惠/退款/购物车事实，计算派生转化率与标签，产出最终宽表 |
+| 字段数 | 37 |
 
-**关联策略**:
+**字段逻辑**:
 
-| 别名 | JOIN | 条件 |
-|------|------|------|
-| tmp1 | main |  |
-| tmp2 | LEFT JOIN | tmp1.user_id = tmp2.user_id |
-| tmp3 | LEFT JOIN | tmp1.user_id = tmp3.user_id |
-| coupon_agg | LEFT JOIN | tmp1.user_id = coupon_agg.user_id |
-| refund_agg | LEFT JOIN | tmp1.user_id = refund_agg.user_id |
-| cart_agg | LEFT JOIN | tmp1.user_id = cart_agg.user_id |
-
-**关联安全**:
-
-| 表 | JOIN键唯一 | 对齐策略 |
-|------|-----------|----------|
-| tmp2 (订单汇总) | 是 |  |
-| tmp3 (行为汇总) | 是 |  |
-| coupon_agg (CTE) | 是 |  |
-| refund_agg (CTE) | 是 |  |
-| cart_agg (CTE) | 是 |  |
-
-**字段概要**:
-
-| 转换类型 | 数量 |
-|----------|------|
-| aggregate | 15 |
-| assign | 4 |
-| assign(审计) | 4 |
-
-**加工字段抽样**(完整字段见 ts.json):
-
-- `avg_order_amount`: 平均客单价：历史消费金额 / 历史订单数，分母为 0 或 NULL 时返回 NULL（NULLIF 防除零）
-- `rfm_r_score`: R 值：计算最近下单距今天数 DATEDIFF(CURDATE(), last_order_time) 后，全量用户 NTILE(5) 窗口分组打分（天数越小分越高）。无订单用户 last_order_time 为 NULL，R 值记 NULL 或最低分
-- `rfm_f_score`: F 值：基于历史订单数 total_order_cnt，全量用户 NTILE(5) 窗口分组打分（订单越多分越高）。无订单用户记最低分
-- `rfm_m_score`: M 值：基于历史消费金额 total_pay_amount，全量用户 NTILE(5) 窗口分组打分（金额越高分越高）。无消费用户记最低分
-- `rfm_segment`: 用户价值分层：组合 R/F/M 三分值，按规则划分高价值/中价值/低价值/流失四档
-- ...(共 19 个加工字段)
+- `user_phone_masked`: 手机号脱敏：CONCAT(LEFT(user_phone,3),'****',RIGHT(user_phone,4))，保留前 3 位与后 4 位
+- `gender_name`: 性别代码转中文：M→男，F→女，其他→未知
+- `age`: 年龄 = YEAR(CURDATE()) - YEAR(birthday)
+- `register_days`: 注册天数 = DATEDIFF(CURDATE(), register_time)
+- `user_status_name`: 用户状态代码转中文：ACTIVE→正常，INACTIVE→未激活，FROZEN→冻结，其他→其他
+- `city_name`: 通过 city_code 二次关联 dim_region_f 获取城市名称（dim_region_f 关联两次：一次取省份 province_code，一次取城市 city_code）
+- `total_pv_cnt`: CTE 从 dwd_user_behavior_f 按 user_id 聚合，SUM(pv_cnt) 统计历史浏览次数
+- `total_collect_cnt`: CTE 从 dwd_user_behavior_f 按 user_id 聚合，SUM(collect_cnt) 统计历史收藏次数
+- `total_cart_cnt`: CTE 从 dwd_user_behavior_f 按 user_id 聚合，SUM(cart_cnt) 统计历史加购次数
+- `pv_to_order_rate`: 浏览-下单转化率(%) = 历史订单数 / 浏览次数 × 100，分母为 0 时返回 NULL（NULLIF 防除零）
+- `pv_to_cart_rate`: 浏览-加购转化率(%) = 加购次数 / 浏览次数 × 100，分母为 0 时返回 NULL（NULLIF 防除零）
+- `coupon_used_cnt`: CTE 从 dwd_coupon_use_f 按 user_id 聚合，COUNT(*) 统计优惠券使用次数
+- `coupon_total_amount`: CTE 从 dwd_coupon_use_f 按 user_id 聚合，SUM(coupon_amount) 统计优惠券使用总金额
+- `refund_cnt`: CTE 从 dwd_refund_f 按 user_id 聚合，COUNT(*) 统计退款次数
+- `refund_rate`: 退款率(%) = 退款次数 / 历史订单数 × 100，分母为 0 时返回 NULL（NULLIF 防除零）
+- `cart_product_cnt`: CTE 从 dwd_cart_f（过滤 del_flag='N' 有效记录）按 user_id 聚合，COUNT(*) 统计购物车商品数
+- `cart_total_amount`: CTE 从 dwd_cart_f（过滤 del_flag='N' 有效记录）按 user_id 聚合，SUM(qty*price) 统计购物车总金额
+- `order_freq_label`: 下单频率标签：历史订单数≥10→高频用户，≥3→中频用户，≥1→低频用户，0→未购买
+- `consume_level_label`: 消费能力标签：历史消费金额≥10000→高消费，≥1000→中消费，≥100→低消费，其他→无消费
 
 ---
 
 ## 5. 数据流向
 
-**血缘关系**:
+```mermaid
+flowchart TD
 
-| from | to | 中间表 |
-|------|-----|--------|
-| R0001 | R0004 | dwb_user_center_tmp1 |
-| R0002 | R0004 | dwb_user_center_tmp2 |
-| R0003 | R0004 | dwb_user_center_tmp3 |
+  step_R0001("R0001 / 订单聚合中间表")
+  src_dwd_order_f["dwd_order_f<br/><small>sdord</small>"]
+  tbl_dwb_user_center_f_tmp1["dwb_user_center_f_tmp1"]
 
-**执行顺序**:
+  step_R0002("R0002 / RFM 评分中间表<br/>关联维表: dim_user_f, dim_user_level_f, dim_region_f, dim_user_source_f")
+  src_dwd_user_behavior_f["dwd_user_behavior_f<br/><small>sdlog</small>"]
+  src_dwd_coupon_use_f["dwd_coupon_use_f<br/><small>sdmar</small>"]
+  src_dwd_refund_f["dwd_refund_f<br/><small>sdref</small>"]
+  src_dwd_cart_f["dwd_cart_f<br/><small>sdlog</small>"]
+  tbl_dwb_user_center_f_tmp2["dwb_user_center_f_tmp2"]
 
-| 顺序 | 规则 |
-|------|------|
-| 1 | R0001, R0002, R0003 |
-| 2 | R0004 |
+  step_R0003("R0003 / 用户中心宽表装配<br/>关联维表: dim_user_f, dim_user_level_f, dim_region_f, dim_user_source_f")
+  tbl_dwb_user_center_f["dwb_user_center_f"]
+
+  src_dwd_order_f --> step_R0001
+  step_R0001 --> tbl_dwb_user_center_f_tmp1
+  src_dwd_order_f --> step_R0002
+  src_dwd_user_behavior_f --> step_R0002
+  src_dwd_coupon_use_f --> step_R0002
+  src_dwd_refund_f --> step_R0002
+  src_dwd_cart_f --> step_R0002
+  step_R0002 --> tbl_dwb_user_center_f_tmp2
+  src_dwd_user_behavior_f --> step_R0003
+  src_dwd_coupon_use_f --> step_R0003
+  src_dwd_refund_f --> step_R0003
+  src_dwd_cart_f --> step_R0003
+  step_R0003 --> tbl_dwb_user_center_f
+  tbl_dwb_user_center_f_tmp1 --> step_R0002
+  tbl_dwb_user_center_f_tmp1 --> step_R0003
+  tbl_dwb_user_center_f_tmp2 --> step_R0003
+
+  classDef source fill:#dbeafe,stroke:#3b82f6,stroke-width:1.5px,color:#1e3a5f
+  classDef step fill:#ede9fe,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95
+  classDef intermediate fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#334155,stroke-dasharray:5 3
+  classDef target fill:#dcfce7,stroke:#22c55e,stroke-width:2.5px,color:#166534
+  classDef view fill:#e0e7ff,stroke:#6366f1,stroke-width:1.5px,color:#3730a3,stroke-dasharray:5 3
+  class step_R0001,step_R0002,step_R0003 step
+  class src_dwd_order_f,src_dwd_user_behavior_f,src_dwd_coupon_use_f,src_dwd_refund_f,src_dwd_cart_f source
+  class tbl_dwb_user_center_f_tmp1,tbl_dwb_user_center_f_tmp2 intermediate
+  class tbl_dwb_user_center_f target
+```
 
 ---
 
 ## 6. 调度配置
 
+### F 表调度
+
 | 配置项 | 值 |
 |--------|-----|
-| 调度任务 | dw_slusr_dwb_user_center_f |
-| 调度周期 | 0 0 2 * * ? |
-| 任务组 | dw_slusr_user_center |
+| 调度任务 | dwb_user_center_f |
+| 调度周期 | 0 30 3 * * ? |
+
+**LTS 参数**:
+
+| LTS 变量 | 赋值给 ETL 参数 | 说明 |
+|----------|----------------|------|
+| V_CYCLE_ID | P_CYCLE_ID | 批次号 |
+| V_GROUP_CODE | — | 规则组编码 |
+
+### I 视图调度
+
+| 配置项 | 值 |
+|--------|-----|
+| 调度任务 | dwb_user_center_i |
+| 调度周期 | 0 35 3 * * ? |
+
+**上游依赖**:
+
+| 源表 | 调度任务 |
+|------|---------|
+| dwb_user_center_f | dwb_user_center_f |
 
 ---
 

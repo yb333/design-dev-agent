@@ -278,6 +278,81 @@ def step_check_sql(report, deliver, rule_code):
         return False
 
 
+def step_ut(report, deliver):
+    """步骤6.5: UT 预检 + 执行（需数据库；无库则跳过不报错）。
+
+    与 new-pipe 对齐：先 check_db.py 判断有无数据源，有才跑 ut_precheck/ut_execute。
+    无库时静默跳过（仅警告），不阻断流程——UT 是可选的环境依赖步骤。
+    """
+    # 先判断有没有数据源
+    code, out = run_python(str(CODING_REFS / "check_db.py"), [], timeout=30)
+    if code != 0 or "DB_OK" not in out:
+        report.warn("执行验证(UT)", f"无数据源，跳过UT（{out.strip().splitlines()[-1] if out.strip() else 'check_db失败'}）")
+        return True
+
+    # 6a: UT 预检（秒级，不写数据）
+    code, out = run_python(
+        str(CODING_REFS / "ut_precheck.py"),
+        ["--ts", str(deliver / "ts.json"),
+         "--select-dir", str(deliver / "etl"),
+         "--ddl-dir", str(deliver / "ddl"),
+         "--result", str(deliver / "ut_precheck_result.json")],
+        timeout=300,
+    )
+    if code != 0:
+        report.fail_step("UT预检(ut_precheck)", out[:200])
+        return False
+    report.pass_step("UT预检(ut_precheck)", "回退+DDL+SELECT 预检通过")
+
+    # 6b: UT 执行（分钟级，写数据）
+    code, out = run_python(
+        str(CODING_REFS / "ut_execute.py"),
+        ["--ts", str(deliver / "ts.json"),
+         "--select-dir", str(deliver / "etl"),
+         "--ddl-dir", str(deliver / "ddl"),
+         "--report", str(deliver / "ut_report.md")],
+        timeout=1800,
+    )
+    if code != 0:
+        report.fail_step("UT执行(ut_execute)", out[:200])
+        return False
+    report.pass_step("UT执行(ut_execute)", "INSERT + UT 检查通过")
+    return True
+
+
+def step_assemble_export(report, deliver):
+    """步骤7: 生成平台制品包（与 new-pipe 对齐，UT 通过后必跑）。
+
+    assemble_export.py 不依赖数据库，只做文件生成（Excel + manifest）。
+    规则编码留空（codes_filled=false），由内网 skill 回填。
+    """
+    export_dir = deliver / "export"
+    code, out = run_python(
+        str(CODING_REFS / "assemble_export.py"),
+        ["--ts", str(deliver / "ts.json"),
+         "--etl-dir", str(deliver / "etl"),
+         "--ddl-dir", str(deliver / "ddl"),
+         "--outdir", str(deliver)],
+        timeout=120,
+    )
+    shujia = list(export_dir.glob("shujia_*.xlsx")) if export_dir.exists() else []
+    lts = list(export_dir.glob("lts_*.xlsx")) if export_dir.exists() else []
+    if code == 0 and shujia and lts:
+        report.pass_step("制品包(export)", f"{len(shujia)}术加 + {len(lts)}LTS")
+        # manifest codes_filled 应为 false（规则编码留空）
+        for mf in export_dir.glob("export_manifest_*.json"):
+            try:
+                m = json.loads(mf.read_text(encoding="utf-8"))
+                if m.get("codes_filled") is not False:
+                    report.add_issue("制品包", f"{mf.name}: codes_filled 应为 false（实际 {m.get('codes_filled')}）")
+            except Exception:
+                pass
+        return True
+    else:
+        report.fail_step("制品包(export)", out[:200])
+        return False
+
+
 def step_validate_ts(report, deliver):
     """步骤7: ts.json 结构校验"""
     ts = json.loads((deliver / "ts.json").read_text(encoding="utf-8"))
@@ -409,6 +484,12 @@ def main():
         # 步骤6: 静态对比（对每个已编码规则）
         for rc in encoded_rules:
             step_check_sql(report, deliver_base, rc)
+
+        # 步骤6.5: UT 执行验证（需数据库；无库自动跳过，与 new-pipe 对齐）
+        step_ut(report, deliver_base)
+
+        # 步骤7: 平台制品包（UT 通过后必跑，不依赖数据库）
+        step_assemble_export(report, deliver_base)
 
     # 输出报告
     all_ok = report.print_report()

@@ -1,56 +1,127 @@
 # ============================================================================
-# design_decisions.yaml - 营销中心宽表 (slmar.dwb_marketing_center_f)
+# design_decisions.yaml - 营销中心宽表 设计决策
 # ----------------------------------------------------------------------------
-# 设计判断：单规则（不分段），订单指标经 CTE order_agg 预聚合后关联。
-# 字段类型/来源/注释由 assemble_ts.py 从 rs_input.json 自动搬移，本文件只含设计判断。
+# 目标: slmar.dwb_marketing_center_f (F表) / dwb_marketing_center_i (I视图)
+# 粒度: 每行一个营销记录(活动)
+# 策略: 全量调度, T+1 日级
+#
+# 核心设计判断:
+#   1. dwd_order_f 一个 activity_id 对应多笔订单 → 直接 JOIN 主查询会发散
+#      → 建物理中间表 dwb_marketing_center_order_mid_f 按 activity_id 预聚合
+#   2. 订单派生指标(order_cnt/gmv_amount/participant_cnt/total_discount_amount/new_user_rate)
+#      全部落在中间表, 主查询只做 JOIN 不再触碰订单明细
+#   3. 枚举翻译/比率/ROI 等单表或跨中间表派生指标落在最终 F 表规则
 # ============================================================================
 
+# === 参数声明 ===
+# P_CYCLE_ID(批次号) 由脚本自动注入, 无需声明。
+# 本资产为全量调度, 无增量起止时间/会计期间等业务参数。
+params: []
+
 # === 规则拆分 ===
-# 一个规则 = 一条 INSERT = 产出目标 F 表。I 视图由 coder 从 meta.target.i_view 镜像生成。
 rules:
+  # ---- R0001: 订单指标预聚合中间表 ----
   - rule_code: R0001
-    rule_name: "营销中心宽表写入"
-    scenario: "default"
+    rule_name: 订单指标预聚合
+    scenario: default
     exec_sequence: 1
-    target_table: "slmar.dwb_marketing_center_f"
+    target_table: slmar.dwb_marketing_center_order_mid_f
     is_view_step: false
     design_intent: >-
-      主查询：以活动事实表(dwd_activity_f)为粒度锚点，LEFT JOIN 活动类型维度表取类型说明、
-      LEFT JOIN 优惠券维度表取券信息，并 LEFT JOIN 订单指标 CTE(order_agg，由 dwd_order_f 按
-      activity_id 预聚合得到订单数/GMV/参与人数/优惠金额/新客订单数)取活动级订单指标，
-      最后在主查询层计算派生比率(优惠券使用率/人均消费/新客占比/活动ROI)，按活动粒度全量覆盖写入宽表。
-      订单明细经 CTE 收敛后再关联，避免活动行发散。
-    load_mode: "truncate_table"
+      按 activity_id 预聚合订单指标(订单数/GMV/参与人数/优惠金额/新客占比),
+      将 dwd_order_f 多行(每笔订单)收敛为一行(每个活动),
+      防止主查询关联订单表时发散。中间表粒度=每行一个活动,
+      以 activity_id 为聚合键(隐式粒度键, 非 field_targets 所属)。
+    load_mode: truncate_table
 
-    # 该规则产出全部 29 个目标字段（25 业务 + 4 审计）
     field_targets:
-      # --- 活动基础信息（主表 dwd_activity_f）---
-      - activity_id
-      - activity_name
-      - activity_type_name
-      - activity_type_desc
-      - activity_status_name
-      - start_time
-      - end_time
-      - activity_days
-      - create_time
-      - min_amount
-      - discount_rate
-      - max_discount
-      # --- 优惠券信息（dim_coupon_f）---
-      - coupon_id
-      - coupon_name
-      - coupon_type_name
-      - coupon_total_qty
-      - coupon_used_qty
-      - coupon_use_rate
-      # --- 订单指标（CTE order_agg，源自 dwd_order_f）---
       - order_cnt
       - gmv_amount
       - participant_cnt
       - total_discount_amount
       - new_user_rate
-      # --- 派生指标（主查询层计算）---
+
+    field_logics:
+      order_cnt: "按 activity_id 汇总活动关联订单数, 对 dwd_order_f 中该活动下的订单行计数"
+      gmv_amount: "按 activity_id 汇总活动 GMV, 对 dwd_order_f 中该活动下所有订单的 pay_amount 求和"
+      participant_cnt: "按 activity_id 统计参与人数, 对 dwd_order_f 中该活动下订单的 user_id 去重计数"
+      total_discount_amount: "按 activity_id 汇总活动优惠金额, 对 dwd_order_f 中该活动下所有订单的 discount_amount 求和"
+      new_user_rate: >-
+        新客占比百分比。分子=活动期间新用户产生的订单数, 分母=活动总订单数, 比值乘100。
+        新用户定义: 用户的全量历史首单时间落在该活动的开始至结束时间窗口内(即活动期间首次下单的用户)。
+        判定方式: 先用子查询找出每个 user_id 的历史首单时间(MIN 下单时间),
+        再筛选首单时间在活动 [start_time, end_time] 窗口内的用户,
+        统计这些用户在该活动中的订单数。总订单数为0时结果为NULL。
+        需关联 dwd_activity_f 取活动时间窗口。
+
+    source_aliases:
+      - dof
+      - daf
+
+    ctes:
+      - name: user_first_order
+        purpose: >-
+          扫描 dwd_order_f 全量订单, 按 user_id 找出每个用户的历史首单时间(MIN 下单时间),
+          用于判定该用户是否为某活动期间的新用户
+        source_tables:
+          - dwd_order_f
+
+    grain:
+      input: "一行=一笔订单(dwd_order_f)"
+      output: "一行=一个活动(按 activity_id 聚合)"
+      change: "多行聚合"
+
+    joins:
+      - alias: dof
+        type: main
+        condition: ""
+        filter: ""
+      - alias: daf
+        type: INNER JOIN
+        condition: "dof.activity_id = daf.activity_id"
+        filter: "取 daf.start_time / daf.end_time 作为活动时间窗口, 用于新用户判定"
+
+    join_safety:
+      - table: dwd_order_f
+        join_key_unique: true
+        strategy: "GROUP BY activity_id 收敛, 聚合后每活动一行"
+        reason: "dwd_order_f 一个 activity_id 对应多笔订单, 直接 JOIN 主查询会发散; 先按 activity_id GROUP BY 预聚合后, JOIN 键唯一"
+
+  # ---- R0002: 营销中心宽表(F表)组装 ----
+  - rule_code: R0002
+    rule_name: 营销中心宽表组装
+    scenario: default
+    exec_sequence: 2
+    target_table: slmar.dwb_marketing_center_f
+    is_view_step: false
+    design_intent: >-
+      以活动事实表(dwd_activity_f)为主表, LEFT JOIN 活动类型维度、优惠券维度和订单聚合中间表,
+      组装营销中心宽表全部字段。枚举翻译、比率指标、人均消费、ROI 在此规则完成。
+      订单相关指标全部取自 R0001 中间表, 不再直接关联订单明细表。
+    load_mode: truncate_table
+
+    field_targets:
+      # --- 直取类(活动基础信息) ---
+      - activity_id
+      - activity_name
+      - activity_type_desc
+      - start_time
+      - end_time
+      - create_time
+      - min_amount
+      - discount_rate
+      - max_discount
+      # --- 直取类(优惠券信息) ---
+      - coupon_id
+      - coupon_name
+      - coupon_total_qty
+      - coupon_used_qty
+      # --- 加工类(枚举翻译/比率/派生指标) ---
+      - activity_type_name
+      - activity_status_name
+      - activity_days
+      - coupon_type_name
+      - coupon_use_rate
       - avg_order_amount
       - activity_roi
       # --- 审计字段 ---
@@ -59,113 +130,102 @@ rules:
       - last_upd_cycle_id
       - dw_last_update_date
 
-    # ★ 仅加工类字段写 design_logic（自然语言口径，不含 SQL）。
-    # 直取字段（transform_rule=直接复制）不写，脚本自动填；审计字段脚本自动处理。
     field_logics:
-      activity_type_name: >-
-        活动类型编码转中文：SECKILL→秒杀、GROUPBUY→团购、PRESALE→预售、FULL_REDUCE→满减、
-        FULL_GIFT→满赠，其余→其他。
-      activity_status_name: >-
-        活动状态编码转中文：DRAFT→草稿、PENDING→待开始、RUNNING→进行中、ENDED→已结束，
-        其余→其他。
-      activity_days: "活动天数 = 结束时间与开始时间的天数差。"
-      coupon_type_name: >-
-        优惠券类型编码转中文：FULL_REDUCE→满减券、DISCOUNT→折扣券、CASH→现金券，其余→其他。
-      coupon_use_rate: "优惠券使用率 = 已使用量 / 发放总量 × 100，发放总量为 0 时返回 NULL 避免除零。"
-      order_cnt: >-
-        活动订单数 = 按 activity_id 关联 dwd_order_f 后 COUNT(*) 统计订单行数；先在 CTE order_agg
-        中收敛到活动粒度，再 LEFT JOIN 关联主表。
-      gmv_amount: >-
-        活动 GMV = 按 activity_id 关联 dwd_order_f 后 SUM(pay_amount) 汇总支付金额；先在 CTE
-        order_agg 中收敛到活动粒度，再关联主表。
-      participant_cnt: >-
-        参与人数 = 按 activity_id 关联 dwd_order_f 后 COUNT(DISTINCT user_id) 去重统计下单用户数；
-        先在 CTE order_agg 中收敛到活动粒度，再关联主表。
-      total_discount_amount: >-
-        活动优惠金额 = 按 activity_id 关联 dwd_order_f 后 SUM(discount_amount) 汇总优惠金额；
-        先在 CTE order_agg 中收敛到活动粒度，再关联主表。
-      new_user_rate: >-
-        新客占比 = 活动期间新客订单数 / 总订单数 × 100；在 CTE order_agg 中同时统计新客订单数与
-        总订单数。⚠ 新客判定标准待确认（需用户首次下单时间或新客标记字段），RS 未提供明确口径。
-      avg_order_amount: "人均消费 = 活动 GMV / 参与人数，参与人数为 0 时返回 NULL 避免除零。"
+      activity_type_name: "活动类型枚举翻译: SECKILL→秒杀, GROUPBUY→团购, PRESALE→预售, FULL_REDUCE→满减, FULL_GIFT→满赠, 其余→其他"
+      activity_status_name: "活动状态枚举翻译: DRAFT→草稿, PENDING→待开始, RUNNING→进行中, ENDED→已结束, 其余→其他"
+      activity_days: "活动持续天数, 结束时间减去开始时间的天数差(DATEDIFF)"
+      coupon_type_name: "优惠券类型枚举翻译: FULL_REDUCE→满减券, DISCOUNT→折扣券, CASH→现金券, 其余→其他"
+      coupon_use_rate: "优惠券使用率百分比, 已使用量除以发放总量再乘以100, 发放总量为0时结果为NULL"
+      avg_order_amount: "人均消费, 活动GMV除以参与人数, 参与人数为0时结果为NULL(GMV和参与人数均取自订单中间表)"
       activity_roi: >-
-        活动 ROI = (活动 GMV − 活动成本) / 活动成本 × 100；活动成本 = 优惠金额 + 满减金额 + 运营成本。
-        ⚠ 满减金额与运营成本来源待确认（RS 未提供明确字段；源表 dwd_coupon_use_f 已列入但无字段映射，
-        疑为优惠券成本来源，需人工确认口径）。
+        活动ROI百分比, 计算公式: ROI = (活动GMV - 活动成本) / 活动成本 * 100。
+        活动成本 = 优惠券核销金额 + 满减优惠金额 + 运营成本。
+        各成分来源: 活动GMV取自订单中间表 gmv_amount; 满减优惠金额取自订单中间表 total_discount_amount;
+        优惠券核销金额取自优惠券使用事实表(dwd_coupon_use_f)按 activity_id 汇总(经 CTE 预聚合);
+        运营成本来源待确认(见 design_notes DN002)。活动成本为0时结果为NULL。
 
-    # 该规则关联的源表别名（脚本据此从 rs_input 补 schema/table）
     source_aliases:
       - daf
       - dat
       - dcf
-      - dof
+      - dcu
 
-    # CTE（内联临时表）
     ctes:
-      - name: "order_agg"
-        purpose: >-
-          对订单明细事实表(dwd_order_f)按 activity_id 收敛，预聚合活动级订单指标：订单数、GMV、
-          参与人数、优惠金额、新客订单数。避免直接 JOIN 订单明细导致活动行发散（一对多 fan-out）。
-        source_tables: ["dwd_order_f"]
+      - name: coupon_use_agg
+        purpose: "按 activity_id 预聚合优惠券使用事实表(dwd_coupon_use_f), 汇总优惠券核销金额, 防止 dcu 多行关联发散"
+        source_tables:
+          - dwd_coupon_use_f
 
-    # 粒度变化（输入→输出）
     grain:
-      input: "一行=一个活动（主表 dwd_activity_f），左连活动类型/优惠券维度，订单指标经 CTE 预聚合后关联"
-      output: "一行=一个营销记录（活动粒度）"
-      change: "主表活动粒度不变；订单明细→活动级的聚合收敛在 CTE order_agg 内完成"
+      input: "一行=一个活动(dwd_activity_f)"
+      output: "一行=一个活动"
+      change: "无变化"
 
-    # 关联策略
     joins:
-      - alias: "daf"
-        type: "main"
-        condition: "主表（粒度锚点：每行一个活动，activity_id 唯一）"
+      - alias: daf
+        type: main
+        condition: ""
         filter: ""
-      - alias: "dat"
-        type: "LEFT JOIN"
+      - alias: dat
+        type: LEFT JOIN
         condition: "daf.activity_type = dat.type_code"
         filter: ""
-      - alias: "dcf"
-        type: "LEFT JOIN"
+      - alias: dcf
+        type: LEFT JOIN
         condition: "daf.activity_id = dcf.activity_id"
         filter: ""
-      - alias: "order_agg"
-        type: "LEFT JOIN"
-        condition: "daf.activity_id = order_agg.activity_id"
-        filter: ""
+      - alias: dcu_agg
+        type: LEFT JOIN
+        condition: "daf.activity_id = dcu_agg.activity_id"
+        filter: "经由 coupon_use_agg CTE 预聚合后关联"
+      - alias: order_mid
+        type: LEFT JOIN
+        condition: "daf.activity_id = order_mid.activity_id"
+        filter: "关联 R0001 产出的订单聚合中间表"
 
-    # 关联安全分析（JOIN键唯一性 → 对齐策略）
     join_safety:
-      - table: "dim_activity_type_f"
+      - table: dim_activity_type_f
         join_key_unique: true
-        strategy: "直接关联"
-        reason: "活动类型维度表按 type_code 唯一（类型字典：SECKILL/GROUPBUY 等），与主表一对一。"
-      - table: "dim_coupon_f"
+        strategy: ""
+        reason: "维度表, type_code 唯一, 关联不发散"
+      - table: dim_coupon_f
         join_key_unique: false
-        strategy: "需确认收敛策略（假设每活动一券；若一对多需取主券或聚合）"
-        reason: >-
-          按 activity_id 关联优惠券维度；目标表券字段(coupon_id/coupon_name)为标量，隐含每活动一券
-          假设。若数据存在一活动多券将导致活动行发散，需补充收敛策略（取最新/主券/聚合）。⚠ 待人工确认。
-      - table: "dwd_order_f"
+        strategy: "需确认 activity_id 在 dim_coupon_f 中是否唯一; 若一活动多券则需收敛(取主券或聚合)"
+        reason: "优惠券维度表按 activity_id 关联, 若一活动关联多张优惠券则直取字段(coupon_id/coupon_name 等)会歧义发散"
+      - table: dwd_coupon_use_f
         join_key_unique: false
-        strategy: "CTE 预聚合收敛（按 activity_id GROUP BY 后关联）"
-        reason: "订单明细为一对多（一活动多订单），直接 JOIN 会发散；经 CTE order_agg 收敛到活动粒度后保证唯一。"
+        strategy: "CTE 预聚合: 按 activity_id GROUP BY 汇总优惠券核销金额后关联"
+        reason: "优惠券使用事实表一个活动对应多条使用记录, 直接关联发散"
+      - table: dwb_marketing_center_order_mid_f
+        join_key_unique: true
+        strategy: ""
+        reason: "中间表已按 activity_id GROUP BY 收敛, 每活动一行, 关联安全"
 
 # === 复杂度分析与分段决策 ===
 complexity_analysis:
-  join_count: 3                         # LEFT JOIN 操作数（dat/dcf/order_agg，不含主表）
-  has_grain_change: true                # 源→目标存在粒度变化（订单明细→活动）
-  grain_change_detail: "订单明细(dwd_order_f，订单粒度)→活动粒度，经 CTE order_agg 预聚合收敛后关联；主表活动粒度不变。"
-  multi_step_fields: 6                  # order_cnt/gmv_amount/participant_cnt/total_discount_amount/new_user_rate/activity_roi
-  aggregation_after_join: false         # 聚合在 CTE 内（JOIN 前）完成，非 JOIN 后聚合
-  segmentation_decision: "不分段"
+  join_count: 5
+  has_grain_change: true
+  grain_change_detail: >-
+    dwd_order_f 多行(每笔订单一行)聚合为一行(每个活动一行),
+    在订单中间表 dwb_marketing_center_order_mid_f 中按 activity_id GROUP BY 完成收敛
+  multi_step_fields: 6
+  aggregation_after_join: true
+  segmentation_decision: "分段"
   segmentation_reason: >-
-    JOIN≤12（3）、订单指标经 CTE order_agg 预聚合后关联（聚合后关联=否）；多步骤加工字段虽达 6 个，
-    但均源自同一订单聚合 CTE（单步收敛即可完成），满足 CTE 内联条件，不建物理中间表。
+    命中分段阈值: 多步骤加工字段6个(order_cnt/gmv_amount/participant_cnt/total_discount_amount/new_user_rate/activity_roi,
+    均≥5阈值); 且存在聚合后关联(订单表先 GROUP BY 再 JOIN 主查询)。
+    建物理中间表 dwb_marketing_center_order_mid_f 收口订单聚合, 防止主查询 JOIN 订单表发散。
 
-# === 分布键 ===
-# activity_id：高基数业务主键，且为全表 JOIN 键，多表关联时分布一致保证本地关联。
-distribution_key:
-  - activity_id
+# === 表物理属性 ===
+tables:
+  dwb_marketing_center_order_mid_f:
+    distribution_key:
+      - activity_id
+    distribute_type: HASH
+  dwb_marketing_center_f:
+    distribution_key:
+      - activity_id
+    distribute_type: HASH
 
 # === 业务主键 ===
 business_key:
@@ -173,34 +233,67 @@ business_key:
 
 business_key_design:
   input_key:
-    - activity_id                       # RS 备注"主键"
+    - activity_id
   adjusted: false
-  reason: "活动 ID 在活动粒度下唯一，直接作为业务主键。（前提：dim_coupon_f 一对一假设成立，见 join_safety）"
+  reason: "mapping 标注 activity_id 为主键, 在产出表粒度(每行一个活动)下唯一, 无需调整"
 
 # === 调度细化 ===
 schedule:
-  task_name: "task_dwb_marketing_center_f"
-  cron: "0 30 3 * * ?"                  # 每日 03:30（T+1，一天一调，SLA 3:30）
-  task_group: "GROUP_SLMAR"
-  project: "SLMAR_DAILY"
-  # 设计新增的上游依赖（RS 未列；中间表/CTE 引入的订单明细为关键路径上游）
-  upstream_added:
-    - table: "sdmar.dwd_activity_f"
-      task: "task_dwd_activity_f"
-    - table: "sdord.dwd_order_f"
-      task: "task_dwd_order_f"
-    - table: "dim.dim_activity_type_f"
-      task: "task_dim_activity_type_f"
-    - table: "dim.dim_coupon_f"
-      task: "task_dim_coupon_f"
+  task_name: dwb_marketing_center_f
+  cron: "0 30 2 * * ?"
+  lts_params:
+    - lts_var: V_CYCLE_ID
+      etl_param: P_CYCLE_ID
+      desc: "批次号"
+    - lts_var: V_GROUP_CODE
+      etl_param: ""
+      desc: "规则组编码"
+  upstream_added: []
+  view:
+    task_name: dwb_marketing_center_i
+    cron: "0 0 3 * * ?"
 
-# === 数据流（规则间关系）===
+# === 数据流 ===
 data_flow:
-  dependencies: []                      # 单规则，无规则间依赖；F→I 视图由 coder 自动镜像
+  dependencies:
+    - from: R0001
+      to: R0002
+      type: data_flow
+      intermediate_table: dwb_marketing_center_order_mid_f
   schedule_groups:
     - sequence: 1
       rules:
         - R0001
+        - R0002
 
-# === DQ（可选）===
+# === DQ ===
 dq_rules: []
+
+# === 设计备注(待确认事项) ===
+# assemble_ts.py 不读此段, 仅供人工评审/闸口①确认。
+design_notes:
+  - id: DN001
+    topic: "dim_coupon_f 关联安全性"
+    severity: high
+    question: >-
+      dim_coupon_f 按 activity_id 关联, 一个活动是否只对应一张优惠券?
+      若一活动多券, 直取字段(coupon_id/coupon_name/coupon_total_qty/coupon_used_qty)将歧义。
+    impact: "若多券发散, 需改为取主券(如最新/面额最大)或按 activity_id 聚合优惠券指标"
+
+  - id: DN002
+    topic: "activity_roi 成本构成——运营成本来源缺失"
+    severity: high
+    question: >-
+      activity_roi 口径中"运营成本"的数据来源未在 rs_input 的 source_tables 中明确。
+      dwd_activity_f 是否有运营成本/预算字段? 还是需要新增数据源?
+    impact: >-
+      若运营成本无数据源, activity_roi 无法准确计算。
+      建议确认后补充字段映射; 若确认不可得, 该字段降级为固定赋值NULL并在 design_logic 标注。
+
+  - id: DN003
+    topic: "activity_roi 成本构成——优惠券核销金额字段未映射"
+    severity: medium
+    question: >-
+      activity_roi 中"优惠券核销金额"应取自 dwd_coupon_use_f(dcu), 
+      但 rs_input 未映射 dcu 的金额字段。请确认取哪个字段(如 coupon_amount / face_value / deduct_amount)汇总。
+    impact: "字段不明确则无法汇总优惠券核销金额, 影响 activity_roi 成本计算"

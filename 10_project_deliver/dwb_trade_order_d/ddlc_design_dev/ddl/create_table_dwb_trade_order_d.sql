@@ -1,20 +1,20 @@
 /* =====================================================
    表名: dws.dwb_trade_order_d
-   规则: R0001 - 订单汇总
+   规则: R0001 - 订单汇总聚合
    分布键: order_id
    逻辑集群: LC_DW1
-   生成时间: 2026-08-03
-   说明: 从订单明细接入表按订单+客户维度聚合 amount，收敛到订单粒度产出目标 F 表
+   生成时间: 2026-08-05
+   说明: 从订单明细接入表按 order_id+cust_id 聚合到订单粒度，汇总金额，直取订单与客户标识，补审计字段
    ===================================================== */
 
 CREATE TABLE IF NOT EXISTS dws.dwb_trade_order_d (
-    order_id            VARCHAR(64),  /* 订单ID */
-    cust_id             VARCHAR(64),  /* 客户ID */
-    total_amount        DECIMAL(18,2),  /* 订单总额 */
-    del_flag            NVARCHAR(1),  /* 删除标识 */
-    crt_cycle_id        BIGINT,  /* 创建批次ID */
-    last_upd_cycle_id   BIGINT,  /* 最后更新批次ID */
-    dw_last_update_date TIMESTAMP(0) WITHOUT TIME ZONE  /* 数仓最后更新时间 */
+    order_id            VARCHAR(64),
+    cust_id             VARCHAR(64),
+    total_amount        DECIMAL(18,2),
+    del_flag            NVARCHAR(1),
+    crt_cycle_id        BIGINT,
+    last_upd_cycle_id   BIGINT,
+    dw_last_update_date TIMESTAMP(0) WITHOUT TIME ZONE
 )
 WITH (
     ORIENTATION = COLUMN,

@@ -1,21 +1,21 @@
 /* =====================================================
    表名: dws.dwb_trade_wide_f
-   规则: R0001 - 交易宽表全量装配
+   规则: R0001 - 交易宽表主表加载
    分布键: order_id
    逻辑集群: LC_DW1
-   生成时间: 2026-08-03
-   说明: 单源表无JOIN，字段全部直接复制或固定赋值，无粒度变化，单条INSERT直产目标F表
+   生成时间: 2026-08-04
+   说明: 单源主表直加载，无关联无加工，全量覆盖写入目标F表。
    ===================================================== */
 
 CREATE TABLE IF NOT EXISTS dws.dwb_trade_wide_f (
-    order_id            VARCHAR(64),  /* 订单ID */
-    cust_id             VARCHAR(64),  /* 客户ID */
-    product_id          VARCHAR(64),  /* 商品ID */
-    order_amt           DECIMAL(18,2),  /* 订单金额 */
-    del_flag            NVARCHAR(1),  /* 删除标识 */
-    crt_cycle_id        BIGINT,  /* 创建批次 */
-    last_upd_cycle_id   BIGINT,  /* 更新批次 */
-    dw_last_update_date TIMESTAMP(0)  /* 更新时间 */
+    order_id            VARCHAR(64),
+    cust_id             VARCHAR(64),
+    product_id          VARCHAR(64),
+    order_amt           DECIMAL(18,2),
+    del_flag            NVARCHAR(1),
+    crt_cycle_id        BIGINT,
+    last_upd_cycle_id   BIGINT,
+    dw_last_update_date TIMESTAMP(0)
 )
 WITH (
     ORIENTATION = COLUMN,

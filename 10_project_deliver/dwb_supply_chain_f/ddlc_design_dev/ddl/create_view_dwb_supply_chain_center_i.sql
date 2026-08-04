@@ -9,6 +9,7 @@ SELECT
     product_id,
     purchase_qty,
     purchase_price,
+    purchase_amount,
     warehouse_id,
     supplier_name,
     supplier_level_name,
@@ -18,7 +19,6 @@ SELECT
     warehouse_type_name,
     current_stock_qty,
     locked_qty,
-    purchase_amount,
     stock_days,
     del_flag,
     crt_cycle_id,
@@ -36,6 +36,7 @@ COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.supplier_id IS '供应商ID';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.product_id IS '商品ID';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.purchase_qty IS '采购数量';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.purchase_price IS '采购单价';
+COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.purchase_amount IS '采购金额';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.warehouse_id IS '仓库ID';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.supplier_name IS '供应商名称';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.supplier_level_name IS '供应商等级';
@@ -45,7 +46,6 @@ COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.warehouse_name IS '仓库名�
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.warehouse_type_name IS '仓库类型';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.current_stock_qty IS '当前库存';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.locked_qty IS '锁定库存';
-COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.purchase_amount IS '采购金额';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.stock_days IS '库存周转天数';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.del_flag IS '删除标识';
 COMMENT ON COLUMN slscc.dwb_supply_chain_center_i.crt_cycle_id IS '创建批次ID';

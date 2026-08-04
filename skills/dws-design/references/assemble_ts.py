@@ -455,13 +455,14 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         is_final = (tbl_short == final_table_short)
         tbl_type = "target" if is_final else "intermediate"
 
-        # 字段定义：从 field_map 按 field_targets 组装
+        # 字段定义：从 field_map 按 field_targets 组装（design_logic 取规则 field_logics）
+        rule_logics = rule.get("field_logics", {})
         fields = []
         for tname in rule.get("field_targets", []):
             rec = field_map.get(tname)
             if not rec:
                 continue
-            f = build_field(rec, None, rule.get("source_aliases"))
+            f = build_field(rec, rule_logics.get(tname), rule.get("source_aliases"))
             fields.append(f)
 
         # 目标表补充审计字段

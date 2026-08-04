@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "spec_type": "ts",
-  "generated_at": "2026-08-03T22:58:00",
+  "generated_at": "2026-08-04T22:10:49",
   "generated_by": "assemble_ts.py",
   "meta": {
     "target": {
@@ -66,25 +66,50 @@
       }
     ],
     "schedule": {
-      "task_name": "dwb_supply_chain_center_f_全量",
+      "task_name": "task_dwb_supply_chain_center_f",
       "cron": "0 30 3 * * ?",
-      "task_group": "supply_chain",
-      "project": "slscc",
       "owner": "",
-      "exec_params": {},
+      "exec_params": {
+        "P_CYCLE_ID": {
+          "value_type": "string",
+          "desc": "批次号",
+          "standard": true
+        }
+      },
+      "lts_params": [
+        {
+          "lts_var": "V_CYCLE_ID",
+          "etl_param": "P_CYCLE_ID",
+          "desc": "批次号"
+        },
+        {
+          "lts_var": "V_GROUP_CODE",
+          "etl_param": "",
+          "desc": "规则组编码"
+        }
+      ],
       "upstream": [],
-      "execution_platform": {}
+      "view": {
+        "task_name": "task_dwb_supply_chain_center_i",
+        "cron": "0 35 3 * * ?",
+        "upstream": [
+          {
+            "table": "dwb_supply_chain_center_f",
+            "task": "task_dwb_supply_chain_center_f"
+          }
+        ]
+      }
     }
   },
   "design": {
     "complexity_analysis": {
       "join_count": 6,
-      "has_grain_change": false,
-      "grain_change_detail": "输入=采购单（dpf），输出=采购单（宽表），无聚合/展开。",
+      "has_grain_change": true,
+      "grain_change_detail": "销售事实表(dwd_sales_f)从销售明细粒度聚合到商品粒度(sales_agg CTE)后关联主表",
       "multi_step_fields": 1,
       "aggregation_after_join": false,
       "segmentation_decision": "不分段",
-      "segmentation_reason": "JOIN 表数量 6（< 12 阈值）、多步骤加工字段 1（< 5 阈值）、无粒度变化。 虽命中 design-guide §4.1 的\"聚合后关联\"指标（dsales 需先按 product_id 聚合销量再 JOIN）， 但该聚合逻辑简单（单一 GROUP BY 求和）、且仅 stock_days 一处使用、无需独立校验 → 按 design-guide §4.2 用 CTE(sales_agg) 内联处理即可，建物理中间表属过度设计。 单条规则 R0001 一次性产出目标 F 表，I 视图由后续脚本/规则镜像 F 表。"
+      "segmentation_reason": "JOIN≤12（6张）、多步骤加工字段<5（1个：stock_days）、无复杂关联链；dsales聚合满足CTE内联条件（仅本规则内用一次、无需独立校验），不建物理中间表"
     },
     "audit_fields": {
       "del_flag": {
@@ -109,9 +134,6 @@
       }
     },
     "audit_supplemented": [],
-    "distribution_key": [
-      "purchase_id"
-    ],
     "business_key": [
       "purchase_id"
     ],
@@ -120,134 +142,19 @@
         "purchase_id"
       ],
       "adjusted": false,
-      "reason": "mapping 标注的主键 purchase_id 在产出表（采购单粒度）下唯一，dsales 经 CTE 聚合收敛、dif 维度组合唯一，均不会导致 purchase_id 发散，故未调整。"
+      "reason": ""
     }
   },
-  "rules": {
-    "R0001": {
-      "rule_name": "供应链中心宽表全量加工",
-      "scenario": "default",
-      "exec_sequence": 1,
-      "target_table": "dwb_supply_chain_center_f",
-      "is_view_step": false,
-      "design_intent": "以采购事实表(dpf)为主表，左联供应商/商品/仓库维度表与库存/销售事实表，单条 INSERT 一次性产出宽表；销售表(dsales)因 sales_product_id 多行会发散，必须经 CTE 按 product_id 聚合收敛后再 JOIN，保障产出粒度=采购单。",
-      "load_mode": "truncate_table",
-      "source_tables": [
-        {
-          "schema": "sdinv",
-          "table": "dwd_purchase_f",
-          "alias": "dpf"
-        },
-        {
-          "schema": "dim",
-          "table": "dim_supplier_f",
-          "alias": "dsf"
-        },
-        {
-          "schema": "dim",
-          "table": "dim_product_f",
-          "alias": "dpf2"
-        },
-        {
-          "schema": "dim",
-          "table": "dim_warehouse_f",
-          "alias": "dwf"
-        },
-        {
-          "schema": "sdinv",
-          "table": "dwd_inventory_f",
-          "alias": "dif"
-        },
-        {
-          "schema": "sdinv",
-          "table": "dwd_sales_f",
-          "alias": "dsales"
-        }
+  "tables": {
+    "dwb_supply_chain_center_f": {
+      "type": "target",
+      "distribution_key": [
+        "purchase_id"
       ],
-      "ctes": [
-        {
-          "name": "sales_agg",
-          "purpose": "把销售事实表(dsales)按 product_id 聚合统计近30天销量(sales_qty_30d)，聚合后 product_id 唯一，供主查询安全 LEFT JOIN 计算 stock_days。",
-          "source_tables": [
-            "dsales"
-          ]
-        }
-      ],
-      "grain": {
-        "input": "一行=一个采购单（dpf 采购事实表粒度）",
-        "output": "一行=一个采购单（供应链中心宽表记录）",
-        "change": "无变化"
-      },
-      "joins": [
-        {
-          "alias": "dpf",
-          "type": "main",
-          "condition": "主表",
-          "filter": ""
-        },
-        {
-          "alias": "dsf",
-          "type": "LEFT JOIN",
-          "condition": "p.supplier_id = s.supplier_id",
-          "filter": ""
-        },
-        {
-          "alias": "dpf2",
-          "type": "LEFT JOIN",
-          "condition": "p.product_id = prd.product_id",
-          "filter": ""
-        },
-        {
-          "alias": "dwf",
-          "type": "LEFT JOIN",
-          "condition": "p.warehouse_id = wh.warehouse_id",
-          "filter": ""
-        },
-        {
-          "alias": "dif",
-          "type": "LEFT JOIN",
-          "condition": "p.product_id = inv.product_id AND p.warehouse_id = inv.warehouse_id",
-          "filter": ""
-        },
-        {
-          "alias": "sales_agg",
-          "type": "LEFT JOIN",
-          "condition": "p.product_id = sales_agg.product_id",
-          "filter": ""
-        }
-      ],
-      "join_safety": [
-        {
-          "table": "dsf",
-          "join_key_unique": true,
-          "strategy": "",
-          "reason": "dim_supplier_f 供应商维度表，按 supplier_id 唯一。"
-        },
-        {
-          "table": "dpf2",
-          "join_key_unique": true,
-          "strategy": "",
-          "reason": "dim_product_f 商品维度表，按 product_id 唯一。"
-        },
-        {
-          "table": "dwf",
-          "join_key_unique": true,
-          "strategy": "",
-          "reason": "dim_warehouse_f 仓库维度表，按 warehouse_id 唯一。"
-        },
-        {
-          "table": "dif",
-          "join_key_unique": true,
-          "strategy": "",
-          "reason": "dwd_inventory_f 库存事实表，按 product_id+warehouse_id 组合一行一库存，应唯一；若实际数据存在重复需在落地前 GROUP BY 收敛（本设计按唯一假设）。"
-        },
-        {
-          "table": "dsales",
-          "join_key_unique": false,
-          "strategy": "CTE(sales_agg) 先按 product_id 聚合 sales_qty_30d 再 JOIN，聚合后 product_id 唯一。",
-          "reason": "dwd_sales_f 销售事实表，sales_product_id 多行（一个商品多条销售记录），直接 JOIN 会导致采购单因商品被多次销售而发散（purchase_id 重复）。"
-        }
-      ],
+      "distribute_type": "HASH",
+      "partition": "",
+      "storage": "column",
+      "logical_group": "LC_DW1",
       "fields": [
         {
           "target_field": "purchase_id",
@@ -289,7 +196,7 @@
               "alias": "dpf"
             }
           ],
-          "design_logic": "把采购单状态英文码值翻译成中文：DRAFT→草稿、SUBMITTED→已提交、APPROVED→已审批、RECEIVED→已入库、CLOSED→已关闭，其余码值归为'其他'。"
+          "design_logic": "[需补充] 加工逻辑未写, transform_detail: CASE WHEN purchase_status='DRAFT' THEN '草稿' WHEN purchase_status='SUBMITTED' THEN '已提交' WHEN purchase_status='APPROVED' THEN '已审批' WHEN purchase_status='RECEIVED' THEN '已入库' WHEN purchase_status='CLOSED' THEN '已关闭' ELSE '其他' END"
         },
         {
           "target_field": "create_time",
@@ -362,6 +269,20 @@
           "design_logic": "直取 dpf.purchase_price"
         },
         {
+          "target_field": "purchase_amount",
+          "field_type": "decimal(18,2)",
+          "field_comment": "采购金额",
+          "transform_type": "aggregate",
+          "source_fields": [
+            {
+              "table": "",
+              "field": "",
+              "alias": ""
+            }
+          ],
+          "design_logic": "[需补充] 加工逻辑未写, transform_detail: purchase_qty * purchase_price"
+        },
+        {
           "target_field": "warehouse_id",
           "field_type": "bigint",
           "field_comment": "仓库ID",
@@ -401,7 +322,7 @@
               "alias": "dsf"
             }
           ],
-          "design_logic": "把供应商等级 A/B/C 翻译成中文等级名：A→A级供应商、B→B级供应商、C→C级供应商，其余码值归为'其他'。"
+          "design_logic": "[需补充] 加工逻辑未写, transform_detail: CASE WHEN supplier_level='A' THEN 'A级供应商' WHEN supplier_level='B' THEN 'B级供应商' WHEN supplier_level='C' THEN 'C级供应商' ELSE '其他' END"
         },
         {
           "target_field": "cooperation_years",
@@ -457,7 +378,7 @@
               "alias": "dwf"
             }
           ],
-          "design_logic": "把仓库类型码值翻译成中文：SELF→自营仓、THIRD_PARTY→第三方仓，其余码值归为'其他'。"
+          "design_logic": "[需补充] 加工逻辑未写, transform_detail: CASE WHEN warehouse_type='SELF' THEN '自营仓' WHEN warehouse_type='THIRD_PARTY' THEN '第三方仓' ELSE '其他' END"
         },
         {
           "target_field": "current_stock_qty",
@@ -488,20 +409,6 @@
           "design_logic": "直取 dif.locked_qty"
         },
         {
-          "target_field": "purchase_amount",
-          "field_type": "decimal(18,2)",
-          "field_comment": "采购金额",
-          "transform_type": "aggregate",
-          "source_fields": [
-            {
-              "table": "",
-              "field": "",
-              "alias": ""
-            }
-          ],
-          "design_logic": "采购金额 = 采购数量 × 采购单价（取主表 dpf 的 purchase_qty 与 purchase_price 相乘）。"
-        },
-        {
           "target_field": "stock_days",
           "field_type": "int",
           "field_comment": "库存周转天数",
@@ -513,7 +420,7 @@
               "alias": "dsales"
             }
           ],
-          "design_logic": "库存周转天数。先用 CTE(sales_agg) 把 dsales 按 product_id 聚合统计近30天销量(sales_qty_30d)，再用 (当前库存 - 锁定库存) ÷ 近30天销量计算周转天数；当近30天销量为 0 时返回 NULL（防除零）。"
+          "design_logic": "[需补充] 加工逻辑未写, transform_detail: 【多步骤加工】第一步：dsales 按 product_id 聚合统计近30天销量(sales_qty_30d)；第二步：可售天数 = (dif.stock_qty - dif.locked_qty) / NULLIF(sales_qty_30d,0)"
         },
         {
           "target_field": "del_flag",
@@ -571,8 +478,166 @@
           ],
           "design_logic": "固定赋值"
         }
+      ]
+    }
+  },
+  "rules": {
+    "R0001": {
+      "rule_name": "供应链中心宽表写入",
+      "scenario": "default",
+      "exec_sequence": 1,
+      "target_table": "slscc.dwb_supply_chain_center_f",
+      "is_view_step": false,
+      "design_intent": "以采购事实表(dp)为主表锚定粒度，LEFT JOIN 供应商/商品/仓库维度表补充属性，LEFT JOIN 库存事实表取当前库存与锁定库存，通过CTE预聚合销售表按product_id统计近30天销量后关联，计算库存周转天数，写入供应链中心宽表",
+      "load_mode": "truncate_table",
+      "source_tables": [
+        {
+          "schema": "sdinv",
+          "table": "dwd_purchase_f",
+          "alias": "dpf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_supplier_f",
+          "alias": "dsf"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_product_f",
+          "alias": "dpf2"
+        },
+        {
+          "schema": "dim",
+          "table": "dim_warehouse_f",
+          "alias": "dwf"
+        },
+        {
+          "schema": "sdinv",
+          "table": "dwd_inventory_f",
+          "alias": "dif"
+        },
+        {
+          "schema": "sdinv",
+          "table": "dwd_sales_f",
+          "alias": "dsales"
+        }
       ],
-      "field_count": 23
+      "ctes": [
+        {
+          "name": "sales_agg",
+          "purpose": "对销售事实表(dwd_sales_f)按product_id聚合SUM统计近30天销量(sales_qty_30d)，产出商品粒度的销量汇总，避免销售明细JOIN到采购主表时发散",
+          "source_tables": [
+            "sdinv.dwd_sales_f"
+          ]
+        }
+      ],
+      "grain": {
+        "input": "采购事实表每行=一个采购单(dp为主表)；销售事实表每行=一笔销售明细(dsales需聚合)",
+        "output": "每行=一个采购单（供应链记录）",
+        "change": "主表粒度不变；dsales从销售明细聚合到商品粒度后关联"
+      },
+      "joins": [
+        {
+          "alias": "dpf",
+          "type": "main",
+          "condition": "采购事实表（粒度锚点：采购单）",
+          "filter": ""
+        },
+        {
+          "alias": "dsf",
+          "type": "LEFT JOIN",
+          "condition": "dpf.supplier_id = dsf.supplier_id",
+          "filter": ""
+        },
+        {
+          "alias": "dpf2",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = dpf2.product_id",
+          "filter": ""
+        },
+        {
+          "alias": "dwf",
+          "type": "LEFT JOIN",
+          "condition": "dpf.warehouse_id = dwf.warehouse_id",
+          "filter": ""
+        },
+        {
+          "alias": "dif",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = dif.product_id AND dpf.warehouse_id = dif.warehouse_id",
+          "filter": ""
+        },
+        {
+          "alias": "sales_agg",
+          "type": "LEFT JOIN",
+          "condition": "dpf.product_id = sales_agg.product_id",
+          "filter": "CTE预聚合结果，已按product_id收敛唯一"
+        }
+      ],
+      "join_safety": [
+        {
+          "table": "dim_supplier_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "供应商维度表按supplier_id唯一"
+        },
+        {
+          "table": "dim_product_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "商品维度表按product_id唯一"
+        },
+        {
+          "table": "dim_warehouse_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "仓库维度表按warehouse_id唯一"
+        },
+        {
+          "table": "dwd_inventory_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "库存事实表按product_id+warehouse_id粒度取当前库存快照（stock_qty/locked_qty为当前状态值），假设唯一；若存在批次级库存需改为GROUP BY收敛"
+        },
+        {
+          "table": "dwd_sales_f",
+          "join_key_unique": false,
+          "strategy": "CTE预聚合收敛",
+          "reason": "销售事实表按product_id不唯一（每笔销售一行），需通过CTE(sales_agg)先按product_id聚合SUM后再关联"
+        }
+      ],
+      "field_targets": [
+        "purchase_id",
+        "purchase_no",
+        "purchase_status_name",
+        "create_time",
+        "supplier_id",
+        "product_id",
+        "purchase_qty",
+        "purchase_price",
+        "purchase_amount",
+        "warehouse_id",
+        "supplier_name",
+        "supplier_level_name",
+        "cooperation_years",
+        "product_name",
+        "warehouse_name",
+        "warehouse_type_name",
+        "current_stock_qty",
+        "locked_qty",
+        "stock_days",
+        "del_flag",
+        "crt_cycle_id",
+        "last_upd_cycle_id",
+        "dw_last_update_date"
+      ],
+      "field_logics": {
+        "purchase_status_name": "采购状态码转中文映射：DRAFT→草稿，SUBMITTED→已提交，APPROVED→已审批，RECEIVED→已入库，CLOSED→已关闭，其余→其他",
+        "supplier_level_name": "供应商等级码转中文映射：A→A级供应商，B→B级供应商，C→C级供应商，其余→其他",
+        "purchase_amount": "采购金额 = 采购数量(purchase_qty) × 采购单价(purchase_price)",
+        "warehouse_type_name": "仓库类型码转中文映射：SELF→自营仓，THIRD_PARTY→第三方仓，其余→其他",
+        "stock_days": "库存周转天数 = (当前库存 - 锁定库存) / 近30天日均销量。近30天销量通过CTE(sales_agg)对销售表按product_id聚合SUM得到，除零保护用NULLIF(sales_qty_30d, 0)，结果为NULL或零时库存周转天数取NULL"
+      }
     }
   },
   "data_flow": {
