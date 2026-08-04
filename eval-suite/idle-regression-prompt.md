@@ -74,52 +74,70 @@ python3 eval-suite/local_eval.py --asset dwb_user_behavior_f     --mapping eval-
 
 ### 第三步补充：多规则案例全编码（时间充裕时跑）
 
-验证中间表流水衔接（tmp1→tmp2→…→f）。多规则案例每个规则都要编码，耗时较长（4规则案例可能 1-2 小时）。
-
 ```bash
 cd /Users/yuanbo/design-dev-agent
-# 选一个多规则案例（3-4规则）跑 --all-rules
 python3 eval-suite/local_eval.py --asset dwb_user_center_f --mapping eval-suite/cases/005_dwb_user_center_f/mapping.xlsx --rs eval-suite/cases/005_dwb_user_center_f/RS.md --clean --all-rules
-# 跑完检查 etl/ 目录下是否有 R0001/R0002/R0003/R0004 四个 SQL 文件
-# 人工核查：tmp2 的 SELECT 是否引用了 tmp1 的字段（流水上溯正确）
 ```
 
 ### 第四步：逐案例检查产出质量
 
 每个案例跑完后检查以下内容：
 
-**1. 案例自检**
-```bash
-python3 eval-suite/check_case.py --mapping eval-suite/cases/0XX_xxx/mapping.xlsx --rs eval-suite/cases/0XX_xxx/RS.md
-```
-
-**2. ts.json 结构**
+**1. ts.json 结构（重点：tables 段 + rules 无 fields）**
 ```bash
 DELIVER=10_project_deliver/{资产名}/ddlc_design_dev
 python3 -c "
 import json
 ts = json.load(open('$DELIVER/ts.json'))
-# 顶层键
-for k in ['version','meta','design','rules','data_flow','dq_rules']:
+# 顶层键含 tables（本轮新增）
+for k in ['version','meta','design','tables','rules','data_flow','dq_rules']:
     assert k in ts, f'缺顶层键: {k}'
-# business_key
-assert ts['design'].get('business_key'), 'business_key 为空'
-# load_mode（每个规则都有）
+# tables 段有字段定义 + 物理属性
+tables = ts.get('tables', {})
+assert tables, 'tables 段为空'
+for tname, t in tables.items():
+    assert 'fields' in t, f'{tname} 缺 fields'
+    assert 'distribute_type' in t, f'{tname} 缺 distribute_type'
+    assert t.get('distribution_key') is not None, f'{tname} 缺 distribution_key'
+# rules 无 fields（搬到 tables 了），有 field_targets
 for code, rule in ts['rules'].items():
-    assert 'load_mode' in rule, f'{code} 缺 load_mode'
-# source_tables 补全
-for code, rule in ts['rules'].items():
-    for st in rule.get('source_tables', []):
-        assert st.get('table'), f'{code} source_tables 有空 table'
+    assert 'fields' not in rule, f'{code} 还有 fields（应已搬到 tables）'
+    assert 'field_targets' in rule, f'{code} 缺 field_targets'
+# design 无 distribution_key（搬到 tables 了）
+assert 'distribution_key' not in ts.get('design', {}), 'design 还有 distribution_key'
+# schedule 有 lts_params
+sched = ts.get('meta', {}).get('schedule', {})
+assert 'lts_params' in sched, 'schedule 缺 lts_params'
 print('✅ ts.json 结构通过')
 "
 ```
 
-**3. DDL 完整性**（每个DDL有回退脚本，I视图不用SELECT*）
+**2. ts.md 渲染质量（重点：§1 来源表去重 + §2 分布类型 + §4 无关联策略 + §5 只有图 + §6 LTS参数）**
+```bash
+python3 -c "
+ts_md = open('$DELIVER/ts.md').read()
+# §1 来源表无重复（按表去重）
+assert '来源表' in ts_md
+# §2 分布列显示 HASH/ROUNDROBIN/REPLICATION
+assert 'HASH' in ts_md or 'ROUNDROBIN' in ts_md, '§2 缺分布类型'
+# §4 无关联策略（已删除）
+assert '关联策略' not in ts_md, '§4 不应有关联策略'
+# §5 只有图，无血缘关系表/执行顺序表
+assert '血缘关系' not in ts_md, '§5 不应有血缘关系表'
+assert '执行顺序' not in ts_md, '§5 不应有执行顺序表'
+# §6 有 LTS 参数
+assert 'LTS 参数' in ts_md or 'lts_params' in ts_md.lower(), '§6 缺 LTS 参数'
+print('✅ ts.md 渲染通过')
+"
+```
+
+**3. DDL 完整性（重点：业务字段不丢 + 分布类型正确 + 无行内注释）**
 ```bash
 DDL_DIR=$DELIVER/ddl
 RB_DIR=$DELIVER/ddl_rollback
-# DDL 数量 = 回退脚本数量
+# DDL 文件存在
+ls $DDL_DIR/create_table_*.sql > /dev/null 2>&1 && echo "✅ 有DDL" || echo "⚠️ 无DDL"
+# 回退脚本数量 = DDL 数量
 DDL_COUNT=$(ls $DDL_DIR/*.sql 2>/dev/null | wc -l)
 RB_COUNT=$(ls $RB_DIR/*.sql 2>/dev/null | wc -l)
 echo "DDL: $DDL_COUNT, 回退: $RB_COUNT"
@@ -127,12 +145,23 @@ echo "DDL: $DDL_COUNT, 回退: $RB_COUNT"
 grep -l "SELECT \*" $DDL_DIR/create_view_*.sql 2>/dev/null && echo "⚠️ I视图用了SELECT*" || echo "✅ I视图OK"
 ```
 
-**4. DQ 生成**（标准DQ准确，定制DQ留TODO）
+**4. 制品包生成（重点：文件命名 shujia_/lts_ + 规则编码留空）**
 ```bash
-DQ_DIR=$DELIVER/dq
-ls $DQ_DIR/*.sql 2>/dev/null && echo "有DQ文件" || echo "⚠️ 无DQ文件"
-# 检查标准DQ（主键唯一/审计非空/记录数）
-grep -l "total_count" $DQ_DIR/*.sql 2>/dev/null && echo "✅ 有记录数检查"
+EXPORT_DIR=$DELIVER/export
+if [ -d "$EXPORT_DIR" ]; then
+  ls $EXPORT_DIR/shujia_*.xlsx > /dev/null 2>&1 && echo "✅ 术加制品包" || echo "⚠️ 无术加制品包"
+  ls $EXPORT_DIR/lts_*.xlsx > /dev/null 2>&1 && echo "✅ LTS制品包" || echo "⚠️ 无LTS制品包"
+  # manifest 的 codes_filled 应为 false
+  python3 -c "
+import json, glob
+for f in glob.glob('$EXPORT_DIR/export_manifest_*.json'):
+    m = json.load(open(f))
+    assert m.get('codes_filled') == False, 'codes_filled 应为 false'
+    print(f'✅ {f}: codes_filled=false')
+"
+else
+  echo "⚠️ 无 export 目录（制品包未生成）"
+fi
 ```
 
 **5. 数据探索提取**（如果RS有L01数据探索）
@@ -166,16 +195,29 @@ git push origin main
 
 ### 重点检查项（本轮新增）
 
-本轮代码有大量改动，重点验证：
-1. **目标表写_i结尾**：mapping目标表物理名称写I视图名，preprocess从_i推导_f
-2. **load_mode**：每个规则有写入方式（truncate_table/no_delete/truncate_partition等）
-3. **DQ分工**：标准DQ脚本生成（主键/审计/记录数），定制DQ留TODO交coder
-4. **数据探索提取**：RS的L01章节（数据量级/空值率/发散说明）提取到rs_input
-5. **文件命名**：ts.md带资产名前缀，ETL文件名带规则名+load_mode
-6. **列名大小写不敏感**：Schema/schema都能匹配
-7. **校验分级**：目标表schema/table两边都没写→阻断，一边没写→告警
-8. **db-sources.json**：在~/.config/opencode/下（不在skill目录），install不覆盖
-9. **designer审视意识**：主键发散/关联缺失应该在设计阶段发现
-10. **数据源缺口前移**：designer 发现某字段口径依赖的源表不在 rs_input 里，应该用 question 弹确认，**不把缺口写进 ts.json 带到 coder**（案例 007 stock_days 字段是典型场景，验证它不会卡在 coder 阶段）
-11. **--all-rules 开关**：多规则案例（005/006/009/012）加 `--all-rules` 能编出全部规则，验证中间表衔接（tmp1→tmp2→…→f）
-12. **参数化机制**：ts.json 的 `meta.schedule.exec_params` 应有 P_CYCLE_ID（脚本自动注入）；如 designer 声明了业务参数（BIZ_DATE/ACCT_PERIOD 等），UT 执行前应替换 `${PARAM}` 为实际值
+本轮有重大结构重构和大量修复，重点验证：
+
+**结构重构类：**
+1. **tables 段**：ts.json 顶层有 tables 段（每表有 fields + distribution_key + distribute_type + partition）；rules 里**无** fields（只有 field_targets + field_logics）；design 里**无** distribution_key
+2. **分布类型**：tables 每表有 distribute_type（HASH/ROUNDROBIN/REPLICATION），§2 表模型显示如 `HASH(product_id)`，DDL 生成 `DISTRIBUTE BY HASH(...)` 正确
+3. **来源表去重**：§1 来源表按表去重（同表多别名合并），不应有重复行
+4. **DDL 字段完整**：DDL 的 CREATE TABLE 里**业务字段和审计字段都在**（之前 bug 导致只有审计字段）。验证：DDL 里能找到业务字段名
+5. **DDL 无行内注释**：字段行不再有 `/* 注释 */`，注释统一用 COMMENT ON COLUMN
+
+**流程改进类：**
+6. **DQ 改 coder 生成**：不再调 assemble_dq.py 脚本，DQ 由 coder 在编码步骤并行生成。检查 dq/ 目录下有 SQL 文件
+7. **UT 拆分预检+执行**：步骤 6a（ut_precheck.py，秒级）先跑回退+DDL+SELECT预检；步骤 6b（ut_execute.py，分钟级）跑 INSERT+UT检查。预检失败的规则不跑 INSERT
+8. **制品包必跑**：UT 通过后自动生成制品包（不再可选），文件名 `shujia_{表名}.xlsx` / `lts_{表名}.xlsx`
+9. **platform_config 按 schema 映射**：术加/LTS 两套配置按 schema 映射，子项目编码留空
+
+**渲染优化类：**
+10. **ts.md §4 精简**：无关联策略、字段概要改为字段逻辑（只列有口径的加工字段）、关联安全仅有风险时展示、场景 default 不显示、加了写入方式
+11. **ts.md §5 只有图**：血缘关系表和执行顺序表已删（被图覆盖）
+12. **ts.md §6 调度完整**：F表调度 + LTS参数表 + 上游依赖表 + I视图调度（如有）
+13. **mermaid 图 Typora 兼容**：用 class 语句赋类（不用 ::: 内联），无 base 主题覆盖
+14. **预处理不告警**：未匹配的列静默跳过，不再报 column_unmatched
+
+**持续验证项（之前轮次的）：**
+15. **参数化机制**：exec_params 有 P_CYCLE_ID；UT 执行前替换 `${PARAM}`
+16. **数据源缺口前移**：designer 发现缺口用 question 弹确认，不写进 ts.json
+17. **--all-rules**：多规则案例能编出全部规则
