@@ -138,6 +138,19 @@ def resolve_source_by_schema(config_path: str, schema: str) -> str:
     return schema_mapping.get(schema, raw.get("default", ""))
 
 
+def load_test_params(config_path: str) -> dict:
+    """从 db-sources.json 读 test_params 段（参数测试值配置）。
+
+    返回 {param_name: {type, expr/value, desc}}，未配置则返回 {}。
+    被 run_ut.py 调用，执行前把 ${PARAM} 替换为实际值（模拟术加平台运行时注入）。
+    """
+    p = Path(config_path)
+    if not p.exists():
+        return {}
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    return raw.get("test_params", {})
+
+
 # ============================================================
 # DBExecutor 抽象接口
 # ============================================================

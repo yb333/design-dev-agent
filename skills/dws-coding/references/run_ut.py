@@ -27,13 +27,80 @@ UT 检查项（全脚本化）：
 
 import sys
 import json
+import re
 import argparse
 from pathlib import Path
 from datetime import datetime
 
 # 同目录导入 dws_db
 sys.path.insert(0, str(Path(__file__).parent))
-from dws_db import create_executor, ExecuteResult
+from dws_db import create_executor, ExecuteResult, load_test_params
+
+
+# ============================================================
+# 参数替换：执行前把 ${PARAM} 替换为实际值（模拟术加平台运行时注入）
+# ============================================================
+
+# 动态表达式注册表：当天日期类参数在 UT 时按规则算出值
+DYNAMIC_EXPRS = {
+    "today_ymdhms": lambda: datetime.now().strftime("%Y%m%d") + "000000",  # 批次号
+    "today_ymd":    lambda: datetime.now().strftime("%Y%m%d"),             # 业务日期
+}
+
+
+def resolve_test_value(param_name: str, cfg: dict | None) -> str | None:
+    """解析单个参数的测试值。
+
+    cfg 取自 db-sources.json 的 test_params.{param_name}，两种形态：
+      {"type": "dynamic", "expr": "today_ymdhms"}  → 按表达式算
+      {"type": "static",  "value": "20260101"}      → 直接用值
+    cfg 为 None → 返回 None（调用方 fail loud）
+    """
+    if not cfg:
+        return None
+    t = cfg.get("type", "static")
+    if t == "dynamic":
+        expr = cfg.get("expr", "")
+        fn = DYNAMIC_EXPRS.get(expr)
+        if not fn:
+            raise ValueError(f"未知动态表达式: {expr}（参数 {param_name}）")
+        return fn()
+    # static
+    return cfg.get("value", "")
+
+
+def substitute_params(sql: str, param_values: dict) -> str:
+    """${PARAM} → 实际值。SQL 里用了某参数但 param_values 没值 → fail loud。"""
+    def replacer(m):
+        name = m.group(1)
+        if name not in param_values:
+            raise ValueError(f"SQL 用了参数 ${{{name}}}，但没配测试值")
+        return str(param_values[name])
+    return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", replacer, sql)
+
+
+def resolve_all_params(ts: dict, config_path: str) -> dict:
+    """从 ts.json 的 exec_params 声明 + db-sources.json 的 test_params 配置，
+    算出全部参数的实际值。缺值则 fail loud（退出码 2）。"""
+    declared = ts.get("meta", {}).get("schedule", {}).get("exec_params", {})
+    if not declared:
+        return {}
+    test_cfg = load_test_params(config_path)
+    values = {}
+    missing = []
+    for pname in declared:
+        val = resolve_test_value(pname, test_cfg.get(pname))
+        if val is None or val == "":
+            missing.append(pname)
+        else:
+            values[pname] = val
+    if missing:
+        print(
+            f"❌ 以下参数声明了但 db-sources.json 没配测试值: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return values
 
 
 def wrap_insert(select_sql: str, target_table: str, fields: list, audit_fields: dict) -> str:
@@ -164,7 +231,15 @@ def main():
         print(f"错误: 连库失败: {e}", file=sys.stderr)
         sys.exit(2)
 
+    # 加载测试参数（模拟术加平台运行时参数注入；缺值即中止）
+    config_path = args.db_config or os.environ.get(
+        "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json")
+    )
+    param_values = resolve_all_params(ts, config_path)
+
     print(f"数据源: {executor.get_current_source()}（schema: {target_schema}）")
+    if param_values:
+        print(f"参数替换: {param_values}")
     print(f"规则数: {len(rules)}")
     print()
 
@@ -212,6 +287,7 @@ def main():
                 view_ddls = list(ddl_dir.glob(f"*{table}*.sql"))
                 if view_ddls:
                     ddl_sql = view_ddls[0].read_text(encoding="utf-8")
+                    ddl_sql = substitute_params(ddl_sql, param_values)
                     r = executor.execute(ddl_sql)
                     rule_result["status"] = "PASS" if r.success else "FAIL"
                     rule_result["detail"] = r.summary()
@@ -230,6 +306,7 @@ def main():
                 table_ddls = list(ddl_dir.glob(f"create_table*{table}*.sql"))
                 if table_ddls:
                     ddl_sql = table_ddls[0].read_text(encoding="utf-8")
+                    ddl_sql = substitute_params(ddl_sql, param_values)
                     r = executor.execute(ddl_sql)
                     if not r.success:
                         rule_result["status"] = "FAIL"
@@ -253,6 +330,7 @@ def main():
                 continue
 
             insert_sql = wrap_insert(select_sql, target, rule.get("fields", []), audit_fields)
+            insert_sql = substitute_params(insert_sql, param_values)
             r = executor.execute(insert_sql)
 
             if not r.success:

@@ -329,6 +329,7 @@ def main():
     parser.add_argument("--mapping", default="", help="mapping.xlsx 路径")
     parser.add_argument("--rs", default="", help="RS.md 路径")
     parser.add_argument("--rule", default="", help="要编码的规则号（默认第一个）")
+    parser.add_argument("--all-rules", action="store_true", help="编码所有规则（默认只编第一个；多规则案例用于验证流水衔接）")
     parser.add_argument("--skip-ai", action="store_true", help="跳过 AI（只跑脚本链路）")
     parser.add_argument("--clean", action="store_true", help="清理旧产出后重跑")
     args = parser.parse_args()
@@ -371,12 +372,33 @@ def main():
     if (deliver_base / "ts.json").exists():
         step_validate_ts(report, deliver_base)
 
-    # 步骤4: coder（取第一个规则）
+    # 步骤4: coder
     if not args.skip_ai and (deliver_base / "ts.json").exists():
         ts = json.loads((deliver_base / "ts.json").read_text(encoding="utf-8"))
-        rules = list(ts.get("rules", {}).keys())
-        rule_code = args.rule or (rules[0] if rules else "R0001")
-        step_coder(report, deliver_base, rule_code, args.skip_ai)
+        all_rules = list(ts.get("rules", {}).keys())
+
+        # 确定要编码的规则集合
+        if args.rule:
+            # --rule 显式指定：只编这一个
+            rules_to_encode = [args.rule]
+        elif args.all_rules:
+            # --all-rules：编全部
+            rules_to_encode = all_rules if all_rules else ["R0001"]
+        else:
+            # 默认：只编第一个
+            rules_to_encode = [all_rules[0]] if all_rules else ["R0001"]
+
+        encoded_rules = []
+        for rc in rules_to_encode:
+            ok = step_coder(report, deliver_base, rc, args.skip_ai)
+            if ok:
+                encoded_rules.append(rc)
+
+        # 未编码规则清单（多规则案例提醒）
+        if len(all_rules) > 1:
+            not_encoded = [r for r in all_rules if r not in encoded_rules]
+            if not_encoded:
+                report.add_issue("编码覆盖", f"未编码规则: {', '.join(not_encoded)}（ts.json 共 {len(all_rules)} 规则）")
 
         # 步骤5: DDL
         step_assemble_ddl(report, deliver_base)
@@ -384,8 +406,9 @@ def main():
         # 步骤5.5: DQ 检查 SQL
         step_assemble_dq(report, deliver_base)
 
-        # 步骤6: 静态对比
-        step_check_sql(report, deliver_base, rule_code)
+        # 步骤6: 静态对比（对每个已编码规则）
+        for rc in encoded_rules:
+            step_check_sql(report, deliver_base, rc)
 
     # 输出报告
     all_ok = report.print_report()

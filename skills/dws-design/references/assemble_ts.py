@@ -52,6 +52,34 @@ STANDARD_AUDIT_TEMPLATE = {
 }
 STANDARD_AUDIT_NAMES = set(STANDARD_AUDIT_TEMPLATE.keys())
 
+# 标准参数（所有资产默认都有，脚本自动注入，designer 无需声明）
+# 现仅批次号；如未来加标准参数，在此列表追加即可。
+STANDARD_PARAMS = [
+    {"name": "P_CYCLE_ID", "value_type": "string", "desc": "批次号"},
+]
+
+
+def build_exec_params(decisions):
+    """组装 exec_params：标准参数自动注入 + 业务参数透传。
+
+    返回 {param_name: {value_type, desc, standard}}。
+    standard=true 表示脚本自动注入（所有资产都有）。
+    """
+    params = {}
+    for sp in STANDARD_PARAMS:
+        params[sp["name"]] = {
+            "value_type": sp["value_type"],
+            "desc": sp["desc"],
+            "standard": True,
+        }
+    for p in decisions.get("params", []):
+        params[p["name"]] = {
+            "value_type": p.get("value_type", "string"),
+            "desc": p.get("desc", ""),
+            "standard": False,
+        }
+    return params
+
 
 def is_audit_field(fm: dict) -> bool:
     """判断字段是否审计字段：备注优先（含'审计字段'），字段名兜底（匹配标准名）。"""
@@ -255,7 +283,7 @@ def build_meta(rs_input, decisions):
         "task_group": dec_sched.get("task_group", ""),
         "project": dec_sched.get("project", ""),
         "owner": rs_meta.get("owner", {}).get("person", ""),
-        "exec_params": {},
+        "exec_params": build_exec_params(decisions),
         "upstream": rs_sched.get("upstream", []),
         "execution_platform": {},
     }

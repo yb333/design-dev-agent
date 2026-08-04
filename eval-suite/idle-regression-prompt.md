@@ -72,6 +72,18 @@ python3 eval-suite/local_eval.py --asset dwb_user_profile_f      --mapping eval-
 python3 eval-suite/local_eval.py --asset dwb_user_behavior_f     --mapping eval-suite/cases/006_dwb_user_behavior_f/mapping.xlsx     --rs eval-suite/cases/006_dwb_user_behavior_f/RS.md     --clean
 ```
 
+### 第三步补充：多规则案例全编码（时间充裕时跑）
+
+验证中间表流水衔接（tmp1→tmp2→…→f）。多规则案例每个规则都要编码，耗时较长（4规则案例可能 1-2 小时）。
+
+```bash
+cd /Users/yuanbo/design-dev-agent
+# 选一个多规则案例（3-4规则）跑 --all-rules
+python3 eval-suite/local_eval.py --asset dwb_user_center_f --mapping eval-suite/cases/005_dwb_user_center_f/mapping.xlsx --rs eval-suite/cases/005_dwb_user_center_f/RS.md --clean --all-rules
+# 跑完检查 etl/ 目录下是否有 R0001/R0002/R0003/R0004 四个 SQL 文件
+# 人工核查：tmp2 的 SELECT 是否引用了 tmp1 的字段（流水上溯正确）
+```
+
 ### 第四步：逐案例检查产出质量
 
 每个案例跑完后检查以下内容：
@@ -164,3 +176,6 @@ git push origin main
 7. **校验分级**：目标表schema/table两边都没写→阻断，一边没写→告警
 8. **db-sources.json**：在~/.config/opencode/下（不在skill目录），install不覆盖
 9. **designer审视意识**：主键发散/关联缺失应该在设计阶段发现
+10. **数据源缺口前移**：designer 发现某字段口径依赖的源表不在 rs_input 里，应该用 question 弹确认，**不把缺口写进 ts.json 带到 coder**（案例 007 stock_days 字段是典型场景，验证它不会卡在 coder 阶段）
+11. **--all-rules 开关**：多规则案例（005/006/009/012）加 `--all-rules` 能编出全部规则，验证中间表衔接（tmp1→tmp2→…→f）
+12. **参数化机制**：ts.json 的 `meta.schedule.exec_params` 应有 P_CYCLE_ID（脚本自动注入）；如 designer 声明了业务参数（BIZ_DATE/ACCT_PERIOD 等），UT 执行前应替换 `${PARAM}` 为实际值

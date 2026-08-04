@@ -43,7 +43,10 @@
       "task_group": "",
       "project": "",
       "owner": "",
-      "exec_params": {},
+      "exec_params": {                    // 资产级参数声明。P_CYCLE_ID 脚本自动注入；业务参数 designer 声明
+        "P_CYCLE_ID": { "value_type": "string", "desc": "批次号", "standard": true }
+        // 业务参数按需追加，如 BIZ_DATE / ACCT_PERIOD
+      },
       "upstream": [                      // 上游依赖(RS给 + 中间表增量)
         // source: "rs"(RS 提供) | "designer"(设计新增的中间表)
         { "table": "", "task": "", "source": "" }

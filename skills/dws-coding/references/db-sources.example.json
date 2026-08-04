@@ -28,6 +28,23 @@
     "dwrdim_dw1": "dws-dev",
     "dws_rt": "dws-prod"
   },
+  "test_params": {
+    "P_CYCLE_ID": {
+      "type": "dynamic",
+      "expr": "today_ymdhms",
+      "desc": "批次号=当天0点拼000000，如 20260804000000"
+    },
+    "BIZ_DATE": {
+      "type": "dynamic",
+      "expr": "today_ymd",
+      "desc": "业务日期=当天，如 20260804"
+    },
+    "ACCT_PERIOD": {
+      "type": "static",
+      "value": "202608",
+      "desc": "会计期间（手动指定）"
+    }
+  },
   "security": {
     "allowWriteOperations": true,
     "maxRows": 1000,
