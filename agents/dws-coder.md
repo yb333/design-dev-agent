@@ -81,6 +81,7 @@ INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 - **design_logic 是自然语言口径，你只做技术翻译**——套 COALESCE/NULL 处理，不改变业务口径
 - 若发现口径本身有问题，**回报给调用方，不自己改 TS**
 - **遵守编码规范**：不能 SELECT *、NULL 必须 COALESCE、审计字段齐全
+- **SELECT 要写注释**——每个加工字段用 `-- 注释` 说明加工逻辑（直取字段不用），CTE 用 `-- 用途说明` 标注
 - **不写 INSERT/DDL**——只写 SELECT
 - 若切片拿不到或规则不存在，用 question 向调用方报告
 

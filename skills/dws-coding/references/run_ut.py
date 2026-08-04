@@ -347,7 +347,7 @@ def main():
                 else:
                     print(f"  ⚠️ DDL文件未找到: {ddl_file.name}，跳过建表")
 
-            # 步骤2: 包装 + 执行 INSERT
+            # 步骤2: 读 SELECT + 参数替换
             select_sql = read_select(Path(args.select_dir), rule_code)
             if not select_sql:
                 rule_result["status"] = "SKIP"
@@ -355,19 +355,45 @@ def main():
                 print(f"  ⏭️ SELECT文件未找到")
                 all_results.append(rule_result)
                 continue
+            select_sql = substitute_params(select_sql, param_values)
 
+            # 步骤2.5: SELECT 预检（快速发现类型/字段问题，不写数据）
+            r_pre = executor.execute(select_sql)
+            if not r_pre.success:
+                error_msg = r_pre.error[:200] if r_pre.error else "未知错误"
+                error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
+                rule_result["status"] = "FAIL"
+                rule_result["detail"] = f"SELECT预检失败({error_type}): {error_msg}"
+                rule_result["error_type"] = error_type
+                print(f"  ❌ SELECT预检失败({error_type}): {error_msg}")
+                all_results.append(rule_result)
+                prev_failed = True
+                continue
+            pre_cols = r_pre.columns or []
+            pre_rows = len(r_pre.rows) if r_pre.rows else 0
+            print(f"  ✅ SELECT预检: {pre_rows}行, {len(pre_cols)}列")
+
+            # 步骤3: 按写入模式预处理（模拟术加平台行为）
+            load_mode = rule.get("load_mode", "truncate_table")
+            if load_mode == "truncate_table":
+                executor.execute(f"TRUNCATE TABLE {target}")
+                print(f"  🔄 TRUNCATE（load_mode=truncate_table）")
+            elif load_mode == "delete" and rule.get("delete_condition"):
+                del_sql = f"DELETE FROM {target} WHERE {rule['delete_condition']}"
+                executor.execute(del_sql)
+                print(f"  🔄 DELETE（load_mode=delete）")
+            # no_delete / merge_into 不预处理
+
+            # 步骤4: INSERT 灌数据
             # INSERT 字段列表从 tables 段取该表全部字段（含审计）
             target_short = target.rsplit(".", 1)[-1] if "." in target else target
             tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
-            # 旧格式兼容：tables 段没有时 fallback 到 rule.fields
             if not tbl_fields:
                 tbl_fields = rule.get("fields", [])
             insert_sql = wrap_insert(select_sql, target, tbl_fields)
-            insert_sql = substitute_params(insert_sql, param_values)
             r = executor.execute(insert_sql)
 
             if not r.success:
-                # 分类错误
                 error_msg = r.error[:200] if r.error else "未知错误"
                 error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
                 rule_result["status"] = "FAIL"
@@ -380,7 +406,7 @@ def main():
 
             print(f"  ✅ INSERT: {r.summary()}")
 
-            # 步骤3: UT 检查
+            # 步骤5: UT 检查
             ut_checks = run_ut_check(executor, target, business_key, audit_fields)
             rule_result["checks"] = ut_checks
 

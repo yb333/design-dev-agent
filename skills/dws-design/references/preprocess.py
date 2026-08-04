@@ -371,6 +371,9 @@ class ExcelMappingParser:
         remaining_keys = list(column_map.keys())
         used_targets = set()
 
+        # 已知的非标准列（模板里的辅助列，不是数据列），静默忽略不报警告
+        IGNORE_COLUMNS = {"序号", "备注", "说明", "note", "comment", "no", "index"}
+
         for col in df.columns:
             col_clean = self._clean_column_name(col)
 
@@ -378,6 +381,9 @@ class ExcelMappingParser:
             best_key = col_clean if col_clean in column_map else None
 
             if best_key is None:
+                # 已知的非标准列（序号/备注等），静默忽略
+                if col_clean in IGNORE_COLUMNS or col_clean == "":
+                    continue
                 # 未匹配的列要报出来，让调用方知道输入有问题
                 self.diagnostics.append({
                     'type': 'column_unmatched',

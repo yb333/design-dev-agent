@@ -107,14 +107,13 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
         atype = aspec.get("type", "") if isinstance(aspec, dict) else str(aspec)
         audit_lines.append((aname, atype, ""))
 
-    # 输出字段
+    # 输出字段（不在行内写注释，字段注释用下方 COMMENT ON COLUMN 统一定义）
     all_fields = field_lines + audit_lines
     for i, (fname, ftype, fcomment) in enumerate(all_fields):
         comma = "," if i < len(all_fields) - 1 else ""
-        comment = f"  /* {fcomment} */" if fcomment else ""
         if i == len(field_lines):
             lines.append(f"    /* 审计字段 */")
-        lines.append(f"    {fname:<{max_field_len}} {type_or_empty(ftype)}{comma}{comment}")
+        lines.append(f"    {fname:<{max_field_len}} {type_or_empty(ftype)}{comma}")
 
     lines.append(")")
 
