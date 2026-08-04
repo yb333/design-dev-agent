@@ -19,6 +19,7 @@ permission:
   edit:
     "*": deny
     "**/ddlc_design_dev/etl/*.sql": allow
+    "**/ddlc_design_dev/dq/*.sql": allow
   # 禁止 MCP 工具
   "mcp_*": deny
   skill:

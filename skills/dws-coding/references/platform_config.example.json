@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": {
+      "project_code": "SRP_ETL",
+      "project_cn": "ETL项目",
+      "project_en": "ETL_Project",
+      "subproject_code": "SUB_001",
+      "subproject_cn": "子项目",
+      "subproject_en": "Sub_Project",
+      "datasource": "SRP_DWS",
+      "business_owner": "zhangsan"
+    }
+  }
+}

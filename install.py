@@ -278,6 +278,22 @@ def run():
         print("[6/6] 数据库配置 example 未找到，跳过")
         print()
 
+    # ── 7. 平台配置初始化（exporter 用）──
+    pf_config = config_dir / "platform_config.json"
+    pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "references" / "platform_config.example.json"
+    if not pf_config.exists() and pf_example.exists():
+        shutil.copy2(str(pf_example), str(pf_config))
+        print("[7/7] 平台配置初始化...")
+        print(f"  ✓ 已创建 {pf_config}")
+        print(f"  ⚠️  请编辑此文件，填入项目/子项目编码（部署到平台时用）")
+        print()
+    elif pf_config.exists():
+        print("[7/7] 平台配置已存在，跳过（不覆盖）")
+        print()
+    else:
+        print("[7/7] 平台配置 example 未找到，跳过")
+        print()
+
     # ── 完成 ──
     print("=" * 55)
     print("  ✓ 安装完成！")

@@ -24,6 +24,10 @@ agent: build
     ├── ut_report.md                      ← UT 报告（执行验证后生成）
     ├── ddl/                              ← 编码产出（脚本生成的 DDL）
     │   └── create_table_xxx.sql
+    ├── export/                           ← 平台制品包（UT 通过后生成，可选）
+    │   ├── execution_tasks.xlsx          ← 执行平台导入（10 sheet）
+    │   ├── schedule_tasks.xlsx           ← 调度平台导入（3 sheet）
+    │   └── export_manifest.json          ← 元数据清单（给内网 skill 读）
     └── _internal/                        ← 过程产物
         ├── rs_input.json                 ← 预处理产出
         ├── design_decisions.yaml         ← 设计决策
@@ -131,29 +135,19 @@ python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/
 
 ---
 
-## 步骤 4.5：生成 DQ 检查 SQL
+## 步骤 4.5：生成标准 DQ 检查 SQL（脚本）
 
-**4.5a 标准DQ**（脚本自动生成）：主键唯一/审计非空/记录数
+调脚本自动生成标准 DQ（主键唯一/审计非空/记录数）：
 
 ```bash
 python CODING_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --outdir {deliver}/dq
 ```
 
-**4.5b 定制DQ**（如果有 TODO 占位）：检查生成的 dq/*.sql 里有没有 `-- TODO`，
-如果有，说明有定制 DQ 需要 coder 生成。调 coder 补写：
-
-```
-Task(
-  subagent_type="dws-coder",
-  description="补写定制DQ SQL",
-  prompt="读取 {deliver}/dq/ 下的 DQ 文件，找到 -- TODO 标记的定制 DQ 规则，
-          根据 ts.json 的 dq_rules 描述，补写对应的 DQ 检查 SQL，替换 TODO 占位。"
-)
-```
+检查生成的 dq/*.sql 里有没有 `-- TODO`（定制 DQ 占位）。如果有，记下来——步骤 5 会和规则编码并行补写。
 
 ---
 
-## 步骤 5：逐规则调 coder 产 SELECT
+## 步骤 5：逐规则调 coder 产 SELECT（与定制 DQ 并行）
 
 读 ts.json 的 rules，按 `data_flow.schedule_groups` 顺序逐规则调 coder。
 
@@ -172,6 +166,20 @@ coder 完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
 > coder 内部会：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。
 > 如果 coder 报"静态对比不过"，记录失败规则，继续后面的规则（不阻塞）。
+
+**定制 DQ 并行补写**（如果步骤 4.5 发现有 TODO）：
+
+规则编码和定制 DQ **互不依赖**（查同一张目标表但 SQL 逻辑独立），可以并行。
+在逐规则调 coder 的同时，另起一个 Task 补写定制 DQ：
+
+```
+Task(
+  subagent_type="dws-coder",
+  description="补写定制DQ SQL",
+  prompt="读取 {deliver}/dq/ 下的 DQ 文件，找到 -- TODO 标记的定制 DQ 规则，
+          根据 ts.json 的 dq_rules 描述，补写对应的 DQ 检查 SQL，替换 TODO 占位。"
+)
+```
 
 ---
 
@@ -217,6 +225,30 @@ coder 改完后重跑步骤6验证。**每个规则限 3 轮**。
 
 ---
 
+## 步骤 7.5：生成平台制品包（可选，UT 全通过后）
+
+> **前提**：步骤6的 UT 全部通过（SQL 验证稳定后才生成制品包，避免反复改）。
+> **可选**：只有要部署到平台时才跑。不部署就跳过。
+
+调 assemble_export.py 生成平台消费的 Excel：
+
+```bash
+python CODING_SCRIPTS/assemble_export.py \
+  --ts {deliver}/ts.json \
+  --etl-dir {deliver}/etl/ \
+  --ddl-dir {deliver}/ddl/ \
+  --outdir {deliver}
+```
+
+产出在 `{deliver}/export/` 下：
+- `execution_tasks.xlsx`（执行平台导入，10 sheet）
+- `schedule_tasks.xlsx`（调度平台导入，3 sheet）
+- `export_manifest.json`（元数据清单）
+
+> ⚠️ 规则编码留空。部署时内网 skill 先获取编码回填 Excel 再导入。
+
+---
+
 ## 步骤 8：闸口②（人确认编码质量）
 
 > **非交互模式**：跳过闸口，打印摘要后结束。
@@ -232,6 +264,11 @@ coder 改完后重跑步骤6验证。**每个规则限 3 轮**。
 
 ### 产出文件
 - ts.json / ts.md（设计制品）
+- etl/*.sql（编码制品）
+- dq/*.sql（DQ 检查脚本）
+- ddl/*.sql（建表脚本）
+- ut_report.md（UT 报告）
+- export/（平台制品包，如已生成）
 - etl/*.sql（编码制品）
 - dq/*.sql（DQ 检查脚本）
 - ddl/*.sql（建表脚本）

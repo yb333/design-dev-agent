@@ -138,11 +138,8 @@ def render_data_flow_mermaid(ts: dict) -> str:
                            for code, r in rules.items()]
 
     lines = ['```mermaid']
-    lines.append('%%{init: {"theme":"base", "themeVariables": {')
-    lines.append('  "primaryColor":"#dbeafe","primaryTextColor":"#1e3a5f",')
-    lines.append('  "primaryBorderColor":"#3b82f6","lineColor":"#64748b",')
-    lines.append('  "fontSize":"13px"')
-    lines.append('}}}%%')
+    # init 配置必须单行（多行格式部分 mermaid 渲染器不支持）
+    lines.append('%%{init: {"theme":"base","themeVariables":{"primaryColor":"#dbeafe","primaryTextColor":"#1e3a5f","primaryBorderColor":"#3b82f6","lineColor":"#64748b","fontSize":"13px"}}}%%')
     lines.append('flowchart TD')
     lines.append('')
 
