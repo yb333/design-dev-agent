@@ -381,16 +381,9 @@ class ExcelMappingParser:
             best_key = col_clean if col_clean in column_map else None
 
             if best_key is None:
-                # 已知的非标准列（序号/备注等），静默忽略
-                if col_clean in IGNORE_COLUMNS or col_clean == "":
-                    continue
-                # 未匹配的列要报出来，让调用方知道输入有问题
-                self.diagnostics.append({
-                    'type': 'column_unmatched',
-                    'sheet': '',
-                    'message': f'列 "{col}" 未匹配到标准列名（清理后: "{col_clean}"），'
-                               f'请检查 mapping 表头是否按标准模板填写',
-                })
+                # 未匹配的列直接跳过，不报警告。
+                # mapping 模板可能有各种辅助列（序号/备注/空列等），不影响产出。
+                # 真正的问题（标准列缺失）由 column_missing 检查覆盖。
                 continue
 
             target = column_map[best_key]

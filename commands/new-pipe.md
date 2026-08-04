@@ -133,25 +133,17 @@ python DESIGN_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
 python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/ddl
 ```
 
----
-
-## 步骤 4.5：生成标准 DQ 检查 SQL（脚本）
-
-调脚本自动生成标准 DQ（主键唯一/审计非空/记录数）：
-
-```bash
-python CODING_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --outdir {deliver}/dq
-```
-
-检查生成的 dq/*.sql 里有没有 `-- TODO`（定制 DQ 占位）。如果有，记下来——步骤 5 会和规则编码并行补写。
+> **I 视图自动推导**：mapping 目标表写 `_i` 后缀（如 `dwb_xxx_i`），
+> 脚本自动推导出 F 表（`dwb_xxx_f`）并先建 F 表、再建 I 视图。
+> 不需要 designer/coder 单独处理 F 表，`_i` 就是完整目标。
 
 ---
 
-## 步骤 5：逐规则调 coder 产 SELECT（与定制 DQ 并行）
+## 步骤 5：逐规则调 coder 产 SELECT + DQ
 
 读 ts.json 的 rules，按 `data_flow.schedule_groups` 顺序逐规则调 coder。
 
-**对每个规则**：
+**对每个规则**（ETL 编码）：
 ```
 Task(
   subagent_type="dws-coder",
@@ -167,19 +159,21 @@ coder 完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 > coder 内部会：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。
 > 如果 coder 报"静态对比不过"，记录失败规则，继续后面的规则（不阻塞）。
 
-**定制 DQ 并行补写**（如果步骤 4.5 发现有 TODO）：
-
-规则编码和定制 DQ **互不依赖**（查同一张目标表但 SQL 逻辑独立），可以并行。
-在逐规则调 coder 的同时，另起一个 Task 补写定制 DQ：
+**DQ 并行生成**（ETL 编码和 DQ 互不依赖，并行调）：
 
 ```
 Task(
   subagent_type="dws-coder",
-  description="补写定制DQ SQL",
-  prompt="读取 {deliver}/dq/ 下的 DQ 文件，找到 -- TODO 标记的定制 DQ 规则，
-          根据 ts.json 的 dq_rules 描述，补写对应的 DQ 检查 SQL，替换 TODO 占位。"
+  description="生成DQ检查SQL",
+  prompt="读取 {deliver}/ts.json 的 dq_rules，为每条 DQ 规则生成检查 SQL，
+          产出到 {deliver}/dq/ 目录。
+          标准 DQ（主键唯一/审计非空/行数）直接写；
+          业务 DQ 按 rule_desc 口径写。
+          每个文件命名 dq_{检查类型}.sql。"
 )
 ```
+
+> DQ 不再由脚本生成（assemble_dq 已废弃），全部交给 coder 一次性产出。
 
 ---
 
@@ -194,7 +188,7 @@ python CODING_SCRIPTS/check_db.py
 - 如果输出 `DB_OK` → 有数据源，继续跑 UT
 - 如果输出 `NO_DB_SOURCE` → 无数据源，跳过 UT，直接到闸口②（告知用户"UT 未执行，需配置 db-sources.json"）
 
-**有数据源时**，调 run_ut.py 跑执行验证（DDL+INSERT+UT检查）：
+**有数据源时**，调 run_ut.py 跑执行验证（回退→DDL→SELECT预检→load_mode预处理→INSERT→UT检查）：
 
 ```bash
 python CODING_SCRIPTS/run_ut.py \
@@ -203,6 +197,10 @@ python CODING_SCRIPTS/run_ut.py \
   --ddl-dir {deliver}/ddl \
   --report {deliver}/ut_report.md
 ```
+
+> **UT 是长耗时操作**（大表 INSERT 可能 10-30 分钟）。run_ut.py 输出行缓冲，
+> 每个节点（DDL/SELECT预检/INSERT/UT检查）完成时实时打印进度。
+> 主控 agent 不要急于超时——DDL 和 INSERT 成功是有进度的标志，等待是正常的。
 
 ---
 
@@ -225,10 +223,10 @@ coder 改完后重跑步骤6验证。**每个规则限 3 轮**。
 
 ---
 
-## 步骤 7.5：生成平台制品包（可选，UT 全通过后）
+## 步骤 7.5：生成平台制品包（UT 通过后必跑）
 
 > **前提**：步骤6的 UT 全部通过（SQL 验证稳定后才生成制品包，避免反复改）。
-> **可选**：只有要部署到平台时才跑。不部署就跳过。
+> UT 未执行（无数据库）时，闸口②人工确认通过后再生成。
 
 调 assemble_export.py 生成平台消费的 Excel：
 
@@ -236,16 +234,17 @@ coder 改完后重跑步骤6验证。**每个规则限 3 轮**。
 python CODING_SCRIPTS/assemble_export.py \
   --ts {deliver}/ts.json \
   --etl-dir {deliver}/etl/ \
-  --ddl-dir {deliver}/ddl/ \
+  --ddl-dir {deliver}/ddl \
   --outdir {deliver}
 ```
 
 产出在 `{deliver}/export/` 下：
-- `execution_tasks.xlsx`（执行平台导入，10 sheet）
-- `schedule_tasks.xlsx`（调度平台导入，3 sheet）
-- `export_manifest.json`（元数据清单）
+- `shujia_{表名}.xlsx`（术加执行平台导入，10 sheet）
+- `lts_{表名}.xlsx`（LTS 调度平台导入，3 sheet）
+- `export_manifest_{表名}.json`（元数据清单）
 
 > ⚠️ 规则编码留空。部署时内网 skill 先获取编码回填 Excel 再导入。
+> 后续导入平台是可选的（由内网 skill 执行），但制品包必须生成。
 
 ---
 
@@ -268,11 +267,9 @@ python CODING_SCRIPTS/assemble_export.py \
 - dq/*.sql（DQ 检查脚本）
 - ddl/*.sql（建表脚本）
 - ut_report.md（UT 报告）
-- export/（平台制品包，如已生成）
-- etl/*.sql（编码制品）
-- dq/*.sql（DQ 检查脚本）
-- ddl/*.sql（建表脚本）
-- ut_report.md（UT 报告）
+- export/shujia_{表名}.xlsx（术加执行平台制品）
+- export/lts_{表名}.xlsx（LTS 调度平台制品）
+- export/export_manifest_{表名}.json（元数据清单）
 
 请选择：
 - ✅ 确认，流程完成

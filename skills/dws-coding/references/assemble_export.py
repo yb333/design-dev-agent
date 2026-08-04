@@ -370,7 +370,7 @@ def build_target_fields(ts: dict) -> list[list]:
                 src_field,          # 来源字段名称
                 "0",                # 加密方式
                 "",                 # Merge模式数据源字段值
-                src_alias,          # 别名
+                "",                 # 别名（不填）
                 "",                 # 字段类型
                 "",                 # 备注
             ])
@@ -571,7 +571,7 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
         "upstream_tasks": upstream_tasks,
         "rule_codes_needed": rule_codes_needed,
         "codes_filled": False,   # 内网回填后改 true
-        "files": ["execution_tasks.xlsx", "schedule_tasks.xlsx"],
+        "files": [f"shujia_{target_short}.xlsx", f"lts_{target_short}.xlsx"],
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -607,10 +607,11 @@ def main():
     target_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
     config = resolve_config_by_schema(raw_config, target_schema)
 
-    # 产出
-    exec_path = export_dir / "execution_tasks.xlsx"
-    sched_path = export_dir / "schedule_tasks.xlsx"
-    manifest_path = export_dir / "export_manifest.json"
+    # 产出（文件名带平台标识 + 表名，便于多资产区分）
+    target_short = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "unknown")
+    exec_path = export_dir / f"shujia_{target_short}.xlsx"
+    sched_path = export_dir / f"lts_{target_short}.xlsx"
+    manifest_path = export_dir / f"export_manifest_{target_short}.json"
 
     generate_execution_excel(ts, config, etl_dir, ddl_dir, exec_path)
     generate_schedule_excel(ts, config, sched_path)

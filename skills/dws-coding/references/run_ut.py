@@ -32,6 +32,12 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+# 行缓冲 stdout——子进程模式下主控能实时看到 DDL/SELECT/INSERT 各节点进度
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except AttributeError:
+    pass
+
 # 同目录导入 dws_db
 sys.path.insert(0, str(Path(__file__).parent))
 from dws_db import create_executor, ExecuteResult, load_test_params

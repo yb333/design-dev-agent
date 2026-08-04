@@ -287,12 +287,12 @@ class TestBuildTargetFields:
         assert "crt_cycle_id" not in target_fields
 
     def test_source_field_extracted(self, sample_ts):
-        """来源字段正确提取"""
+        """来源字段正确提取，别名不填"""
         rows = build_target_fields(sample_ts)
         for row in rows:
             if row[1] == "order_amt":
                 assert row[2] == "amount"
-                assert row[5] == "a"  # 别名
+                assert row[5] == ""  # 别名不填
 
     def test_rule_code_empty(self, sample_ts):
         """规则编码留空"""
