@@ -61,12 +61,14 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
         tbl_info = tables[table_short]
         fields = tbl_info.get("fields", [])
         dist_key = ", ".join(tbl_info.get("distribution_key", []))
+        distribute_type = tbl_info.get("distribute_type", "HASH" if dist_key else "ROUNDROBIN")
         logical_group = tbl_info.get("logical_group", "") or infer_logical_group(schema)
         storage = tbl_info.get("storage", "column")
     else:
-        # 旧格式兼容：字段和分布键从 rule/design 取
+        # 旧格式兼容
         fields = rule.get("fields", [])
         dist_key = ", ".join(design.get("distribution_key", []))
+        distribute_type = "HASH" if dist_key else "ROUNDROBIN"
         logical_group = infer_logical_group(schema)
         storage = "column"
 
@@ -123,9 +125,13 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
     lines.append(f"    COMPRESSION = LOW")
     lines.append(f")")
 
-    # 分布键
-    if dist_key:
+    # 分布方式（HASH / ROUNDROBIN / REPLICATION）
+    if distribute_type == "HASH" and dist_key:
         lines.append(f"DISTRIBUTE BY HASH({dist_key})")
+    elif distribute_type == "REPLICATION":
+        lines.append(f"DISTRIBUTE BY REPLICATION")
+    else:
+        lines.append(f"DISTRIBUTE BY ROUNDROBIN")
 
     # TO GROUP
     lines.append(f'TO GROUP "{logical_group}";')

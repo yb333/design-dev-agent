@@ -495,9 +495,16 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         if not dec_dist:
             dec_dist = decisions.get("distribution_key", [])
 
+        # 分布方式：HASH（默认）/ ROUNDROBIN / REPLICATION
+        # 有分布键 → HASH；无分布键 → ROUNDROBIN；designer 可显式指定
+        distribute_type = dec_tbl.get("distribute_type", "")
+        if not distribute_type:
+            distribute_type = "HASH" if dec_dist else "ROUNDROBIN"
+
         tables[tbl_short] = {
             "type": tbl_type,
             "distribution_key": dec_dist,
+            "distribute_type": distribute_type,
             "partition": dec_tbl.get("partition", ""),
             "storage": dec_tbl.get("storage", "column"),
             "logical_group": dec_tbl.get("logical_group", "") or infer_logical_group(tbl_schema),
@@ -526,22 +533,27 @@ def build_meta(rs_input, decisions):
             f_table = {"schema": target.get("schema", ""), "table": table_name, "cn": target.get("cn", "")}
             i_view = {"schema": target.get("schema", ""), "table": table_name[:-2] + "_i" if table_name.endswith("_f") else table_name + "_i", "cn": target.get("cn", "")}
 
-    # source_tables(从 rs_input 搬, 去重)
-    seen = set()
-    source_tables = []
+    # source_tables(从 rs_input 搬, 按表去重——同一张表多次关联只列一次)
+    seen_tables = {}  # table -> {schema, table, table_cn, aliases}
     for st in rs_input.get("source_tables", []):
         t = st.get("source_table", "")
         a = st.get("source_alias", "")
-        key = (t, a)
-        if key in seen:
+        if not t:
             continue
-        seen.add(key)
-        source_tables.append({
-            "schema": st.get("source_schema", ""),
-            "table": t,
-            "table_cn": st.get("source_table_cn", ""),
-            "alias": a,
-        })
+        if t not in seen_tables:
+            seen_tables[t] = {
+                "schema": st.get("source_schema", ""),
+                "table": t,
+                "table_cn": st.get("source_table_cn", ""),
+                "aliases": [],
+            }
+        if a and a not in seen_tables[t]["aliases"]:
+            seen_tables[t]["aliases"].append(a)
+    # 转成列表，别名合并成逗号分隔
+    source_tables = []
+    for st_info in seen_tables.values():
+        st_info["alias"] = ", ".join(st_info.pop("aliases"))
+        source_tables.append(st_info)
 
     # 调度: rs_input 给大框架 + designer 细化
     rs_sched = rs_input.get("schedule", {})
@@ -771,20 +783,29 @@ def render_md(ts):
                 break
         return text[:limit] + "…" if len(text) > limit else text
 
+    def _dist_label(t):
+        """分布类型+分布键合并显示，如 HASH(product_id) / ROUNDROBIN / REPLICATION"""
+        dtype = t.get("distribute_type", "HASH")
+        dkeys = t.get("distribution_key", [])
+        if dtype == "HASH" and dkeys:
+            return f"HASH({', '.join(dkeys)})"
+        elif dtype == "REPLICATION":
+            return "REPLICATION"
+        else:
+            return dtype or "—"
+
     # 排序：目标F表 → 中间表 → 视图
-    lines.append("| 表名 | 类型 | 分布键 | 分区 | 字段数 | 说明 |")
-    lines.append("|------|------|--------|------|--------|------|")
+    lines.append("| 表名 | 类型 | 分布 | 分区 | 字段数 | 说明 |")
+    lines.append("|------|------|------|------|--------|------|")
     # 目标 F 表
     if f_table_short in tables:
         t = tables[f_table_short]
-        dist = ", ".join(t.get("distribution_key", [])) or "—"
         part = t.get("partition") or "—"
         fcount = len(t.get("fields", []))
-        lines.append(f"| `{f_table_short}` | 目标F表 | {dist} | {part} | {fcount} | {target['f_table'].get('cn', '')} |")
+        lines.append(f"| `{f_table_short}` | 目标F表 | {_dist_label(t)} | {part} | {fcount} | {target['f_table'].get('cn', '')} |")
     # 中间表
     for tname, t in tables.items():
         if t.get("type") == "intermediate":
-            dist = ", ".join(t.get("distribution_key", [])) or "—"
             part = t.get("partition") or "—"
             fcount = len(t.get("fields", []))
             # 找对应规则的 design_intent，截短成简述
@@ -794,7 +815,7 @@ def render_md(ts):
                 if rt.rsplit(".", 1)[-1] == tname or rt == tname:
                     intent = _short_desc(r.get("design_intent", ""))
                     break
-            lines.append(f"| `{tname}` | 中间表 | {dist} | {part} | {fcount} | {intent} |")
+            lines.append(f"| `{tname}` | 中间表 | {_dist_label(t)} | {part} | {fcount} | {intent} |")
     # 视图（无物理属性）
     if i_view_short:
         f_fields = len(tables.get(f_table_short, {}).get("fields", []))

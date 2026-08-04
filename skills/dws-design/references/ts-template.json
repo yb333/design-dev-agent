@@ -97,7 +97,8 @@
   "tables": {
     "dwb_xxx_f": {
       "type": "target",                   // target(目标F表) | intermediate(中间表)
-      "distribution_key": ["id"],         // ★ 分布键（每表各自，设计师在 decisions.tables 声明）
+      "distribution_key": ["id"],         // 分布键字段（每表各自）
+      "distribute_type": "HASH",          // 分布方式: HASH(有分布键时默认) | ROUNDROBIN(无分布键) | REPLICATION(复制)
       "partition": "",                    // 分区表达式（无则空）
       "storage": "column",                // column | row（默认列存）
       "logical_group": "LC_DW1",          // TO GROUP（默认按 schema 推断）

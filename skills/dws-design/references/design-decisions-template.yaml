@@ -89,15 +89,22 @@ complexity_analysis:
   segmentation_reason: ""               # 决策理由
 
 # === 表物理属性（per-table）===
-# 每张表各自定义分布键。大部分情况下分布键跟业务主键一致，
+# 每张表各自定义分布键和分布方式。大部分情况下分布键跟业务主键一致，
 # 但中间表可能不同（如按 user_id 聚合的 tmp 表用 user_id 做分布键）。
-# 只需填 distribution_key，其余属性不填走默认（列存 / 按 schema 推断逻辑集群）。
+# distribution_key: 分布键字段列表
+# distribute_type: 分布方式 HASH(默认) | ROUNDROBIN | REPLICATION（不填时有键=HASH，无键=ROUNDROBIN）
+# 其余属性不填走默认（列存 / 按 schema 推断逻辑集群）。
 # 字段定义由 assemble_ts.py 从 rs_input 自动搬入 tables.{表名}.fields，designer 不碰。
 tables:
-  # 目标F表的短名（不含schema）:
+  # 目标F表:
   # dwb_xxx_f:
   #   distribution_key: [id]
-  # 中间表：
+  #   distribute_type: HASH
+  # 维表（复制分布）:
+  # dwb_xxx_d:
+  #   distribution_key: []
+  #   distribute_type: REPLICATION
+  # 中间表:
   # dwb_xxx_tmp1:
   #   distribution_key: [id]
 
