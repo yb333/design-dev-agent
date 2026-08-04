@@ -222,9 +222,9 @@ class TestInsertWrapping:
         """INSERT 包装基本功能"""
         from run_ut import wrap_insert
         select = "SELECT t.col1 AS col1, 'N' AS del_flag FROM table t"
-        fields = [{"target_field": "col1"}]
-        audit = {"del_flag": {}, "crt_cycle_id": {}, "last_upd_cycle_id": {}, "dw_last_update_date": {}}
-        result = wrap_insert(select, "schema.target_table", fields, audit)
+        # table_fields = 表的全部字段（含审计）
+        table_fields = [{"target_field": "col1"}, {"target_field": "del_flag"}]
+        result = wrap_insert(select, "schema.target_table", table_fields)
         assert "INSERT INTO schema.target_table" in result
         assert "col1" in result
         assert "del_flag" in result
@@ -234,9 +234,8 @@ class TestInsertWrapping:
         """INSERT 包装应保留 SELECT 内容"""
         from run_ut import wrap_insert
         select = "SELECT\n    t.x AS x,\n    'N' AS del_flag\nFROM t"
-        fields = [{"target_field": "x"}]
-        audit = {"del_flag": {}}
-        result = wrap_insert(select, "schema.tbl", fields, audit)
+        table_fields = [{"target_field": "x"}, {"target_field": "del_flag"}]
+        result = wrap_insert(select, "schema.tbl", table_fields)
         assert "t.x AS x" in result
         assert "FROM t" in result
 

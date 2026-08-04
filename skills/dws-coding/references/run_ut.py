@@ -103,23 +103,23 @@ def resolve_all_params(ts: dict, config_path: str) -> dict:
     return values
 
 
-def wrap_insert(select_sql: str, target_table: str, fields, audit_fields: dict) -> str:
+def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
     """把 SELECT 包装成完整 INSERT（按平台固定规则）。
 
     平台规则：
     - INSERT INTO 目标表 (字段列表)
     - SELECT 内容不变
-    - 审计字段已在 SELECT 里带上了（coder 产的 SELECT 含审计字段赋值）
 
-    fields 可以是 field_targets（字段名列表 str）或旧格式 fields（dict 列表）。
+    table_fields: 该表的全部字段（从 tables 段取，已含审计字段）。
+    INSERT 的字段列表 = 表的全部字段 = SELECT 输出的字段，一一对应。
     """
-    # 字段列表（业务字段 + 审计字段）
-    # 兼容两种格式：field_targets（str 列表）或 fields（dict 列表含 target_field）
-    if fields and isinstance(fields[0], str):
-        field_names = list(fields)
+    # 字段列表：取表的全部字段名（业务 + 审计，已在 tables 段里）
+    if table_fields and isinstance(table_fields[0], dict):
+        field_names = [f.get("target_field", "") for f in table_fields]
+    elif table_fields and isinstance(table_fields[0], str):
+        field_names = list(table_fields)
     else:
-        field_names = [f["target_field"] for f in fields]
-    field_names.extend(audit_fields.keys())
+        field_names = []
     columns = ",\n    ".join(field_names)
 
     return f"""INSERT INTO {target_table} (
@@ -335,7 +335,13 @@ def main():
                 all_results.append(rule_result)
                 continue
 
-            insert_sql = wrap_insert(select_sql, target, rule.get("field_targets") or rule.get("fields", []), audit_fields)
+            # INSERT 字段列表从 tables 段取该表全部字段（含审计）
+            target_short = target.rsplit(".", 1)[-1] if "." in target else target
+            tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
+            # 旧格式兼容：tables 段没有时 fallback 到 rule.fields
+            if not tbl_fields:
+                tbl_fields = rule.get("fields", [])
+            insert_sql = wrap_insert(select_sql, target, tbl_fields)
             insert_sql = substitute_params(insert_sql, param_values)
             r = executor.execute(insert_sql)
 

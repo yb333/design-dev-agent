@@ -138,15 +138,15 @@ def render_data_flow_mermaid(ts: dict) -> str:
                            for code, r in rules.items()]
 
     lines = ['```mermaid']
-    # init 配置必须单行（多行格式部分 mermaid 渲染器不支持）
-    lines.append('%%{init: {"theme":"base","themeVariables":{"primaryColor":"#dbeafe","primaryTextColor":"#1e3a5f","primaryBorderColor":"#3b82f6","lineColor":"#64748b","fontSize":"13px"}}}%%')
     lines.append('flowchart TD')
     lines.append('')
 
+    # 节点ID → className 的映射（末尾用 class 语句批量赋类，兼容 Typora）
+    node_classes = {}  # {node_id: class_name}
+
     # --- 收集源表节点（全局去重，跨规则共享） ---
-    # source_table_key → (schema, table, node_id)
-    declared_sources = {}  # 已声明画过节点
-    declared_targets = set()  # 已声明的产出表 node_id（防多规则写同一表时重复声明）
+    declared_sources = {}  # source_table_key → {schema, table, node_id}
+    declared_targets = set()  # 已声明的产出表 node_id
     edges = []  # [(from_id, to_id, dashed)]
 
     for code in list(rules.keys()):
@@ -191,7 +191,7 @@ def render_data_flow_mermaid(ts: dict) -> str:
                 else:
                     fact_sources.append((sch, tbl))
 
-            # 步骤节点（含规则名 + 维表标注）
+            # 步骤节点（含规则名 + 维表标注），不内联 :::，用 class 语句赋类
             step_label = f'{code}'
             if rule_name:
                 step_label += f' / {rule_name}'
@@ -200,19 +200,21 @@ def render_data_flow_mermaid(ts: dict) -> str:
                 if len(dim_names) > 4:
                     dim_text += f" 等{len(dim_names)}张"
                 step_label += f'<br/>关联维表: {dim_text}'
-            lines.append(f'  {step_id}("{step_label}"):::step')
+            lines.append(f'  {step_id}("{step_label}")')
+            node_classes[step_id] = "step"
 
-            # 画非维表源表节点 + 源表→步骤的边（源表节点首次出现才声明）
+            # 画非维表源表节点 + 源表→步骤的边
             for sch, tbl in fact_sources:
                 src_info = declared_sources.get(f"{sch}.{tbl}")
                 if src_info:
                     src_id = src_info["node_id"]
                     if not src_info.get("_drawn"):
-                        lines.append(f'  {src_id}["{tbl}<br/><small>{sch}</small>"]:::source')
+                        lines.append(f'  {src_id}["{tbl}<br/><small>{sch}</small>"]')
                         src_info["_drawn"] = True
+                        node_classes[src_id] = "source"
                     edges.append((src_id, step_id, False))
 
-            # 画产出表节点 + 步骤→产出表的边（产出表节点首次出现才声明）
+            # 画产出表节点 + 步骤→产出表的边
             if target:
                 tgt_id = "tbl_" + _sanitize_node_id(target)
                 if tgt_id not in declared_targets:
@@ -222,13 +224,14 @@ def render_data_flow_mermaid(ts: dict) -> str:
                         cls = "intermediate"
                     else:
                         cls = "target"
-                    lines.append(f'  {tgt_id}["{target}"]:::{cls}')
+                    lines.append(f'  {tgt_id}["{target}"]')
                     declared_targets.add(tgt_id)
-                edges.append((step_id, tgt_id, is_view))   # 视图虚线，其余实线
+                    node_classes[tgt_id] = cls
+                edges.append((step_id, tgt_id, is_view))
 
         lines.append('')
 
-    # --- 画中间表→后续步骤的边（跨步骤数据传递）---
+    # --- 画中间表→后续步骤的边 ---
     for dep in df.get("dependencies", []):
         inter_tbl = dep.get("intermediate_table", "")
         to_code = dep.get("to", "")
@@ -242,13 +245,22 @@ def render_data_flow_mermaid(ts: dict) -> str:
         arrow = "-.->" if dashed else "-->"
         lines.append(f'  {from_id} {arrow} {to_id}')
 
-    # --- classDef 样式 ---
+    # --- classDef 样式定义 ---
     lines.append('')
     lines.append('  classDef source fill:#dbeafe,stroke:#3b82f6,stroke-width:1.5px,color:#1e3a5f')
     lines.append('  classDef step fill:#ede9fe,stroke:#8b5cf6,stroke-width:1.5px,color:#4c1d95')
     lines.append('  classDef intermediate fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#334155,stroke-dasharray:5 3')
     lines.append('  classDef target fill:#dcfce7,stroke:#22c55e,stroke-width:2.5px,color:#166534')
     lines.append('  classDef view fill:#e0e7ff,stroke:#6366f1,stroke-width:1.5px,color:#3730a3,stroke-dasharray:5 3')
+
+    # --- class 语句批量赋类（兼容 Typora，不用 ::: 内联）---
+    # 按 class_name 分组节点
+    by_class = {}
+    for nid, cls in node_classes.items():
+        by_class.setdefault(cls, []).append(nid)
+    for cls, nids in by_class.items():
+        lines.append(f'  class {",".join(nids)} {cls}')
+
     lines.append('```')
 
     return "\n".join(lines)
