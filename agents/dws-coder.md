@@ -75,6 +75,7 @@ INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 4. 关联安全策略（如"取最新有效行"）体现在 WHERE/CTE
 5. 审计字段赋值（从切片 `_global.audit_fields` 取 4 个标准字段）
 6. 引用参数用 `${PARAM_NAME}` 语法（可用参数见切片 `_global.schedule.exec_params`；如批次号 `${P_CYCLE_ID}`、业务日期 `${BIZ_DATE}`）。**UT 执行前由脚本替换为实际值，你只写占位符。**
+7. **增量规则**（切片有 `incremental` 段时）：SELECT 的 WHERE 里**必须**加上 `incremental.filter` 的增量过滤条件。这是增量规则的核心——不加过滤会全量扫源表，失去增量意义。你只写增量版，初始化版由脚本自动生成。
 
 # 硬约束（必须遵守）
 

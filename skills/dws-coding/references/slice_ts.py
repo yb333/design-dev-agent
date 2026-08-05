@@ -81,6 +81,12 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
         "exec_sequence": rule.get("exec_sequence", 1),
         "design_intent": rule.get("design_intent", ""),
 
+        # 写入方式（coder 参考：merge_into 需要 ON 条件，truncate 不需要）
+        "load_mode": rule.get("load_mode", "truncate_table"),
+
+        # 增量设计（如有：coder 要在 SELECT 里加增量 WHERE 过滤）
+        "incremental": rule.get("incremental", {}),
+
         # 关联策略（coder 写 FROM/JOIN 用）
         "source_tables": rule.get("source_tables", []),
         "joins": rule.get("joins", []),
@@ -107,6 +113,8 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
             "distribution_key": dist_key,
             # 目标表 schema（从 meta 取）
             "target_schema": ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", ""),
+            # 可用参数（coder 在 SELECT 里用 ${PARAM} 引用）
+            "exec_params": ts.get("meta", {}).get("schedule", {}).get("exec_params", {}),
         },
     }
 
