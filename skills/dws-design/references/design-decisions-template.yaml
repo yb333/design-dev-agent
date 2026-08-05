@@ -121,30 +121,20 @@ business_key_design:
   adjusted: false                        # 是否调整过
   reason: ""                             # 调整原因（adjusted=true 时必填）
 
-# === 调度细化（RS给大框架 → designer细化）===
+# === 调度设计（designer 只填这三个，其余脚本标准化构建）===
 schedule:
-  task_name: ""                         # F表调度任务名
-  cron: ""                              # 细化为标准表达式，如 "0 30 3 * * ?"
+  schedule_type: "daily"               # daily(日调度) | hourly(定时调度) | realtime(高频/实时)
+  cron: "0 30 3 * * ?"                 # designer 填标准 cron（F/view/dq 共用）
 
-  # LTS 调度参数（运行时生成值，赋值给术加 ETL 参数）
-  # lts_var: LTS 侧变量名（运行时生成值）
-  # etl_param: 赋值给术加的参数名（= SQL 里的 ${占位符}）；空表示仅 LTS 侧用
-  lts_params:
-    - lts_var: "V_CYCLE_ID"
-      etl_param: "P_CYCLE_ID"
-      desc: "批次号"
-    - lts_var: "V_GROUP_CODE"
-      etl_param: ""
-      desc: "规则组编码"
-
-  # 设计新增的上游依赖（中间表引入的新上游）；rs_input 已有的上游脚本会自动带
+  # F 表上游依赖（rs_input 已有的湖表调度脚本自动带，这里只填设计新增的）
+  # dep_type: 宽依赖(默认) | 同周期依赖 | 时间点依赖 | 上周期依赖 | 虚拟依赖
   upstream_added: []
+  #   - table: "ods_order_f"
+  #     task: "task_ods_order_f"        # RS 湖表调度给的任务名（原样保留，不转 job）
+  #     dep_type: "宽依赖"
 
-  # I 视图调度（如有直封视图，需独立调度任务）
-  view:
-    task_name: ""                       # 视图调度任务名
-    cron: ""                            # 通常比 F 表晚几分钟，等 F 表完成
-    # upstream 由脚本自动补（依赖 F 表任务）
+  # 注意：task_name/job_name/view/dq 全部由脚本标准化派生，designer 不填
+  # lts_params 默认含 V_CYCLE_ID→P_CYCLE_ID + V_GROUP_CODE，需要时才改
 
 # === 数据流（规则间关系）===
 data_flow:

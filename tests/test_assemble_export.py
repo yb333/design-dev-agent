@@ -50,14 +50,36 @@ def sample_ts():
                 "i_view": {"schema": "dws", "table": "dwb_xxx_i", "cn": "XXX宽表"},
             },
             "schedule": {
-                "task_name": "dws_dwb_xxx_f",
+                "schedule_type": "daily",
                 "cron": "0 30 3 * * ?",
-                "owner": "zhangsan",
                 "exec_params": {"P_CYCLE_ID": {"value_type": "string", "desc": "批次号", "standard": True}},
-                "upstream": [
-                    {"table": "ods_order_f", "task": "task_ods_order_f"},
-                    {"table": "dim_product_f", "task": "task_dim_product_f"},
+                "lts_params": [
+                    {"lts_var": "V_CYCLE_ID", "etl_param": "P_CYCLE_ID", "desc": "批次号"},
+                    {"lts_var": "V_GROUP_CODE", "etl_param": "", "desc": "规则组编码"},
                 ],
+                "tasks": {
+                    "f": {
+                        "task_name": "task_dwb_xxx_f",
+                        "job_name": "Pjob_dwb_xxx_f",
+                        "cron": "0 30 3 * * ?",
+                        "upstream": [
+                            {"table": "ods_order_f", "task": "task_ods_order_f", "dep_type": "宽依赖"},
+                            {"table": "dim_product_f", "task": "task_dim_product_f", "dep_type": "宽依赖"},
+                        ],
+                    },
+                    "view": {
+                        "task_name": "task_dwb_xxx_i",
+                        "job_name": "Pjob_dwb_xxx_i",
+                        "cron": "0 30 3 * * ?",
+                        "upstream": [{"table": "dwb_xxx_f", "task": "task_dwb_xxx_f", "dep_type": "宽依赖"}],
+                    },
+                    "dq": {
+                        "task_name": "task_dwb_xxx_f_dq",
+                        "job_name": "Pjob_dwb_xxx_f_dq",
+                        "cron": "0 30 3 * * ?",
+                        "upstream": [{"table": "dwb_xxx_i", "task": "task_dwb_xxx_i", "dep_type": "宽依赖"}],
+                    },
+                },
             },
         },
         "rules": {
@@ -343,22 +365,22 @@ class TestGenerateScheduleExcel:
         wb = openpyxl.load_workbook(out)
         assert wb.sheetnames == ["tasks", "jobs", "taskParams"]
 
-    def test_tasks_has_f_and_view(self, sample_ts, sample_config, tmp_path):
-        """tasks 有 F 表 + 视图两行"""
+    def test_tasks_has_f_view_dq(self, sample_ts, sample_config, tmp_path):
+        """tasks 有 F 表 + 视图 + DQ 三行"""
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(sample_ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["tasks"]
-        assert ws.max_row == 3  # 表头 + F + 视图
+        assert ws.max_row == 4  # 表头 + F + 视图 + DQ
 
     def test_jobs_has_upstream_deps(self, sample_ts, sample_config, tmp_path):
-        """jobs 含 upstream 依赖行"""
+        """jobs 含 upstream 依赖行 + view/dq 执行行和依赖"""
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(sample_ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["jobs"]
-        # 表头 + F执行 + 2依赖 + 视图执行 + 视图依赖 = 6
-        assert ws.max_row == 6
+        # 表头 + F执行 + 2依赖 + view执行 + view依赖 + dq执行 + dq依赖 = 8
+        assert ws.max_row == 8
 
     def test_taskparams_v_group_code_empty(self, sample_ts, sample_config, tmp_path):
         """V_GROUP_CODE 值留空"""

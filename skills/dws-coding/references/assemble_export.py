@@ -425,103 +425,117 @@ def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, ddl_dir: Pat
 def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     """生成 schedule_tasks.xlsx（3 sheet）。
 
-    config: resolve_config_by_schema 返回的 {shujia, lts} 结构。
-    LTS 调度平台配置从 config["lts"] 取。
+    从 ts.json schedule.tasks 的 f/view/dq 三段取调度信息。
+    虚拟依赖（dep_type=虚拟依赖）在 jobs sheet 额外生成 URL 类型 job 行。
     """
     meta = ts.get("meta", {})
-    f_table = meta.get("target", {}).get("f_table", {})
-    i_view = meta.get("target", {}).get("i_view", {})
     sched = meta.get("schedule", {})
+    tasks_sched = sched.get("tasks", {})
 
-    target_short = f_table.get("table", "")
     lts = config.get("lts", {})
     project_name = _cfg(lts, "project_name")
     task_group = _cfg(lts, "task_group")
-    cron = sched.get("cron", "")
-    owner = sched.get("owner", "") or _cfg(config.get("shujia", {}), "business_owner", "")
-    upstream = sched.get("upstream", [])
+    owner = _cfg(config.get("shujia", {}), "business_owner", "")
 
     wb = openpyxl.Workbook()
 
-    # --- Sheet 1: tasks ---
+    def _task_row(task_info):
+        """生成 tasks sheet 的任务行"""
+        return [
+            project_name, task_group, task_info.get("task_name", ""), "周期任务",
+            "", "", task_info.get("cron", ""), "是", "", owner,
+            "", "", "", "", "", "", "", "", "", "", "", "",
+        ]
+
+    def _exec_job_row(task_info):
+        """生成 jobs sheet 的执行行（url 类型）"""
+        return [
+            project_name, task_group, task_info.get("task_name", ""),
+            task_info.get("job_name", ""), "url",
+            "start", "${V_URL}", DEFAULT_JOB_PARAMS, "",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+        ]
+
+    def _dep_job_row(task_info, dep_task, job_type="tskdep"):
+        """生成 jobs sheet 的依赖行"""
+        return [
+            project_name, task_group, task_info.get("task_name", ""),
+            dep_task, job_type,
+            task_info.get("job_name", ""), "", "", "",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+        ]
+
+    def _virtual_dep_row(task_info, dep_task):
+        """虚拟依赖：额外生成 URL 类型 job 行（查数据库判断依赖任务状态）"""
+        return [
+            project_name, task_group, task_info.get("task_name", ""),
+            dep_task, "url",
+            task_info.get("job_name", ""), "${V_URL}", DEFAULT_JOB_PARAMS, "",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+        ]
+
+    # --- Sheet 1: tasks（F + view + dq）---
     ws = wb.active
     ws.title = "tasks"
     ws.append(TASKS_COLUMNS)
+    f_info = tasks_sched.get("f", {})
+    view_info = tasks_sched.get("view", {})
+    dq_info = tasks_sched.get("dq", {})
 
-    # F 表任务行
-    f_task_name = f"task_{target_short}"
-    ws.append([
-        project_name, task_group, f_task_name, "周期任务",
-        "", "", cron, "是", "", owner,
-        "", "", "", "", "", "", "", "", "", "", "", "",
-    ])
+    if f_info.get("task_name"):
+        ws.append(_task_row(f_info))
+    if view_info.get("task_name"):
+        ws.append(_task_row(view_info))
+    if dq_info.get("task_name"):
+        ws.append(_task_row(dq_info))
 
-    # 视图任务行（如有）
-    view_task_name = ""
-    if i_view and i_view.get("table"):
-        view_short = i_view.get("table", "")
-        view_task_name = f"task_{view_short}"
-        ws.append([
-            project_name, task_group, view_task_name, "周期任务",
-            "", "", cron, "是", "", owner,
-            "", "", "", "", "", "", "", "", "", "", "", "",
-        ])
-
-    # --- Sheet 2: jobs ---
+    # --- Sheet 2: jobs（执行行 + 依赖行 + 虚拟依赖额外行）---
     ws = wb.create_sheet("jobs")
     ws.append(JOBS_COLUMNS)
 
-    # F 表执行行
-    f_job_name = f"Pjob_{target_short}"
-    ws.append([
-        project_name, task_group, f_task_name, f_job_name, "url",
-        "start", "${V_URL}", DEFAULT_JOB_PARAMS, "",
-        "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-    ])
+    # F 表执行行 + 依赖行
+    if f_info.get("task_name"):
+        ws.append(_exec_job_row(f_info))
+        for u in f_info.get("upstream", []):
+            dep_task = u.get("task", "")
+            if not dep_task:
+                continue
+            dep_type = u.get("dep_type", "宽依赖")
+            if dep_type == "虚拟依赖":
+                ws.append(_virtual_dep_row(f_info, dep_task))
+            else:
+                ws.append(_dep_job_row(f_info, dep_task))
 
-    # 依赖行（tskdep）— 每个 upstream 一行
-    for u in upstream:
-        dep_task = u.get("task", "")
-        if not dep_task:
-            continue
-        ws.append([
-            project_name, task_group, f_task_name, dep_task, "tskdep",
-            f_job_name, "", "", "",
-            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-        ])
+    # 视图执行行 + 依赖行
+    if view_info.get("task_name"):
+        ws.append(_exec_job_row(view_info))
+        for u in view_info.get("upstream", []):
+            dep_task = u.get("task", "")
+            if dep_task:
+                ws.append(_dep_job_row(view_info, dep_task))
 
-    # 视图执行行 + 视图依赖 F 表
-    if view_task_name:
-        view_short = i_view.get("table", "")
-        view_job_name = f"Pjob_{view_short}"
-        ws.append([
-            project_name, task_group, view_task_name, view_job_name, "url",
-            "start", "${V_URL}", DEFAULT_JOB_PARAMS, "",
-            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-        ])
-        # 视图依赖 F 表的 job
-        ws.append([
-            project_name, task_group, view_task_name, f_job_name, "tskdep",
-            view_job_name, "", "", "",
-            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-        ])
+    # DQ 执行行 + 依赖行
+    if dq_info.get("task_name"):
+        ws.append(_exec_job_row(dq_info))
+        for u in dq_info.get("upstream", []):
+            dep_task = u.get("task", "")
+            if dep_task:
+                ws.append(_dep_job_row(dq_info, dep_task))
 
     # --- Sheet 3: taskParams ---
     ws = wb.create_sheet("taskParams")
     ws.append(TASKPARAMS_COLUMNS)
 
-    # 参数从 ts.json 的 lts_params 取（LTS 侧变量名），值留空（内网回填）
     lts_params = sched.get("lts_params", [])
     param_names = [p.get("lts_var", "") for p in lts_params] if lts_params else list(FIXED_PARAMS)
 
-    # 每个任务 × 参数
-    all_tasks = [f_task_name]
-    if view_task_name:
-        all_tasks.append(view_task_name)
+    all_tasks = []
+    for ti in [f_info, view_info, dq_info]:
+        if ti.get("task_name"):
+            all_tasks.append(ti["task_name"])
     for task_name in all_tasks:
         for param in param_names:
-            value = ""  # 值留空（内网回填）
-            ws.append([project_name, task_group, task_name, param, value])
+            ws.append([project_name, task_group, task_name, param, ""])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
@@ -549,10 +563,15 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
     rule_codes_needed = etl_count + view_count + 1
 
     upstream_tasks = []
-    for u in sched.get("upstream", []):
+    tasks_sched = sched.get("tasks", {})
+    f_info = tasks_sched.get("f", {})
+    view_info = tasks_sched.get("view", {})
+    dq_info = tasks_sched.get("dq", {})
+    for u in f_info.get("upstream", []):
         upstream_tasks.append({
             "source_table": u.get("table", ""),
             "schedule_task": u.get("task", ""),
+            "dep_type": u.get("dep_type", "宽依赖"),
         })
 
     manifest = {
@@ -560,17 +579,19 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
         "target_table": target_full,
         "target_table_short": target_short,
         "view_name": f"{i_view.get('schema', '')}.{i_view.get('table', '')}" if has_view else "",
-        "task_name": f"task_{target_short}",
-        "job_name": f"Pjob_{target_short}",
-        "view_task_name": f"task_{i_view.get('table', '')}" if has_view else "",
-        "view_job_name": f"Pjob_{i_view.get('table', '')}" if has_view else "",
+        "task_name": f_info.get("task_name", f"task_{target_short}"),
+        "job_name": f_info.get("job_name", f"Pjob_{target_short}"),
+        "view_task_name": view_info.get("task_name", ""),
+        "view_job_name": view_info.get("job_name", ""),
+        "dq_task_name": dq_info.get("task_name", ""),
+        "dq_job_name": dq_info.get("job_name", ""),
         "cron_expr": sched.get("cron", ""),
         "project_name": _cfg(config.get("lts", {}), "project_name"),
         "task_group": _cfg(config.get("lts", {}), "task_group"),
-        "params": sorted(ts.get("meta", {}).get("schedule", {}).get("exec_params", {}).keys()),
+        "params": sorted(sched.get("exec_params", {}).keys()),
         "upstream_tasks": upstream_tasks,
         "rule_codes_needed": rule_codes_needed,
-        "codes_filled": False,   # 内网回填后改 true
+        "codes_filled": False,
         "files": [f"shujia_{target_short}.xlsx", f"lts_{target_short}.xlsx"],
     }
 

@@ -567,36 +567,54 @@ def build_meta(rs_input, decisions):
     ]
     lts_params = dec_sched.get("lts_params", default_lts_params)
 
-    # upstream: rs_input 已有的 + designer 新增的
-    upstream = list(rs_sched.get("upstream", []))
-    for u in dec_sched.get("upstream_added", []):
-        upstream.append({"table": u.get("table", ""), "task": u.get("task", ""), "source": "designer"})
+    # cron 和 schedule_type（designer 填）
+    cron = dec_sched.get("cron", "")
+    schedule_type = dec_sched.get("schedule_type", "daily")
 
-    # I 视图调度（如有直封视图）
-    view_sched = {}
-    i_view = target.get("i_view", {})
-    if i_view and i_view.get("table"):
-        dec_view = dec_sched.get("view", {})
-        view_task = dec_view.get("task_name", "")
-        view_cron = dec_view.get("cron", "")
-        # 视图上游自动补：依赖 F 表任务
-        f_task = dec_sched.get("task_name", "")
-        f_table_short = target.get("f_table", {}).get("table", "")
-        view_upstream = [{"table": f_table_short, "task": f_task}] if f_task else []
-        view_sched = {
-            "task_name": view_task,
-            "cron": view_cron,
-            "upstream": view_upstream,
+    # 表名（用兜底后的 f_table/i_view，不用原始 target）
+    f_table_short = f_table.get("table", "")
+    i_view_short = i_view.get("table", "")
+
+    # F 表 upstream：rs_input 已有的（原样 task）+ designer 新增的（dep_type 默认宽依赖）
+    f_upstream = []
+    for u in rs_sched.get("upstream", []):
+        f_upstream.append({"table": u.get("table", ""), "task": u.get("task", ""), "dep_type": "宽依赖"})
+    for u in dec_sched.get("upstream_added", []):
+        f_upstream.append({
+            "table": u.get("table", ""),
+            "task": u.get("task", ""),
+            "dep_type": u.get("dep_type", "宽依赖"),
+        })
+
+    # 标准化构建 tasks（F / view / dq）
+    tasks = {
+        "f": {
+            "task_name": f"task_{f_table_short}" if f_table_short else "",
+            "job_name": f"Pjob_{f_table_short}" if f_table_short else "",
+            "cron": cron,
+            "upstream": f_upstream,
+        }
+    }
+    if i_view_short:
+        tasks["view"] = {
+            "task_name": f"task_{i_view_short}",
+            "job_name": f"Pjob_{i_view_short}",
+            "cron": cron,
+            "upstream": [{"table": f_table_short, "task": f"task_{f_table_short}", "dep_type": "宽依赖"}],
+        }
+        tasks["dq"] = {
+            "task_name": f"task_{f_table_short}_dq",
+            "job_name": f"Pjob_{f_table_short}_dq",
+            "cron": cron,
+            "upstream": [{"table": i_view_short, "task": f"task_{i_view_short}", "dep_type": "宽依赖"}],
         }
 
     schedule = {
-        "task_name": dec_sched.get("task_name", ""),
-        "cron": dec_sched.get("cron", ""),
-        "owner": rs_meta.get("owner", {}).get("person", ""),
+        "schedule_type": schedule_type,
+        "cron": cron,
         "exec_params": build_exec_params(decisions),
         "lts_params": lts_params,
-        "upstream": upstream,
-        "view": view_sched,
+        "tasks": tasks,
     }
 
     # 字段统计：识别审计字段（来源提供的），其余为业务字段
@@ -901,22 +919,36 @@ def render_md(ts):
     lines.append("---")
     lines.append("")
 
-    # §6 调度配置
+    # §6 调度配置（F表 / I视图 / DQ 三任务）
     lines.append("## 6. 调度配置")
     lines.append("")
     sched = meta.get("schedule", {})
-
-    # F 表调度
-    lines.append("### F 表调度")
-    lines.append("")
-    lines.append("| 配置项 | 值 |")
-    lines.append("|--------|-----|")
-    lines.append(f"| 调度任务 | {sched.get('task_name') or '-'} |")
-    lines.append(f"| 调度周期 | {sched.get('cron') or '-'} |")
-    lines.append("")
-
-    # LTS 参数
+    tasks_sched = sched.get("tasks", {})
     lts_params = sched.get("lts_params", [])
+
+    def _render_task_section(title, task_info):
+        """渲染单个调度任务段（F表/I视图/DQ 通用）"""
+        if not task_info or not task_info.get("task_name"):
+            return
+        lines.append(f"### {title}")
+        lines.append("")
+        lines.append("| 配置项 | 值 |")
+        lines.append("|--------|-----|")
+        lines.append(f"| 调度任务 | {task_info.get('task_name', '-')} |")
+        lines.append(f"| 执行Job | {task_info.get('job_name', '-')} |")
+        lines.append(f"| 调度周期 | {task_info.get('cron', '-') or '-'} |")
+        lines.append("")
+        upstream = task_info.get("upstream", [])
+        if upstream:
+            lines.append("**上游依赖**:")
+            lines.append("")
+            lines.append("| 源表 | 调度任务 | 依赖类型 |")
+            lines.append("|------|---------|---------|")
+            for u in upstream:
+                lines.append(f"| {u.get('table', '')} | {u.get('task', '') or '-'} | {u.get('dep_type', '宽依赖')} |")
+            lines.append("")
+
+    # LTS 参数（全局，只在 F 表段前展示一次）
     if lts_params:
         lines.append("**LTS 参数**:")
         lines.append("")
@@ -927,36 +959,9 @@ def render_md(ts):
             lines.append(f"| {p.get('lts_var', '')} | {etl} | {p.get('desc', '')} |")
         lines.append("")
 
-    # 上游依赖
-    upstream = sched.get("upstream", [])
-    if upstream:
-        lines.append("**上游依赖**:")
-        lines.append("")
-        lines.append("| 源表 | 调度任务 |")
-        lines.append("|------|---------|")
-        for u in upstream:
-            lines.append(f"| {u.get('table', '')} | {u.get('task', '') or '-'} |")
-        lines.append("")
-
-    # I 视图调度
-    view_sched = sched.get("view", {})
-    if view_sched and view_sched.get("task_name"):
-        lines.append("### I 视图调度")
-        lines.append("")
-        lines.append("| 配置项 | 值 |")
-        lines.append("|--------|-----|")
-        lines.append(f"| 调度任务 | {view_sched.get('task_name', '-')} |")
-        lines.append(f"| 调度周期 | {view_sched.get('cron', '-') or '-'} |")
-        lines.append("")
-        v_upstream = view_sched.get("upstream", [])
-        if v_upstream:
-            lines.append("**上游依赖**:")
-            lines.append("")
-            lines.append("| 源表 | 调度任务 |")
-            lines.append("|------|---------|")
-            for u in v_upstream:
-                lines.append(f"| {u.get('table', '')} | {u.get('task', '') or '-'} |")
-            lines.append("")
+    _render_task_section("F 表调度", tasks_sched.get("f", {}))
+    _render_task_section("I 视图调度", tasks_sched.get("view", {}))
+    _render_task_section("DQ 调度", tasks_sched.get("dq", {}))
 
     lines.append("---")
     lines.append("")

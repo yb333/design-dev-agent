@@ -36,11 +36,11 @@
       { "schema": "", "table": "", "table_cn": "", "alias": "" }
     ],
 
-    // schedule —— 调度。RS 给大框架(日级) -> designer 细化为标准 cron + 补中间表增量上游
+    // schedule —— 调度。designer 填 schedule_type + cron + upstream_added，
+    // 脚本标准化构建 F/view/dq 三任务
     "schedule": {
-      "task_name": "",                   // F表调度任务名
-      "cron": "",                        // designer 细化为标准表达式(如 "0 30 3 * * ?")
-      "owner": "",
+      "schedule_type": "daily",          // daily | hourly | realtime（标签，§6展示用）
+      "cron": "",                        // designer 填标准表达式(如 "0 30 3 * * ?")
       "exec_params": {                    // ETL 参数（SQL 里的 ${占位符}）。P_CYCLE_ID 脚本自动注入
         "P_CYCLE_ID": { "value_type": "string", "desc": "批次号", "standard": true }
       },
@@ -48,13 +48,28 @@
         { "lts_var": "V_CYCLE_ID", "etl_param": "P_CYCLE_ID", "desc": "批次号" },
         { "lts_var": "V_GROUP_CODE", "etl_param": "", "desc": "规则组编码" }
       ],
-      "upstream": [                      // 上游依赖(RS给 + 中间表增量)
-        { "table": "", "task": "", "source": "" }
-      ],
-      "view": {                          // I 视图调度（如有直封视图，独立调度任务）
-        "task_name": "",                 // 视图调度任务名
-        "cron": "",                      // 通常比 F 表晚，等 F 表完成
-        "upstream": []                   // 脚本自动补（依赖 F 表任务）
+      "tasks": {                         // 标准化构建的三任务（脚本派生，designer 不碰）
+        "f": {                           // F 表调度
+          "task_name": "task_{表名}",
+          "job_name": "Pjob_{表名}",
+          "cron": "",
+          "upstream": [                  // 上游依赖（RS给 + designer新增），task原样保留
+            { "table": "", "task": "", "dep_type": "宽依赖" }
+            // dep_type: 宽依赖(默认) | 同周期依赖 | 时间点依赖 | 上周期依赖 | 虚拟依赖
+          ]
+        },
+        "view": {                        // I 视图调度（如有，自动补依赖F表）
+          "task_name": "task_{表名}_i",
+          "job_name": "Pjob_{表名}_i",
+          "cron": "",
+          "upstream": [{ "table": "{F表}", "task": "task_{F表}", "dep_type": "宽依赖" }]
+        },
+        "dq": {                          // DQ 调度（如有I视图，自动补依赖I视图）
+          "task_name": "task_{表名}_dq",
+          "job_name": "Pjob_{表名}_dq",
+          "cron": "",
+          "upstream": [{ "table": "{I视图}", "task": "task_{I视图}", "dep_type": "宽依赖" }]
+        }
       }
       // 注意：项目/任务组/数据源等部署配置不在 ts.json 里
       // 它们是平台概念，由 platform_config.json 按schema映射，exporter 读取
