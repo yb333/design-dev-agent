@@ -2,13 +2,12 @@
 """
 DQ 检查 SQL 生成器：从 ts.json 生成 DQ 检查 SQL 到 dq/
 
+⚠️ 生产流程（new-pipe command）已改由 coder 直接生成 DQ，不再调用本脚本。
+本脚本仅供 eval-suite/local_eval.py 使用（确定性脚本保证评测可复现）。
+
 核心逻辑：
 - RS（dq_rules）提供的 DQ → 按规则生成 SQL（RS 有就用 RS 的，不重复生成）
 - 标准检查只补 RS 没覆盖的（主键唯一/审计非空/记录数）
-
-去重规则（避免和 RS 重复）：
-- RS 有"重复数据检查"/"唯一性" → 不再标准生成主键唯一
-- RS 有"空值检查"/"非空" 且覆盖了审计字段 → 不再标准生成审计非空
 
 用法:
   python assemble_dq.py --ts ts.json --outdir dq/

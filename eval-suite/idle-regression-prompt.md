@@ -115,7 +115,9 @@ print('✅ ts.json 结构通过')
 **2. ts.md 渲染质量（重点：§1 来源表去重 + §2 分布类型 + §4 无关联策略 + §5 只有图 + §6 LTS参数）**
 ```bash
 python3 -c "
-ts_md = open('$DELIVER/ts.md').read()
+import glob
+ts_md_files = glob.glob('$DELIVER/*_ts.md')
+ts_md = open(ts_md_files[0]).read() if ts_md_files else ''
 # §1 来源表无重复（按表去重）
 assert '来源表' in ts_md
 # §2 分布列显示 HASH/ROUNDROBIN/REPLICATION
