@@ -38,8 +38,8 @@ try:
 except AttributeError:
     pass
 
-# 同目录导入 dws_db
-sys.path.insert(0, str(Path(__file__).parent))
+# dws_db 在 design-dev-shared 公共库（与本 skill 平级）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"))
 from dws_db import create_executor, ExecuteResult, load_test_params
 
 

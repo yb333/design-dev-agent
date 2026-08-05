@@ -343,6 +343,38 @@ def create_executor(config_path: str = "", source_name: str = "") -> DBExecutor:
     return PsycopgExecutor(config_path, source_name)
 
 
+def resolve_config_path(config_path: str = "") -> str:
+    """解析 db-sources.json 路径（公共能力：调用方不用关心配置在哪）。
+
+    优先级：
+      1. 显式传入的 config_path
+      2. 环境变量 DB_CONFIG
+      3. ~/.config/opencode/db-sources.json（全局配置，install 不覆盖）
+    """
+    if config_path:
+        return config_path
+    return os.environ.get(
+        "DB_CONFIG",
+        str(Path.home() / ".config" / "opencode" / "db-sources.json"),
+    )
+
+
+def create_executor_for_schema(schema: str, config_path: str = "") -> DBExecutor:
+    """★ 高层封装：传入目标 schema，内部自动选数据源 + 建连。
+
+    调用方（check_db / ut / precheck）只用这个函数——传 schema 即可，
+    不用关心 config_path 在哪、schema_mapping 怎么查、default 是谁。
+    选源逻辑：按 schema 查 schema_mapping，查不到回退 default。
+
+    Args:
+        schema: 目标表 schema（用来按 schema_mapping 选数据源）。
+        config_path: 可选，db-sources.json 路径；不传则自动查找。
+    """
+    resolved = resolve_config_path(config_path)
+    source_name = resolve_source_by_schema(resolved, schema)
+    return create_executor(resolved, source_name)
+
+
 # ============================================================
 # CLI（命令行测试用）
 # ============================================================

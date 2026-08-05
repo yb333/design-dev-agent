@@ -241,6 +241,13 @@ def run():
         dst = skills_dir / s
         copy_dir(src, dst)
         print(f"  ✓ {s}")
+
+    # 公共代码库（无 SKILL.md，scan_skills 扫不到，单独拷）
+    # design-dev-shared：设计开发 agent 各 skill 共享的 Python 代码（如 dws_db.py）
+    dd_shared_src = SCRIPT_DIR / "skills" / "design-dev-shared"
+    if dd_shared_src.exists():
+        copy_dir(dd_shared_src, skills_dir / "design-dev-shared")
+        print(f"  ✓ design-dev-shared（设计开发公共库）")
     print()
 
     # ── 5. 安装 agents + commands ──

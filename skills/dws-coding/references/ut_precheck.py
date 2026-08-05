@@ -24,8 +24,9 @@ try:
 except AttributeError:
     pass
 
-# 同目录导入
-sys.path.insert(0, str(Path(__file__).parent))
+# dws_db 在 design-dev-shared 公共库（与本 skill 平级）；run_ut 仍在同目录
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor, load_test_params
 from run_ut import substitute_params, resolve_all_params, read_select
 

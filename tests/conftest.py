@@ -12,8 +12,10 @@ PROJECT_ROOT = Path(__file__).parent.parent
 # 将各 skill 的 references 目录加入 Python 路径
 DESIGN_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-design" / "references"
 CODING_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-coding" / "references"
+# design-dev-shared：设计开发 agent 的公共代码库（dws_db.py 等）
+DD_SHARED_REFS = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "references"
 
-for _p in (DESIGN_REFS, CODING_REFS):
+for _p in (DESIGN_REFS, CODING_REFS, DD_SHARED_REFS):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
