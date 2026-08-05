@@ -30,6 +30,39 @@ def main():
         print(f"  处理: 跳过 UT 执行验证，只做静态检查")
         sys.exit(1)
 
+    # 配置结构自检（不连库，提前发现配置错误）
+    import json
+    try:
+        raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        sources = raw.get("sources", {})
+        if not sources:
+            print("NO_DB_SOURCE")
+            print(f"  原因: sources 为空（没配数据源）")
+            sys.exit(1)
+        # 检查每个 source 是否配了 roles（新结构）
+        bad = []
+        for name, cfg in sources.items():
+            roles = cfg.get("roles", {})
+            if not roles:
+                bad.append(f"{name}: 缺 roles（旧结构 user/password 已废弃，需配 roles.admin/roles.etl）")
+            else:
+                for rn in ("admin", "etl"):
+                    if rn not in roles:
+                        bad.append(f"{name}: roles 里缺 {rn}")
+                    elif not roles[rn].get("user"):
+                        bad.append(f"{name}: roles.{rn}.user 为空")
+        if bad:
+            print("NO_DB_SOURCE")
+            print(f"  原因: 配置结构错误")
+            for b in bad:
+                print(f"    - {b}")
+            print(f"  参考: skills/dws-coding/references/db-sources.example.json")
+            sys.exit(1)
+    except json.JSONDecodeError as e:
+        print("NO_DB_SOURCE")
+        print(f"  原因: 配置文件 JSON 格式错误: {e}")
+        sys.exit(1)
+
     # 尝试连接
     try:
         # dws_db 在 design-dev-shared 公共库（与本 skill 平级）
@@ -40,15 +73,18 @@ def main():
             if arg == "--source" and i + 1 < len(sys.argv):
                 source = sys.argv[i + 1]
         executor = create_executor(config_path, source, role="etl")
-        ok = executor.test_connection()
-        if ok:
+        # 直接 execute('SELECT 1')，拿真实报错（test_connection 会吞异常）
+        r = executor.execute("SELECT 1")
+        if r.success:
             print("DB_OK")
             print(f"  数据源: {executor.get_current_source()}")
+            print(f"  账号: etl")
             sys.exit(0)
         else:
             print("NO_DB_SOURCE")
             print(f"  数据源: {executor.get_current_source()}")
-            print(f"  原因: 连接测试失败")
+            print(f"  账号: etl")
+            print(f"  原因: {r.error}")
             sys.exit(1)
     except ImportError as e:
         print("NO_DB_SOURCE")
