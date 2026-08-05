@@ -6,7 +6,7 @@
 """
 import pytest
 
-# conftest 已把 design references 加入 sys.path
+# conftest 已把 design scripts 加入 sys.path
 from assemble_ts import is_dim_table, render_data_flow_mermaid, _sanitize_node_id
 
 

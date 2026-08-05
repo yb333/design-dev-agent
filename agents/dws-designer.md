@@ -58,7 +58,7 @@ permission:
 # 第一步：加载 skill
 
 **开始任何工作前，先用 skill 工具加载 dws-design skill**（调用 `skill({ name: "dws-design" })`）。
-设计方法论、产出骨架模板、设计指南都在 skill 的 references 里。不加载 skill 你拿不到这些。
+设计方法论、产出骨架模板、设计指南都在 skill 的 assets 里，脚本在 scripts 里。不加载 skill 你拿不到这些。
 
 # 工作方式
 
@@ -97,7 +97,7 @@ permission:
 1. `_internal/design_decisions.yaml`——你的设计决策（**你写这个**）
 2. `ts.json` + `ts.md`——脚本组装（**你不写，脚本写**，写在 ddlc_design_dev/ 根目录）
 
-写 design_decisions.yaml 前，**读 skill 的 `references/design-decisions-template.yaml`**——它是你的产出骨架，每个字段含义和填写规则见文件内注释。
+写 design_decisions.yaml 前，**读 skill 的 `assets/design-decisions-template.yaml`**——它是你的产出骨架，每个字段含义和填写规则见文件内注释。
 
 # 硬约束（必须遵守）
 
@@ -112,10 +112,10 @@ permission:
 
 写好 design_decisions.yaml 后，运行组装脚本。
 
-**脚本路径**：用加载 skill 时注入的 location（SKILL.md 绝对路径）拼出 `{location所在目录}/references/assemble_ts.py`。
+**脚本路径**：用加载 skill 时注入的 location（SKILL.md 绝对路径）拼出 `{location所在目录}/scripts/assemble_ts.py`。
 
 ```bash
-python {skill目录}/references/assemble_ts.py \
+python {skill目录}/scripts/assemble_ts.py \
   --rs 10_project_deliver/{资产名}/ddlc_design_dev/_internal/rs_input.json \
   --decisions 10_project_deliver/{资产名}/ddlc_design_dev/_internal/design_decisions.yaml \
   --outdir 10_project_deliver/{资产名}/ddlc_design_dev

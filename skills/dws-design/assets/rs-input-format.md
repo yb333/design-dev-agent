@@ -63,7 +63,7 @@ RS 是 BA（业务分析师）写的 markdown 文档，有**固定模板**（RS 
 2. **失败处理不同**：预处理不过→拦住让人补输入；designer 拿不准→闸口问人
 3. **可复用**：rs_input.json 多方消费（designer/优化场景/eval-suite）
 
-**脚本位置**：`skills/dws-design/references/preprocess.py`
+**脚本位置**：`skills/dws-design/scripts/preprocess.py`
 - 复用 excel_parser 解析 mapping.xlsx
 - 解析 RS.md 的 markdown 表格（按章节+表头）
 - 合并成 rs_input.json + 预检

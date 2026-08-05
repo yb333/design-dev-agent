@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import openpyxl
 
-# conftest 已把 coding references 加入 sys.path
+# conftest 已把 coding scripts 加入 sys.path
 from assemble_export import (
     load_platform_config,
     resolve_config_by_schema,

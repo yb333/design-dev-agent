@@ -1,6 +1,6 @@
 """公共 fixture：构造测试数据。
 
-将 skill references 目录加入 sys.path，使测试可以直接 import 被测模块。
+将 skill scripts 目录加入 sys.path，使测试可以直接 import 被测模块。
 所有测试数据用 Python dict 构造，不依赖外部 xlsx 文件。
 """
 import sys
@@ -9,11 +9,11 @@ from pathlib import Path
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# 将各 skill 的 references 目录加入 Python 路径
-DESIGN_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-design" / "references"
-CODING_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-coding" / "references"
+# 将各 skill 的 scripts 目录加入 Python 路径
+DESIGN_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-design" / "scripts"
+CODING_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-coding" / "scripts"
 # design-dev-shared：设计开发 agent 的公共代码库（dws_db.py 等）
-DD_SHARED_REFS = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "references"
+DD_SHARED_REFS = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "scripts"
 
 for _p in (DESIGN_REFS, CODING_REFS, DD_SHARED_REFS):
     if str(_p) not in sys.path:

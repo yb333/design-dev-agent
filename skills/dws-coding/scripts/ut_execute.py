@@ -22,7 +22,7 @@ except AttributeError:
     pass
 
 # dws_db 在 design-dev-shared 公共库（与本 skill 平级）；run_ut 仍在同目录
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor
 from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, run_ut_check

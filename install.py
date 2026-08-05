@@ -271,7 +271,7 @@ def run():
 
     # ── 6. 数据库配置初始化 ──
     db_config = config_dir / "db-sources.json"
-    db_example = SCRIPT_DIR / "skills" / "dws-coding" / "references" / "db-sources.example.json"
+    db_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "db-sources.example.json"
     if not db_config.exists() and db_example.exists():
         shutil.copy2(str(db_example), str(db_config))
         print("[6/6] 数据库配置初始化...")
@@ -287,7 +287,7 @@ def run():
 
     # ── 7. 平台配置初始化（exporter 用）──
     pf_config = config_dir / "platform_config.json"
-    pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "references" / "platform_config.example.json"
+    pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "platform_config.example.json"
     if not pf_config.exists() and pf_example.exists():
         shutil.copy2(str(pf_example), str(pf_config))
         print("[7/7] 平台配置初始化...")

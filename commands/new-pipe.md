@@ -43,12 +43,12 @@ agent: build
 **不要用 glob 找**——直接用 Python 定位全局安装路径（跨平台兼容）：
 
 ```bash
-python -c "from pathlib import Path; p=Path.home()/'.config'/'opencode'/'skills'/'dws-design'/'references'; print(p)"
+python -c "from pathlib import Path; p=Path.home()/'.config'/'opencode'/'skills'/'dws-design'/'scripts'; print(p)"
 ```
 
 把输出路径记为 `DESIGN_SCRIPTS`（设计段脚本目录），同理获取 `CODING_SCRIPTS`（把 dws-design 换成 dws-coding）。
 
-> 如果全局目录不存在（项目级安装），用当前项目下的 `skills/dws-design/references`。
+> 如果全局目录不存在（项目级安装），用当前项目下的 `skills/dws-design/scripts`。
 
 下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录。
 调用时把变量替换为实际路径，例如：`python <DESIGN_SCRIPTS>/preprocess.py ...`

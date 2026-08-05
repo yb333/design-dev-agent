@@ -14,7 +14,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-# conftest 已把 design-dev-shared/references 加入 sys.path
+# conftest 已把 design-dev-shared/scripts 加入 sys.path
 import dws_db
 from dws_db import load_db_sources, create_executor, create_executor_for_schema
 

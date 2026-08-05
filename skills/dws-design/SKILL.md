@@ -8,17 +8,18 @@ description: >-
 
 ## ⚠️ 文件路径规则（必须遵守）
 
-本 skill 的所有文件（references/ 下的模板、规范、脚本）都在 **skill 安装目录** 下，不在你的工作目录下。
+本 skill 的所有文件（scripts/ 下的脚本、assets/ 下的模板规范）都在 **skill 安装目录** 下，不在你的工作目录下。
 
 ### 怎么拿到 skill 安装目录的真实路径
 
-加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找 references 文件——location 的同级目录就是 references/。
+加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找文件——location 的同级目录下分两类：`scripts/`（脚本）和 `assets/`（模板、规范、示例资源）。
 
-### 读取 references 文件
+### 读取文件
 
-用注入的 location 路径拼 references，例如：
-- `{location所在目录}/references/design-decisions-template.yaml`
-- `{location所在目录}/references/design-guide.md`
+用注入的 location 路径拼目录，例如：
+- `{location所在目录}/assets/design-decisions-template.yaml`（模板资源）
+- `{location所在目录}/assets/design-guide.md`（规范文档）
+- `{location所在目录}/scripts/assemble_ts.py`（脚本）
 
 **绝对不要**按当前工作目录或 `~` 去拼路径——跨平台会出错。
 
@@ -27,7 +28,7 @@ description: >-
 # DWS ETL 设计 Skill
 
 > 本 skill 被 **dws-designer** agent 加载，提供设计方法论。
-> TS 制品包的 ts.json 结构权威定义见 `references/ts-template.json`（字段含义见文件内注释）。
+> TS 制品包的 ts.json 结构权威定义见 `assets/ts-template.json`（字段含义见文件内注释）。
 
 ---
 
@@ -68,7 +69,7 @@ description: >-
 - 脚本会校验完整性，漏字段或重复分配会报错
 
 ### 步骤 5：设计思路与分段决策
-详见 `references/design-guide.md` §4。核心：
+详见 `assets/design-guide.md` §4。核心：
 - **design_approach**：写清楚整体设计策略（自然语言），讲清楚为什么这样拆、加工思路是什么。自然引用指标但不只列数字。
 - 分段决策指标（JOIN 数/聚合字段数/粒度变化等）见 design-guide §4.1
 - 分段结论 + 中间表决策（CTE 内联 vs 物理中间表）
@@ -83,7 +84,7 @@ description: >-
 - 不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行 / 等）
 
 ### 步骤 8：调度设计
-详见 `references/design-guide.md` §5 调度设计。核心：
+详见 `assets/design-guide.md` §5 调度设计。核心：
 
 **调度类型**（从 RS L07 推导）：
 - RS 的"调度频率"→ `schedule_type`：日调度→daily，小时/分钟级→hourly/realtime
@@ -110,7 +111,7 @@ description: >-
 - I 视图和 DQ 的调度由脚本自动补，不需要填
 
 ### 步骤 9：产出 design_decisions.yaml + 调脚本组装
-- 写 `design_decisions.yaml`（骨架见 `references/design-decisions-template.yaml`）
+- 写 `design_decisions.yaml`（骨架见 `assets/design-decisions-template.yaml`）
 - 调 `assemble_ts.py` 组装出 ts.json + ts.md
 - 脚本校验失败 → 修正 design_decisions 重跑
 
@@ -141,11 +142,11 @@ description: >-
 
 | 文档 | 内容 |
 |------|------|
-| `references/design-decisions-template.yaml` | **design_decisions 产出骨架**（你的产出模板，含填写规则注释） |
-| `references/design-guide.md` | 命名规范 + 物理设计决策（分布键/分区）+ 字段分组原则 + 分段决策 |
-| `references/rs-input-format.md` | RS 输入格式（理解输入） |
-| `references/ts-template.json` | TS 制品包 ts.json 结构定义（字段含义见内注释，组装目标） |
-| `references/ts-template.md` | ts.md 渲染骨架（7章结构） |
+| `assets/design-decisions-template.yaml` | **design_decisions 产出骨架**（你的产出模板，含填写规则注释） |
+| `assets/design-guide.md` | 命名规范 + 物理设计决策（分布键/分区）+ 字段分组原则 + 分段决策 |
+| `assets/rs-input-format.md` | RS 输入格式（理解输入） |
+| `assets/ts-template.json` | TS 制品包 ts.json 结构定义（字段含义见内注释，组装目标） |
+| `assets/ts-template.md` | ts.md 渲染骨架（7章结构） |
 
 ---
 

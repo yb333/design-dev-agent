@@ -9,7 +9,7 @@
 """
 import pytest
 
-# conftest 已把 design references 加入 sys.path
+# conftest 已把 design scripts 加入 sys.path
 from assemble_ts import assemble_ts, build_tables, infer_logical_group
 
 

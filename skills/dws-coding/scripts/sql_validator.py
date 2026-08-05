@@ -63,7 +63,7 @@ except ImportError:
 # 导入 DWS 预处理器
 try:
     from pathlib import Path
-    _dws_preprocessor_path = Path(__file__).parent / "dws_preprocessor.py"
+    _dws_preprocessor_path = Path(__file__).parent / "lib" / "dws_preprocessor.py"
     if _dws_preprocessor_path.exists():
         import importlib.util
         _spec = importlib.util.spec_from_file_location("dws_preprocessor", _dws_preprocessor_path)

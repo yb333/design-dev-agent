@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# conftest 已把 design-dev-shared/references 加入 sys.path
+# conftest 已把 design-dev-shared/scripts 加入 sys.path
 from precheck import precheck, PrecheckResult
 
 

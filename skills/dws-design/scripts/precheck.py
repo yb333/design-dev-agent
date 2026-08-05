@@ -417,7 +417,7 @@ def _check_db_schema(
         try:
             sys.path.insert(
                 0,
-                str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"),
+                str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"),
             )
             from dws_db import create_executor_for_schema
 

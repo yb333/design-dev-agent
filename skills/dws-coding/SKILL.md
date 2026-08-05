@@ -8,17 +8,17 @@ description: >-
 
 ## ⚠️ 文件路径规则（必须遵守）
 
-本 skill 的所有文件（references/ 下的规范、模板、脚本）都在 **skill 安装目录** 下，不在你的工作目录下。
+本 skill 的所有文件（scripts/ 下的脚本、assets/ 下的规范模板）都在 **skill 安装目录** 下，不在你的工作目录下。
 
 ### 怎么拿到 skill 安装目录的真实路径
 
-加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找 references 文件——location 的同级目录就是 references/。
+加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找文件——location 的同级目录下分两类：`scripts/`（脚本）和 `assets/`（规范、模板资源）。
 
-### 读取 references 文件
+### 读取文件
 
-用注入的 location 路径拼 references，例如：
-- `{location所在目录}/references/etl-templates.md`
-- `{location所在目录}/references/dws-coding-standards.md`
+用注入的 location 路径拼目录，例如：
+- `{location所在目录}/assets/etl-templates.md`
+- `{location所在目录}/assets/dws-coding-standards.md`
 
 **绝对不要**按当前工作目录或 `~` 去拼路径——跨平台会出错。
 
@@ -48,7 +48,7 @@ description: >-
 调 slice_ts.py 拿到自己负责的规则的数据（不读整个 ts.json）：
 
 ```bash
-python {skill目录}/references/slice_ts.py --ts {ts路径} --rule {规则号}
+python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule {规则号}
 ```
 
 ### 步骤 2：理解规则
@@ -70,11 +70,11 @@ JOIN 条件从切片的 joins 取。
 关联安全策略（不唯一的 JOIN 键）体现在 CTE 或子查询里（先收敛再关联）。
 审计字段从切片 `_global.audit_fields` 取（4 个标准赋值）。
 
-详见 `references/etl-templates.md` 的 SELECT 模板。
+详见 `assets/etl-templates.md` 的 SELECT 模板。
 
 ### 步骤 4：套规范
 
-详见 `references/dws-coding-standards.md`：
+详见 `assets/dws-coding-standards.md`：
 - 不能 SELECT *、NULL 必须 COALESCE、审计字段齐全、命名规范
 
 ### 步骤 5：静态对比
@@ -132,10 +132,10 @@ JOIN 条件从切片的 joins 取。
 
 | 文档 | 内容 |
 |------|------|
-| `references/etl-templates.md` | SELECT 标准模板（各种加工模式） |
-| `references/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
+| `assets/etl-templates.md` | SELECT 标准模板（各种加工模式） |
+| `assets/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
 
-> 工具脚本（slice_ts.py / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在同目录 references/ 下，agent 通过 bash 调用。
+> 工具脚本（slice_ts.py / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在 `scripts/` 下，agent 通过 bash 调用。
 
 ---
 

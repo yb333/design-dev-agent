@@ -39,7 +39,7 @@ except AttributeError:
     pass
 
 # dws_db 在 design-dev-shared 公共库（与本 skill 平级）
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from dws_db import create_executor, ExecuteResult, load_test_params
 
 

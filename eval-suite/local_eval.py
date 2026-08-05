@@ -27,8 +27,8 @@ from datetime import datetime
 # 项目根
 ROOT = Path(__file__).resolve().parent.parent
 # 全局安装的 skill 路径
-DESIGN_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-design" / "references"
-CODING_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-coding" / "references"
+DESIGN_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-design" / "scripts"
+CODING_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-coding" / "scripts"
 
 
 class EvalReport:

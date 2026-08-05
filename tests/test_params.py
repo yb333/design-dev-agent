@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-# conftest 已把 design/coding references 加入 sys.path
+# conftest 已把 design/coding scripts 加入 sys.path
 from assemble_ts import build_exec_params
 from dws_db import load_test_params
 

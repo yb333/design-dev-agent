@@ -16,7 +16,7 @@ import pytest
 from pathlib import Path
 
 # 脚本目录
-CODING_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-coding" / "references"
+CODING_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-coding" / "scripts"
 sys.path.insert(0, str(CODING_REFS))
 
 # 样例 ts.json

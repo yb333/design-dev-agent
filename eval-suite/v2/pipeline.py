@@ -29,8 +29,8 @@ from engine import PipelineStepResult
 # 项目根
 ROOT = Path(__file__).resolve().parents[2]
 # skill 脚本目录（install 后在 ~/.config/opencode/skills/）
-DESIGN_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-design" / "references"
-CODING_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-coding" / "references"
+DESIGN_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-design" / "scripts"
+CODING_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-coding" / "scripts"
 
 
 def _run_python(script: str, args: list[str], timeout: int = 60) -> tuple[int, str]:

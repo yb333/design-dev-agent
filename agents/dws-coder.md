@@ -33,7 +33,7 @@ permission:
 # 第一步：加载 skill
 
 **开始任何工作前，先用 skill 工具加载 dws-coding skill**（调用 `skill({ name: "dws-coding" })`）。
-编码规范、SELECT 模板都在 skill 的 references 里。不加载 skill 你拿不到这些。
+编码规范、SELECT 模板都在 skill 的 assets 里，脚本在 scripts 里。不加载 skill 你拿不到这些。
 
 # 输入
 
@@ -44,7 +44,7 @@ permission:
 **不要直接读 ts.json**（大表会上下文爆炸）。调 slice_ts.py 拿切片：
 
 ```bash
-python {skill目录}/references/slice_ts.py --ts {ts路径} --rule R0001
+python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 ```
 
 切片输出该规则的全部信息：字段列表（含 design_logic）、关联策略、粒度、关联安全、审计字段模板。
@@ -61,7 +61,7 @@ python {skill目录}/references/slice_ts.py --ts {ts路径} --rule R0001
 这个文件只含 SELECT 语句（加工逻辑），不含 INSERT/DDL。
 INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 
-写 SELECT 前先读 skill 的 `references/etl-templates.md`（SELECT 模板）和 `references/dws-coding-standards.md`（强制规范）。
+写 SELECT 前先读 skill 的 `assets/etl-templates.md`（SELECT 模板）和 `assets/dws-coding-standards.md`（强制规范）。
 
 # 你怎么写 SELECT
 
@@ -91,7 +91,7 @@ INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 写完 SELECT 后，调 check_sql.py 静态对比（SELECT vs 切片）：
 
 ```bash
-python {skill目录}/references/check_sql.py --select R0001.sql --ts {ts路径} --rule R0001
+python {skill目录}/scripts/check_sql.py --select R0001.sql --ts {ts路径} --rule R0001
 ```
 
 - 对比不过 → 自己改 SELECT → 重对比（最多3轮）

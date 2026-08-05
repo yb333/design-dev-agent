@@ -56,7 +56,7 @@ def main():
             print(f"  原因: 配置结构错误")
             for b in bad:
                 print(f"    - {b}")
-            print(f"  参考: skills/dws-coding/references/db-sources.example.json")
+            print(f"  参考: skills/dws-coding/assets/db-sources.example.json")
             sys.exit(1)
     except json.JSONDecodeError as e:
         print("NO_DB_SOURCE")
@@ -66,7 +66,7 @@ def main():
     # 尝试连接
     try:
         # dws_db 在 design-dev-shared 公共库（与本 skill 平级）
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"))
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
         from dws_db import create_executor
         source = ""
         for i, arg in enumerate(sys.argv):
