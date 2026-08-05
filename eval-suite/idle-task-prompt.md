@@ -83,12 +83,15 @@ skills/dws-design/
 - 每改完一类引用点，跑一次 `python3 -m pytest tests/ -q` 确认不破坏（现在 226 个测试）。
 - 全部改完后，重跑 `python3 install.py`，确认 install 后目录结构正确，再跑一次测试。
 
-**验证标准**：
+**验证标准（四项全过才能提交，缺一不可）**：
 1. `python3 -m pytest tests/ -q` 全套通过
-2. `python3 install.py` 无报错，`~/.config/opencode/skills/dws-coding/scripts/slice_ts.py` 存在
-3. `python3 ~/.config/opencode/skills/dws-coding/scripts/check_db.py` 能跑（验证 import 链）
+2. `python3 install.py` 无报错，且 `~/.config/opencode/skills/dws-coding/scripts/slice_ts.py` 存在（确认 scripts/ 拷过去了）
+3. `python3 ~/.config/opencode/skills/dws-coding/scripts/check_db.py` 能跑（验证 install 后真实路径的 import 链，不只是 pytest 的 conftest 路径）
 4. 对 002 跑 `python3 eval-suite/v2/run.py --case 002 --skip-ai` 不崩
-5. 如实报告：移了哪些文件、改了哪些引用、测试结果、有没有遗漏
+
+**四项全过 → 自动提交**：`git add -A && git commit && git push origin main`。
+提交信息写明：移了哪些文件、改了哪些引用点、四项验证结果。
+如果任何一项不过，**不要提交**，如实报告卡在哪。
 
 ---
 
@@ -153,5 +156,5 @@ skills/dws-design/
 
 ### 收尾
 1. 跑 `python3 -m pytest tests/ -q` 确认全套通过
-2. 如实汇报：加了哪些陷阱用例、测试结果、遇到的问题
-3. 不要 git commit（等我 review）
+2. **自动提交**：`git add -A && git commit && git push origin main`，提交信息写明加了哪些陷阱用例、测试结果。
+3. 如实汇报：加了哪些陷阱用例、测试结果、遇到的问题
