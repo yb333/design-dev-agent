@@ -71,8 +71,8 @@ def _make_mock_executor(table_columns: dict):
     """构造 mock executor。
 
     table_columns: {(schema, table): [col1, col2, ...]} 表示库里实际存在的列。
-    适配 pg_catalog 逐表查询：每张表一条 SQL（WHERE n.nspname=... AND c.relname=...），
-    返回该表全部列（不再 attname IN，比对在 Python 端做）。
+    适配 UNION ALL 批量查询：一条 SQL 含所有表的 UNION ALL 分支，
+    每个分支带 nsp/rel/col 三列标记。
     """
     executor = MagicMock()
     executor.test_connection.return_value = True
@@ -82,11 +82,14 @@ def _make_mock_executor(table_columns: dict):
         result.success = True
         result.error = ""
         rows = []
+        # UNION ALL 的每个分支含 SELECT 'sch' AS nsp, 'tbl' AS rel, ...
+        # 按 SQL 里出现的 (schema, table) 匹配，返回该表全部列
         for (sch, tbl), existing_cols in table_columns.items():
-            if f"n.nspname = '{sch.lower()}'" in sql and f"c.relname = '{tbl.lower()}'" in sql:
-                # 逐表查：返回该表全部列
+            sch_l = sch.lower()
+            tbl_l = tbl.lower()
+            if f"'{sch_l}' AS nsp" in sql and f"'{tbl_l}' AS rel" in sql:
                 for c in existing_cols:
-                    rows.append({"column_name": c})
+                    rows.append({"nsp": sch_l, "rel": tbl_l, "col": c})
         result.rows = rows
         return result
 
@@ -235,11 +238,11 @@ class TestCheckDbSchema:
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == [], f"纯派生字段不应被校验: {db_errors}"
 
-    def test_only_queries_used_fields(self, monkeypatch):
-        """只查 mapping 用到的字段，不查全表所有列。
+    def test_union_all_batch_query(self, monkeypatch):
+        """连库查表结构用 UNION ALL（实测 DWS 最快），走 pg_catalog 精确表名。
 
         表里有 id/name/amount/extra_col 四个字段，mapping 只用了 id。
-        SQL 应带 column_name IN ('id')，只查用到的。
+        查的是整表列（不再 attname IN），比对在 Python 端做。
         """
         captured_sql = []
         executor = _make_mock_executor({
@@ -262,8 +265,11 @@ class TestCheckDbSchema:
         # SQL 应走 pg_catalog（不用慢的 information_schema）
         assert "pg_attribute" in sql_text, f"应用 pg_catalog 系统表，实际: {sql_text}"
         assert "information_schema" not in sql_text, "不应再用 information_schema（慢）"
-        # 逐表查：SQL 带精确表名（c.relname），不做 OR 拼大查询
-        assert "c.relname = 'ods_test_f'" in sql_text, f"应逐表查精确表名: {sql_text}"
+        # 带 schema/table 标记列（UNION ALL 形式）
+        assert "AS nsp" in sql_text and "AS rel" in sql_text, \
+            f"UNION ALL 应带 nsp/rel 标记列: {sql_text}"
+        # 精确表名（每个分支 WHERE c.relname=）
+        assert "c.relname = 'ods_test_f'" in sql_text, f"应精确表名: {sql_text}"
         # 校验通过（id 确实存在）
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == []
@@ -418,3 +424,62 @@ class TestSchemaCache:
 
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == [], "无缓存+连不上库应静默跳过"
+
+    def test_multi_table_union_all_single_query(self, tmp_path, monkeypatch):
+        """多张表缺失 → 一条 UNION ALL SQL 查回（不是多次往返）。
+
+        构造两张表都缺失缓存，验证只连库一次（UNION ALL 一条 SQL），
+        且两张表的列都正确归属。
+        """
+        cache_path = tmp_path / "schema_cache.json"
+        # 空缓存（两张表都要连库捞）
+        cache_path.write_text('{"cached_at": "", "tables": {}}', encoding="utf-8")
+
+        captured_sql = []
+        executor = _make_mock_executor({
+            ("ods", "table_a"): ["id", "name"],
+            ("dim", "table_b"): ["user_id", "level"],
+        })
+        # 用 wrapper 拦截 execute 调用的 SQL
+        real_side = executor.execute.side_effect
+        def capture(sql):
+            captured_sql.append(sql)
+            return real_side(sql)
+        executor.execute.side_effect = capture
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+
+        # 两个字段来自两张不同的表
+        rs = _make_rs_input(
+            fields=[
+                {"source_schema": "ods", "source_table": "table_a",
+                 "source_column": "id", "source_type": "bigint",
+                 "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "id", "target_column_cn": "ID",
+                 "target_type": "bigint", "source_alias": "a", "remark": "主键"},
+                {"source_schema": "dim", "source_table": "table_b",
+                 "source_column": "user_id", "source_type": "bigint",
+                 "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "user_id", "target_column_cn": "用户ID",
+                 "target_type": "bigint", "source_alias": "b", "remark": ""},
+            ],
+            sources=[
+                {"source_schema": "ods", "source_table": "table_a",
+                 "source_table_cn": "表A", "source_alias": "a",
+                 "target_schema": "dws", "target_table": "dwb_test_i"},
+                {"source_schema": "dim", "source_table": "table_b",
+                 "source_table_cn": "表B", "source_alias": "b",
+                 "target_schema": "dws", "target_table": "dwb_test_i"},
+            ],
+        )
+        result = precheck(rs, cache_path)
+
+        # 主查询（非 SELECT 1 的 test_connection）应只有一条，含 UNION ALL
+        main_sqls = [s for s in captured_sql if "pg_attribute" in s]
+        assert len(main_sqls) == 1, \
+            f"多表应一条 UNION ALL SQL，实际 {len(main_sqls)} 条: {main_sqls}"
+        assert "UNION ALL" in main_sqls[0], f"应含 UNION ALL"
+        assert "table_a" in main_sqls[0] and "table_b" in main_sqls[0]
+        # 校验通过
+        db_errors = [e for e in result.errors if "DB 校验" in e]
+        assert db_errors == [], f"两张表字段都存在应通过: {db_errors}"

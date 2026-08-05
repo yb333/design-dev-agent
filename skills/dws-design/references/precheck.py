@@ -274,23 +274,49 @@ def _is_cache_expired(cached_at: str, ttl_hours: int = 24) -> bool:
         return True
 
 
-def _fetch_table_schema(executor, schema: str, table: str) -> set[str]:
-    """连库查单张表的全部列名（pg_catalog，走索引，逐表查不做 OR 拼接）。
+def _fetch_tables_schema_batch(
+    executor, tables: list[tuple[str, str]]
+) -> dict[tuple[str, str], set[str]]:
+    """连库批量查多张表的列名（UNION ALL，实测 DWS 上最快）。
 
-    返回 {column_name_lower}，表不存在/无权限返回空集。
+    每张表一个 UNION ALL 分支，每个分支走精确等值（n.nspname= AND c.relname=），
+    优化器不用处理 OR，执行计划稳定。一次往返查完全部表。
+
+    Args:
+        executor: DB executor。
+        tables: [(schema, table), ...] 待查的表。
+
+    Returns:
+        {(schema_lower, table_lower): {column_name_lower}}。
+        表不存在/无权限 → 该表对应空集。
     """
-    sql = (
-        "SELECT a.attname AS column_name "
-        "FROM pg_attribute a "
-        "JOIN pg_class c ON a.attrelid = c.oid "
-        "JOIN pg_namespace n ON c.relnamespace = n.oid "
-        f"WHERE n.nspname = '{schema.lower()}' AND c.relname = '{table.lower()}' "
-        "AND a.attnum > 0 AND NOT a.attisdropped"
-    )
+    if not tables:
+        return {}
+
+    # 构造 UNION ALL：每个分支带 schema/table 标记列，便于结果归属
+    branches = []
+    for (sch, tbl) in tables:
+        branches.append(
+            f"SELECT '{sch.lower()}' AS nsp, '{tbl.lower()}' AS rel, a.attname AS col "
+            "FROM pg_attribute a "
+            "JOIN pg_class c ON a.attrelid = c.oid "
+            "JOIN pg_namespace n ON c.relnamespace = n.oid "
+            f"WHERE n.nspname = '{sch.lower()}' AND c.relname = '{tbl.lower()}' "
+            "AND a.attnum > 0 AND NOT a.attisdropped"
+        )
+    sql = "\nUNION ALL\n".join(branches)
+
     r = executor.execute(sql)
-    if not r.success or not r.rows:
-        return set()
-    return {row["column_name"].lower() for row in r.rows}
+    result: dict[tuple[str, str], set[str]] = {}
+    # 初始化所有表为空集（表不存在/查询失败时保留空集）
+    for (sch, tbl) in tables:
+        result[(sch.lower(), tbl.lower())] = set()
+
+    if r.success and r.rows:
+        for row in r.rows:
+            key = (row["nsp"].lower(), row["rel"].lower())
+            result.setdefault(key, set()).add(row["col"].lower())
+    return result
 
 
 def _check_db_schema(
@@ -375,12 +401,12 @@ def _check_db_schema(
                 if cache_hits == 0:
                     return
             else:
-                # 逐表查（每表一条 SQL，走精确索引，不做 OR 拼接）
-                for (sch, tbl) in tables_to_fetch:
-                    cols = _fetch_table_schema(executor, sch, tbl)
-                    found[(sch.lower(), tbl.lower())] = cols
+                # 批量查（UNION ALL，一次往返查全部缺失表，实测 DWS 最快）
+                fetched = _fetch_tables_schema_batch(executor, tables_to_fetch)
+                for (sch, tbl), cols in fetched.items():
+                    found[(sch, tbl)] = cols
                     # 追加到缓存
-                    cache.setdefault("tables", {})[f"{sch.lower()}.{tbl.lower()}"] = sorted(cols)
+                    cache.setdefault("tables", {})[f"{sch}.{tbl}"] = sorted(cols)
                 executor.close()
                 # 写回缓存
                 if cache_path:
