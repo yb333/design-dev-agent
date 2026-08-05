@@ -38,7 +38,8 @@ rules:
     # 增量设计（仅 load_mode != truncate_table 时才填）
     # incremental:
     #   key: "update_time"              # 增量识别字段
-    #   filter: "update_time >= '${BIZ_DATE}'"  # 增量过滤条件
+    #   filter: "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'"  # 增量过滤
+    #   init_filter: "1=1"              # 初始化过滤（全量用 1=1，或限定范围）
     #   init_time_range: "ALL"          # 初始化时间范围（来自 RS L07）
     #   init_strategy: "首次全量加载，后续按 update_time 增量"  # 初始化策略
 

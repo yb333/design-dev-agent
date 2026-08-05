@@ -90,8 +90,9 @@ description: >-
 - RS 的"增量识别方式"→ 判断是否增量场景
 
 **增量设计**（如果增量）：
-- `incremental.key`：增量识别字段（如 update_time）
-- `incremental.filter`：增量过滤条件
+- `incremental.key`：增量识别字段（如 update_time / dt）
+- `incremental.filter`：增量过滤条件（用起止双参数 BIZ_DATE_START / BIZ_DATE_END）
+- `incremental.init_filter`：初始化过滤条件（全量用 `1=1`，或限定范围）
 - `incremental.init_time_range`：初始化时间范围（RS L07）
 - `incremental.init_strategy`：初始化策略
 

@@ -163,14 +163,52 @@ designer 评估复杂度后决定**是否分段、是否建中间表**。
 
 当 RS L07 的"增量识别方式"不是"不涉及"时，该资产为增量场景。增量是规则级的——同一资产里有的规则全量、有的增量。
 
-对每条增量规则（load_mode != truncate_table），设计：
+#### 增量识别方式
+
+| 识别方式 | 说明 | 示例 |
+|---------|------|------|
+| **时间戳字段** | 源表有 update_time，按时间范围过滤 | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` |
+| **分区字段** | 源表有日期分区，按分区读取 | `dt >= '${BIZ_DATE_START}' AND dt < '${BIZ_DATE_END}'` |
+
+#### 增量写入方式（load_mode）
+
+| load_mode | 说明 | 典型场景 |
+|-----------|------|---------|
+| `truncate_partition` | 按分区清空再插 | 分区日增量（清当天分区再灌） |
+| `no_delete` | 直接追加 | 事件流水（只加不改） |
+| `delete` | 按条件删后插 | 可能有数据修正的表（删当天再插） |
+| `merge_into` | Upsert | 维度表（有更新有新增） |
+
+#### 增量参数
+
+增量过滤用**起止双参数**：
+- `BIZ_DATE_START`：增量起始日期
+- `BIZ_DATE_END`：增量结束日期
+
+在 `params` 段声明，在 `lts_params` 段配置 LTS 侧变量赋值（如 `V_BIZ_DATE_START → BIZ_DATE_START`）。
+
+#### 初始化设计
+
+初始化和增量是**同一套规则、WHERE 不同**：
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
-| `key` | 增量识别字段 | update_time |
-| `filter` | 增量过滤条件 | `update_time >= '${BIZ_DATE}'` |
-| `init_time_range` | 初始化时间范围（RS L07） | ALL / 2024-01-01 |
-| `init_strategy` | 初始化策略描述 | 首次全量加载，后续按 update_time 增量 |
+| `incremental.filter` | 增量 WHERE | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` |
+| `incremental.init_filter` | 初始化 WHERE | `1=1`（全量）或 `dt >= '2024-01-01'`（限定范围） |
+| `incremental.init_time_range` | 初始化时间范围（RS L07） | ALL / 2024-01-01 |
+| `incremental.init_strategy` | 初始化策略描述 | 首次全量加载，后续增量 |
+
+> 初始化在术加平台通过"参数控制"（同规则组传不同参数）或"独立规则组"（复制一套规则组）实现。
+> ts.json 只设计一套规则 + init_filter，具体实现方式由部署决定。
+
+#### 增量场景矩阵
+
+| 场景 | 识别 | 写入 | filter 示例 | init_filter |
+|------|------|------|------------|-------------|
+| 分区日增量 | 分区字段 | truncate_partition | `dt >= '${BIZ_DATE_START}' AND dt < '${BIZ_DATE_END}'` | `1=1` |
+| 时间戳追加 | 时间戳 | no_delete | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` | `1=1` |
+| 时间戳重刷 | 时间戳 | delete | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` | `1=1` |
+| Upsert增量 | 时间戳 | merge_into | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` | `1=1` |
 
 ### 5.3 依赖类型
 
