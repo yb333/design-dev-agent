@@ -162,7 +162,9 @@ def precheck(rs_input: dict[str, Any]) -> PrecheckResult:
     _check_audit_fields(field_mappings, result)
 
     # 9. DB 校验：连得上库时，校验来源表/字段在库里的真实性（连不上则静默跳过）
-    _check_db_schema(rs_input, result)
+    # ★ 短路：静态检查已有 error 就不进 DB 校验（schema/字段都没了，查库白费几百毫秒建连）
+    if not result.errors:
+        _check_db_schema(rs_input, result)
 
     return result
 
@@ -251,75 +253,66 @@ def _check_db_schema(rs_input: dict[str, Any], result: PrecheckResult):
         # 无配置/无 psycopg2/无数据源/网络不通 —— 统统静默跳过
         return
 
-    # 收集要校验的来源表（schema, table 去重）
-    source_tables = rs_input.get("source_tables", [])
-    tables_to_check: dict[tuple[str, str], str] = {}  # {(schema, table): table_cn}
-    for st in source_tables:
-        schema = (st.get("source_schema") or "").strip()
-        table = (st.get("source_table") or "").strip()
-        if schema and table:
-            tables_to_check.setdefault((schema, table), st.get("source_table_cn", ""))
-
-    if not tables_to_check:
-        return
-
-    result.add_pass(f"DB 校验: 已连库，校验 {len(tables_to_check)} 张来源表")
-
-    # 一次查所有目标表的列，建 {(schema, table): set(columns)} 索引
-    # 用 information_schema.columns（DWS/PG 通用）
-    table_columns: dict[tuple[str, str], set[str]] = {}
-    for (schema, table) in tables_to_check:
-        sql = (
-            "SELECT column_name FROM information_schema.columns "
-            f"WHERE table_schema = '{schema}' AND table_name = '{table}'"
-        )
-        r = executor.execute(sql)
-        if not r.success:
-            result.add_error(f"DB 校验: 查询 {schema}.{table} 列信息失败: {r.error}")
-            continue
-        cols = {row["column_name"].lower() for row in r.rows} if r.rows else set()
-        if not cols:
-            # 表不存在或无权限
-            result.add_error(
-                f"DB 校验: 来源表 {schema}.{table} 在库中不存在（或无权限）"
-            )
-        else:
-            table_columns[(schema, table)] = cols
-
-    # 逐字段校验：只校验"有 source_column 且非纯派生（赋值/序列）"的行
+    # 从 field_mappings 收集"要用到的来源字段"：{(schema, table): {column: target_field}}
+    # 只查用到的字段，不查全表所有列（表可能几百列，我们只用几个）
+    # 跳过纯派生行（赋值/序列、source_column 空）和审计字段——这些不查源表
     field_mappings = rs_input.get("field_mappings", [])
-    checked = 0
+    # {(schema, table): {source_column_lower: (原source_column, target_field)}}
+    needed: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
     for fm in field_mappings:
-        # 纯派生行（赋值/序列、source_column 为空）不查源表，跳过
         source_column = (fm.get("source_column") or "").strip()
         if not source_column:
-            continue
-        # 审计字段跳过（不查源表）
+            continue  # 纯派生行不查源表
         if _is_audit_field(fm):
-            continue
-
+            continue  # 审计字段不查源表
         schema = (fm.get("source_schema") or "").strip()
         table = (fm.get("source_table") or "").strip()
-        target_field = fm.get("target_column", "?")
-
         if not schema or not table:
-            # 缺 schema/table 属静态检查范畴，不在这里重复报
-            continue
+            continue  # 缺 schema/table 属静态检查范畴
+        needed.setdefault((schema, table), {})[source_column.lower()] = (
+            source_column, fm.get("target_column", "?")
+        )
 
-        cols = table_columns.get((schema, table))
-        if cols is None:
-            # 表本身不存在/无权限，已在上面报过 error，这里不重复
-            continue
+    if not needed:
+        executor.close()
+        return
 
-        checked += 1
-        if source_column.lower() not in cols:
-            result.add_error(
-                f"DB 校验: 字段 {target_field} 的来源字段 '{source_column}' "
-                f"在表 {schema}.{table} 中不存在"
-            )
+    total_fields = sum(len(cols) for cols in needed.values())
+    result.add_pass(f"DB 校验: 已连库，校验 {len(needed)} 张表 / {total_fields} 个字段")
 
-    if checked:
-        result.add_pass(f"DB 校验: 校验了 {checked} 个来源字段")
+    # 一条 SQL 只查用到的字段：每张表用 column_name IN (用到的字段)
+    or_clauses = []
+    for (sch, tbl), cols in needed.items():
+        col_list = ", ".join(f"'{c}'" for c in cols.keys())
+        or_clauses.append(
+            f"(table_schema = '{sch}' AND table_name = '{tbl}' AND column_name IN ({col_list}))"
+        )
+    sql = (
+        "SELECT table_schema, table_name, column_name "
+        "FROM information_schema.columns WHERE "
+        + " OR ".join(or_clauses)
+    )
+    r = executor.execute(sql)
+    executor.close()  # 查完释放连接
+    if not r.success:
+        result.add_error(f"DB 校验: 查询字段信息失败: {r.error}")
+        return
+
+    # 实际查到的字段（库里存在的）：{(schema, table): {column_lower}}
+    found: dict[tuple[str, str], set[str]] = {}
+    for row in r.rows:
+        key = (row["table_schema"].lower(), row["table_name"].lower())
+        found.setdefault(key, set()).add(row["column_name"].lower())
+
+    # 比对：期望用到的字段 - 库里查到的 = 不存在的字段
+    for (sch, tbl), cols_map in needed.items():
+        found_cols = found.get((sch.lower(), tbl.lower()), set())
+        for col_lower, (orig_col, target_field) in cols_map.items():
+            if col_lower not in found_cols:
+                result.add_error(
+                    f"DB 校验: 字段 {target_field} 的来源字段 '{orig_col}' "
+                    f"在表 {sch}.{tbl} 中不存在（或表/字段名错误）"
+                )
 
 
 def main():

@@ -232,6 +232,8 @@ class PsycopgExecutor(DBExecutor):
 
         # 操作角色：admin（DDL 建表删表）| etl（SELECT/INSERT 数据读写）
         self._role = role
+        # 缓存的连接（复用，避免每次 execute 都建连）
+        self._conn = None
 
     def _get_conn_params(self) -> dict:
         """获取当前数据源 + 当前 role 的连接参数"""
@@ -256,17 +258,32 @@ class PsycopgExecutor(DBExecutor):
         return params
 
     def _get_conn(self):
-        """获取数据库连接"""
-        return psycopg2.connect(**self._get_conn_params())
+        """获取数据库连接（复用实例缓存的连接，避免每次建连开销）"""
+        if self._conn is None or self._conn.closed:
+            self._conn = psycopg2.connect(**self._get_conn_params())
+            self._conn.autocommit = True  # DDL 需要 autocommit
+        return self._conn
+
+    def close(self):
+        """显式关闭缓存的连接（批量查询结束后调用）"""
+        if self._conn is not None and not self._conn.closed:
+            self._conn.close()
+        self._conn = None
+
+    def __del__(self):
+        """析构兜底：确保连接释放（短脚本退出时也干净）"""
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def execute(self, sql: str) -> ExecuteResult:
-        """执行单条 SQL"""
+        """执行单条 SQL（复用连接，不再每次建连/关连）"""
         start = time.monotonic()
         sql_stripped = sql.strip().rstrip(";")
 
         try:
             conn = self._get_conn()
-            conn.autocommit = True  # DDL 需要 autocommit
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             cur.execute(sql_stripped)
@@ -285,7 +302,6 @@ class PsycopgExecutor(DBExecutor):
                 rows = [dict(r) for r in cur.fetchmany(self._security.max_rows)]
 
             cur.close()
-            conn.close()
 
             duration = int((time.monotonic() - start) * 1000)
             return ExecuteResult(

@@ -187,3 +187,64 @@ class TestRoleSelection:
         assert admin_user != etl_user, "admin 和 etl 必须是不同账号"
         assert admin_user == "admin_user"
         assert etl_user == "etl_user"
+
+
+class TestConnectionReuse:
+    """连接复用测试：多次 execute 只建一次连接（批量查询的性能关键）。"""
+
+    @pytest.fixture(autouse=True)
+    def _fake_psycopg2_with_counter(self, monkeypatch):
+        """注入假的 psycopg2，connect 调用次数可追踪。"""
+        import types
+        fake = types.ModuleType("psycopg2")
+        extras = types.ModuleType("psycopg2.extras")
+        extras.RealDictCursor = type("RealDictCursor", (), {})
+        fake.extras = extras
+
+        connect_calls = {"n": 0}
+
+        class FakeConn:
+            def __init__(self):
+                self.closed = False
+                self.autocommit = False
+            def cursor(self, **kw):
+                cur = MagicMock()
+                cur.execute = lambda sql: None
+                cur.description = None
+                cur.rowcount = 0
+                cur.close = lambda: None
+                return cur
+            def close(self):
+                self.closed = True
+
+        def fake_connect(**kw):
+            connect_calls["n"] += 1
+            return FakeConn()
+
+        fake.connect = fake_connect
+        monkeypatch.setattr("dws_db.psycopg2", fake)
+        # 让测试能读到计数
+        self._connect_calls = connect_calls
+
+    def test_multiple_execute_one_connection(self, tmp_path):
+        """多次 execute 只建一次连接（复用），不再每次建连/关连。"""
+        config_path = _write_config(tmp_path, {"dws-dev": _two_role_source()})
+        executor = create_executor(config_path, "dws-dev", role="etl")
+
+        # 跑 5 次 execute
+        for _ in range(5):
+            executor.execute("SELECT 1")
+
+        assert self._connect_calls["n"] == 1, \
+            f"5次execute应只建1次连接，实际建了{self._connect_calls['n']}次"
+
+    def test_close_releases_connection(self, tmp_path):
+        """close 后再 execute 会重新建连。"""
+        config_path = _write_config(tmp_path, {"dws-dev": _two_role_source()})
+        executor = create_executor(config_path, "dws-dev", role="etl")
+
+        executor.execute("SELECT 1")
+        assert self._connect_calls["n"] == 1
+        executor.close()
+        executor.execute("SELECT 1")
+        assert self._connect_calls["n"] == 2  # close 后重新建连

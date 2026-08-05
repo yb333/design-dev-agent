@@ -47,10 +47,12 @@ def _make_rs_input(fields, sources=None, schema="ods", table="ods_test_f"):
 
 def _biz_field(source_column="id", target_column="id", rule="直接复制"):
     """构造一个业务字段映射行。"""
+    # 数据加工必须有合法的映射表达式（非"-"），否则静态检查报 error
+    detail = "SUM(amount)" if rule == "数据加工" else "-"
     return {
         "source_schema": "ods", "source_table": "ods_test_f",
         "source_column": source_column, "source_type": "VARCHAR(64)",
-        "transform_rule": rule, "transform_detail": "-",
+        "transform_rule": rule, "transform_detail": detail,
         "target_column": target_column, "target_column_cn": target_column,
         "target_type": "VARCHAR(64)", "source_alias": "t",
     }
@@ -68,22 +70,31 @@ def _audit_field(target_column="del_flag"):
 def _make_mock_executor(table_columns: dict):
     """构造 mock executor。
 
-    table_columns: {(schema, table): [col1, col2, ...]}
-    executor.execute(sql) 返回带 .success/.rows 的 mock。
+    table_columns: {(schema, table): [col1, col2, ...]} 表示库里实际存在的列。
+    适配新查询：一条 SQL 带 column_name IN (...)，只查用到的字段。
+    mock 解析 SQL 里请求的字段，返回库里确实存在的那些。
     """
     executor = MagicMock()
     executor.test_connection.return_value = True
 
     def fake_execute(sql):
-        # 解析 SQL 里的 table_schema / table_name
         result = MagicMock()
         result.success = True
         result.error = ""
         rows = []
-        for (sch, tbl), cols in table_columns.items():
+        for (sch, tbl), existing_cols in table_columns.items():
             if f"table_schema = '{sch}'" in sql and f"table_name = '{tbl}'" in sql:
-                rows = [{"column_name": c} for c in cols]
-                break
+                # 从 SQL 里解析请求的字段（column_name IN (...) 段）
+                import re
+                m = re.search(r"column_name IN \(([^)]+)\)", sql)
+                if m:
+                    requested = [c.strip().strip("'") for c in m.group(1).split(",")]
+                else:
+                    requested = existing_cols
+                # 只返回库里确实存在的 + 本次请求的
+                for c in requested:
+                    if c.lower() in [x.lower() for x in existing_cols]:
+                        rows.append({"table_schema": sch, "table_name": tbl, "column_name": c})
         result.rows = rows
         return result
 
@@ -125,8 +136,11 @@ class TestCheckDbSchema:
         assert db_errors == [], f"连接失败不应报 DB error: {db_errors}"
 
     def test_table_not_exists_blocks(self, monkeypatch):
-        """表在库里不存在 → error（阻断）。"""
-        executor = _make_mock_executor({})  # 空字典 = 表不存在
+        """表在库里不存在 → 它的字段全部查不到，报字段不存在（阻断）。
+
+        新逻辑不单独查表存在性：表不存在 = 用到的字段全查不到，统一报字段不存在。
+        """
+        executor = _make_mock_executor({})  # 空字典 = 库里没这张表的任何列
         monkeypatch.setattr("dws_db.create_executor_for_schema",
                             lambda schema, config_path="": executor)
 
@@ -134,8 +148,8 @@ class TestCheckDbSchema:
         result = precheck(rs)
 
         db_errors = [e for e in result.errors if "DB 校验" in e]
-        assert any("ods_test_f" in e and "不存在" in e for e in db_errors), \
-            f"表不存在应报 error: {db_errors}"
+        assert any("id" in e and "不存在" in e for e in db_errors), \
+            f"表不存在时其字段应报不存在: {db_errors}"
         # 阻断：return_code 应为 2
         assert result.return_code == 2
 
@@ -173,9 +187,10 @@ class TestCheckDbSchema:
 
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == [], f"全部存在不应报 error: {db_errors}"
-        # 应有 DB 校验通过的 pass
+        # 应有 DB 校验通过的 pass（含表数/字段数）
         db_passes = [p for p in result.passed if "DB 校验" in p]
-        assert len(db_passes) >= 2  # 至少"已连库"+"校验了 N 个字段"
+        assert len(db_passes) >= 1
+        assert "字段" in db_passes[0]  # pass 文案应含字段数
 
     def test_case_insensitive_column_match(self, monkeypatch):
         """列名大小写不敏感（库是 ID，mapping 是 id）→ 匹配成功。"""
@@ -227,3 +242,82 @@ class TestCheckDbSchema:
 
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == [], f"纯派生字段不应被校验: {db_errors}"
+
+    def test_only_queries_used_fields(self, monkeypatch):
+        """只查 mapping 用到的字段，不查全表所有列。
+
+        表里有 id/name/amount/extra_col 四个字段，mapping 只用了 id。
+        SQL 应带 column_name IN ('id')，只查用到的。
+        """
+        captured_sql = []
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): ["id", "name", "amount", "extra_col"]
+        })
+        # 拦截 SQL 看是否带字段过滤
+        orig_execute = executor.execute.side_effect
+        def capture_execute(sql):
+            captured_sql.append(sql)
+            return orig_execute(sql)
+        executor.execute.side_effect = capture_execute
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)
+
+        assert captured_sql, "应有查询执行"
+        sql_text = captured_sql[0]
+        # SQL 应含 column_name IN (...) 字段过滤
+        assert "column_name IN" in sql_text, \
+            f"应只查用到的字段（带 column_name IN），实际 SQL: {sql_text}"
+        assert "'id'" in sql_text, "应用到的字段 id 应在查询里"
+        # 不应把表里其他字段（name/amount/extra_col）都查出来
+        assert "extra_col" not in sql_text, "不应查未用到的字段"
+        # 校验通过（id 确实存在）
+        db_errors = [e for e in result.errors if "DB 校验" in e]
+        assert db_errors == []
+
+    def test_static_error_skips_db_check(self, monkeypatch):
+        """静态检查有 error 时，不进 DB 校验（短路，避免白白连库）。
+
+        构造一个静态就报 error 的 rs_input（目标字段重复），
+        验证 create_executor_for_schema 根本没被调用。
+        """
+        executor_called = {"n": 0}
+        def tracking_executor(schema, config_path=""):
+            executor_called["n"] += 1
+            return _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", tracking_executor)
+
+        # 两个字段 target_column 相同 → 静态检查报 error（字段重复）
+        rs = _make_rs_input([
+            _biz_field(source_column="id", target_column="dup_field"),
+            _biz_field(source_column="name", target_column="dup_field"),
+        ])
+        result = precheck(rs)
+
+        # 静态应有 error（字段重复）
+        assert any("重复" in e for e in result.errors), \
+            f"应报字段重复 error: {result.errors}"
+        # DB 校验不应执行（短路）
+        assert executor_called["n"] == 0, \
+            f"静态有 error 时不应连库，实际连了 {executor_called['n']} 次"
+
+    def test_static_warning_still_runs_db_check(self, monkeypatch):
+        """静态检查只有 warning（无 error）时，仍进 DB 校验（告警不阻断）。"""
+        executor_called = {"n": 0}
+        def tracking_executor(schema, config_path=""):
+            executor_called["n"] += 1
+            return _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", tracking_executor)
+
+        # 正常字段（无静态 error），schedule.upstream 空 → 触发 warning（不是 error）
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)
+
+        # 有 warning（上游调度缺失）但无 error
+        assert result.warnings, "应有 warning"
+        assert not result.errors, f"不应有 error: {result.errors}"
+        # DB 校验应执行（warning 不阻断）
+        assert executor_called["n"] == 1, \
+            f"只有 warning 时应照常连库，实际连了 {executor_called['n']} 次"
