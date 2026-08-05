@@ -1,14 +1,100 @@
-# 闲时任务提示词：能力陷阱用例构造
+# 闲时任务提示词：skill 目录规范化 + 能力陷阱用例构造
 
 > 用于空闲时段执行。复制下面的提示词给 agent，在项目目录下执行。
+> 两件事独立，任务一（目录规范化）是基础设施改动，建议先做。
 
 ---
 
 ## 提示词（复制以下全部内容给 agent）
 
-你在 design-dev-agent 项目（/Users/yuanbo/design-dev-agent）里。先读 `/Users/yuanbo/design-dev-agent/docs/eval-v2-design.md` 和 `/Users/yuanbo/design-dev-agent/CLAUDE.md` 了解项目约定（尤其 CLAUDE.md 第155行的 glob 禁令：文件查找必须用确定性文件名，禁止 glob 通配）。
+你在 design-dev-agent 项目（/Users/yuanbo/design-dev-agent）里。先读 `/Users/yuanbo/design-dev-agent/CLAUDE.md` 了解项目约定（尤其 glob 禁令：文件查找必须用确定性文件名，禁止 glob 通配）。
 
-任务是构造"能力陷阱用例"——测 agent "该想到的想到了吗"，不是测"能不能跑通"。现有用例（001-012）都是正常输入，只能测稳定性。
+---
+
+### 任务一：skill 目录规范化（脚本进 scripts/，模板资源进 assets/）
+
+**背景**：现在 skill 的脚本（.py）和模板资源（.yaml/.json/.md）都混在 references/ 下，要按职责拆分。
+
+**目标目录结构**（scripts/ 和 assets/ 都与 references/ 同级，即在 skill 根目录下）：
+```
+skills/dws-design/
+├── SKILL.md
+├── scripts/          ← 所有 .py 脚本
+│   ├── assemble_ts.py
+│   ├── gate_summary.py
+│   ├── precheck.py
+│   └── preprocess.py
+├── assets/           ← 模板、规范、示例等资源
+│   ├── design-decisions-template.yaml
+│   ├── design-guide.md
+│   ├── rs-input-format.md
+│   ├── ts-template.json
+│   └── ts-template.md
+└── references/       ← 迁移后应为空（或删除）
+```
+
+**要迁移的文件清单**（三个 skill）：
+
+`skills/dws-design/`：
+- → scripts/：assemble_ts.py, gate_summary.py, precheck.py, preprocess.py
+- → assets/：design-decisions-template.yaml, design-guide.md, rs-input-format.md, ts-template.json, ts-template.md
+
+`skills/dws-coding/`：
+- → scripts/：assemble_ddl.py, assemble_dq.py, assemble_export.py, check_db.py, check_sql.py, run_ut.py, slice_ts.py, sql_validator.py, ut_execute.py, ut_precheck.py, validate_ddl.py, verify_files.py
+- → scripts/lib/（保留子目录）：lib/dws_preprocessor.py
+- → assets/：db-sources.example.json, dws-coding-standards.md, etl-templates.md, platform_config.example.json
+
+`skills/design-dev-shared/`：
+- → scripts/：dws_db.py
+- → assets/：（无）
+
+**迁移后必须检查并修正的引用点（6 类，逐个核对）**：
+
+1. **SKILL.md 里的路径引用**（两个 skill 的 SKILL.md 都要改）：
+   - `skills/dws-design/SKILL.md`：所有 `references/xxx.yaml`、`references/xxx.md`、`references/xxx.json` → 按文件类型改 `assets/xxx`（模板资源）或 `scripts/xxx.py`（脚本）。注意第15行"location 的同级目录就是 references/"这句话要改成说明 scripts/ 和 assets/ 的结构。第51行 `{skill目录}/references/slice_ts.py` 改 `{skill目录}/scripts/slice_ts.py`。
+   - `skills/dws-coding/SKILL.md`：同理，etl-templates.md/dws-coding-standards.md → assets/；slice_ts.py 等 → scripts/。第138行"工具脚本在同目录 references/ 下"改为"在 scripts/ 下"。
+
+2. **commands/new-pipe.md**：
+   - DESIGN_SCRIPTS / CODING_SCRIPTS 变量定义（第49行）原指 references/，现在指 scripts/。确认变量获取逻辑改成定位 scripts/ 目录。
+   - 所有 `CODING_SCRIPTS/xxx.py`、`DESIGN_SCRIPTS/xxx.py` 调用不变（变量名没变，指向变了）。
+
+3. **脚本之间的 import（sys.path 推算）**——这是最容易出错的地方：
+   - coding 脚本引用 design-dev-shared：现在是 `Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"`。迁移后脚本从 references/ 进 scripts/，`parent` 层级不变（都在 skill 目录下一级），但目标要从 `"design-dev-shared" / "references"` 改成 `"design-dev-shared" / "scripts"`。涉及的文件：check_db.py、ut_precheck.py、ut_execute.py、run_ut.py（搜 `design-dev-shared` 确认）。
+   - design 的 precheck.py 同理（搜 `design-dev-shared` / `references` → 改 `scripts`）。
+   - 同目录 import（`from run_ut import`、`from dws_db import`）：都在 scripts/ 下，仍同目录，`sys.path.insert(0, Path(__file__).parent)` 仍成立，不用改。
+   - sql_validator.py 引用 `lib/dws_preprocessor.py`：`Path(__file__).parent / "dws_preprocessor.py"` → 改 `Path(__file__).parent / "lib" / "dws_preprocessor.py"`（lib 子目录保留）。
+
+4. **install.py**：
+   - 第274行 `skills/dws-coding/references/db-sources.example.json` → `skills/dws-coding/assets/db-sources.example.json`
+   - 第290行 `skills/dws-coding/references/platform_config.example.json` → `skills/dws-coding/assets/platform_config.example.json`
+   - copy_dir 是整个 skill 目录拷贝，scripts/ assets/ 子目录会跟着拷，不用改 copy_dir 逻辑。
+   - 确认 install 后 `~/.config/opencode/skills/{skill}/scripts/` 和 `assets/` 都存在。
+
+5. **tests/conftest.py**：
+   - DESIGN_REFS / CODING_REFS / DD_SHARED_REFS 指向 `references/`，现在脚本进 scripts/，改成 `... / "scripts"`。
+
+6. **eval-suite/v2/ 的脚本路径引用**：
+   - `eval-suite/v2/pipeline.py` 的 DESIGN_REFS / CODING_REFS（指向 `~/.config/opencode/skills/dws-{design,coding}/references`）→ 改 `/scripts`。
+   - `eval-suite/v2/assert_sql.py` 和 engine.py 里 `validators` 的 import 路径不变（那是 eval-suite 自己的，不是 skill）。
+
+**约束**：
+- 用 `git mv` 移动文件（保留 git 历史）。
+- references/ 迁移完如果空了就删掉（含 __pycache__）。
+- 每改完一类引用点，跑一次 `python3 -m pytest tests/ -q` 确认不破坏（现在 226 个测试）。
+- 全部改完后，重跑 `python3 install.py`，确认 install 后目录结构正确，再跑一次测试。
+
+**验证标准**：
+1. `python3 -m pytest tests/ -q` 全套通过
+2. `python3 install.py` 无报错，`~/.config/opencode/skills/dws-coding/scripts/slice_ts.py` 存在
+3. `python3 ~/.config/opencode/skills/dws-coding/scripts/check_db.py` 能跑（验证 import 链）
+4. 对 002 跑 `python3 eval-suite/v2/run.py --case 002 --skip-ai` 不崩
+5. 如实报告：移了哪些文件、改了哪些引用、测试结果、有没有遗漏
+
+---
+
+### 任务二：能力陷阱用例构造（设计 + 实现 3 个陷阱用例）
+
+现有用例（001-012）都是正常输入，只能测稳定性。要造"能力陷阱用例"——测 agent "该想到的想到了吗"，不是测"能不能跑通"。
 
 **方法论**（每个陷阱 = 埋雷输入 + 正确行为契约 + 断言）：
 - 埋雷输入：mapping/RS 里故意留会诱导犯错的细节
