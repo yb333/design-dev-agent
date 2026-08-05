@@ -161,6 +161,9 @@ def precheck(rs_input: dict[str, Any]) -> PrecheckResult:
     # 8. 审计字段校验
     _check_audit_fields(field_mappings, result)
 
+    # 9. DB 校验：连得上库时，校验来源表/字段在库里的真实性（连不上则静默跳过）
+    _check_db_schema(rs_input, result)
+
     return result
 
 
@@ -219,6 +222,104 @@ def _check_audit_fields(field_mappings: list, result: PrecheckResult):
                     f"审计字段 {target} 的映射规则是 '{rule}'，"
                     f"标准审计字段应是赋值（固定值），请确认"
                 )
+
+
+def _check_db_schema(rs_input: dict[str, Any], result: PrecheckResult):
+    """DB 校验：连得上库时，校验来源表/字段在库里的真实性。
+
+    能连上库 → 表/字段不存在报 error（阻断设计，让人改 mapping）。
+    连不上库（无配置/无依赖/超时）→ 静默跳过（不阻断，保持纯静态检查的兼容）。
+
+    账号选用逻辑与 UT 一致：按目标 schema 查 schema_mapping 选源。
+    """
+    # 目标 schema 用来按 schema_mapping 选数据源
+    target = rs_input.get("meta", {}).get("target", {})
+    target_schema = target.get("f_table", {}).get("schema", "") or target.get("schema", "")
+
+    # 尝试连库——任何连接问题都静默跳过（连不上库不阻断设计）
+    try:
+        sys.path.insert(
+            0,
+            str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"),
+        )
+        from dws_db import create_executor_for_schema
+        executor = create_executor_for_schema(target_schema)
+        # 实测连接，连不上也跳过
+        if not executor.test_connection():
+            return
+    except Exception:
+        # 无配置/无 psycopg2/无数据源/网络不通 —— 统统静默跳过
+        return
+
+    # 收集要校验的来源表（schema, table 去重）
+    source_tables = rs_input.get("source_tables", [])
+    tables_to_check: dict[tuple[str, str], str] = {}  # {(schema, table): table_cn}
+    for st in source_tables:
+        schema = (st.get("source_schema") or "").strip()
+        table = (st.get("source_table") or "").strip()
+        if schema and table:
+            tables_to_check.setdefault((schema, table), st.get("source_table_cn", ""))
+
+    if not tables_to_check:
+        return
+
+    result.add_pass(f"DB 校验: 已连库，校验 {len(tables_to_check)} 张来源表")
+
+    # 一次查所有目标表的列，建 {(schema, table): set(columns)} 索引
+    # 用 information_schema.columns（DWS/PG 通用）
+    table_columns: dict[tuple[str, str], set[str]] = {}
+    for (schema, table) in tables_to_check:
+        sql = (
+            "SELECT column_name FROM information_schema.columns "
+            f"WHERE table_schema = '{schema}' AND table_name = '{table}'"
+        )
+        r = executor.execute(sql)
+        if not r.success:
+            result.add_error(f"DB 校验: 查询 {schema}.{table} 列信息失败: {r.error}")
+            continue
+        cols = {row["column_name"].lower() for row in r.rows} if r.rows else set()
+        if not cols:
+            # 表不存在或无权限
+            result.add_error(
+                f"DB 校验: 来源表 {schema}.{table} 在库中不存在（或无权限）"
+            )
+        else:
+            table_columns[(schema, table)] = cols
+
+    # 逐字段校验：只校验"有 source_column 且非纯派生（赋值/序列）"的行
+    field_mappings = rs_input.get("field_mappings", [])
+    checked = 0
+    for fm in field_mappings:
+        # 纯派生行（赋值/序列、source_column 为空）不查源表，跳过
+        source_column = (fm.get("source_column") or "").strip()
+        if not source_column:
+            continue
+        # 审计字段跳过（不查源表）
+        if _is_audit_field(fm):
+            continue
+
+        schema = (fm.get("source_schema") or "").strip()
+        table = (fm.get("source_table") or "").strip()
+        target_field = fm.get("target_column", "?")
+
+        if not schema or not table:
+            # 缺 schema/table 属静态检查范畴，不在这里重复报
+            continue
+
+        cols = table_columns.get((schema, table))
+        if cols is None:
+            # 表本身不存在/无权限，已在上面报过 error，这里不重复
+            continue
+
+        checked += 1
+        if source_column.lower() not in cols:
+            result.add_error(
+                f"DB 校验: 字段 {target_field} 的来源字段 '{source_column}' "
+                f"在表 {schema}.{table} 中不存在"
+            )
+
+    if checked:
+        result.add_pass(f"DB 校验: 校验了 {checked} 个来源字段")
 
 
 def main():
