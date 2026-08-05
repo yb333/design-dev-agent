@@ -67,9 +67,10 @@ description: >-
 - design_decisions 所有规则 field_targets 的并集 = rs_input 的所有 target_column
 - 脚本会校验完整性，漏字段或重复分配会报错
 
-### 步骤 5：复杂度评估与分段
-详见 `references/design-guide.md` §4 分段决策。核心指标：
-- JOIN 表数量、粒度变化、多步骤加工字段数、聚合后关联
+### 步骤 5：设计思路与分段决策
+详见 `references/design-guide.md` §4。核心：
+- **design_approach**：写清楚整体设计策略（自然语言），讲清楚为什么这样拆、加工思路是什么。自然引用指标但不只列数字。
+- 分段决策指标（JOIN 数/聚合字段数/粒度变化等）见 design-guide §4.1
 - 分段结论 + 中间表决策（CTE 内联 vs 物理中间表）
 
 ### 步骤 6：字段加工逻辑
@@ -81,9 +82,30 @@ description: >-
 - 每个被关联表：JOIN 键在限定条件下是否唯一
 - 不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行 / 等）
 
-### 步骤 8：调度细化
-- RS 给大框架（日级）→ 细化为标准 cron 表达式
-- 补中间表新增的上游依赖
+### 步骤 8：调度设计
+详见 `references/design-guide.md` §5 调度设计。核心：
+
+**调度类型**（从 RS L07 推导）：
+- RS 的"调度频率"→ `schedule_type`：日调度→daily，小时/分钟级→hourly/realtime
+- RS 的"增量识别方式"→ 判断是否增量场景
+
+**增量设计**（如果增量）：
+- `incremental.key`：增量识别字段（如 update_time）
+- `incremental.filter`：增量过滤条件
+- `incremental.init_time_range`：初始化时间范围（RS L07）
+- `incremental.init_strategy`：初始化策略
+
+**依赖类型**（每个上游依赖选 dep_type）：
+| 类型 | 含义 | 用在哪 |
+|------|------|--------|
+| 宽依赖（默认） | 当天或计划时间前后 N 小时内完成过 | 大部分场景 |
+| 同周期依赖 | 同频同时，跑完才轮到我 | 同频任务 |
+| 时间点依赖 | 等到指定时间点执行完成 | 精确控制 |
+| 上周期依赖 | 匹配被依赖的上一个计划时间 | T-1 场景 |
+| 虚拟依赖 | 依赖源端实时任务，查数据库判断状态 | 源端非周期任务 |
+
+- `cron`：designer 填标准 cron 表达式
+- I 视图和 DQ 的调度由脚本自动补，不需要填
 
 ### 步骤 9：产出 design_decisions.yaml + 调脚本组装
 - 写 `design_decisions.yaml`（骨架见 `references/design-decisions-template.yaml`）
