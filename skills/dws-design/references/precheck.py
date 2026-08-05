@@ -280,17 +280,24 @@ def _check_db_schema(rs_input: dict[str, Any], result: PrecheckResult):
     total_fields = sum(len(cols) for cols in needed.values())
     result.add_pass(f"DB 校验: 已连库，校验 {len(needed)} 张表 / {total_fields} 个字段")
 
-    # 一条 SQL 只查用到的字段：每张表用 column_name IN (用到的字段)
+    # 一条 SQL 只查用到的字段：用 pg_catalog 系统表（不走 information_schema，
+    # 后者在 DWS 上是跨全集群元数据的慢视图，会扫 pg_class×pg_attribute 笛卡尔展开）。
+    # pg_attribute 走索引，直接定位到目标表的列，毫秒级。
     or_clauses = []
     for (sch, tbl), cols in needed.items():
-        col_list = ", ".join(f"'{c}'" for c in cols.keys())
+        col_list = ", ".join(f"'{c.lower()}'" for c in cols.keys())
         or_clauses.append(
-            f"(table_schema = '{sch}' AND table_name = '{tbl}' AND column_name IN ({col_list}))"
+            f"(n.nspname = '{sch.lower()}' AND c.relname = '{tbl.lower()}' "
+            f"AND a.attname IN ({col_list}))"
         )
     sql = (
-        "SELECT table_schema, table_name, column_name "
-        "FROM information_schema.columns WHERE "
+        "SELECT n.nspname AS table_schema, c.relname AS table_name, a.attname AS column_name "
+        "FROM pg_attribute a "
+        "JOIN pg_class c ON a.attrelid = c.oid "
+        "JOIN pg_namespace n ON c.relnamespace = n.oid "
+        "WHERE a.attnum > 0 AND NOT a.attisdropped AND ("
         + " OR ".join(or_clauses)
+        + ")"
     )
     r = executor.execute(sql)
     executor.close()  # 查完释放连接

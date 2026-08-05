@@ -71,7 +71,7 @@ def _make_mock_executor(table_columns: dict):
     """构造 mock executor。
 
     table_columns: {(schema, table): [col1, col2, ...]} 表示库里实际存在的列。
-    适配新查询：一条 SQL 带 column_name IN (...)，只查用到的字段。
+    适配 pg_catalog 查询：一条 SQL 带 a.attname IN (...)，只查用到的字段。
     mock 解析 SQL 里请求的字段，返回库里确实存在的那些。
     """
     executor = MagicMock()
@@ -83,10 +83,10 @@ def _make_mock_executor(table_columns: dict):
         result.error = ""
         rows = []
         for (sch, tbl), existing_cols in table_columns.items():
-            if f"table_schema = '{sch}'" in sql and f"table_name = '{tbl}'" in sql:
-                # 从 SQL 里解析请求的字段（column_name IN (...) 段）
+            if f"n.nspname = '{sch.lower()}'" in sql and f"c.relname = '{tbl.lower()}'" in sql:
+                # 从 SQL 里解析请求的字段（a.attname IN (...) 段）
                 import re
-                m = re.search(r"column_name IN \(([^)]+)\)", sql)
+                m = re.search(r"a\.attname IN \(([^)]+)\)", sql)
                 if m:
                     requested = [c.strip().strip("'") for c in m.group(1).split(",")]
                 else:
@@ -267,9 +267,12 @@ class TestCheckDbSchema:
 
         assert captured_sql, "应有查询执行"
         sql_text = captured_sql[0]
-        # SQL 应含 column_name IN (...) 字段过滤
-        assert "column_name IN" in sql_text, \
-            f"应只查用到的字段（带 column_name IN），实际 SQL: {sql_text}"
+        # SQL 应走 pg_catalog（不用慢的 information_schema）
+        assert "pg_attribute" in sql_text, f"应用 pg_catalog 系统表，实际: {sql_text}"
+        assert "information_schema" not in sql_text, "不应再用 information_schema（慢）"
+        # SQL 应含 a.attname IN (...) 字段过滤
+        assert "a.attname IN" in sql_text, \
+            f"应只查用到的字段（带 a.attname IN），实际 SQL: {sql_text}"
         assert "'id'" in sql_text, "应用到的字段 id 应在查询里"
         # 不应把表里其他字段（name/amount/extra_col）都查出来
         assert "extra_col" not in sql_text, "不应查未用到的字段"
