@@ -6,20 +6,40 @@
       "host": "your-dws-cluster.huaweicloud.com",
       "port": 8000,
       "database": "your_database",
-      "user": "your_user",
-      "password": "${DWS_DEV_PASSWORD}",
       "ssl": true,
-      "sslrootcert": "/path/to/dws-ca.pem"
+      "sslrootcert": "/path/to/dws-ca.pem",
+      "roles": {
+        "admin": {
+          "user": "your_admin_user",
+          "password": "${DWS_DEV_ADMIN_PASSWORD}",
+          "desc": "DDL 账号（建表/删表/建视图）"
+        },
+        "etl": {
+          "user": "your_etl_user",
+          "password": "${DWS_DEV_ETL_PASSWORD}",
+          "desc": "数据读写账号（SELECT 查来源表/INSERT 写目标表/UT检查）"
+        }
+      }
     },
     "dws-prod": {
       "type": "huawei-dws",
       "host": "your-dws-prod-cluster.huaweicloud.com",
       "port": 8000,
       "database": "your_database",
-      "user": "your_user",
-      "password": "${DWS_PROD_PASSWORD}",
       "ssl": true,
-      "sslrootcert": "/path/to/dws-ca.pem"
+      "sslrootcert": "/path/to/dws-ca.pem",
+      "roles": {
+        "admin": {
+          "user": "your_admin_user",
+          "password": "${DWS_PROD_ADMIN_PASSWORD}",
+          "desc": "DDL 账号（建表/删表/建视图）"
+        },
+        "etl": {
+          "user": "your_etl_user",
+          "password": "${DWS_PROD_ETL_PASSWORD}",
+          "desc": "数据读写账号（SELECT 查来源表/INSERT 写目标表/UT检查）"
+        }
+      }
     }
   },
   "schema_mapping": {

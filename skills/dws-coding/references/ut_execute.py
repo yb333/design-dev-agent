@@ -61,7 +61,8 @@ def main():
                 "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json"))
             from dws_db import resolve_source_by_schema
             source = resolve_source_by_schema(config_path, target_schema)
-        executor = create_executor(args.db_config, source)
+        # 本脚本只做数据读写（TRUNCATE/INSERT/UT检查），用 etl 账号；DDL 在 ut_precheck 阶段用 admin 已建好
+        executor = create_executor(args.db_config, source, role="etl")
     except Exception as e:
         print(f"错误: 连库失败: {e}", file=sys.stderr)
         sys.exit(2)

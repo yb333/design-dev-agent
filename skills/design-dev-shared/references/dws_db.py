@@ -56,16 +56,20 @@ class ExecuteResult:
 
 @dataclass
 class DataSource:
-    """单个数据源配置"""
+    """单个数据源配置。
+
+    账号按操作类型分（roles）：admin（DDL 建表删表）、etl（SELECT/INSERT 数据读写）。
+    每个数据源必须配这两个 role，同一库两个账号、密码各自独立。
+    """
     name: str
     type: str = "postgresql"     # postgresql | huawei-dws
     host: str = ""
     port: int = 5432
     database: str = ""
-    user: str = ""
-    password: str = ""
     ssl: bool = False
     sslrootcert: str = ""
+    # 按操作类型分账号（必配）：{"admin": {user,password}, "etl": {user,password}}
+    roles: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -100,16 +104,22 @@ def load_db_sources(config_path: str) -> tuple[dict[str, DataSource], str, Secur
 
     sources = {}
     for name, cfg in raw.get("sources", {}).items():
+        # 解析 roles（每个 role 一组 user/password）
+        roles = {}
+        for role_name, role_cfg in cfg.get("roles", {}).items():
+            roles[role_name] = {
+                "user": role_cfg.get("user", ""),
+                "password": resolve_password(role_cfg.get("password", "")),
+            }
         sources[name] = DataSource(
             name=name,
             type=cfg.get("type", "postgresql"),
             host=cfg.get("host", ""),
             port=cfg.get("port", 5432),
             database=cfg.get("database", ""),
-            user=cfg.get("user", ""),
-            password=resolve_password(cfg.get("password", "")),
             ssl=cfg.get("ssl", False),
             sslrootcert=cfg.get("sslrootcert", ""),
+            roles=roles,
         )
 
     default = raw.get("default", "")
@@ -203,7 +213,7 @@ class PsycopgExecutor(DBExecutor):
     支持 PostgreSQL 和华为云 DWS（DWS 兼容 PostgreSQL 协议）。
     """
 
-    def __init__(self, config_path: str, source_name: str = ""):
+    def __init__(self, config_path: str, source_name: str = "", role: str = "etl"):
         if psycopg2 is None:
             raise ImportError(
                 "psycopg2 未安装。请运行: pip install psycopg2-binary"
@@ -220,15 +230,24 @@ class PsycopgExecutor(DBExecutor):
             # 如果指定的不存在，用第一个
             self._current = next(iter(self._sources))
 
+        # 操作角色：admin（DDL 建表删表）| etl（SELECT/INSERT 数据读写）
+        self._role = role
+
     def _get_conn_params(self) -> dict:
-        """获取当前数据源的连接参数"""
+        """获取当前数据源 + 当前 role 的连接参数"""
         ds = self._sources[self._current]
+        role_cfg = ds.roles.get(self._role)
+        if not role_cfg:
+            raise ValueError(
+                f"数据源 '{self._current}' 没有配置 role '{self._role}'，"
+                f"请在 db-sources.json 的 sources.{self._current}.roles.{self._role} 配置 user/password"
+            )
         params = {
             "host": ds.host,
             "port": ds.port,
             "database": ds.database,
-            "user": ds.user,
-            "password": ds.password,
+            "user": role_cfg["user"],
+            "password": role_cfg["password"],
         }
         if ds.ssl:
             params["sslmode"] = "require"
@@ -327,20 +346,21 @@ class PsycopgExecutor(DBExecutor):
 # 工厂函数
 # ============================================================
 
-def create_executor(config_path: str = "", source_name: str = "") -> DBExecutor:
+def create_executor(config_path: str = "", source_name: str = "", role: str = "etl") -> DBExecutor:
     """创建执行器实例。
 
     config_path: db-sources.json 路径。默认按以下顺序查找：
       1. 环境变量 DB_CONFIG
       2. ~/.config/opencode/db-sources.json（全局配置，install 不覆盖）
     source_name: 指定数据源。默认用配置文件里的 default。
+    role: 操作角色。admin（DDL 建表删表）| etl（SELECT/INSERT 数据读写，默认）。
     """
     if not config_path:
         config_path = os.environ.get(
             "DB_CONFIG",
             str(Path.home() / ".config" / "opencode" / "db-sources.json"),
         )
-    return PsycopgExecutor(config_path, source_name)
+    return PsycopgExecutor(config_path, source_name, role)
 
 
 def resolve_config_path(config_path: str = "") -> str:
@@ -359,20 +379,21 @@ def resolve_config_path(config_path: str = "") -> str:
     )
 
 
-def create_executor_for_schema(schema: str, config_path: str = "") -> DBExecutor:
-    """★ 高层封装：传入目标 schema，内部自动选数据源 + 建连。
+def create_executor_for_schema(schema: str, role: str = "etl", config_path: str = "") -> DBExecutor:
+    """★ 高层封装：传入目标 schema + role，内部自动选数据源 + 建连。
 
-    调用方（check_db / ut / precheck）只用这个函数——传 schema 即可，
+    调用方（check_db / ut / precheck）只用这个函数——传 schema 和 role 即可，
     不用关心 config_path 在哪、schema_mapping 怎么查、default 是谁。
     选源逻辑：按 schema 查 schema_mapping，查不到回退 default。
 
     Args:
         schema: 目标表 schema（用来按 schema_mapping 选数据源）。
+        role: 操作角色。admin（DDL 建表删表）| etl（SELECT/INSERT 数据读写，默认）。
         config_path: 可选，db-sources.json 路径；不传则自动查找。
     """
     resolved = resolve_config_path(config_path)
     source_name = resolve_source_by_schema(resolved, schema)
-    return create_executor(resolved, source_name)
+    return create_executor(resolved, source_name, role)
 
 
 # ============================================================

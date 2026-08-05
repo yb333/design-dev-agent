@@ -57,7 +57,9 @@ def main():
                 "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json"))
             from dws_db import resolve_source_by_schema
             source = resolve_source_by_schema(config_path, target_schema)
-        executor = create_executor(args.db_config, source)
+        # 两个 role：admin 跑 DDL（建表删表），etl 跑 SELECT 预检（查数据）
+        ddl_executor = create_executor(args.db_config, source, role="admin")
+        etl_executor = create_executor(args.db_config, source, role="etl")
     except Exception as e:
         print(f"错误: 连库失败: {e}", file=sys.stderr)
         sys.exit(2)
@@ -67,7 +69,8 @@ def main():
         "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json"))
     param_values = resolve_all_params(ts, config_path)
 
-    print(f"数据源: {executor.get_current_source()}（schema: {target_schema}）")
+    print(f"数据源: {ddl_executor.get_current_source()}（schema: {target_schema}）")
+    print(f"账号: DDL→admin, SELECT→etl")
     if param_values:
         print(f"参数替换: {param_values}")
     print(f"规则数: {len(rules)}")
@@ -110,15 +113,15 @@ def main():
                 results.append(r_result)
                 continue
 
-            # 视图规则：回退 + DDL（视图不跑 SELECT 预检）
+            # 视图规则：回退 + DDL（视图不跑 SELECT 预检）—— 用 admin 账号
             if is_view:
                 rb_file = rb_dir / f"rollback_create_view_{table}.sql"
                 if rb_file.exists():
-                    executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
+                    ddl_executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
 
                 view_file = ddl_dir / f"create_view_{table}.sql"
                 if view_file.exists():
-                    r = executor.execute(substitute_params(view_file.read_text(encoding="utf-8"), param_values))
+                    r = ddl_executor.execute(substitute_params(view_file.read_text(encoding="utf-8"), param_values))
                     r_result["status"] = "PASS" if r.success else "FAIL"
                     r_result["detail"] = r.summary()
                     print(f"  {'✅' if r.success else '❌'} 视图DDL: {r.summary()}")
@@ -130,16 +133,16 @@ def main():
 
             # 表规则：回退 → DDL → SELECT 预检
             if not args.skip_ddl:
-                # 回退
+                # 回退（admin 账号）
                 rb_file = rb_dir / f"rollback_create_table_{table}.sql"
                 if rb_file.exists():
-                    r_rb = executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
+                    r_rb = ddl_executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
                     print(f"  {'🔄' if r_rb.success else '⚠️'} 回退: {rb_file.name}")
 
-                # DDL
+                # DDL（admin 账号）
                 ddl_file = ddl_dir / f"create_table_{table}.sql"
                 if ddl_file.exists():
-                    r = executor.execute(substitute_params(ddl_file.read_text(encoding="utf-8"), param_values))
+                    r = ddl_executor.execute(substitute_params(ddl_file.read_text(encoding="utf-8"), param_values))
                     if not r.success:
                         r_result["status"] = "FAIL"
                         r_result["error_type"] = "DDL"
@@ -162,7 +165,7 @@ def main():
                 continue
 
             select_sql = substitute_params(select_sql, param_values)
-            r_pre = executor.execute(select_sql)
+            r_pre = etl_executor.execute(select_sql)
             if not r_pre.success:
                 error_msg = r_pre.error[:200] if r_pre.error else "未知错误"
                 error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"

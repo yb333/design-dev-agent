@@ -242,7 +242,9 @@ def main():
             )
             from dws_db import resolve_source_by_schema
             source = resolve_source_by_schema(config_path, target_schema)
-        executor = create_executor(args.db_config, source)
+        # 两个 role：admin 跑 DDL（建表删表），etl 跑 SELECT/INSERT/UT检查（数据读写）
+        ddl_executor = create_executor(args.db_config, source, role="admin")
+        etl_executor = create_executor(args.db_config, source, role="etl")
     except Exception as e:
         print(f"错误: 连库失败: {e}", file=sys.stderr)
         sys.exit(2)
@@ -253,7 +255,8 @@ def main():
     )
     param_values = resolve_all_params(ts, config_path)
 
-    print(f"数据源: {executor.get_current_source()}（schema: {target_schema}）")
+    print(f"数据源: {ddl_executor.get_current_source()}（schema: {target_schema}）")
+    print(f"账号: DDL→admin, SELECT/INSERT→etl")
     if param_values:
         print(f"参数替换: {param_values}")
     print(f"规则数: {len(rules)}")
@@ -302,17 +305,17 @@ def main():
                 rb_dir = Path(args.rollback_dir) if args.rollback_dir else ddl_dir.parent / "ddl_rollback"
                 _, view_name = (target.split(".", 1) + [""])[:2] if "." in target else ("", target)
 
-                # 先跑回退（DROP VIEW，确定文件名）
+                # 先跑回退（DROP VIEW，确定文件名）—— admin 账号
                 rb_file = rb_dir / f"rollback_create_view_{view_name}.sql"
                 if rb_file.exists():
                     rb_sql = substitute_params(rb_file.read_text(encoding="utf-8"), param_values)
-                    executor.execute(rb_sql)  # 回退失败不阻断
+                    ddl_executor.execute(rb_sql)  # 回退失败不阻断
 
-                # 再跑 DDL（CREATE VIEW，确定文件名）
+                # 再跑 DDL（CREATE VIEW，确定文件名）—— admin 账号
                 view_file = ddl_dir / f"create_view_{view_name}.sql"
                 if view_file.exists():
                     ddl_sql = substitute_params(view_file.read_text(encoding="utf-8"), param_values)
-                    r = executor.execute(ddl_sql)
+                    r = ddl_executor.execute(ddl_sql)
                     rule_result["status"] = "PASS" if r.success else "FAIL"
                     rule_result["detail"] = r.summary()
                     print(f"  {'✅' if r.success else '❌'} {r.summary()}")
@@ -329,21 +332,21 @@ def main():
                 rb_dir = Path(args.rollback_dir) if args.rollback_dir else ddl_dir.parent / "ddl_rollback"
                 _, table = (target.split(".", 1) + [""])[:2] if "." in target else ("", target)
 
-                # 先跑回退（DROP TABLE，确定文件名）
+                # 先跑回退（DROP TABLE，确定文件名）—— admin 账号
                 rb_file = rb_dir / f"rollback_create_table_{table}.sql"
                 if rb_file.exists():
                     rb_sql = substitute_params(rb_file.read_text(encoding="utf-8"), param_values)
-                    r_rb = executor.execute(rb_sql)
+                    r_rb = ddl_executor.execute(rb_sql)
                     if r_rb.success:
                         print(f"  🔄 回退: {rb_file.name}")
                     else:
                         print(f"  ⚠️ 回退失败(忽略): {r_rb.error[:80]}")
 
-                # 步骤1: DDL（CREATE TABLE，确定文件名）
+                # 步骤1: DDL（CREATE TABLE，确定文件名）—— admin 账号
                 ddl_file = ddl_dir / f"create_table_{table}.sql"
                 if ddl_file.exists():
                     ddl_sql = substitute_params(ddl_file.read_text(encoding="utf-8"), param_values)
-                    r = executor.execute(ddl_sql)
+                    r = ddl_executor.execute(ddl_sql)
                     if not r.success:
                         rule_result["status"] = "FAIL"
                         rule_result["detail"] = f"DDL失败: {r.error[:100]}"
@@ -366,8 +369,8 @@ def main():
                 continue
             select_sql = substitute_params(select_sql, param_values)
 
-            # 步骤2.5: SELECT 预检（快速发现类型/字段问题，不写数据）
-            r_pre = executor.execute(select_sql)
+            # 步骤2.5: SELECT 预检（快速发现类型/字段问题，不写数据）—— etl 账号
+            r_pre = etl_executor.execute(select_sql)
             if not r_pre.success:
                 error_msg = r_pre.error[:200] if r_pre.error else "未知错误"
                 error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
@@ -382,14 +385,14 @@ def main():
             pre_rows = len(r_pre.rows) if r_pre.rows else 0
             print(f"  ✅ SELECT预检: {pre_rows}行, {len(pre_cols)}列")
 
-            # 步骤3: 按写入模式预处理（模拟术加平台行为）
+            # 步骤3: 按写入模式预处理（模拟术加平台行为）—— etl 账号
             load_mode = rule.get("load_mode", "truncate_table")
             if load_mode == "truncate_table":
-                executor.execute(f"TRUNCATE TABLE {target}")
+                etl_executor.execute(f"TRUNCATE TABLE {target}")
                 print(f"  🔄 TRUNCATE（load_mode=truncate_table）")
             elif load_mode == "delete" and rule.get("delete_condition"):
                 del_sql = f"DELETE FROM {target} WHERE {rule['delete_condition']}"
-                executor.execute(del_sql)
+                etl_executor.execute(del_sql)
                 print(f"  🔄 DELETE（load_mode=delete）")
             # no_delete / merge_into 不预处理
 
@@ -400,7 +403,7 @@ def main():
             if not tbl_fields:
                 tbl_fields = rule.get("fields", [])
             insert_sql = wrap_insert(select_sql, target, tbl_fields)
-            r = executor.execute(insert_sql)
+            r = etl_executor.execute(insert_sql)
 
             if not r.success:
                 error_msg = r.error[:200] if r.error else "未知错误"
@@ -415,8 +418,8 @@ def main():
 
             print(f"  ✅ INSERT: {r.summary()}")
 
-            # 步骤5: UT 检查
-            ut_checks = run_ut_check(executor, target, business_key, audit_fields)
+            # 步骤5: UT 检查 —— etl 账号
+            ut_checks = run_ut_check(etl_executor, target, business_key, audit_fields)
             rule_result["checks"] = ut_checks
 
             # 汇总 UT

@@ -39,7 +39,7 @@ def main():
         for i, arg in enumerate(sys.argv):
             if arg == "--source" and i + 1 < len(sys.argv):
                 source = sys.argv[i + 1]
-        executor = create_executor(config_path, source)
+        executor = create_executor(config_path, source, role="etl")
         ok = executor.test_connection()
         if ok:
             print("DB_OK")
