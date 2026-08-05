@@ -348,10 +348,40 @@ class TestSchemaCache:
         assert executor_called["n"] == 0, "缓存命中不应连库"
 
     def test_cache_miss_fetches_from_db(self, tmp_path, monkeypatch):
-        """缓存缺失某表 → 连库捞该表，追加缓存。"""
+        """缓存过期/不存在 → 连库整体查所有表，写缓存。
+
+        新逻辑：缓存整体有效就用、无效就整体重查（不按表补缺）。
+        """
         cache_path = tmp_path / "schema_cache.json"
         import json
-        # 缓存有 table_a，没有 ods_test_f
+        # 空缓存（cached_at 空 → 视为过期 → 整体重查）
+        cache_path.write_text(json.dumps({"cached_at": "", "tables": {}}), encoding="utf-8")
+
+        executor_called = {"n": 0}
+        def tracking(schema, config_path=""):
+            executor_called["n"] += 1
+            return _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", tracking)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, cache_path)
+
+        assert executor_called["n"] == 1, "缓存无效应整体连库查一次"
+        db_errors = [e for e in result.errors if "DB 校验" in e]
+        assert db_errors == [], f"查到后应校验通过: {db_errors}"
+        # 缓存应被写入（含 ods_test_f）
+        updated = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "ods.ods_test_f" in updated["tables"]
+
+    def test_cache_valid_partial_miss_uses_cache(self, tmp_path, monkeypatch):
+        """缓存有效（未过期）但缺某张表 → 仍用缓存（该表当空集，报字段不存在）。
+
+        新逻辑不做按表补缺：缓存整体有效就用，缺的表当空集处理。
+        想刷新用 --refresh-schema。
+        """
+        cache_path = tmp_path / "schema_cache.json"
+        import json
+        # 缓存有效但只有 table_a，没有 ods_test_f（本次要查的）
         cache_path.write_text(json.dumps({
             "cached_at": "2099-01-01T00:00:00",
             "tables": {"ods.table_a": ["x"]},
@@ -366,12 +396,12 @@ class TestSchemaCache:
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs, cache_path)
 
-        assert executor_called["n"] == 1, "缓存缺失应连库捞一次"
+        # 不连库（缓存有效）
+        assert executor_called["n"] == 0, "缓存有效不连库"
+        # ods_test_f 不在缓存 → 当空集 → 报 id 不存在
         db_errors = [e for e in result.errors if "DB 校验" in e]
-        assert db_errors == [], f"捞到后应校验通过: {db_errors}"
-        # 缓存应被更新（追加了 ods_test_f）
-        updated = json.loads(cache_path.read_text(encoding="utf-8"))
-        assert "ods.ods_test_f" in updated["tables"]
+        assert any("id" in e and "不存在" in e for e in db_errors), \
+            f"缓存缺该表应报字段不存在: {db_errors}"
 
     def test_cache_expired_refetches(self, tmp_path, monkeypatch):
         """缓存过期（cached_at 过去很久）→ 重新连库捞。"""
@@ -424,6 +454,80 @@ class TestSchemaCache:
 
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == [], "无缓存+连不上库应静默跳过"
+
+
+class TestStaticChecks:
+    """新增静态校验测试：表别名重复 / source_column 中文 / 字段级表级一致性。"""
+
+    def test_duplicate_alias_blocks(self, monkeypatch):
+        """实体级同别名出现多次 → error。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input(
+            fields=[_biz_field(source_column="id")],
+            sources=[
+                {"source_schema": "ods", "source_table": "t1", "source_table_cn": "t1",
+                 "source_alias": "a", "target_schema": "dws", "target_table": "dwb_test_i"},
+                {"source_schema": "ods", "source_table": "t2", "source_table_cn": "t2",
+                 "source_alias": "a", "target_schema": "dws", "target_table": "dwb_test_i"},  # 同别名 a
+            ],
+        )
+        result = precheck(rs)
+        dup_errors = [e for e in result.errors if "别名" in e and "重复" in e]
+        assert dup_errors, f"应报别名重复: {result.errors}"
+
+    def test_chinese_source_column_blocks(self, monkeypatch):
+        """source_column 含中文 → error。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([_biz_field(source_column="订单ID")])  # 中文列名
+        result = precheck(rs)
+        cn_errors = [e for e in result.errors if "中文" in e]
+        assert cn_errors, f"应报 source_column 中文: {result.errors}"
+
+    def test_english_source_column_passes(self, monkeypatch):
+        """source_column 是英文 → 无中文相关 error。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([_biz_field(source_column="order_id")])  # 英文
+        result = precheck(rs)
+        cn_errors = [e for e in result.errors if "中文" in e]
+        assert cn_errors == [], f"英文列名不应报中文错误: {cn_errors}"
+
+    def test_field_table_mismatch_blocks(self, monkeypatch):
+        """字段级的 source_table 不在实体级定义 → error。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        # 实体级只有 ods_test_f，字段级写了 ods_other_table
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_other_table",  # 不在实体级
+            "source_column": "id", "source_type": "bigint",
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "id", "target_column_cn": "ID",
+            "target_type": "bigint", "source_alias": "t", "remark": "主键",
+        }])
+        result = precheck(rs)
+        mismatch_errors = [e for e in result.errors if "未定义" in e]
+        assert mismatch_errors, f"应报字段级表级不一致: {result.errors}"
+
+    def test_field_table_consistent_passes(self, monkeypatch):
+        """字段级的 source_table 在实体级定义 → 无不一致 error。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])  # ods_test_f 在实体级
+        result = precheck(rs)
+        mismatch_errors = [e for e in result.errors if "未定义" in e]
+        assert mismatch_errors == [], f"一致时不应报: {mismatch_errors}"
 
     def test_multi_table_union_all_single_query(self, tmp_path, monkeypatch):
         """多张表缺失 → 一条 UNION ALL SQL 查回（不是多次往返）。

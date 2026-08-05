@@ -153,12 +153,46 @@ def precheck(
     if not schedule.get("upstream"):
         result.add_warn("上游调度任务缺失 (RS L07 湖表调度信息)")
 
-    # 6. 别名一致性
+    # 6. 别名一致性 + 表别名重复 + 字段级/表级一致性
     entity_aliases = {st.get("source_alias") for st in source_tables if st.get("source_alias")}
     for fm in field_mappings:
         fm_alias = fm.get("source_alias", "")
         if fm_alias and fm_alias not in entity_aliases:
             result.add_error(f"字段 {fm.get('target_column', '?')} 的来源别名 '{fm_alias}' 在实体级 mapping 中不存在")
+
+    # 6a. 表别名重复检查（实体级同别名出现多次 → JOIN 时歧义）
+    alias_count: dict[str, int] = {}
+    for st in source_tables:
+        al = (st.get("source_alias") or "").strip()
+        if al:
+            alias_count[al] = alias_count.get(al, 0) + 1
+    for al, cnt in alias_count.items():
+        if cnt > 1:
+            result.add_error(f"实体级表别名 '{al}' 重复出现 {cnt} 次（JOIN 时会歧义）")
+
+    # 6b. 字段级与表级一致性：字段级的 source_schema/source_table 应在实体级定义范围内
+    entity_tables = {
+        ((st.get("source_schema") or "").strip(), (st.get("source_table") or "").strip())
+        for st in source_tables
+    }
+    for fm in field_mappings:
+        fm_sch = (fm.get("source_schema") or "").strip()
+        fm_tbl = (fm.get("source_table") or "").strip()
+        if fm_sch and fm_tbl and (fm_sch, fm_tbl) not in entity_tables:
+            result.add_error(
+                f"字段 {fm.get('target_column', '?')} 的来源表 {fm_sch}.{fm_tbl} "
+                f"在实体级 mapping 中未定义"
+            )
+
+    # 6c. source_column 不能是中文（应是英文物理列名，中文是另一个字段"源表字段中文名"）
+    import re as _re
+    for fm in field_mappings:
+        sc = (fm.get("source_column") or "").strip()
+        if sc and _re.search(r"[\u4e00-\u9fff]", sc):
+            result.add_error(
+                f"字段 {fm.get('target_column', '?')} 的 source_column '{sc}' 含中文"
+                f"（应为英文物理列名，中文列名应在'源表字段中文名'列）"
+            )
 
     # 7. 映射表达式模糊术语检查
     biz_terms = ["等等", "之类", "相关", "之类的", "等等等"]
@@ -358,34 +392,26 @@ def _check_db_schema(
         return
 
     total_fields = sum(len(cols) for cols in needed.values())
+    all_tables = list(needed.keys())
 
-    # ── 读缓存 ──
-    cache: dict = {"cached_at": "", "tables": {}}
-    cache_tables: dict[str, set[str]] = {}  # {"schema.table": {cols}}
+    # ── 缓存有效就用（整体），无效就连库整体查所有表 ──
+    # 缓存粒度 = 本次用到的全部来源表；不做按表补缺（同用例来源表固定，整体刷新更简单）
+    found: dict[tuple[str, str], set[str]] = {}
+    cache_used = False
+
     if cache_path and not refresh_schema:
         cache = _load_schema_cache(cache_path)
-        expired = _is_cache_expired(cache.get("cached_at", ""))
-        raw_tables = cache.get("tables", {})
-        for full_name, cols in raw_tables.items():
-            cache_tables[full_name] = {c.lower() for c in cols}
-        # 缓存全量过期则视为空（全都要重捞）
-        if expired:
-            cache_tables = {}
+        if not _is_cache_expired(cache.get("cached_at", ""), ttl_hours=72):
+            # 缓存未过期：用缓存里的表结构（本次用到的表都应在缓存里）
+            raw_tables = cache.get("tables", {})
+            for (sch, tbl) in all_tables:
+                key = f"{sch.lower()}.{tbl.lower()}"
+                if key in raw_tables:
+                    found[(sch.lower(), tbl.lower())] = {c.lower() for c in raw_tables[key]}
+            cache_used = True
 
-    # 区分缓存命中 vs 需连库捞的
-    tables_to_fetch: list[tuple[str, str]] = []
-    found: dict[tuple[str, str], set[str]] = {}
-    for (sch, tbl) in needed:
-        key = f"{sch.lower()}.{tbl.lower()}"
-        if key in cache_tables:
-            found[(sch.lower(), tbl.lower())] = cache_tables[key]
-        else:
-            tables_to_fetch.append((sch, tbl))
-
-    cache_hits = len(needed) - len(tables_to_fetch)
-
-    # ── 缓存未命中的表才连库 ──
-    if tables_to_fetch:
+    # ── 缓存无效（过期/不存在/强制刷新）→ 连库整体查所有表 ──
+    if not cache_used:
         target = rs_input.get("meta", {}).get("target", {})
         target_schema = target.get("f_table", {}).get("schema", "") or target.get("schema", "")
         try:
@@ -397,31 +423,24 @@ def _check_db_schema(
 
             executor = create_executor_for_schema(target_schema)
             if not executor.test_connection():
-                # 连不上但有缓存命中 → 用缓存结果；无缓存命中 → 跳过
-                if cache_hits == 0:
-                    return
-            else:
-                # 批量查（UNION ALL，一次往返查全部缺失表，实测 DWS 最快）
-                fetched = _fetch_tables_schema_batch(executor, tables_to_fetch)
+                return  # 连不上库，静默跳过
+            # UNION ALL 一条 SQL 查全部表
+            fetched = _fetch_tables_schema_batch(executor, all_tables)
+            executor.close()
+            found = fetched
+            # 写缓存
+            if cache_path:
+                cache_new = {"cached_at": "", "tables": {}}
                 for (sch, tbl), cols in fetched.items():
-                    found[(sch, tbl)] = cols
-                    # 追加到缓存
-                    cache.setdefault("tables", {})[f"{sch}.{tbl}"] = sorted(cols)
-                executor.close()
-                # 写回缓存
-                if cache_path:
-                    _save_schema_cache(cache_path, cache)
+                    cache_new["tables"][f"{sch}.{tbl}"] = sorted(cols)
+                _save_schema_cache(cache_path, cache_new)
         except Exception:
-            # 连不上库：有缓存命中就用缓存，无则跳过
-            if cache_hits == 0:
-                return
+            return  # 连不上库，静默跳过
 
-    # ── 比对（纯本地，秒级）──
-    fetch_n = len(tables_to_fetch)
-    hit_n = cache_hits
+    # ── 比对（纯本地）──
     result.add_pass(
-        f"DB 校验: 校验 {len(needed)} 张表 / {total_fields} 个字段"
-        f"（缓存命中 {hit_n}，连库刷新 {fetch_n}）"
+        f"DB 校验: 校验 {len(all_tables)} 张表 / {total_fields} 个字段"
+        f"（{'缓存命中' if cache_used else '连库刷新'}）"
     )
 
     for (sch, tbl), cols_map in needed.items():
