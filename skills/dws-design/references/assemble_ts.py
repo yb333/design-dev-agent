@@ -1026,10 +1026,14 @@ def render_md(ts):
                 lines.append(f"| 增量字段 | `{inc['key']}` |")
             if inc.get("filter"):
                 lines.append(f"| 增量条件 | `{inc['filter']}` |")
+            if inc.get("init_filter"):
+                lines.append(f"| 初始化条件 | `{inc['init_filter']}` |")
             if inc.get("init_time_range"):
                 lines.append(f"| 初始化时间范围 | {inc['init_time_range']} |")
             if inc.get("init_strategy"):
                 lines.append(f"| 初始化策略 | {inc['init_strategy']} |")
+            if inc.get("init_mode"):
+                lines.append(f"| 初始化方式 | **{inc['init_mode']}** |")
             lines.append("")
 
     # §9 分区设计（条件出现：只有有分区的表才显示）

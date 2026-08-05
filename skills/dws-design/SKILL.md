@@ -95,6 +95,7 @@ description: >-
 - `incremental.init_filter`：初始化过滤条件（全量用 `1=1`，或限定范围）
 - `incremental.init_time_range`：初始化时间范围（RS L07）
 - `incremental.init_strategy`：初始化策略
+- `incremental.init_mode`：★ 初始化实现方式（`参数控制` | `独立规则组`），详见 design-guide §5.2
 
 **依赖类型**（每个上游依赖选 dep_type）：
 | 类型 | 含义 | 用在哪 |
