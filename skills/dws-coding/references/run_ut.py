@@ -136,17 +136,20 @@ def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
 
 
 def read_select(select_dir: Path, rule_code: str) -> str:
-    """读 coder 产的 SELECT 文件"""
-    # 文件名约定：{rule_code}.sql
+    """读 coder 产的 SELECT 文件。
+
+    文件名约定：{rule_code}.sql 或 {rule_code}_描述_loadmode.sql
+    确定文件名优先，不以 glob 模糊匹配。
+    """
+    # 尝试精确文件名
     path = select_dir / f"{rule_code}.sql"
-    if not path.exists():
-        # 尝试其他命名
-        candidates = list(select_dir.glob(f"*{rule_code}*.sql"))
-        if candidates:
-            path = candidates[0]
-        else:
-            return ""
-    return path.read_text(encoding="utf-8")
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    # coder 可能产出了 {rule_code}_描述.sql 格式，用前缀确定匹配（不用两侧通配）
+    candidates = sorted(select_dir.glob(f"{rule_code}_*.sql"))
+    if candidates:
+        return candidates[0].read_text(encoding="utf-8")
+    return ""
 
 
 def run_ut_check(executor, target_table: str, business_key: list, audit_fields: dict) -> list[dict]:

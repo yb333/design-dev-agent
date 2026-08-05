@@ -152,6 +152,7 @@ dws-run designer path    # 输出 skill 目录
 - **提交规范**：`feat/fix/refactor/docs: 描述`（中文或英文）
 - **路径约定**：所有产出在 `docs/output/{target_table}/` 下（运行时约定，skill 硬编码）
 - **架构演化**：涉及架构理念变更时，遵循演化流程（参考客户端仓的 evolution-process.md）
+- **禁止 glob 通配匹配文件**：文件名由生成脚本的命名规则确定，查找文件时必须用确定的文件名拼接（如 `f"create_table_{table}.sql"`），不用 `glob("*{table}*.sql")` 模糊匹配。文件名约定变了就改查找代码，不靠通配兜底
 
 ---
 
