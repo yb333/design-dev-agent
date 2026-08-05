@@ -295,7 +295,10 @@ class TestRenderDataFlowMermaid:
             "data_flow": {"schedule_groups": [{"sequence": 1, "rules": ["R0001"]}]},
         }
         result = render_data_flow_mermaid(ts)
-        assert "等5张" in result
+        # 维表用 subgraph 框住，5 个维表都在里面（不再截断为"等N张"）
+        assert "subgraph dims" in result
+        assert "dim_dim_a_f" in result
+        assert "dim_dim_e_f" in result
 
 
 # ============================================================

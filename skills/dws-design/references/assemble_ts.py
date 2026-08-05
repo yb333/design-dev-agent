@@ -118,17 +118,33 @@ def _sanitize_node_id(text: str) -> str:
     return re.sub(r'[^A-Za-z0-9_]', '_', text or "")
 
 
+def _short_desc_for_mermaid(text: str, limit: int = 20) -> str:
+    """截短设计意图用于 mermaid 节点 label（取第一个逗号/句号前，限长度）。"""
+    if not text:
+        return ""
+    for sep in ["，", "。", ",", ".", "；"]:
+        if sep in text:
+            text = text.split(sep)[0]
+            break
+    return text[:limit] + "…" if len(text) > limit else text
+
+
 def render_data_flow_mermaid(ts: dict) -> str:
     """从 ts.json 的 rules + data_flow 生成 mermaid flowchart TD 代码块。
 
     布局：上到下（TD），按 schedule_groups 分层。
     节点：表（源表/中间表/目标表/视图）+ 步骤（规则）混合。
-    维表不画节点，降级为步骤标注。
+    维表用 subgraph 框住，不画成主流程节点。
     无规则时返回空串。
     """
     rules = ts.get("rules", {})
     if not rules:
         return ""
+
+    # 从 meta.source_tables 建表名→中文名映射
+    meta_sources = {}
+    for st in ts.get("meta", {}).get("source_tables", []):
+        meta_sources[f"{st.get('schema','')}.{st.get('table','')}"] = st.get("table_cn", "")
 
     df = ts.get("data_flow", {})
     schedule_groups = df.get("schedule_groups", [])
@@ -143,6 +159,7 @@ def render_data_flow_mermaid(ts: dict) -> str:
 
     # 节点ID → className 的映射（末尾用 class 语句批量赋类，兼容 Typora）
     node_classes = {}  # {node_id: class_name}
+    all_dims = []  # 全局维表收集（去重），用于 subgraph
 
     # --- 收集源表节点（全局去重，跨规则共享） ---
     declared_sources = {}  # source_table_key → {schema, table, node_id}
@@ -172,13 +189,11 @@ def render_data_flow_mermaid(ts: dict) -> str:
             if not rule:
                 continue
 
-            rule_name = rule.get("rule_name", "")
             target = rule.get("target_table", "")
             is_view = rule.get("is_view_step", False)
             step_id = "step_" + _sanitize_node_id(code)
 
             # 分类该规则的 source_tables
-            dim_names = []      # 维表名（标注用）
             fact_sources = []   # 非维表（画节点）
 
             for st in rule.get("source_tables", []):
@@ -187,29 +202,35 @@ def render_data_flow_mermaid(ts: dict) -> str:
                 if not tbl:
                     continue
                 if is_dim_table(sch, tbl):
-                    dim_names.append(tbl)
+                    # 维表收集到全局列表（去重），不画主流程节点
+                    dim_key = f"{sch}.{tbl}"
+                    if dim_key not in [d["key"] for d in all_dims]:
+                        dim_cn = meta_sources.get(dim_key, "")
+                        all_dims.append({"key": dim_key, "table": tbl, "schema": sch, "cn": dim_cn})
                 else:
                     fact_sources.append((sch, tbl))
 
-            # 步骤节点（含规则名 + 维表标注），不内联 :::，用 class 语句赋类
+            # 步骤节点：用设计意图截短（不用维表标注）
             step_label = f'{code}'
-            if rule_name:
-                step_label += f' / {rule_name}'
-            if dim_names:
-                dim_text = ", ".join(dim_names[:4])
-                if len(dim_names) > 4:
-                    dim_text += f" 等{len(dim_names)}张"
-                step_label += f'<br/>关联维表: {dim_text}'
+            intent = rule.get("design_intent", "") or rule.get("rule_name", "")
+            if intent:
+                step_label += f' / {_short_desc_for_mermaid(intent)}'
             lines.append(f'  {step_id}("{step_label}")')
             node_classes[step_id] = "step"
 
-            # 画非维表源表节点 + 源表→步骤的边
+            # 画非维表源表节点（schema.表名 + 中文名）+ 源表→步骤的边
             for sch, tbl in fact_sources:
                 src_info = declared_sources.get(f"{sch}.{tbl}")
                 if src_info:
                     src_id = src_info["node_id"]
                     if not src_info.get("_drawn"):
-                        lines.append(f'  {src_id}["{tbl}<br/><small>{sch}</small>"]')
+                        cn = meta_sources.get(f"{sch}.{tbl}", "")
+                        label = f'{tbl}'
+                        if sch:
+                            label = f'{sch}.{tbl}'
+                        if cn:
+                            label += f'<br/>{cn}'
+                        lines.append(f'  {src_id}["{label}"]')
                         src_info["_drawn"] = True
                         node_classes[src_id] = "source"
                     edges.append((src_id, step_id, False))
@@ -252,6 +273,20 @@ def render_data_flow_mermaid(ts: dict) -> str:
     lines.append('  classDef intermediate fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#334155,stroke-dasharray:5 3')
     lines.append('  classDef target fill:#dcfce7,stroke:#22c55e,stroke-width:2.5px,color:#166534')
     lines.append('  classDef view fill:#e0e7ff,stroke:#6366f1,stroke-width:1.5px,color:#3730a3,stroke-dasharray:5 3')
+    lines.append('  classDef dim fill:#fef3c7,stroke:#f59e0b,stroke-width:1px,color:#78350f')
+
+    # --- 维表 subgraph（框住所有维表，视觉上跟主流程分开）---
+    if all_dims:
+        lines.append('')
+        lines.append('  subgraph dims["关联维表"]')
+        for d in all_dims:
+            dim_id = "dim_" + _sanitize_node_id(d["table"])
+            label = d["table"]
+            if d["cn"]:
+                label += f'<br/>{d["cn"]}'
+            lines.append(f'    {dim_id}["{label}"]')
+            node_classes[dim_id] = "dim"
+        lines.append('  end')
 
     # --- class 语句批量赋类（兼容 Typora，不用 ::: 内联）---
     # 按 class_name 分组节点
@@ -401,6 +436,7 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "is_view_step": rule_dec.get("is_view_step", False),
         "design_intent": rule_dec.get("design_intent", ""),
         "load_mode": rule_dec.get("load_mode", "truncate_table"),
+        "incremental": rule_dec.get("incremental", {}),  # 增量设计（key/filter/init_time_range/init_strategy）
         "source_tables": rule_sources,
         "ctes": rule_dec.get("ctes", []),
         "grain": rule_dec.get("grain", {}),
@@ -676,11 +712,7 @@ def build_design(decisions, rs_input):
 
     return {
         "complexity_analysis": {
-            "join_count": comp.get("join_count", 0),
-            "has_grain_change": comp.get("has_grain_change", False),
-            "grain_change_detail": comp.get("grain_change_detail", ""),
-            "multi_step_fields": comp.get("multi_step_fields", 0),
-            "aggregation_after_join": comp.get("aggregation_after_join", False),
+            "design_approach": comp.get("design_approach", ""),
             "segmentation_decision": comp.get("segmentation_decision", ""),
             "segmentation_reason": comp.get("segmentation_reason", ""),
         },
@@ -843,26 +875,18 @@ def render_md(ts):
     lines.append("---")
     lines.append("")
 
-    # §3 复杂度分析
-    lines.append("## 3. 复杂度分析与分段决策")
+    # §3 设计思路（designer 写的自然语言，含设计考虑的指标 + 整体策略）
+    lines.append("## 3. 设计思路")
     lines.append("")
-    comp = design["complexity_analysis"]
-    lines.append("| 因素 | 值 | 阈值 |")
-    lines.append("|------|-----|------|")
-    lines.append(f"| JOIN 表数量 | {comp['join_count']} | >12 触发分段 |")
-    grain_label = "有" if comp['has_grain_change'] else "无"
-    lines.append(f"| 粒度变化 | {grain_label} | 有即评估分段 |")
-    lines.append(f"| 多步骤加工字段 | {comp['multi_step_fields']} | ≥5 触发分段 |")
-    lines.append(f"| 聚合后关联 | {'是' if comp['aggregation_after_join'] else '否'} | 是即评估分段 |")
-    lines.append("")
-    if comp.get("grain_change_detail"):
-        lines.append(f"> 粒度变化说明: {comp['grain_change_detail']}")
+    comp = design.get("complexity_analysis", {})
+    # design_approach 是 designer 写的设计思路（自然语言，自然引用了 JOIN 数/聚合字段等指标）
+    approach = comp.get("design_approach", "") or comp.get("segmentation_reason", "")
+    if approach:
+        lines.append(f"> {approach}")
         lines.append("")
     seg = comp.get("segmentation_decision", "")
-    lines.append(f"**分段结论**: **{seg}**")
-    lines.append("")
-    if comp.get("segmentation_reason"):
-        lines.append(f"> {comp['segmentation_reason']}")
+    if seg:
+        lines.append(f"**分段结论**: **{seg}**")
         lines.append("")
     lines.append("---")
     lines.append("")
@@ -978,6 +1002,51 @@ def render_md(ts):
     else:
         lines.append("*(本表无 DQ 要求)*")
     lines.append("")
+
+    # §8 增量设计（条件出现：只有有增量规则的资产才显示）
+    incremental_rules = {
+        code: r for code, r in rules.items()
+        if r.get("load_mode", "truncate_table") != "truncate_table" and r.get("incremental")
+    }
+    if incremental_rules:
+        lines.append("---")
+        lines.append("")
+        lines.append("## 8. 增量设计")
+        lines.append("")
+        lines.append("> 本资产含增量规则，以下规则采用增量写入策略。")
+        lines.append("")
+        for code, r in incremental_rules.items():
+            inc = r.get("incremental", {})
+            lines.append(f"### {code} - {r.get('rule_name', '')}")
+            lines.append("")
+            lines.append("| 项目 | 内容 |")
+            lines.append("|------|------|")
+            lines.append(f"| 写入方式 | {r.get('load_mode', '-')} |")
+            if inc.get("key"):
+                lines.append(f"| 增量字段 | `{inc['key']}` |")
+            if inc.get("filter"):
+                lines.append(f"| 增量条件 | `{inc['filter']}` |")
+            if inc.get("init_time_range"):
+                lines.append(f"| 初始化时间范围 | {inc['init_time_range']} |")
+            if inc.get("init_strategy"):
+                lines.append(f"| 初始化策略 | {inc['init_strategy']} |")
+            lines.append("")
+
+    # §9 分区设计（条件出现：只有有分区的表才显示）
+    partition_tables = {
+        tname: t for tname, t in tables.items()
+        if t.get("partition")
+    }
+    if partition_tables:
+        lines.append("---")
+        lines.append("")
+        lines.append("## 9. 分区设计")
+        lines.append("")
+        lines.append("| 表名 | 分区表达式 |")
+        lines.append("|------|-----------|")
+        for tname, t in partition_tables.items():
+            lines.append(f"| `{tname}` | `{t['partition']}` |")
+        lines.append("")
 
     return "\n".join(lines)
 
