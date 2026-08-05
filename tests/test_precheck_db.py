@@ -71,8 +71,8 @@ def _make_mock_executor(table_columns: dict):
     """构造 mock executor。
 
     table_columns: {(schema, table): [col1, col2, ...]} 表示库里实际存在的列。
-    适配 pg_catalog 查询：一条 SQL 带 a.attname IN (...)，只查用到的字段。
-    mock 解析 SQL 里请求的字段，返回库里确实存在的那些。
+    适配 pg_catalog 逐表查询：每张表一条 SQL（WHERE n.nspname=... AND c.relname=...），
+    返回该表全部列（不再 attname IN，比对在 Python 端做）。
     """
     executor = MagicMock()
     executor.test_connection.return_value = True
@@ -84,17 +84,9 @@ def _make_mock_executor(table_columns: dict):
         rows = []
         for (sch, tbl), existing_cols in table_columns.items():
             if f"n.nspname = '{sch.lower()}'" in sql and f"c.relname = '{tbl.lower()}'" in sql:
-                # 从 SQL 里解析请求的字段（a.attname IN (...) 段）
-                import re
-                m = re.search(r"a\.attname IN \(([^)]+)\)", sql)
-                if m:
-                    requested = [c.strip().strip("'") for c in m.group(1).split(",")]
-                else:
-                    requested = existing_cols
-                # 只返回库里确实存在的 + 本次请求的
-                for c in requested:
-                    if c.lower() in [x.lower() for x in existing_cols]:
-                        rows.append({"table_schema": sch, "table_name": tbl, "column_name": c})
+                # 逐表查：返回该表全部列
+                for c in existing_cols:
+                    rows.append({"column_name": c})
         result.rows = rows
         return result
 
@@ -253,7 +245,7 @@ class TestCheckDbSchema:
         executor = _make_mock_executor({
             ("ods", "ods_test_f"): ["id", "name", "amount", "extra_col"]
         })
-        # 拦截 SQL 看是否带字段过滤
+        # 拦截 SQL
         orig_execute = executor.execute.side_effect
         def capture_execute(sql):
             captured_sql.append(sql)
@@ -270,12 +262,8 @@ class TestCheckDbSchema:
         # SQL 应走 pg_catalog（不用慢的 information_schema）
         assert "pg_attribute" in sql_text, f"应用 pg_catalog 系统表，实际: {sql_text}"
         assert "information_schema" not in sql_text, "不应再用 information_schema（慢）"
-        # SQL 应含 a.attname IN (...) 字段过滤
-        assert "a.attname IN" in sql_text, \
-            f"应只查用到的字段（带 a.attname IN），实际 SQL: {sql_text}"
-        assert "'id'" in sql_text, "应用到的字段 id 应在查询里"
-        # 不应把表里其他字段（name/amount/extra_col）都查出来
-        assert "extra_col" not in sql_text, "不应查未用到的字段"
+        # 逐表查：SQL 带精确表名（c.relname），不做 OR 拼大查询
+        assert "c.relname = 'ods_test_f'" in sql_text, f"应逐表查精确表名: {sql_text}"
         # 校验通过（id 确实存在）
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == []
@@ -324,3 +312,109 @@ class TestCheckDbSchema:
         # DB 校验应执行（warning 不阻断）
         assert executor_called["n"] == 1, \
             f"只有 warning 时应照常连库，实际连了 {executor_called['n']} 次"
+
+
+class TestSchemaCache:
+    """表结构缓存测试：命中优先，过期/缺失才连库。"""
+
+    def test_cache_hit_no_db_connection(self, tmp_path, monkeypatch):
+        """缓存命中（未过期）→ 不连库，纯本地对比。"""
+        cache_path = tmp_path / "schema_cache.json"
+        # 预置缓存：ods.ods_test_f 有 id 列
+        import json
+        cache_path.write_text(json.dumps({
+            "cached_at": "2099-01-01T00:00:00",  # 未来时间，未过期
+            "tables": {"ods.ods_test_f": ["id", "name"]},
+        }), encoding="utf-8")
+
+        # executor 不应被调用
+        executor_called = {"n": 0}
+        def boom(schema, config_path=""):
+            executor_called["n"] += 1
+            return _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, cache_path)
+
+        db_errors = [e for e in result.errors if "DB 校验" in e]
+        assert db_errors == [], f"缓存命中应校验通过: {db_errors}"
+        assert executor_called["n"] == 0, "缓存命中不应连库"
+
+    def test_cache_miss_fetches_from_db(self, tmp_path, monkeypatch):
+        """缓存缺失某表 → 连库捞该表，追加缓存。"""
+        cache_path = tmp_path / "schema_cache.json"
+        import json
+        # 缓存有 table_a，没有 ods_test_f
+        cache_path.write_text(json.dumps({
+            "cached_at": "2099-01-01T00:00:00",
+            "tables": {"ods.table_a": ["x"]},
+        }), encoding="utf-8")
+
+        executor_called = {"n": 0}
+        def tracking(schema, config_path=""):
+            executor_called["n"] += 1
+            return _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", tracking)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, cache_path)
+
+        assert executor_called["n"] == 1, "缓存缺失应连库捞一次"
+        db_errors = [e for e in result.errors if "DB 校验" in e]
+        assert db_errors == [], f"捞到后应校验通过: {db_errors}"
+        # 缓存应被更新（追加了 ods_test_f）
+        updated = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "ods.ods_test_f" in updated["tables"]
+
+    def test_cache_expired_refetches(self, tmp_path, monkeypatch):
+        """缓存过期（cached_at 过去很久）→ 重新连库捞。"""
+        cache_path = tmp_path / "schema_cache.json"
+        import json
+        cache_path.write_text(json.dumps({
+            "cached_at": "2020-01-01T00:00:00",  # 很久以前，已过期
+            "tables": {"ods.ods_test_f": ["id"]},
+        }), encoding="utf-8")
+
+        executor_called = {"n": 0}
+        def tracking(schema, config_path=""):
+            executor_called["n"] += 1
+            return _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", tracking)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, cache_path)
+
+        assert executor_called["n"] == 1, "缓存过期应重新连库"
+
+    def test_refresh_schema_forces_fetch(self, tmp_path, monkeypatch):
+        """--refresh-schema 强制连库，即使缓存有效。"""
+        cache_path = tmp_path / "schema_cache.json"
+        import json
+        cache_path.write_text(json.dumps({
+            "cached_at": "2099-01-01T00:00:00",  # 未过期
+            "tables": {"ods.ods_test_f": ["id"]},
+        }), encoding="utf-8")
+
+        executor_called = {"n": 0}
+        def tracking(schema, config_path=""):
+            executor_called["n"] += 1
+            return _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", tracking)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, cache_path, refresh_schema=True)
+
+        assert executor_called["n"] == 1, "refresh_schema=True 应强制连库"
+
+    def test_no_cache_no_db_skips_silently(self, tmp_path, monkeypatch):
+        """无缓存 + 连不上库 → 静默跳过。"""
+        def boom(schema, config_path=""):
+            raise ImportError("psycopg2 未安装")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, None)  # 无缓存
+
+        db_errors = [e for e in result.errors if "DB 校验" in e]
+        assert db_errors == [], "无缓存+连不上库应静默跳过"

@@ -59,8 +59,18 @@ class PrecheckResult:
 VALID_RULES = {"直接复制", "数据加工", "赋值", "序列"}
 
 
-def precheck(rs_input: dict[str, Any]) -> PrecheckResult:
-    """预检 rs_input.json 完整性。"""
+def precheck(
+    rs_input: dict[str, Any],
+    cache_path: Path | None = None,
+    refresh_schema: bool = False,
+) -> PrecheckResult:
+    """预检 rs_input.json 完整性。
+
+    Args:
+        rs_input: rs_input.json 的 dict。
+        cache_path: 表结构缓存路径（schema_cache.json），None 则不缓存。
+        refresh_schema: 强制连库刷新缓存（忽略过期判断）。
+    """
     result = PrecheckResult()
 
     # 1. 目标表基本信息
@@ -161,10 +171,11 @@ def precheck(rs_input: dict[str, Any]) -> PrecheckResult:
     # 8. 审计字段校验
     _check_audit_fields(field_mappings, result)
 
-    # 9. DB 校验：连得上库时，校验来源表/字段在库里的真实性（连不上则静默跳过）
+    # 9. DB 校验：连得上库或缓存可用时，校验来源表/字段真实性（连不上则静默跳过）
     # ★ 短路：静态检查已有 error 就不进 DB 校验（schema/字段都没了，查库白费几百毫秒建连）
+    # 缓存命中时不需要连库，不受"连库白费"影响，但仍遵守短路（静态错了先解决静态）
     if not result.errors:
-        _check_db_schema(rs_input, result)
+        _check_db_schema(rs_input, result, cache_path, refresh_schema)
 
     return result
 
@@ -226,35 +237,79 @@ def _check_audit_fields(field_mappings: list, result: PrecheckResult):
                 )
 
 
-def _check_db_schema(rs_input: dict[str, Any], result: PrecheckResult):
+def _load_schema_cache(cache_path: Path) -> dict:
+    """读表结构缓存。返回 {cached_at, tables: {schema.table: {col: type}}}。"""
+    if not cache_path.exists():
+        return {"cached_at": "", "tables": {}}
+    try:
+        import json
+
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"cached_at": "", "tables": {}}
+
+
+def _save_schema_cache(cache_path: Path, cache: dict):
+    """写表结构缓存。"""
+    try:
+        import json
+        from datetime import datetime
+
+        cache["cached_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # 缓存写失败不影响校验
+
+
+def _is_cache_expired(cached_at: str, ttl_hours: int = 24) -> bool:
+    """缓存是否过期。"""
+    if not cached_at:
+        return True
+    try:
+        from datetime import datetime, timedelta
+
+        cached_time = datetime.strptime(cached_at, "%Y-%m-%dT%H:%M:%S")
+        return datetime.now() - cached_time > timedelta(hours=ttl_hours)
+    except Exception:
+        return True
+
+
+def _fetch_table_schema(executor, schema: str, table: str) -> set[str]:
+    """连库查单张表的全部列名（pg_catalog，走索引，逐表查不做 OR 拼接）。
+
+    返回 {column_name_lower}，表不存在/无权限返回空集。
+    """
+    sql = (
+        "SELECT a.attname AS column_name "
+        "FROM pg_attribute a "
+        "JOIN pg_class c ON a.attrelid = c.oid "
+        "JOIN pg_namespace n ON c.relnamespace = n.oid "
+        f"WHERE n.nspname = '{schema.lower()}' AND c.relname = '{table.lower()}' "
+        "AND a.attnum > 0 AND NOT a.attisdropped"
+    )
+    r = executor.execute(sql)
+    if not r.success or not r.rows:
+        return set()
+    return {row["column_name"].lower() for row in r.rows}
+
+
+def _check_db_schema(
+    rs_input: dict[str, Any],
+    result: PrecheckResult,
+    cache_path: Path | None = None,
+    refresh_schema: bool = False,
+):
     """DB 校验：连得上库时，校验来源表/字段在库里的真实性。
 
-    能连上库 → 表/字段不存在报 error（阻断设计，让人改 mapping）。
-    连不上库（无配置/无依赖/超时）→ 静默跳过（不阻断，保持纯静态检查的兼容）。
+    表结构本地缓存优先（schema_cache.json）：命中且未过期 → 纯本地对比秒级；
+    缺失/过期/强制刷新 → 只连库捞缺失的表，逐表查（走索引），追加缓存。
+
+    能连上库或缓存可用 → 表/字段不存在报 error（阻断设计）。
+    连不上库且无缓存 → 静默跳过（不阻断）。
 
     账号选用逻辑与 UT 一致：按目标 schema 查 schema_mapping 选源。
     """
-    # 目标 schema 用来按 schema_mapping 选数据源
-    target = rs_input.get("meta", {}).get("target", {})
-    target_schema = target.get("f_table", {}).get("schema", "") or target.get("schema", "")
-
-    # 尝试连库——任何连接问题都静默跳过（连不上库不阻断设计）
-    try:
-        sys.path.insert(
-            0,
-            str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"),
-        )
-        from dws_db import create_executor_for_schema
-        executor = create_executor_for_schema(target_schema)
-        # 实测连接，连不上也跳过
-        if not executor.test_connection():
-            return
-    except Exception:
-        # 无配置/无 psycopg2/无数据源/网络不通 —— 统统静默跳过
-        return
-
     # 从 field_mappings 收集"要用到的来源字段"：{(schema, table): {column: target_field}}
-    # 只查用到的字段，不查全表所有列（表可能几百列，我们只用几个）
     # 跳过纯派生行（赋值/序列、source_column 空）和审计字段——这些不查源表
     field_mappings = rs_input.get("field_mappings", [])
     # {(schema, table): {source_column_lower: (原source_column, target_field)}}
@@ -262,56 +317,87 @@ def _check_db_schema(rs_input: dict[str, Any], result: PrecheckResult):
     for fm in field_mappings:
         source_column = (fm.get("source_column") or "").strip()
         if not source_column:
-            continue  # 纯派生行不查源表
+            continue
         if _is_audit_field(fm):
-            continue  # 审计字段不查源表
+            continue
         schema = (fm.get("source_schema") or "").strip()
         table = (fm.get("source_table") or "").strip()
         if not schema or not table:
-            continue  # 缺 schema/table 属静态检查范畴
+            continue
         needed.setdefault((schema, table), {})[source_column.lower()] = (
             source_column, fm.get("target_column", "?")
         )
 
     if not needed:
-        executor.close()
         return
 
     total_fields = sum(len(cols) for cols in needed.values())
-    result.add_pass(f"DB 校验: 已连库，校验 {len(needed)} 张表 / {total_fields} 个字段")
 
-    # 一条 SQL 只查用到的字段：用 pg_catalog 系统表（不走 information_schema，
-    # 后者在 DWS 上是跨全集群元数据的慢视图，会扫 pg_class×pg_attribute 笛卡尔展开）。
-    # pg_attribute 走索引，直接定位到目标表的列，毫秒级。
-    or_clauses = []
-    for (sch, tbl), cols in needed.items():
-        col_list = ", ".join(f"'{c.lower()}'" for c in cols.keys())
-        or_clauses.append(
-            f"(n.nspname = '{sch.lower()}' AND c.relname = '{tbl.lower()}' "
-            f"AND a.attname IN ({col_list}))"
-        )
-    sql = (
-        "SELECT n.nspname AS table_schema, c.relname AS table_name, a.attname AS column_name "
-        "FROM pg_attribute a "
-        "JOIN pg_class c ON a.attrelid = c.oid "
-        "JOIN pg_namespace n ON c.relnamespace = n.oid "
-        "WHERE a.attnum > 0 AND NOT a.attisdropped AND ("
-        + " OR ".join(or_clauses)
-        + ")"
-    )
-    r = executor.execute(sql)
-    executor.close()  # 查完释放连接
-    if not r.success:
-        result.add_error(f"DB 校验: 查询字段信息失败: {r.error}")
-        return
+    # ── 读缓存 ──
+    cache: dict = {"cached_at": "", "tables": {}}
+    cache_tables: dict[str, set[str]] = {}  # {"schema.table": {cols}}
+    if cache_path and not refresh_schema:
+        cache = _load_schema_cache(cache_path)
+        expired = _is_cache_expired(cache.get("cached_at", ""))
+        raw_tables = cache.get("tables", {})
+        for full_name, cols in raw_tables.items():
+            cache_tables[full_name] = {c.lower() for c in cols}
+        # 缓存全量过期则视为空（全都要重捞）
+        if expired:
+            cache_tables = {}
 
-    # 实际查到的字段（库里存在的）：{(schema, table): {column_lower}}
+    # 区分缓存命中 vs 需连库捞的
+    tables_to_fetch: list[tuple[str, str]] = []
     found: dict[tuple[str, str], set[str]] = {}
-    for row in r.rows:
-        key = (row["table_schema"].lower(), row["table_name"].lower())
-        found.setdefault(key, set()).add(row["column_name"].lower())
+    for (sch, tbl) in needed:
+        key = f"{sch.lower()}.{tbl.lower()}"
+        if key in cache_tables:
+            found[(sch.lower(), tbl.lower())] = cache_tables[key]
+        else:
+            tables_to_fetch.append((sch, tbl))
 
-    # 比对：期望用到的字段 - 库里查到的 = 不存在的字段
+    cache_hits = len(needed) - len(tables_to_fetch)
+
+    # ── 缓存未命中的表才连库 ──
+    if tables_to_fetch:
+        target = rs_input.get("meta", {}).get("target", {})
+        target_schema = target.get("f_table", {}).get("schema", "") or target.get("schema", "")
+        try:
+            sys.path.insert(
+                0,
+                str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"),
+            )
+            from dws_db import create_executor_for_schema
+
+            executor = create_executor_for_schema(target_schema)
+            if not executor.test_connection():
+                # 连不上但有缓存命中 → 用缓存结果；无缓存命中 → 跳过
+                if cache_hits == 0:
+                    return
+            else:
+                # 逐表查（每表一条 SQL，走精确索引，不做 OR 拼接）
+                for (sch, tbl) in tables_to_fetch:
+                    cols = _fetch_table_schema(executor, sch, tbl)
+                    found[(sch.lower(), tbl.lower())] = cols
+                    # 追加到缓存
+                    cache.setdefault("tables", {})[f"{sch.lower()}.{tbl.lower()}"] = sorted(cols)
+                executor.close()
+                # 写回缓存
+                if cache_path:
+                    _save_schema_cache(cache_path, cache)
+        except Exception:
+            # 连不上库：有缓存命中就用缓存，无则跳过
+            if cache_hits == 0:
+                return
+
+    # ── 比对（纯本地，秒级）──
+    fetch_n = len(tables_to_fetch)
+    hit_n = cache_hits
+    result.add_pass(
+        f"DB 校验: 校验 {len(needed)} 张表 / {total_fields} 个字段"
+        f"（缓存命中 {hit_n}，连库刷新 {fetch_n}）"
+    )
+
     for (sch, tbl), cols_map in needed.items():
         found_cols = found.get((sch.lower(), tbl.lower()), set())
         for col_lower, (orig_col, target_field) in cols_map.items():
@@ -325,6 +411,11 @@ def _check_db_schema(rs_input: dict[str, Any], result: PrecheckResult):
 def main():
     parser = argparse.ArgumentParser(description="输入预检: 校验 rs_input.json 完整性")
     parser.add_argument("--input", required=True, help="rs_input.json 路径")
+    parser.add_argument(
+        "--refresh-schema",
+        action="store_true",
+        help="强制连库刷新表结构缓存（忽略过期判断）",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -335,7 +426,10 @@ def main():
     import json
     rs_input = json.loads(input_path.read_text(encoding="utf-8"))
 
-    result = precheck(rs_input)
+    # 缓存放 rs_input.json 同目录（_internal/schema_cache.json）
+    cache_path = input_path.parent / "schema_cache.json"
+
+    result = precheck(rs_input, cache_path, args.refresh_schema)
     print(result.summary())
     sys.exit(result.return_code)
 
