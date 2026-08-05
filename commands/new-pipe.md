@@ -130,7 +130,7 @@ python DESIGN_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
 调脚本从 ts.json 自动生成 DDL：
 
 ```bash
-python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}/ddl
+python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}
 ```
 
 > **I 视图自动推导**：mapping 目标表写 `_i` 后缀（如 `dwb_xxx_i`），
