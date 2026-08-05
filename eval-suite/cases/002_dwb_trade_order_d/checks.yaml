@@ -1,0 +1,41 @@
+# 002_dwb_trade_order_d 评测断言配置
+# 基于 002 的真实产出（单表聚合案例）配置各层断言。
+case:
+  name: "002 订单汇总表全流程"
+  target_table: "dwb_trade_order_d"
+  rules_expected: [R0001]
+
+# ── 产物层（结构契约，用默认即可）──
+artifacts:
+  ts_json_top_keys: [version, meta, design, rules, data_flow]
+  audit_fields_count: 4
+  audit_field_names: [del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date]
+  each_rule_has_load_mode: true
+  ddl_rollback_paired: true
+  no_select_star_in_view: true
+
+# ── design 质量（判 designer）──
+design:
+  # business_key 应为 order_id + cust_id（订单+客户粒度）
+  business_key: [order_id, cust_id]
+  field_targets_cover_rs_input: true
+  field_targets_no_cross_rule_dup: true
+  load_mode_valid: true
+  join_safety_strategy_when_not_unique: true
+  segmentation_reason_when_segmented: true
+  # 单源表 ods_trade_order_di
+  source_tables_required: [ods.ods_trade_order_di]
+
+# ── code 质量（判 coder，按规则）──
+code:
+  R0001:
+    # SELECT 应输出这些字段
+    fields_required: [order_id, cust_id, total_amount, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date]
+    # 单源表（无 JOIN）
+    join_tables: [ods.ods_trade_order_di]
+    # GROUP BY 粒度 = order_id + cust_id
+    group_by_granularity: [order_id, cust_id]
+    where_must_contain_del_flag: false  # 单源表主表，无 del_flag 过滤需求
+    case_when_must_have_else: true
+    no_select_star: true
+    audit_fields_in_select: true
