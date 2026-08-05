@@ -1,0 +1,32 @@
+# T1 干净对照：mapping 主键正确标了 [order_id, line_id]
+# 正常期望：business_key == [order_id, line_id]（和埋雷版断言一致，防误报）
+case:
+  name: "T1 头行整合主键（干净对照）"
+  target_table: "dwb_order_line_wide_f"
+  rules_expected: [R0001]
+
+artifacts:
+  ts_json_top_keys: [version, meta, design, rules, data_flow]
+  audit_fields_count: 4
+  audit_field_names: [del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date]
+  each_rule_has_load_mode: true
+  ddl_rollback_paired: true
+  no_select_star_in_view: true
+
+design:
+  business_key: [order_id, line_id]
+  field_targets_cover_rs_input: true
+  field_targets_no_cross_rule_dup: true
+  load_mode_valid: true
+  join_safety_strategy_when_not_unique: true
+  segmentation_reason_when_segmented: true
+  source_tables_required: [ods.ods_order, ods.ods_order_line]
+
+code:
+  R0001:
+    fields_required: [order_id, cust_id, line_id, product_id, line_amt, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date]
+    join_tables: [ods.ods_order, ods.ods_order_line]
+    group_by_granularity: [order_id, line_id]
+    case_when_must_have_else: true
+    no_select_star: true
+    audit_fields_in_select: true

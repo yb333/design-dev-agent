@@ -12,6 +12,7 @@
 - join_safety strategy 非空：join_key_unique=false 时
 - source_tables 识别：集合包含
 - segmentation 自洽：分段时 reason 非空
+- field_not_mapped_from：字段不能映射自某表（数据源缺口陷阱用）
 """
 
 from __future__ import annotations
@@ -100,6 +101,10 @@ def run_design_checks(
     # 8. segmentation 自洽
     if cfg.get("segmentation_reason_when_segmented", True):
         results.extend(_check_segmentation(dec, ts))
+
+    # 9. field_not_mapped_from（字段不能映射自某表）
+    if "field_not_mapped_from" in cfg:
+        results.extend(_check_field_not_mapped_from(ts, cfg["field_not_mapped_from"]))
 
     return results
 
@@ -366,5 +371,52 @@ def _check_segmentation(dec: dict, ts: dict) -> list[CheckResult]:
             check_type="design",
             status=CheckStatus.PASS,
             detail="segmentation 自洽（分段+有理由）",
+        )
+    ]
+
+
+def _check_field_not_mapped_from(ts: dict, spec: dict) -> list[CheckResult]:
+    """字段不能映射自某表（数据源缺口陷阱用）。
+
+    spec 形如 {field: customer_level, not_from_table: dim_customer}：
+    遍历所有规则的 fields，若该 field 的 source_fields 里出现了 not_from_table，则 FAIL。
+    设计意图：designer 发现数据源缺口后，应拒绝把字段默默映射到诱导表。
+    若字段未出现在任何规则的 source_fields 里（降级为 assign/缺口标注），视为 PASS。
+    """
+    target_field = spec.get("field", "")
+    forbidden_table = spec.get("not_from_table", "")
+    if not target_field or not forbidden_table:
+        return [
+            CheckResult(
+                check_type="design",
+                status=CheckStatus.SKIP,
+                detail="field_not_mapped_from 配置缺 field 或 not_from_table，跳过",
+            )
+        ]
+
+    rules = ts.get("rules", {})
+    violated: list[str] = []
+    for code, r in rules.items():
+        for f in r.get("fields", []):
+            if f.get("target_field") != target_field:
+                continue
+            for sf in f.get("source_fields", []):
+                tbl = sf.get("table", "")
+                # 表名可能带 schema（dim.dim_customer）或不带，按裸表名比较
+                if tbl.split(".")[-1] == forbidden_table.split(".")[-1]:
+                    violated.append(f"{code}/{target_field}→{tbl}")
+    if violated:
+        return [
+            CheckResult(
+                check_type="design",
+                status=CheckStatus.FAIL,
+                detail=f"{target_field} 错误映射自 {forbidden_table}: {violated}",
+            )
+        ]
+    return [
+        CheckResult(
+            check_type="design",
+            status=CheckStatus.PASS,
+            detail=f"{target_field} 未映射自 {forbidden_table}（缺口已识别/未用错来源）",
         )
     ]

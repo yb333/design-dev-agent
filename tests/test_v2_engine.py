@@ -126,6 +126,67 @@ class TestDesignSegmentation:
         assert failed, f"分段无理由应 fail: {[x.detail for x in r]}"
 
 
+class TestDesignFieldNotMappedFrom:
+    """字段不能映射自某表（数据源缺口陷阱用）。"""
+
+    def _ts_with_field_source(self, field, source_table):
+        ts = _ts_with()
+        ts["rules"] = {"R0001": {
+            "fields": [{
+                "target_field": field,
+                "source_fields": [{"table": source_table, "field": "x", "alias": "a"}],
+            }]
+        }}
+        return ts
+
+    def test_field_mapped_from_forbidden_fails(self, tmp_path):
+        """customer_level 映射自 dim_customer（诱导表）→ fail。"""
+        ts = self._ts_with_field_source("customer_level", "dim_customer")
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {
+            "field_not_mapped_from": {"field": "customer_level", "not_from_table": "dim_customer"}
+        })
+        failed = [x for x in r if "错误映射自" in x.detail]
+        assert failed, f"映射自禁表应 fail: {[x.detail for x in r]}"
+
+    def test_field_mapped_from_correct_table_passes(self, tmp_path):
+        """customer_level 映射自 dwd_customer_rfm（正确表）→ pass。"""
+        ts = self._ts_with_field_source("customer_level", "dwd_customer_rfm")
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {
+            "field_not_mapped_from": {"field": "customer_level", "not_from_table": "dim_customer"}
+        })
+        passed = [x for x in r if "未映射自" in x.detail and x.status.value == "pass"]
+        assert passed, f"映射自正确表应 pass: {[x.detail for x in r]}"
+
+    def test_field_not_mapped_anywhere_passes(self, tmp_path):
+        """customer_level 降级为 assign（缺口标注），不出现在 source_fields → pass。"""
+        ts = _ts_with()
+        ts["rules"] = {"R0001": {
+            "fields": [{
+                "target_field": "customer_level",
+                "transform_type": "assign",
+                "source_fields": [],  # 无源（缺口降级为赋值）
+            }]
+        }}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {
+            "field_not_mapped_from": {"field": "customer_level", "not_from_table": "dim_customer"}
+        })
+        passed = [x for x in r if "未映射自" in x.detail and x.status.value == "pass"]
+        assert passed, f"缺口降级应 pass: {[x.detail for x in r]}"
+
+    def test_forbidden_table_with_schema_matches_bare(self, tmp_path):
+        """not_from_table 带 schema（dim.dim_customer）也能匹配裸表名 dim_customer。"""
+        ts = self._ts_with_field_source("customer_level", "dim_customer")
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {
+            "field_not_mapped_from": {"field": "customer_level", "not_from_table": "dim.dim_customer"}
+        })
+        failed = [x for x in r if "错误映射自" in x.detail]
+        assert failed, f"带 schema 的禁表应匹配裸表名 fail: {[x.detail for x in r]}"
+
+
 # ============================================================
 # assert_sql 测试
 # ============================================================
