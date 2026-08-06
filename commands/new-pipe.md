@@ -182,7 +182,7 @@ Task(
 **不要自己判断有没有数据源**——调脚本检查：
 
 ```bash
-python CODING_SCRIPTS/check_db.py
+python CODING_SCRIPTS/check_db.py --ts {deliver}/ts.json
 ```
 
 - 如果输出 `DB_OK` → 有数据源，继续跑 UT

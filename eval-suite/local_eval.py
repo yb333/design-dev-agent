@@ -284,8 +284,12 @@ def step_ut(report, deliver):
     与 new-pipe 对齐：先 check_db.py 判断有无数据源，有才跑 ut_precheck/ut_execute。
     无库时静默跳过（仅警告），不阻断流程——UT 是可选的环境依赖步骤。
     """
-    # 先判断有没有数据源
-    code, out = run_python(str(CODING_REFS / "check_db.py"), [], timeout=30)
+    # 先判断有没有数据源（按 target schema 选源，传 ts.json）
+    code, out = run_python(
+        str(CODING_REFS / "check_db.py"),
+        ["--ts", str(deliver / "ts.json")],
+        timeout=30,
+    )
     if code != 0 or "DB_OK" not in out:
         report.warn("执行验证(UT)", f"无数据源，跳过UT（{out.strip().splitlines()[-1] if out.strip() else 'check_db失败'}）")
         return True

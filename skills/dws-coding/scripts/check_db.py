@@ -5,19 +5,48 @@
 command 调本脚本决定要不要跑 UT，不给 AI 判断。
 AI 只看脚本输出（有/无数据源），不自己找配置文件。
 
+按 target schema 选数据源（和 precheck/UT 完全一致）：
+从 ts.json 的 meta.target.f_table.schema 取 schema，按 schema_mapping 选源。
+不兜底默认数据源——必须命中目标 schema 对应的源。
+
 用法:
-  python check_db.py
-  python check_db.py --source dws-dev
+  python check_db.py --ts {deliver}/ts.json
 
 退出码: 0=有数据源且能连接, 1=无数据源或连不上
 """
 
 import sys
 import os
+import argparse
 from pathlib import Path
 
 
 def main():
+    parser = argparse.ArgumentParser(description="数据库连接检查（按 target schema 选源）")
+    parser.add_argument("--ts", required=True, help="ts.json 路径（用来取 target schema）")
+    args = parser.parse_args()
+
+    # 从 ts.json 取 target schema
+    ts_path = Path(args.ts)
+    if not ts_path.exists():
+        print("NO_DB_SOURCE")
+        print(f"  原因: ts.json 不存在 ({ts_path})")
+        sys.exit(1)
+
+    import json
+    try:
+        ts = json.loads(ts_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print("NO_DB_SOURCE")
+        print(f"  原因: ts.json 解析失败: {e}")
+        sys.exit(1)
+
+    target_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
+    if not target_schema:
+        print("NO_DB_SOURCE")
+        print(f"  原因: ts.json 缺 target.f_table.schema（无法按 schema 选源）")
+        sys.exit(1)
+
     # 定位 db-sources.json（和 dws_db.py 同样的查找逻辑）
     config_path = os.environ.get(
         "DB_CONFIG",
@@ -31,7 +60,6 @@ def main():
         sys.exit(1)
 
     # 配置结构自检（不连库，提前发现配置错误）
-    import json
     try:
         raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
         sources = raw.get("sources", {})
@@ -63,22 +91,17 @@ def main():
         print(f"  原因: 配置文件 JSON 格式错误: {e}")
         sys.exit(1)
 
-    # 尝试连接——UT 要用 admin（DDL）和 etl（数据读写）两个账号，两个都得通
+    # 按 target schema 选源，测 admin + etl 两个账号（与 precheck/UT 选源逻辑一致）
     try:
-        # dws_db 在 design-dev-shared 公共库（与本 skill 平级）
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
-        from dws_db import create_executor
-        source = ""
-        for i, arg in enumerate(sys.argv):
-            if arg == "--source" and i + 1 < len(sys.argv):
-                source = sys.argv[i + 1]
+        from dws_db import create_executor_for_schema
 
-        # 测两个 role：admin（建表删表）和 etl（SELECT/INSERT），任一不通算失败
         failures = []
         source_name = ""
         for role in ("admin", "etl"):
-            executor = create_executor(config_path, source, role=role)
-            source_name = executor.get_current_source()
+            executor = create_executor_for_schema(target_schema, role=role)
+            if not source_name:
+                source_name = executor.get_current_source()
             r = executor.execute("SELECT 1")
             executor.close()
             if not r.success:
@@ -86,12 +109,12 @@ def main():
 
         if not failures:
             print("DB_OK")
-            print(f"  数据源: {source_name}")
+            print(f"  数据源: {source_name}（schema={target_schema}）")
             print(f"  账号: admin + etl 均通")
             sys.exit(0)
         else:
             print("NO_DB_SOURCE")
-            print(f"  数据源: {source_name}")
+            print(f"  数据源: {source_name}（schema={target_schema}）")
             for f in failures:
                 print(f"  原因: {f}")
             sys.exit(1)
@@ -107,3 +130,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
