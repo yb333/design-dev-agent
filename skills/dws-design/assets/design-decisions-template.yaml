@@ -34,10 +34,14 @@ rules:
     is_view_step: false                 # 是否视图步骤
     design_intent: ""                   # 该规则的设计意图（自然语言，一句话说清为什么这样拆）
     load_mode: "truncate_table"         # 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区级清空) | truncate_subpartition(子分区清空) | merge_into(upsert)
+    step_type: "full"                   # ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。决策树见 design-guide §4.4
+    target_role: "target"               # ★ 目标角色: intermediate(中间表) | target(目标F表)
+    produces_for: []                    # ★ 中间表规则填：产出供哪些规则消费（rule_code列表），如 ["R0003"]
+    reads: []                           # ★ 装配/merge规则填：读哪些中间表（表名列表），如 ["tmp1","tmp2"]
 
-    # 增量设计（仅 load_mode != truncate_table 时才填）
+    # 增量设计（step_type=incremental_extract 时填，详见 design-guide §5.2）
     # incremental:
-    #   key: "update_time"              # 增量识别字段
+    #   key: "update_time"              # 增量识别字段（从 RS 增量表读）
     #   filter: "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'"  # 增量过滤
     #   init_filter: "1=1"              # 初始化过滤（全量用 1=1，或限定范围）
     #   init_time_range: "ALL"          # 初始化时间范围（来自 RS L07）

@@ -52,30 +52,46 @@ description: >-
 ## 2. 设计流程（designer 的思考顺序）
 
 ### 步骤 1：理解需求
-- 读 rs_input.json 的 meta（目标表 F+I、粒度、调度框架）
-- 读 source_tables（源表关联关系）
-- 读 field_mappings（字段映射 + 转换规则）—— 注意每个字段的 transform_rule（直接复制/数据加工/赋值/序列）
+- 读 rs_input_view.json 的 compact 视图（不是 rs_input.json 全文）：
+  - `tables`：源表清单（哪些表、规模、关联）
+  - `direct`：直取/赋值字段按表分块
+  - `processed`：加工字段逐个（含多步骤口径/多表来源）
+- 需要某字段精确细节（如完整 source_type）时再查 rs_input.json 的 field_mappings
 
 ### 步骤 2：场景识别
 - 同一业务实质的数据，来自不同来源、需不同加工逻辑 → 分场景
 - 场景的本质：同一目标表的多来源并行加工
 - 场景是规则的属性，不是独立结构层
 
-### 步骤 3：规则拆分
-- 把整体加工拆成多个规则
-- 一个规则 = 一条 INSERT = 产出一个表（中间表 / 目标F表 / 视图I表）
-- 每个规则在 design_decisions 的 `field_targets` 里列出它管哪些目标字段（target_column 名）
+### 步骤 3：增量与复杂度识别 ★（决定后面怎么拆）
 
-### 步骤 4：字段分配（关键）
+**3a 增量识别**（从 RS 增量表读）：
+- RS L07 的"增量表及增量字段"段 → 识别**驱动表 + 增量字段**
+- 多驱动表各自增量范围不同（一张按 update_time，一张按 dt）→ 各自一个 extract 步骤
+- 增量识别方式：水位线（update_time）/ 分区（dt），详见 design-guide §5.2
+
+**3b 复杂度评估**（决定是否拆中间表）：
+- 评估指标（JOIN 数/聚合字段/粒度变化等）见 design-guide §4.1
+- 中间表 vs CTE 决策见 design-guide §4.2（业界五条标准）
+
+**输出**：步骤 3 的结论是"拆分依据"——决定步骤 4 每个规则的 step_type。
+
+### 步骤 4：步骤拆分 ★（定 step_type + target_role）
+
+基于步骤 3 的拆分依据，把整体加工拆成多个规则，每个规则定：
+- `step_type`：full（简单直灌/装配）/ aggregate（聚合中间表）/ incremental_extract（增量取数）/ merge（合并目标）
+  - 决策树见 design-guide §4.4
+- `target_role`：intermediate（中间表）/ target（目标表）
+- 多步骤时声明依赖：`produces_for`（产出供谁消费）/ `reads`（读哪些中间表）
+
+一个规则 = 一条 INSERT = 产出一个表（中间表 / 目标F表 / 视图I表）。
+每个规则在 design_decisions 的 `field_targets` 里列出它管哪些目标字段。
+
+### 步骤 5：字段分配（跨中间表）
 - **每个 target_column 必须归属且仅归属一个规则**
 - design_decisions 所有规则 field_targets 的并集 = rs_input 的所有 target_column
+- 中间表的字段也要分配（螺旋式回填，见 design-guide §4.3）
 - 脚本会校验完整性，漏字段或重复分配会报错
-
-### 步骤 5：设计思路与分段决策
-详见 `references/design-guide.md` §4。核心：
-- **design_approach**：写清楚整体设计策略（自然语言），讲清楚为什么这样拆、加工思路是什么。自然引用指标但不只列数字。
-- 分段决策指标（JOIN 数/聚合字段数/粒度变化等）见 design-guide §4.1
-- 分段结论 + 中间表决策（CTE 内联 vs 物理中间表）
 
 ### 步骤 6：字段加工逻辑
 - **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic
@@ -87,28 +103,18 @@ description: >-
 - 不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行 / 等）
 
 ### 步骤 8：调度设计
-详见 `references/design-guide.md` §5 调度设计。核心：
+详见 `references/design-guide.md` §5 调度设计。增量识别已在步骤3完成，这里只填参数：
 
 **调度类型**（从 RS L07 推导）：
 - RS 的"调度频率"→ `schedule_type`：日调度→daily，小时/分钟级→hourly/realtime
-- RS 的"增量识别方式"→ 判断是否增量场景
 
-**增量设计**（如果增量）：
+**增量参数**（如果增量，填 extract 步骤的 incremental 段）：
 - `incremental.key`：增量识别字段（如 update_time / dt）
 - `incremental.filter`：增量过滤条件（用起止双参数 BIZ_DATE_START / BIZ_DATE_END）
 - `incremental.init_filter`：初始化过滤条件（全量用 `1=1`，或限定范围）
-- `incremental.init_time_range`：初始化时间范围（RS L07）
-- `incremental.init_strategy`：初始化策略
-- `incremental.init_mode`：★ 初始化实现方式（`参数控制` | `独立规则组`），详见 design-guide §5.2
+- `incremental.init_mode`：初始化实现方式（参数控制 | 独立规则组），详见 design-guide §5.2
 
-**依赖类型**（每个上游依赖选 dep_type）：
-| 类型 | 含义 | 用在哪 |
-|------|------|--------|
-| 宽依赖（默认） | 当天或计划时间前后 N 小时内完成过 | 大部分场景 |
-| 同周期依赖 | 同频同时，跑完才轮到我 | 同频任务 |
-| 时间点依赖 | 等到指定时间点执行完成 | 精确控制 |
-| 上周期依赖 | 匹配被依赖的上一个计划时间 | T-1 场景 |
-| 虚拟依赖 | 依赖源端实时任务，查数据库判断状态 | 源端非周期任务 |
+**依赖类型**（每个上游依赖选 dep_type，详见 design-guide §5.3）：宽依赖（默认）/ 同周期 / 时间点 / 上周期 / 虚拟依赖
 
 - `cron`：designer 填标准 cron 表达式
 - I 视图和 DQ 的调度由脚本自动补，不需要填
@@ -158,7 +164,10 @@ description: >-
 写好 design_decisions.yaml 后自检，再调脚本：
 
 - [ ] rules 里每个规则有 rule_code / rule_name / field_targets
-- [ ] field_targets 覆盖 rs_input 的所有 target_column（不漏不重）
+- [ ] **每个规则有 step_type**（full / aggregate / incremental_extract / merge，见 design-guide §4.4/§6）
+- [ ] **中间表规则的 target_role=intermediate，目标表规则的 target_role=target**
+- [ ] **多步骤时声明依赖**：中间表填 produces_for，装配/merge 步骤填 reads
+- [ ] field_targets 覆盖 rs_input 的所有 target_column（不漏不重，含中间表字段）
 - [ ] 如果 mapping 提供了审计字段（备注标"审计字段"），field_targets 要包含它们
 - [ ] 审计字段不用写 field_logics（assemble 自动处理：来源有逻辑用来源的，没有补标准值）
 - [ ] field_logics 只写加工类业务字段，直取字段不写
