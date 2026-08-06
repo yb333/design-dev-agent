@@ -1,7 +1,7 @@
-# 闲时任务提示词：skill 目录规范化 + 能力陷阱用例构造
+# 闲时任务提示词：designer 试算 SQL + 调度任务路径进 ts.json
 
 > 用于空闲时段执行。复制下面的提示词给 agent，在项目目录下执行。
-> 两件事独立，任务一（目录规范化）是基础设施改动，建议先做。
+> 两件事独立，任务一较小可先做，任务二涉及面较大。
 
 ---
 
@@ -11,150 +11,7 @@
 
 ---
 
-### 任务一：skill 目录规范化（脚本进 scripts/，模板资源进 assets/）
-
-**背景**：现在 skill 的脚本（.py）和模板资源（.yaml/.json/.md）都混在 references/ 下，要按职责拆分。
-
-**目标目录结构**（scripts/ 和 assets/ 都与 references/ 同级，即在 skill 根目录下）：
-```
-skills/dws-design/
-├── SKILL.md
-├── scripts/          ← 所有 .py 脚本
-│   ├── assemble_ts.py
-│   ├── gate_summary.py
-│   ├── precheck.py
-│   └── preprocess.py
-├── assets/           ← 模板、规范、示例等资源
-│   ├── design-decisions-template.yaml
-│   ├── design-guide.md
-│   ├── rs-input-format.md
-│   ├── ts-template.json
-│   └── ts-template.md
-└── references/       ← 迁移后应为空（或删除）
-```
-
-**要迁移的文件清单**（三个 skill）：
-
-`skills/dws-design/`：
-- → scripts/：assemble_ts.py, gate_summary.py, precheck.py, preprocess.py
-- → assets/：design-decisions-template.yaml, design-guide.md, rs-input-format.md, ts-template.json, ts-template.md
-
-`skills/dws-coding/`：
-- → scripts/：assemble_ddl.py, assemble_dq.py, assemble_export.py, check_db.py, check_sql.py, run_ut.py, slice_ts.py, sql_validator.py, ut_execute.py, ut_precheck.py, validate_ddl.py, verify_files.py
-- → scripts/lib/（保留子目录）：lib/dws_preprocessor.py
-- → assets/：db-sources.example.json, dws-coding-standards.md, etl-templates.md, platform_config.example.json
-
-`skills/design-dev-shared/`：
-- → scripts/：dws_db.py
-- → assets/：（无）
-
-**迁移后必须检查并修正的引用点（6 类，逐个核对）**：
-
-1. **SKILL.md 里的路径引用**（两个 skill 的 SKILL.md 都要改）：
-   - `skills/dws-design/SKILL.md`：所有 `references/xxx.yaml`、`references/xxx.md`、`references/xxx.json` → 按文件类型改 `assets/xxx`（模板资源）或 `scripts/xxx.py`（脚本）。注意第15行"location 的同级目录就是 references/"这句话要改成说明 scripts/ 和 assets/ 的结构。第51行 `{skill目录}/references/slice_ts.py` 改 `{skill目录}/scripts/slice_ts.py`。
-   - `skills/dws-coding/SKILL.md`：同理，etl-templates.md/dws-coding-standards.md → assets/；slice_ts.py 等 → scripts/。第138行"工具脚本在同目录 references/ 下"改为"在 scripts/ 下"。
-
-2. **commands/new-pipe.md**：
-   - DESIGN_SCRIPTS / CODING_SCRIPTS 变量定义（第49行）原指 references/，现在指 scripts/。确认变量获取逻辑改成定位 scripts/ 目录。
-   - 所有 `CODING_SCRIPTS/xxx.py`、`DESIGN_SCRIPTS/xxx.py` 调用不变（变量名没变，指向变了）。
-
-3. **脚本之间的 import（sys.path 推算）**——这是最容易出错的地方：
-   - coding 脚本引用 design-dev-shared：现在是 `Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "references"`。迁移后脚本从 references/ 进 scripts/，`parent` 层级不变（都在 skill 目录下一级），但目标要从 `"design-dev-shared" / "references"` 改成 `"design-dev-shared" / "scripts"`。涉及的文件：check_db.py、ut_precheck.py、ut_execute.py、run_ut.py（搜 `design-dev-shared` 确认）。
-   - design 的 precheck.py 同理（搜 `design-dev-shared` / `references` → 改 `scripts`）。
-   - 同目录 import（`from run_ut import`、`from dws_db import`）：都在 scripts/ 下，仍同目录，`sys.path.insert(0, Path(__file__).parent)` 仍成立，不用改。
-   - sql_validator.py 引用 `lib/dws_preprocessor.py`：`Path(__file__).parent / "dws_preprocessor.py"` → 改 `Path(__file__).parent / "lib" / "dws_preprocessor.py"`（lib 子目录保留）。
-
-4. **install.py**：
-   - 第274行 `skills/dws-coding/references/db-sources.example.json` → `skills/dws-coding/assets/db-sources.example.json`
-   - 第290行 `skills/dws-coding/references/platform_config.example.json` → `skills/dws-coding/assets/platform_config.example.json`
-   - copy_dir 是整个 skill 目录拷贝，scripts/ assets/ 子目录会跟着拷，不用改 copy_dir 逻辑。
-   - 确认 install 后 `~/.config/opencode/skills/{skill}/scripts/` 和 `assets/` 都存在。
-
-5. **tests/conftest.py**：
-   - DESIGN_REFS / CODING_REFS / DD_SHARED_REFS 指向 `references/`，现在脚本进 scripts/，改成 `... / "scripts"`。
-
-6. **eval-suite/v2/ 的脚本路径引用**：
-   - `eval-suite/v2/pipeline.py` 的 DESIGN_REFS / CODING_REFS（指向 `~/.config/opencode/skills/dws-{design,coding}/references`）→ 改 `/scripts`。
-   - `eval-suite/v2/assert_sql.py` 和 engine.py 里 `validators` 的 import 路径不变（那是 eval-suite 自己的，不是 skill）。
-
-**约束**：
-- 用 `git mv` 移动文件（保留 git 历史）。
-- references/ 迁移完如果空了就删掉（含 __pycache__）。
-- 每改完一类引用点，跑一次 `python3 -m pytest tests/ -q` 确认不破坏（现在 226 个测试）。
-- 全部改完后，重跑 `python3 install.py`，确认 install 后目录结构正确，再跑一次测试。
-
-**验证标准（四项全过才能提交，缺一不可）**：
-1. `python3 -m pytest tests/ -q` 全套通过
-2. `python3 install.py` 无报错，且 `~/.config/opencode/skills/dws-coding/scripts/slice_ts.py` 存在（确认 scripts/ 拷过去了）
-3. `python3 ~/.config/opencode/skills/dws-coding/scripts/check_db.py` 能跑（验证 install 后真实路径的 import 链，不只是 pytest 的 conftest 路径）
-4. 对 002 跑 `python3 eval-suite/v2/run.py --case 002 --skip-ai` 不崩
-
-**四项全过 → 自动提交**：`git add -A && git commit && git push origin main`。
-提交信息写明：移了哪些文件、改了哪些引用点、四项验证结果。
-如果任何一项不过，**不要提交**，如实报告卡在哪。
-
----
-
-### 任务二：能力陷阱用例构造（设计 + 实现 3 个陷阱用例）
-
-现有用例（001-012）都是正常输入，只能测稳定性。要造"能力陷阱用例"——测 agent "该想到的想到了吗"，不是测"能不能跑通"。
-
-**方法论**（每个陷阱 = 埋雷输入 + 正确行为契约 + 断言）：
-- 埋雷输入：mapping/RS 里故意留会诱导犯错的细节
-- 正确行为契约：agent 应该识别什么、产出什么
-- 断言：checks.yaml 配"必须有的决策"（must_actions）和"禁止出现的错误"（must_not）
-- 每个陷阱配一个"干净对照版"（同样结构不埋雷），防 agent 过度警觉误报
-
----
-
-### 先造这 3 个陷阱（按价值排，构造从易到难）
-
-#### 陷阱 T1：头行整合主键发散（business_key 判断）
-- **埋雷**：mapping 目标表是头行整合宽表（字段来自 ods_order 头表 + ods_order_line 行表），但 mapping 主键标注只写了头表主键 `order_id`。RS 写"一行=一个订单的一个商品行"。
-- **契约**：designer 应识别粒度是订单行级，business_key 扩展为 `[order_id, line_id]`，标注"原主键会发散已扩展"。
-- **断言**：
-  - ✅ must: `business_key == [order_id, line_id]`（design 层）
-  - ❌ must_not: `business_key == [order_id]`
-- **干净对照版**：同样的表结构，但 mapping 主键正确标了 `[order_id, line_id]`，断言 `business_key == [order_id, line_id]`。
-
-#### 陷阱 T2：RS 标增量但配全量（增量识别）
-- **埋雷**：RS 正文角落写"本表每日增量更新，基于 update_time 取昨日新增"，但 mapping 看起来像全量（主键稳定、字段简单），没有任何 incremental 列提示。
-- **契约**：designer 应主动扫 RS 识别增量，产出至少一条规则 load_mode != truncate_table + incremental 段。
-- **断言**：
-  - ✅ must: 至少一条规则 `load_mode in [merge_into, no_delete, delete]`（design 层）
-  - ❌ must_not: 所有规则 `load_mode == truncate_table`
-- **干净对照版**：RS 写"全量调度"，断言所有规则 `load_mode == truncate_table`。
-
-#### 陷阱 T3：数据源缺口（拒绝沉默假设）
-- **埋雷**：字段 customer_level 口径依赖 `dwd_customer_rfm` 表，但 mapping 可用数据源里没这张表。给一张名字相近的 `dim_customer`（有 level_cd 字段）诱使用错来源。
-- **契约**：designer 应发现缺口并标注，不默默用 dim_customer.level_cd 替代。
-- **断言**：
-  - ✅ must: design_decisions 里有缺口标注（design_intent 或 join_safety 含 "缺口"/"缺失"/"dwd_customer_rfm"）
-  - ❌ must_not: field_logics 把 customer_level 映射到 dim_customer
-- **注意**：这个断言现在 assert_design 不直接支持（"字段不能映射到某表"），可能要给 assert_design 加一个 `field_not_mapped_from` 断言类型。如果加，按现有断言模式扩展，加测试。
-
----
-
-### 每个陷阱要产出
-1. `eval-suite/cases/T{N}_{名}/{mapping.xlsx, RS.md}` —— 埋雷输入
-2. `eval-suite/cases/T{N}_{名}_clean/{mapping.xlsx, RS.md}` —— 干净对照
-3. `eval-suite/cases/T{N}_{名}/checks.yaml` —— 断言（must/must_not）
-4. `eval-suite/cases/T{N}_{名}_clean/checks.yaml` —— 对照断言
-5. 用 `--skip-ai` 跑一遍确认结构 OK（这些陷阱要 designer 真跑才有意义，skip-ai 只验脚本链路+断言引擎不崩）
-
-### 约束
-- 陷阱用例编号用 T 前缀（T1/T2/T3），和 001-012 区分
-- mapping.xlsx 要真实可被 preprocess 解析（参考 002 的 mapping 结构）
-- 陷阱的 checks.yaml 必须能被现有 engine 跑通（assert_artifacts/assert_design/assert_sql）
-- 如果发现 assert_design 缺某个断言类型（如 T3 的 field_not_mapped_from），扩展它并加测试
-- 每一步如实报告：构造了什么、跑了什么、有没有报错
-
-### 验证
-对每个陷阱用例跑 `python eval-suite/v2/run.py --case T1 --skip-ai --cases-dir eval-suite/cases/`，确认断言引擎不崩、报告正常输出。如实报告结果。
-
----
-
-### 任务三：designer 试算 SQL（JOIN 键唯一性检查）
+### 任务一：designer 试算 SQL（JOIN 键唯一性检查）
 
 **背景**：designer 做 join_safety 分析时，不确定 JOIN 键在右表唯一不唯一——这是"关联会不会发散"的事实依据。RS 只给了关联方式（文字），没给键唯一性（数据事实）。需要给 designer 一个试算手段。
 
@@ -221,7 +78,109 @@ skills/dws-design/
 
 ---
 
+### 任务二：调度任务路径（project/task_group）进 ts.json
+
+**背景**：ts.json 的 schedule.tasks 每个 task 只有 task_name（如 task_xxx_f），没有 project/task_group。
+但实际调度中，不同任务（F表/view/dq）和不同阶段（日常/初始化）可能归属不同的项目/任务组。
+现在 export 时才从 platform_config 按 schema 取一个固定值，无法表达"初始化和日常不同项目组"。
+要把 project/task_group 提前到设计阶段确定，进 ts.json 的每个任务。
+
+**核心设计**：
+- 新建 schedule_config.json（给 designer 的配置，不是给平台的）
+- ts.json 的 tasks 每个任务带 project_name/task_group
+- assemble_ts 从 schedule_config 取默认值，designer 可在 design_decisions 覆盖
+- render_md 显示完整路径（项目|任务组|任务名）
+- export 改为直接用 ts.json 里的 project/task_group，不再从 platform_config 取
+
+**要做的**：
+
+1. **新建 `skills/dws-design/assets/schedule_config.example.json`**（给 designer 的调度配置模板）：
+   ```json
+   {
+     "default": {
+       "project_name": "SRP_DAILY",
+       "task_group": "GROUP_SPRD"
+     },
+     "schema_mappings": {
+       "fin": {
+         "project_name": "FIN_DAILY",
+         "task_group": "GROUP_FIN"
+       }
+     },
+     "init_override": {
+       "project_name": "SRP_INIT",
+       "task_group": "GROUP_INIT"
+     },
+     "dq_override": {
+       "project_name": "SRP_DQ",
+       "task_group": "GROUP_DQ"
+     }
+   }
+   ```
+   - `default`：按 schema 默认的 project/task_group
+   - `schema_mappings`：不同 schema 的默认值
+   - `init_override`：初始化调度覆盖（可选，不配就和日常一样）
+   - `dq_override`：DQ 调度覆盖（可选，不配就和日常一样）
+   - 实际配置放 ~/.config/opencode/schedule_config.json（install 时不覆盖已有，和 db-sources/platform_config 一致）
+
+2. **改 `skills/dws-design/scripts/assemble_ts.py` 的 build_meta**：
+   - schedule tasks 的每个任务（f/view/dq）加 `project_name` 和 `task_group` 字段
+   - 从 schedule_config.json 按 target schema 取默认值（读 ~/.config/opencode/schedule_config.json）
+   - designer 在 design_decisions 的 schedule 段可覆盖（如 `schedule.task_project_override`）
+   - 缓存连接不涉及（schedule_config 是本地 json，不连库）
+
+3. **改 `skills/dws-design/assets/ts-template.json`**：
+   - tasks.f/view/dq 每个加 project_name/task_group 字段（注释说明来源）
+   - upstream 项的 project/group 字段已有（之前加的），保持
+
+4. **改 `skills/dws-design/scripts/assemble_ts.py` 的 render_md §6**：
+   - 调度任务表改为显示完整路径：
+     ```
+     | 项目 | 任务组 | 调度任务 | 执行Job | 调度周期 |
+     |------|--------|---------|---------|---------|
+     | SRP_DAILY | GROUP_SPRD | task_xxx_f | Pjob_xxx_f | 0 30 3 * * ? |
+     ```
+   - 上游依赖表加 项目/任务组 列（从 upstream 项的 project/group 取，跨项目依赖时能看到归属）
+
+5. **改 `skills/dws-coding/scripts/assemble_export.py`**：
+   - schedule_tasks.xlsx 的 tasks/jobs/taskParams sheet：project/task_group 从 ts.json 的 tasks 里取（不再从 platform_config 的 lts 段取）
+   - platform_config 的 lts 段只保留 appid（如果 lts 段还有 project_name/task_group，作为 fallback 兼容）
+
+6. **改 `skills/dws-design/assets/design-decisions-template.yaml`**：
+   - schedule 段加可选的覆盖字段（designer 填特殊任务的项目组，如初始化）：
+     ```yaml
+     schedule:
+       schedule_type: "daily"
+       cron: "0 30 3 * * ?"
+       upstream_added: []
+       # 以下可选：覆盖 schedule_config 的默认 project/task_group
+       # task_project_override:
+       #   init: { project_name: "SRP_INIT", task_group: "GROUP_INIT" }
+     ```
+
+7. **改 `install.py`**：
+   - schedule_config.example.json 的拷贝逻辑（和 db-sources.example.json 一致：拷到 ~/.config/opencode/，不覆盖已有）
+
+8. **测试更新**：
+   - assemble_ts 的测试：tasks 段有 project_name/task_group
+   - assemble_export 的测试：project/task_group 从 ts.json 取（不是 platform_config）
+   - render_md 的测试：调度段显示完整路径
+
+**约束**：
+- schedule_config.json 是本地配置（~/.config/opencode/），不进仓库（和 db-sources/platform_config 一致）
+- 兼容：ts.json 没有 project/task_group 的旧产出，export 时 fallback 到 platform_config
+- 全套测试必须通过
+
+**验证标准（四项全过才提交）**：
+1. `python3 -m pytest tests/ -q` 全套通过
+2. `python3 install.py` 无报错
+3. 对 002 跑 assemble_ts，确认 ts.json 的 tasks.f 有 project_name/task_group
+4. 对 002 跑 assemble_export，确认 schedule_tasks.xlsx 的 tasks sheet 有正确的 project/task_group
+5. 四项全过 → `git add -A && git commit && git push origin main`，提交信息写明改动。任一项不过不提交，如实报告。
+
+---
+
 ### 收尾
 1. 跑 `python3 -m pytest tests/ -q` 确认全套通过
-2. **自动提交**：`git add -A && git commit && git push origin main`，提交信息写明加了哪些陷阱用例、测试结果。
-3. 如实汇报：加了哪些陷阱用例、测试结果、遇到的问题
+2. **自动提交**：`git add -A && git commit && git push origin main`
+3. 如实汇报：改了哪些文件、测试结果、遇到的问题
