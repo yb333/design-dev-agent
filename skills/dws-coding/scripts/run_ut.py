@@ -94,6 +94,30 @@ def resolve_all_params(ts: dict, config_path: str) -> dict:
     test_cfg = load_test_params(config_path)
     values = {}
     missing = []
+
+
+def resolve_sample_blocks(config_path: str, cli_value: int = 0) -> int:
+    """解析采样块数：CLI 参数 > 配置文件默认值 > 0。
+
+    - CLI 传了 --sample-blocks N（N>0）→ 用 N
+    - CLI 没传（0）→ 从 db-sources.json 的 security.sample_blocks 读默认值
+    - 都没有 → 0（不采样）
+
+    这样 AI 不用传参数，配置里写了 sample_blocks 就自动采样。
+    开发环境配 sample_blocks=10，UAT/生产配 0。
+    """
+    if cli_value > 0:
+        return cli_value
+    try:
+        import json
+        from pathlib import Path
+        p = Path(config_path)
+        if p.exists():
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            return int(raw.get("security", {}).get("sample_blocks", 0))
+    except Exception:
+        pass
+    return 0
     for pname in declared:
         val = resolve_test_value(pname, test_cfg.get(pname))
         if val is None or val == "":
@@ -493,8 +517,9 @@ def main():
                 all_results.append(rule_result)
                 continue
             select_sql = substitute_params(select_sql, param_values)
-            # 开发环境加速：主表块采样（不破坏 SQL，注入失败回退原 SQL）
-            select_sql = inject_tablesample(select_sql, args.sample_blocks)
+            # 采样：CLI参数优先，不传则从 db-sources.json 的 security.sample_blocks 读默认
+            sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
+            select_sql = inject_tablesample(select_sql, sample_n)
 
             # 步骤2.5: SELECT 预检（快速发现类型/字段问题，不写数据）—— etl 账号
             r_pre = etl_executor.execute(select_sql)

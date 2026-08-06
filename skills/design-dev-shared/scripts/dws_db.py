@@ -78,6 +78,7 @@ class SecurityConfig:
     allow_write: bool = True     # 允许写操作（DDL/INSERT）
     max_rows: int = 1000         # 查询最大返回行数
     timeout: int = 0             # 超时（秒），0=不限制
+    sample_blocks: int = 0       # UT 采样块数（0=不采样，10=SYSTEM(10)）。开发环境配>0加速，UAT/生产配0
 
 
 def resolve_password(password: str) -> str:
@@ -128,6 +129,7 @@ def load_db_sources(config_path: str) -> tuple[dict[str, DataSource], str, Secur
         allow_write=sec_raw.get("allowWriteOperations", True),
         max_rows=sec_raw.get("maxRows", 1000),
         timeout=sec_raw.get("timeout", 0),
+        sample_blocks=sec_raw.get("sample_blocks", 0),
     )
 
     schema_mapping = raw.get("schema_mapping", {})

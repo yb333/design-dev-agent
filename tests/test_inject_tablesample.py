@@ -16,7 +16,7 @@ _CODING_SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "dws-codin
 if str(_CODING_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_CODING_SCRIPTS))
 
-from run_ut import inject_tablesample
+from run_ut import inject_tablesample, resolve_sample_blocks
 
 
 class TestInjectBasic:
@@ -153,3 +153,44 @@ class TestInjectWithAs:
         result = inject_tablesample(sql, 10)
         assert "TABLESAMPLE SYSTEM (10)" in result
         assert "ods.fact TABLESAMPLE" in result
+
+
+class TestResolveSampleBlocks:
+    """resolve_sample_blocks 测试：CLI 参数 > 配置文件默认 > 0。"""
+
+    def test_cli_value_takes_priority(self, tmp_path):
+        """CLI 传了 >0 的值 → 用 CLI 值，不读配置。"""
+        import json
+        cfg = tmp_path / "db.json"
+        cfg.write_text(json.dumps({"security": {"sample_blocks": 50}}))
+        result = resolve_sample_blocks(str(cfg), cli_value=10)
+        assert result == 10  # CLI 优先
+
+    def test_cli_zero_reads_config(self, tmp_path):
+        """CLI 没传（0）→ 从配置读默认值。"""
+        import json
+        cfg = tmp_path / "db.json"
+        cfg.write_text(json.dumps({"security": {"sample_blocks": 10}}))
+        result = resolve_sample_blocks(str(cfg), cli_value=0)
+        assert result == 10  # 配置的默认值
+
+    def test_no_config_no_cli_returns_zero(self, tmp_path):
+        """配置没有 sample_blocks + CLI 没传 → 0（不采样）。"""
+        import json
+        cfg = tmp_path / "db.json"
+        cfg.write_text(json.dumps({"security": {"timeout": 600}}))  # 没 sample_blocks
+        result = resolve_sample_blocks(str(cfg), cli_value=0)
+        assert result == 0
+
+    def test_config_file_not_found_returns_zero(self):
+        """配置文件不存在 → 0。"""
+        result = resolve_sample_blocks("/nonexistent/path/db.json", cli_value=0)
+        assert result == 0
+
+    def test_config_zero_means_no_sample(self, tmp_path):
+        """配置 sample_blocks=0（UAT/生产）→ 0（不采样）。"""
+        import json
+        cfg = tmp_path / "db.json"
+        cfg.write_text(json.dumps({"security": {"sample_blocks": 0}}))
+        result = resolve_sample_blocks(str(cfg), cli_value=0)
+        assert result == 0

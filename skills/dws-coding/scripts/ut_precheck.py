@@ -28,7 +28,7 @@ except AttributeError:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor, load_test_params
-from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample
+from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample, resolve_sample_blocks
 
 
 def main():
@@ -166,7 +166,9 @@ def main():
                 continue
 
             select_sql = substitute_params(select_sql, param_values)
-            select_sql = inject_tablesample(select_sql, args.sample_blocks)
+            # 采样：CLI参数优先，不传则从 db-sources.json 的 security.sample_blocks 读默认
+            sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
+            select_sql = inject_tablesample(select_sql, sample_n)
             r_pre = etl_executor.execute(select_sql)
             if not r_pre.success:
                 error_msg = r_pre.error[:200] if r_pre.error else "未知错误"

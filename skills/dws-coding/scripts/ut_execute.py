@@ -25,7 +25,7 @@ except AttributeError:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor
-from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, run_ut_check, inject_tablesample
+from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, run_ut_check, inject_tablesample, resolve_sample_blocks
 
 
 def main():
@@ -132,8 +132,9 @@ def main():
                 all_results.append(rule_result)
                 continue
             select_sql = substitute_params(select_sql, param_values)
-            # 开发环境加速：主表块采样（不破坏 SQL，注入失败回退原 SQL）
-            select_sql = inject_tablesample(select_sql, args.sample_blocks)
+            # 采样：CLI参数优先，不传则从 db-sources.json 的 security.sample_blocks 读默认
+            sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
+            select_sql = inject_tablesample(select_sql, sample_n)
 
             # load_mode 预处理（模拟术加平台）
             load_mode = rule.get("load_mode", "truncate_table")
