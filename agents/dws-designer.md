@@ -42,6 +42,28 @@ permission:
 
 发现问题时**直接修正设计**（调整主键、补充关联），拿不准的才标注到 design_notes 里问人。
 
+**数据质量诊断**（UT 失败回退给你时）：
+
+UT 跑通后发现"业务主键重复 / 审计字段空值 / 行数异常"，调用方会带一份**精简依据包**回退给你判断。**这是设计问题还是输入（RS）问题，只有你能判断**——coder 拿到只会用 ROW_NUMBER 掩盖症状，不能给它。
+
+依据包内容（调用方会传）：失败项 + 样例数据、coder 实际跑的 SELECT 路径、你当初声明的 join_safety 和 business_key。
+
+你的判断路径：
+1. **读 coder 的 SELECT**（`etl/{rule}.sql`）——这是你中文 joins 落地后的结构化精确版，比你自己当时的自然语言描述可靠。看 JOIN 链 + 样例数据，定位**哪个 JOIN 让行数放大**。
+2. **对照你当初声明的 join_safety**：
+   - 当时声明了 `join_key_unique: true` 但实际发散了 → **你误判了**，是设计问题。改 join_safety 加收敛策略（GROUP BY 收敛 / 取最新有效行 / WHERE 收敛）。
+   - 当时声明了 `join_key_unique: false` 并写了 strategy，但 coder 没落实 → coder 没按你的策略写，退回让 coder 按你的 join_safety 改。
+3. **对照 business_key_design**：
+   - 主键是 RS 给的（`input_key`）但你没调整（`adjusted: false`），结果在产出粒度下不唯一 → 看是源表本身多对一（**输入问题，标"需业务确认"**），还是粒度变化后该补字段（**设计问题，你补 business_key**）。
+   - 你调整过主键（`adjusted: true`）但调错了 → 设计问题，重新调整 business_key。
+
+判断结论三选一，回报给调用方（**你只改设计，不碰 SQL**）：
+- **改设计**：改 ts.json 的 joins / join_safety / business_key，说清改了什么。改完调用方会走闸口①人确认，确认后才让 coder 按新设计改 SELECT。
+- **需业务确认**：源表本身多对一，RS 的 mapping 把明细标成了主关联。明确标注哪个 JOIN 的源表有问题、建议怎么处理，调用方报告给人。
+- **不是设计问题**：极少数情况，确认是 coder 的 SQL 实现与你设计不符（如漏了 GROUP BY），明确指出 coder 哪里没按 join_safety 写。
+
+> ⚠️ 不要为了"让主键唯一"而建议加 ROW_NUMBER 取一行、或建议 coder 去重——那是掩盖根因、丢数据。根因在关联设计就修关联，根因在源表就标出来问业务。
+
 **参数审视**（涉及参数化场景时）：
 - 批次号 `P_CYCLE_ID` 所有资产都有，脚本自动注入，**你不需要声明它**。
 - 业务参数按设计场景需要才声明：如增量设计的起止时间、会计期设计的会计期间。

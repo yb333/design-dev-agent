@@ -489,8 +489,19 @@ def _normalize_type(raw: str) -> str:
     - varchar → character varying
     - int → integer（PG 标准名）
     - 去多余空白、括号内空白
+
+    时间类型家族（with/without time zone 底层存储不同，分开归一）：
+    - timestamp / timestamp(n) / without time zone → 统一 ts_notz（忽略精度）
+    - timestamptz / timestamp(n) with time zone     → 统一 ts_tz（忽略精度）
+    with 和 without 不互通（底层不同：一个带时区偏移一个不带）。
     """
     t = raw.strip().lower().replace(" ", "")
+
+    # 时间类型族：先判 with/without time zone（底层不同，不归一），再忽略精度
+    if "timestamp" in t:
+        is_tz = "withtimezone" in t or t.startswith("timestamptz")
+        return "ts_tz" if is_tz else "ts_notz"
+
     aliases = {
         "varchar": "charactervarying",
         "int": "integer",
@@ -499,7 +510,6 @@ def _normalize_type(raw: str) -> str:
         "int2": "smallint",
         "bool": "boolean",
         "decimal": "numeric",
-        "timestamp": "timestampwithouttimezone",
     }
     # 只替换类型前缀部分（保留长度，如 charactervarying(64)）
     base = t.split("(")[0]

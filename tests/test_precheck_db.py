@@ -710,3 +710,62 @@ class TestTypeCheck:
         assert len(type_errors) == 1
         # 单目标时显示具体目标名
         assert "total_amount" in type_errors[0]
+
+    def _ts_field(self, source_type, db_type, source_column="create_time"):
+        """构造一个 timestamp 类型字段映射行。"""
+        return {
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": source_column, "source_type": source_type,
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": source_column, "target_column_cn": "创建时间",
+            "target_type": source_type, "source_alias": "t",
+        }
+
+    def test_timestamp_precision_ignored(self, monkeypatch):
+        """timestamp vs timestamp(0) 精度差异忽略（都无时区）→ 通过。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"create_time": "timestamp(0) without time zone"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([self._ts_field("timestamp", "timestamp(0) without time zone")])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"timestamp 精度差异应忽略: {type_errors}"
+
+    def test_timestamp_without_tz_variants_match(self, monkeypatch):
+        """timestamp / timestamp(0) / timestamp without time zone 互通（同族无时区）。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"create_time": "timestamp(6) without time zone"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([self._ts_field("timestamp(0)", "timestamp(6) without time zone")])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"无时区 timestamp 同族应互通: {type_errors}"
+
+    def test_timestamptz_variants_match(self, monkeypatch):
+        """timestamptz / timestamp(n) with time zone 互通（同族有时区）。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"create_time": "timestamp(0) with time zone"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([self._ts_field("timestamptz", "timestamp(0) with time zone")])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"有时区 timestamp 同族应互通: {type_errors}"
+
+    def test_timestamp_with_vs_without_tz_mismatch(self, monkeypatch):
+        """timestamp（无时区）vs timestamptz（有时区）底层不同 → 仍判不符。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"create_time": "timestamp with time zone"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        # mapping 写无时区，库里有时区 → 底层不同，应报不符
+        rs = _make_rs_input([self._ts_field("timestamp", "timestamp with time zone")])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors, f"with/without 时区底层不同应报不符: {result.errors}"
