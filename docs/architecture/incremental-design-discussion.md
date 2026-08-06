@@ -1,7 +1,24 @@
-# 增量设计与 ts 规则模型讨论
+# 多步骤数据流设计与 ts 规则模型讨论（全量+增量统一）
 
 > 状态：**讨论中，未定方案**。本文档沉淀诊断和候选方向，供反复审视补充。
-> 起因：增量场景的设计方式"低级死板"，根因在 ts 规则模型，需扩大讨论范围。
+> 起因：增量场景的设计方式"低级死板"。深入后发现根因不在增量，在 ts 规则模型对"多步骤数据流"的表达能力——全量复杂场景和增量场景面临的是同一个结构问题。
+
+---
+
+## 〇、核心结论：全量和增量是同一个问题
+
+**两类场景，同一个结构诉求**：
+
+| 场景 | 触发原因 | 数据流模式 |
+|------|---------|----------|
+| 全量复杂宽表 | 多源 JOIN 太复杂，先聚合中间表再装配 | tmp1/tmp2 → 装配目标表 |
+| 增量 | 多驱动表各自取增量再合并 | tmp_a/tmp_b → MERGE 目标表 |
+
+共同诉求：多个中间步骤各自产出 tmp → 最终步骤读 tmp 装配/合并到目标 → 步骤间有显式依赖。
+
+**好消息**：真实产出 order_center（全量）已用 tmp1/tmp2→R0003 模式，且 `data_flow.dependencies` 已显式表达规则间依赖。全量复杂场景的框架**比增量更接近可用**。
+
+**因此本文档讨论的"多步骤数据流"方案（方向A）同时服务全量和增量**——简单场景（单 rule 直接灌目标，不论全量增量）都不受影响，走老路。
 
 ---
 
@@ -44,14 +61,15 @@ tmp_a + tmp_b → MERGE 合并 → 目标表
 
 ### 卡点 2：跨规则依赖靠 exec_sequence 隐式保证
 
-真实产出 dwb_order_center_f 已经用了这个模式（3 条规则链式）：
+真实产出 dwb_order_center_f（**全量**场景）已经用了这个模式（3 条规则链式）：
 - R0001 → tmp1（聚合用户订单指标）
 - R0002 → tmp2（聚合商品销量）
 - R0003 → 目标表（JOIN tmp1/tmp2 装配，18 张源表）
 
-但 ts.json 里没有"R0003 依赖 R0001/R0002 的产出"这个显式声明。
-coder 拿到 R0003 切片时，要自己推断 tmp1/tmp2 是前序规则的产出。
-UT 执行时靠 schedule_groups 的 sequence 保证顺序，但中间表失败不会显式级联。
+**而且 `data_flow.dependencies` 已显式表达了依赖**（R0001→R0003 经 tmp1，R0002→R0003 经 tmp2）。
+但有两个缺口：
+1. tmp 表没有 `target_role=intermediate` 标记（靠命名约定"tmp"猜，不严谨）
+2. coder 切片单规则时不直接消费 dependencies（拿 R0003 切片时，要自己从 dependencies 推断 tmp 来自哪个 rule）
 
 ### 卡点 3：load_mode 是目标表级的，无法区分步骤
 
@@ -219,20 +237,42 @@ UT 执行时靠 schedule_groups 的 sequence 保证顺序，但中间表失败�
 方向 A/B/C 中，**A（最小改动：rule 加步骤标记）最适合**，理由：
 - 增量全量各半 → 不能强迫全量走复杂编排，A 让简单规则不动（step_type=full 走老路）
 - 多驱动表 → 每个驱动表一个 rule（extract 步骤），天然模块化，符合业界"各自独立管道"
-- 物理临时表每次重建 → tmp 表就是一个 rule 的 target（target_role=intermediate），已有结构能承载
+- 物理临时表每次重建 → tmp 表就是一个 rule 的 target（target_role=intermediate），已有结构能载
 - coder/UT 适配改动可控 → 加 produces_for 依赖标记，切片时知道 tmp 来自哪个 rule
+- **全量复杂场景同样受益**：order_center 已用 tmp1/tmp2→R0003，加 target_role 后从"靠命名猜"变"显式标记"
 
-### 具体增量场景的 rule 编排（示例）
+### 全量复杂场景的 rule 编排（示例）
+
+以 order_center 为例（全量，多源 JOIN 太复杂先聚合再装配）：
+
+```
+R0001: aggregate_user  → tmp1  (target_role=intermediate, produces_for=[R0003])
+R0002: aggregate_product → tmp2 (target_role=intermediate, produces_for=[R0003])
+R0003: assemble        → 目标表 (reads=[tmp1,tmp2], target_role=target, step_type=full)
+```
+
+与现在的区别：tmp 表有 target_role=intermediate 显式标记（不再靠"tmp"命名猜），coder 拿 R0003 切片时能从 produces_for/dependencies 直接知道 tmp1/tmp2 来自哪个 rule。
+
+### 增量场景的 rule 编排（示例）
 
 假设资产 dwb_xxx_f，两驱动表（A 按 update_time 增量、B 按 dt 分区增量）：
 
 ```
-R0001: extract_a  → tmp_a   (target_role=intermediate, incremental={key:update_time, filter:...}, produces_for=[R0003])
-R0002: extract_b  → tmp_b   (target_role=intermediate, incremental={key:dt, filter:...}, produces_for=[R0003])
-R0003: merge      → 目标表  (reads=[tmp_a,tmp_b], load_mode=merge_into, merge_key=business_key)
+R0001: extract_a  → tmp_a   (target_role=intermediate, step_type=incremental_extract, incremental={key:update_time, filter:...}, produces_for=[R0003])
+R0002: extract_b  → tmp_b   (target_role=intermediate, step_type=incremental_extract, incremental={key:dt, filter:...}, produces_for=[R0003])
+R0003: merge      → 目标表  (reads=[tmp_a,tmp_b], target_role=target, step_type=merge, load_mode=merge_into, merge_key=business_key)
 ```
 
-全量简单资产不受影响：仍是一个 rule（step_type=full, target_role=target），走现有老路。
+### 两类场景的 step_type 对照
+
+| step_type | 全量用 | 增量用 | target_role |
+|-----------|--------|--------|-------------|
+| `full` | ✅ 单 rule 直接灌目标（简单全量）| | target |
+| `aggregate` | ✅ 聚合中间表（复杂全量装配）| | intermediate |
+| `incremental_extract` | | ✅ 增量取数到 tmp | intermediate |
+| `merge` | | ✅ MERGE 合并到目标 | target |
+
+简单场景（全量单 rule）不受影响：step_type=full 走现有老路。
 
 ### 要补的 RS 规范（关键缺口）
 
