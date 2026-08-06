@@ -70,9 +70,10 @@ def _audit_field(target_column="del_flag"):
 def _make_mock_executor(table_columns: dict):
     """构造 mock executor。
 
-    table_columns: {(schema, table): [col1, col2, ...]} 表示库里实际存在的列。
-    适配 UNION ALL 批量查询：一条 SQL 含所有表的 UNION ALL 分支，
-    每个分支带 nsp/rel/col 三列标记。
+    table_columns 支持两种格式：
+      {(schema, table): [col1, col2]} —— 只给列名，类型默认 "varchar"
+      {(schema, table): {col1: type1, col2: type2}} —— 列名+类型
+    适配 UNION ALL 批量查询：返回带 nsp/rel/col/col_type 的行。
     """
     executor = MagicMock()
     executor.test_connection.return_value = True
@@ -82,14 +83,17 @@ def _make_mock_executor(table_columns: dict):
         result.success = True
         result.error = ""
         rows = []
-        # UNION ALL 的每个分支含 SELECT 'sch' AS nsp, 'tbl' AS rel, ...
-        # 按 SQL 里出现的 (schema, table) 匹配，返回该表全部列
-        for (sch, tbl), existing_cols in table_columns.items():
+        for (sch, tbl), cols_def in table_columns.items():
             sch_l = sch.lower()
             tbl_l = tbl.lower()
             if f"'{sch_l}' AS nsp" in sql and f"'{tbl_l}' AS rel" in sql:
-                for c in existing_cols:
-                    rows.append({"nsp": sch_l, "rel": tbl_l, "col": c})
+                # 兼容 list（无类型）和 dict（有类型）
+                if isinstance(cols_def, dict):
+                    for c, t in cols_def.items():
+                        rows.append({"nsp": sch_l, "rel": tbl_l, "col": c, "col_type": t or "character varying(64)"})
+                else:
+                    for c in cols_def:
+                        rows.append({"nsp": sch_l, "rel": tbl_l, "col": c, "col_type": "character varying(64)"})
         result.rows = rows
         return result
 
@@ -541,8 +545,8 @@ class TestStaticChecks:
 
         captured_sql = []
         executor = _make_mock_executor({
-            ("ods", "table_a"): ["id", "name"],
-            ("dim", "table_b"): ["user_id", "level"],
+            ("ods", "table_a"): {"id": "bigint", "name": "character varying(64)"},
+            ("dim", "table_b"): {"user_id": "bigint", "level": "integer"},
         })
         # 用 wrapper 拦截 execute 调用的 SQL
         real_side = executor.execute.side_effect
@@ -587,3 +591,65 @@ class TestStaticChecks:
         # 校验通过
         db_errors = [e for e in result.errors if "DB 校验" in e]
         assert db_errors == [], f"两张表字段都存在应通过: {db_errors}"
+
+
+class TestTypeCheck:
+    """字段类型严格匹配检查。"""
+
+    def test_type_match_passes(self, monkeypatch):
+        """mapping 类型和库里一致 → 通过。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"id": "character varying(64)"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        # _biz_field 默认 source_type=VARCHAR(64)，归一化后=charactervarying(64)
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"类型一致应通过: {type_errors}"
+
+    def test_type_mismatch_blocks(self, monkeypatch):
+        """mapping 写 varchar(64)，库里是 bigint → error（阻断）。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"id": "bigint"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        # _biz_field 的 source_type=VARCHAR(64)
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors, f"类型不符应报 error: {result.errors}"
+        assert "varchar" in type_errors[0].lower() or "bigint" in type_errors[0].lower()
+
+    def test_varchar_alias_normalized(self, monkeypatch):
+        """varchar 和 character varying 归一化后应匹配。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"id": "character varying(64)"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([_biz_field(source_column="id")])  # VARCHAR(64)
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"varchar/character varying 应归一化匹配: {type_errors}"
+
+    def test_no_source_type_skips_type_check(self, monkeypatch):
+        """mapping 没写 source_type（空）→ 不查类型（只查存在性）。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"id": "bigint"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        # source_type 为空
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "id", "source_type": "",  # 空，不查类型
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "id", "target_column_cn": "ID",
+            "target_type": "VARCHAR(64)", "source_alias": "t", "remark": "主键",
+        }])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"source_type 空不应查类型: {type_errors}"

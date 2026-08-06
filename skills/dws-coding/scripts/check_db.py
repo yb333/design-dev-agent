@@ -63,7 +63,7 @@ def main():
         print(f"  原因: 配置文件 JSON 格式错误: {e}")
         sys.exit(1)
 
-    # 尝试连接
+    # 尝试连接——UT 要用 admin（DDL）和 etl（数据读写）两个账号，两个都得通
     try:
         # dws_db 在 design-dev-shared 公共库（与本 skill 平级）
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
@@ -72,19 +72,28 @@ def main():
         for i, arg in enumerate(sys.argv):
             if arg == "--source" and i + 1 < len(sys.argv):
                 source = sys.argv[i + 1]
-        executor = create_executor(config_path, source, role="etl")
-        # 直接 execute('SELECT 1')，拿真实报错（test_connection 会吞异常）
-        r = executor.execute("SELECT 1")
-        if r.success:
+
+        # 测两个 role：admin（建表删表）和 etl（SELECT/INSERT），任一不通算失败
+        failures = []
+        source_name = ""
+        for role in ("admin", "etl"):
+            executor = create_executor(config_path, source, role=role)
+            source_name = executor.get_current_source()
+            r = executor.execute("SELECT 1")
+            executor.close()
+            if not r.success:
+                failures.append(f"{role}: {r.error}")
+
+        if not failures:
             print("DB_OK")
-            print(f"  数据源: {executor.get_current_source()}")
-            print(f"  账号: etl")
+            print(f"  数据源: {source_name}")
+            print(f"  账号: admin + etl 均通")
             sys.exit(0)
         else:
             print("NO_DB_SOURCE")
-            print(f"  数据源: {executor.get_current_source()}")
-            print(f"  账号: etl")
-            print(f"  原因: {r.error}")
+            print(f"  数据源: {source_name}")
+            for f in failures:
+                print(f"  原因: {f}")
             sys.exit(1)
     except ImportError as e:
         print("NO_DB_SOURCE")

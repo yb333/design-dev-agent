@@ -310,8 +310,8 @@ def _is_cache_expired(cached_at: str, ttl_hours: int = 24) -> bool:
 
 def _fetch_tables_schema_batch(
     executor, tables: list[tuple[str, str]]
-) -> dict[tuple[str, str], set[str]]:
-    """连库批量查多张表的列名（UNION ALL，实测 DWS 上最快）。
+) -> dict[tuple[str, str], dict[str, str]]:
+    """连库批量查多张表的列名+类型（UNION ALL，实测 DWS 上最快）。
 
     每张表一个 UNION ALL 分支，每个分支走精确等值（n.nspname= AND c.relname=），
     优化器不用处理 OR，执行计划稳定。一次往返查完全部表。
@@ -321,17 +321,19 @@ def _fetch_tables_schema_batch(
         tables: [(schema, table), ...] 待查的表。
 
     Returns:
-        {(schema_lower, table_lower): {column_name_lower}}。
-        表不存在/无权限 → 该表对应空集。
+        {(schema_lower, table_lower): {column_name_lower: type}}。
+        表不存在/无权限 → 该表对应空 dict。
     """
     if not tables:
         return {}
 
-    # 构造 UNION ALL：每个分支带 schema/table 标记列，便于结果归属
+    # 构造 UNION ALL：每个分支带 schema/table 标记列 + 列名 + 类型
+    # format_type 输出归一化类型（如 "character varying(64)"、"bigint"）
     branches = []
     for (sch, tbl) in tables:
         branches.append(
-            f"SELECT '{sch.lower()}' AS nsp, '{tbl.lower()}' AS rel, a.attname AS col "
+            f"SELECT '{sch.lower()}' AS nsp, '{tbl.lower()}' AS rel, "
+            "a.attname AS col, format_type(a.atttypid, a.atttypmod) AS col_type "
             "FROM pg_attribute a "
             "JOIN pg_class c ON a.attrelid = c.oid "
             "JOIN pg_namespace n ON c.relnamespace = n.oid "
@@ -341,15 +343,15 @@ def _fetch_tables_schema_batch(
     sql = "\nUNION ALL\n".join(branches)
 
     r = executor.execute(sql)
-    result: dict[tuple[str, str], set[str]] = {}
-    # 初始化所有表为空集（表不存在/查询失败时保留空集）
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    # 初始化所有表为空 dict（表不存在/查询失败时保留空 dict）
     for (sch, tbl) in tables:
-        result[(sch.lower(), tbl.lower())] = set()
+        result[(sch.lower(), tbl.lower())] = {}
 
     if r.success and r.rows:
         for row in r.rows:
             key = (row["nsp"].lower(), row["rel"].lower())
-            result.setdefault(key, set()).add(row["col"].lower())
+            result.setdefault(key, {})[row["col"].lower()] = (row["col_type"] or "").lower()
     return result
 
 
@@ -372,8 +374,8 @@ def _check_db_schema(
     # 从 field_mappings 收集"要用到的来源字段"：{(schema, table): {column: target_field}}
     # 跳过纯派生行（赋值/序列、source_column 空）和审计字段——这些不查源表
     field_mappings = rs_input.get("field_mappings", [])
-    # {(schema, table): {source_column_lower: (原source_column, target_field)}}
-    needed: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
+    # {(schema, table): {source_column_lower: (原source_column, target_field, source_type)}}
+    needed: dict[tuple[str, str], dict[str, tuple[str, str, str]]] = {}
     for fm in field_mappings:
         source_column = (fm.get("source_column") or "").strip()
         if not source_column:
@@ -384,8 +386,9 @@ def _check_db_schema(
         table = (fm.get("source_table") or "").strip()
         if not schema or not table:
             continue
+        source_type = (fm.get("source_type") or "").strip()
         needed.setdefault((schema, table), {})[source_column.lower()] = (
-            source_column, fm.get("target_column", "?")
+            source_column, fm.get("target_column", "?"), source_type
         )
 
     if not needed:
@@ -396,7 +399,8 @@ def _check_db_schema(
 
     # ── 缓存有效就用（整体），无效就连库整体查所有表 ──
     # 缓存粒度 = 本次用到的全部来源表；不做按表补缺（同用例来源表固定，整体刷新更简单）
-    found: dict[tuple[str, str], set[str]] = {}
+    # found: {(sch, tbl): {col_lower: type_lower}}
+    found: dict[tuple[str, str], dict[str, str]] = {}
     cache_used = False
 
     if cache_path and not refresh_schema:
@@ -407,7 +411,12 @@ def _check_db_schema(
             for (sch, tbl) in all_tables:
                 key = f"{sch.lower()}.{tbl.lower()}"
                 if key in raw_tables:
-                    found[(sch.lower(), tbl.lower())] = {c.lower() for c in raw_tables[key]}
+                    # 缓存里是 {col: type}，兼容旧格式（list 时转无类型 dict）
+                    raw = raw_tables[key]
+                    if isinstance(raw, dict):
+                        found[(sch.lower(), tbl.lower())] = {k.lower(): v.lower() for k, v in raw.items()}
+                    elif isinstance(raw, list):
+                        found[(sch.lower(), tbl.lower())] = {c.lower(): "" for c in raw}
             cache_used = True
 
     # ── 缓存无效（过期/不存在/强制刷新）→ 连库整体查所有表 ──
@@ -428,11 +437,11 @@ def _check_db_schema(
             fetched = _fetch_tables_schema_batch(executor, all_tables)
             executor.close()
             found = fetched
-            # 写缓存
+            # 写缓存（存 {col: type}）
             if cache_path:
                 cache_new = {"cached_at": "", "tables": {}}
                 for (sch, tbl), cols in fetched.items():
-                    cache_new["tables"][f"{sch}.{tbl}"] = sorted(cols)
+                    cache_new["tables"][f"{sch}.{tbl}"] = cols  # 已是 {col: type}
                 _save_schema_cache(cache_path, cache_new)
         except Exception:
             return  # 连不上库，静默跳过
@@ -444,13 +453,50 @@ def _check_db_schema(
     )
 
     for (sch, tbl), cols_map in needed.items():
-        found_cols = found.get((sch.lower(), tbl.lower()), set())
-        for col_lower, (orig_col, target_field) in cols_map.items():
+        found_cols = found.get((sch.lower(), tbl.lower()), {})
+        for col_lower, (orig_col, target_field, source_type) in cols_map.items():
             if col_lower not in found_cols:
                 result.add_error(
                     f"DB 校验: 字段 {target_field} 的来源字段 '{orig_col}' "
                     f"在表 {sch}.{tbl} 中不存在（或表/字段名错误）"
                 )
+                continue
+            # 类型严格匹配（mapping 的 source_type vs 库里实际类型）
+            # 两边都 lower + 去空白后比较；source_type 为空时不查类型（mapping 没写就不验）
+            actual_type = found_cols.get(col_lower, "")
+            if source_type and actual_type:
+                expected_norm = _normalize_type(source_type)
+                actual_norm = _normalize_type(actual_type)
+                if expected_norm != actual_norm:
+                    result.add_error(
+                        f"DB 校验: 字段 {target_field} 的来源字段 '{orig_col}' 类型不符"
+                        f"（mapping={source_type}，库里={actual_type}）"
+                    )
+
+
+def _normalize_type(raw: str) -> str:
+    """类型名归一化（便于严格比较）。
+
+    处理常见的同义异名：
+    - varchar → character varying
+    - int → integer（PG 标准名）
+    - 去多余空白、括号内空白
+    """
+    t = raw.strip().lower().replace(" ", "")
+    aliases = {
+        "varchar": "charactervarying",
+        "int": "integer",
+        "int4": "integer",
+        "int8": "bigint",
+        "int2": "smallint",
+        "bool": "boolean",
+        "decimal": "numeric",
+        "timestamp": "timestampwithouttimezone",
+    }
+    # 只替换类型前缀部分（保留长度，如 charactervarying(64)）
+    base = t.split("(")[0]
+    rest = "(" + t.split("(", 1)[1] if "(" in t else ""
+    return aliases.get(base, base) + rest
 
 
 def main():
