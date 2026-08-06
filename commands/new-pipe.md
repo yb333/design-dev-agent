@@ -198,8 +198,10 @@ python CODING_SCRIPTS/ut_precheck.py \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
   --result {deliver}/ut_precheck_result.json
-# 开发环境可选加 --sample-blocks 10（主表块采样，加速 SELECT 预检）
 ```
+
+> **超时设置**：SELECT 预检可能跑 3-5 分钟，调脚本时设 timeout=600000ms（10分钟）。
+> 数据库端的 statement_timeout（默认600秒）会自动 cancel 超时查询，不会留僵尸进程。
 
 **读预检结果，判断下一步**：
 - 全通过 → 继续步骤 6b
@@ -219,8 +221,8 @@ python CODING_SCRIPTS/ut_execute.py \
   --report {deliver}/ut_report.md
 ```
 
-> INSERT 是长耗时操作（大表可能 10-30 分钟）。agent 调脚本后等待返回即可。
-> 预检已通过的规则才会执行 INSERT，预检失败的不浪费时间。
+> **超时设置**：INSERT + UT 检查可能跑 3-10 分钟，调脚本时设 timeout=600000ms（10分钟）。
+> 数据库端的 statement_timeout 会自动 cancel 超时查询。预检已通过的规则才执行 INSERT。
 
 ---
 
