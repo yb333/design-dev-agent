@@ -1,7 +1,7 @@
-# 闲时任务提示词：designer 试算 SQL + 调度任务路径进 ts.json
+# 闲时任务提示词：designer 试算 SQL + 调度任务路径进 ts.json + 单元测试补缺
 
 > 用于空闲时段执行。复制下面的提示词给 agent，在项目目录下执行。
-> 两件事独立，任务一较小可先做，任务二涉及面较大。
+> 三件事独立，可分开跑。
 
 ---
 
@@ -177,6 +177,93 @@
 3. 对 002 跑 assemble_ts，确认 ts.json 的 tasks.f 有 project_name/task_group
 4. 对 002 跑 assemble_export，确认 schedule_tasks.xlsx 的 tasks sheet 有正确的 project/task_group
 5. 四项全过 → `git add -A && git commit && git push origin main`，提交信息写明改动。任一项不过不提交，如实报告。
+
+---
+
+### 任务三：排查单元测试覆盖缺口并补充
+
+**背景**：之前 `resolve_all_params` 函数被 Edit 操作撕裂（函数体截断无 return），
+导致 UT 执行脚本报错。但没有测试挡住——因为这个函数没有直接单元测试，只被
+UT 脚本间接调用（而测试环境连不了库，走不到间接路径）。要排查所有类似缺口。
+
+**排查方法**：
+
+对以下脚本里的**每个公开函数（def 开头、不以 _ 开头的）**，检查是否有对应的单元测试。
+重点排查"被其他脚本 import 的函数"——这些是跨模块依赖，一旦行为变了影响面大。
+
+要排查的脚本和函数（按优先级排）：
+
+**高优先级（跨模块 import，行为变化影响大）**：
+
+1. `skills/dws-coding/scripts/run_ut.py`：
+   - `resolve_all_params` — ✅ 已补
+   - `resolve_test_value` — 有测试？检查
+   - `substitute_params` — 有测试？检查
+   - `wrap_insert` — 有测试？检查（test_coding_scripts.py 有 TestInsertWrapping）
+   - `read_select` — 有测试？检查
+   - `resolve_sample_blocks` — ✅ 已补（test_inject_tablesample.py）
+   - `inject_tablesample` — ✅ 已补
+
+2. `skills/dws-coding/scripts/check_sql.py`：
+   - `check_sql` — 有测试？检查（test_coding_scripts.py 有 TestCheckSql）
+   - `read_sql` / `split_cte_main` / `extract_select_aliases` / `extract_from_tables`
+     / `check_bracket_balance` / `check_no_select_star` — 逐个检查
+
+3. `skills/dws-coding/scripts/assemble_ddl.py`：
+   - `generate_ddl` / `generate_create_table` / `generate_create_view`
+     / `generate_rollback` / `split_table_ref` / `type_or_empty` — 逐个检查
+
+4. `skills/dws-coding/scripts/assemble_dq.py`：
+   - `generate_dq_sql` / `generate_dq_for_table` — 有测试？检查
+
+5. `skills/dws-coding/scripts/assemble_export.py`：
+   - `load_platform_config` / `resolve_config_by_schema` / `_cfg`
+     / `build_rule_rows` / `build_group_variables` / `build_target_fields` — 逐个检查
+
+6. `skills/dws-coding/scripts/slice_ts.py`：
+   - `slice_rule` — 有测试？检查（test_coding_scripts.py 有 TestSliceTs）
+
+7. `skills/design-dev-shared/scripts/dws_db.py`：
+   - `resolve_password` — ✅ 有测试
+   - `load_db_sources` / `resolve_source_by_schema` / `load_test_params` — 检查
+   - `create_executor` / `create_executor_for_schema` — 有 roles 测试
+
+8. `skills/dws-design/scripts/precheck.py`：
+   - `precheck` — ✅ 有测试（test_precheck_db.py）
+   - `_load_schema_cache` / `_save_schema_cache` / `_is_cache_expired`
+     / `_fetch_tables_schema_batch` / `_normalize_type` — 逐个检查
+
+9. `skills/dws-design/scripts/gate_summary.py`：
+   - `generate_gate1_summary` — 有测试？检查（很可能没有，补上）
+
+10. `skills/dws-design/scripts/assemble_ts.py`：
+    - `assemble_ts` / `build_exec_params` / `build_tables` / `build_rule`
+      / `is_dim_table` / `validate_decisions` / `render_data_flow_mermaid` — 逐个检查
+
+**中优先级（内部使用，但逻辑复杂）**：
+
+11. `skills/dws-coding/scripts/sql_validator.py`：
+    - `extract_aliases` / `check_bracket_balance` / `check_quote_balance`
+      / `check_keyword_spelling` / `check_insert_field_match` / `check_case_when_else` — 逐个检查
+
+12. `skills/dws-coding/scripts/validate_ddl.py`：
+    - `normalize_type` / `parse_ddl` / `parse_design_mappings` / `match_ddl_to_design` — 逐个检查
+
+**做法**：
+- 对每个函数，先 grep 测试文件确认有没有被测过
+- 没测过的 → 补单元测试（不连库、不依赖外部文件，用 mock/dict 构造输入）
+- 测试要覆盖：正常路径 + 边界条件 + 错误处理（如缺值 exit、异常回退）
+- 每个 `pytest.raises(SystemExit)` / 返回值断言 / 行为验证都算
+
+**约束**：
+- 只补**纯逻辑函数**的测试（不连库、不读真实文件、不依赖外部环境）
+- 需要连库/读 xlsx 的函数用 mock 测核心逻辑（参数解析、SQL 拼接、返回值格式）
+- 不要为了凑覆盖率写无意义的测试——每个测试要验证一个明确的行为
+- 补完跑 `python3 -m pytest tests/ -q` 确认全套通过
+
+**验证**：
+- `python3 -m pytest tests/ -q` 全套通过
+- 汇报：补了哪些函数的测试、之前缺测的有哪些、有没有发现新的 bug
 
 ---
 
