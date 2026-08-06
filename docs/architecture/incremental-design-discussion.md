@@ -309,14 +309,16 @@ RS L07 当前只到资产级（增量识别方式），缺**规则级/表级的�
 
 ---
 
-## 十、待决（落地前还需定的）
+## 十、待决（落地进度跟踪）
 
-- [ ] RS L07 的驱动表/增量条件规范怎么补（改 RS 模板 + rs-input-format + preprocess 解析）
-- [ ] step_type / target_role / produces_for 的字段定义进 ts-template
-- [ ] coder 怎么按 step_type 产不同 SQL（extract 产增量取数、merge 产 MERGE 语句）
-- [ ] UT 怎么按 produces_for 依赖编排执行顺序（现有 schedule_groups 能否承载）
-- [ ] designer.md / design-guide 怎么引导 designer 做增量设计（识别驱动表→拆步骤→声明依赖）
+- [x] RS L07 驱动表/增量条件规范（RS 模板已补"增量表及增量字段"段；preprocess 解析 → 闲时任务五）
+- [x] step_type / target_role / produces_for / reads 字段定义进 ts-template + design-decisions-template（已加，含注释）
+- [x] designer.md / design-guide / SKILL.md 引导做增量设计（三层已填充，design-guide §4.4/§5.2）
+- [ ] assemble_ts 组装 step_type 等新字段进 ts.json → **闲时任务四**
+- [ ] preprocess 解析 RS 增量表段进 rs_input.json → **闲时任务五**
+- [ ] coder 怎么按 step_type 产不同 SQL（extract 产增量取数、merge 产 MERGE 语句）→ **待讨论**（不是简单适配，需专门讨论 coder 的多步骤产出模式）
+- [ ] UT 怎么按 produces_for 依赖编排执行顺序（现有 schedule_groups 能否承载）→ **待讨论**（同上，UT 的多步骤执行编排需专门讨论）
 
 ---
 
-*本文档随讨论持续更新。第十节定完，转成正式设计方案落地。*
+*本文档随讨论持续更新。闲时任务四/五完成后，剩余 coder/UT 两项待讨论落地。*

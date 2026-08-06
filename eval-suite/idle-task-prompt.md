@@ -1,7 +1,7 @@
-# 闲时任务提示词：designer 试算 SQL + 调度任务路径进 ts.json + 单元测试补缺
+# 闲时任务提示词：designer 试算 SQL + 调度任务路径进 ts.json + 单元测试补缺 + assemble_ts 组装新字段 + preprocess 解析 RS 增量表
 
 > 用于空闲时段执行。复制下面的提示词给 agent，在项目目录下执行。
-> 三件事独立，可分开跑。
+> 五件事独立，可分开跑。
 
 ---
 
@@ -264,6 +264,99 @@ UT 脚本间接调用（而测试环境连不了库，走不到间接路径）�
 **验证**：
 - `python3 -m pytest tests/ -q` 全套通过
 - 汇报：补了哪些函数的测试、之前缺测的有哪些、有没有发现新的 bug
+
+---
+
+### 任务四：assemble_ts 组装 step_type 等新字段进 ts.json
+
+**背景**：ts 多步骤数据流模型已落地到设计指导（design-guide §4.4）和模板
+（ts-template.json + design-decisions-template.yaml 的 rule 内新增了 step_type /
+target_role / produces_for / reads 字段）。但 assemble_ts.py 还不搬这些字段——
+designer 在 design_decisions 里填了也会被丢掉。这是个断层，要堵上。
+
+**先读这些理解上下文**：
+- `skills/dws-design/assets/ts-template.json` 的 rules 段（看新字段的注释和默认值）
+- `skills/dws-design/assets/design-decisions-template.yaml` 的 rule 段（看 designer 怎么填）
+- `skills/dws-design/scripts/assemble_ts.py` 的 `build_rule` 函数（看现在怎么从 design_decisions 搬字段进 ts.json）
+- `skills/dws-design/references/design-guide.md` §4.4（看 step_type 四种类型和依赖声明语义）
+
+**要做的**：
+
+1. **改 `assemble_ts.py` 的 `build_rule` 函数**：从 rule_dec 搬以下字段进 ts.json 的 rule：
+   - `step_type`：默认 "full"（designer 没填时）
+   - `target_role`：默认 "target"（designer 没填时）
+   - `produces_for`：默认 [] （中间表规则才填）
+   - `reads`：默认 []（装配/merge 规则才填）
+   - 注意：这些字段是可选的，旧 design_decisions 没有这些字段不报错（用默认值兜底）
+
+2. **改 `assemble_ts.py` 的 `render_md`**（如果 ts.md 渲染里涉及规则展示）：
+   - 规则表加 step_type / target_role 列（或至少在规则展示里标出来）
+   - 中间表规则和目标表规则要能区分
+
+3. **测试**（tests/test_assemble_ts.py 补）：
+   - build_rule 搬了 step_type/target_role/produces_for/reads
+   - 旧 design_decisions（无新字段）用默认值不报错
+   - 有新字段时正确搬入
+
+**约束**：
+- 不改 design_decisions 模板（已经加了字段，不用动）
+- 不改 validate_decisions（上一轮已改为按表归属校验，兼容多步骤）
+- 保持向后兼容：旧 design_decisions（没有 step_type）跑 assemble_ts 不报错
+
+**验证**：
+- `python3 -m pytest tests/ -q` 全套通过
+- 对一个真实资产（如 003_dwb_trade_wide_f）跑 assemble_ts，确认 ts.json 的 rule 里有 step_type 字段
+
+---
+
+### 任务五：preprocess 解析 RS 增量表段
+
+**背景**：RS 模板 L07 已补了"增量表及增量字段"段：
+```
+**增量表及增量字段**
+| 来源表 | 增量字段 |
+|--------|---------|
+| xxxx.xxxx | xxxx |
+```
+但 preprocess.py 的 extract_rs_data 不解析这段——designer 拿不到结构化的
+驱动表信息（只能靠读 RS 原文）。要把这段解析进 rs_input.json。
+
+**先读这些理解上下文**：
+- `docs/templates/RS模板.md` 的 L07 段（看"增量表及增量字段"段的格式）
+- `skills/dws-design/scripts/preprocess.py` 的 `extract_rs_data` 函数（看现在怎么解析 RS 的其他段，如 L07 调度设计、湖表调度）
+- `skills/dws-design/references/rs-input-format.md`（看 rs_input 的格式规范，确定增量信息放哪个段）
+- 一个真实的 rs_input.json（如 10_project_deliver/dwb_order_center_f/ddlc_design_dev/_internal/rs_input.json 的 schedule 段）
+
+**要做的**：
+
+1. **改 `preprocess.py` 的 `extract_rs_data`**：解析"增量表及增量字段"段表格，提取为：
+   ```json
+   "incremental_tables": [
+     {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
+     {"source_table": "ods.ods_payment_f", "incremental_key": "dt"}
+   ]
+   ```
+   - 放进 rs_data 的 schedule 段下（和 incremental_key 同级），或顶层独立段（看现有结构哪个合适）
+   - 解析逻辑参照现有 L07 其他表格的解析方式（键值表/列表表的解析模式）
+
+2. **改 `build_rs_input`**：把 incremental_tables 搬进 rs_input.json
+   - 放在 schedule 段下（和 strategy/frequency/incremental_key 同级）
+
+3. **改 `build_compact`**（preprocess.py 里那个分块视图）：如果 incremental_tables 非空，在 compact 视图里体现（designer 读 compact 时能看到驱动表和增量字段）
+
+4. **测试**（tests/test_preprocess.py 补）：
+   - extract_rs_data 能解析增量表段（构造含该段的 RS 文本）
+   - 无该段的 RS（全量资产）不报错，incremental_tables 为空
+   - build_rs_input 把 incremental_tables 搬进 schedule 段
+
+**约束**：
+- 解析容错：表格格式不标准（缺列、空行）不报错，跳过
+- 向后兼容：旧 RS（没有增量表段）正常解析，incremental_tables 为空列表
+- 不改 RS 模板（用户已补，不动）
+
+**验证**：
+- `python3 -m pytest tests/ -q` 全套通过
+- 对一个含增量表段的 RS 跑 preprocess，确认 rs_input.json 的 schedule 段有 incremental_tables
 
 ---
 
