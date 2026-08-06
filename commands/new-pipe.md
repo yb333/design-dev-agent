@@ -31,7 +31,9 @@ agent: build
     └── _internal/                        ← 过程产物
         ├── rs_input.json                 ← 预处理产出
         ├── design_decisions.yaml         ← 设计决策
-        └── ut_report.txt                 ← UT 执行报告（如有数据库）
+        ├── ut_precheck_result.json       ← UT 预检结果（步骤6a 产，6b 读）
+        ├── ut_report.txt                 ← UT 执行报告（如有数据库）
+        └── diagnose/                     ← 数据质量诊断的临时产物（步骤7b 产）
 ```
 
 > 下文用 `{deliver}` 代指 `10_project_deliver/{资产名}/ddlc_design_dev`。
@@ -197,7 +199,7 @@ python CODING_SCRIPTS/ut_precheck.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
-  --result {deliver}/ut_precheck_result.json
+  --result {deliver}/_internal/ut_precheck_result.json
 ```
 
 > **超时设置**：SELECT 预检可能跑 3-5 分钟，调脚本时设 timeout=600000ms（10分钟）。
@@ -218,11 +220,12 @@ python CODING_SCRIPTS/ut_execute.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
-  --precheck-result {deliver}/ut_precheck_result.json \
+  --precheck-result {deliver}/_internal/ut_precheck_result.json \
   --report {deliver}/ut_report.md
 ```
 
-> ⚠️ `--precheck-result` 路径必须与步骤6a 的 `--result` 一致。读到才会执行 INSERT，读不到会直接退出（避免在预检未通过时误灌数据）。
+> ⚠️ `--precheck-result` 路径必须与步骤6a 的 `--result` 一致（都在 `_internal/` 下）。
+> 读到才会执行 INSERT，读不到会直接退出（避免在预检未通过时误灌数据）。
 
 > **超时设置**：INSERT + UT 检查可能跑 3-10 分钟，调脚本时设 timeout=600000ms（10分钟）。
 > 数据库端的 statement_timeout 会自动 cancel 超时查询。预检已通过的规则才执行 INSERT。
@@ -307,8 +310,8 @@ Task(
 coder 改完重跑步骤6验证该规则。**每规则限 3 轮**。
 
 > 💡 过程中 designer/coder 可能产出临时分析脚本或中间产物，统一放
-> `{deliver}/.diagnose/` 内部目录下（command 负责建目录引导）。后续积累稳定后
-> 再提炼成标准辅助脚本。
+> `{deliver}/_internal/diagnose/` 下（过程产物目录的子目录，command 负责建）。
+> 后续积累稳定后再提炼成标准辅助脚本。
 
 ### 7c. 环境问题 → 人（不回调任何 agent）
 

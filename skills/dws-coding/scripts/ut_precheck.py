@@ -198,8 +198,10 @@ def main():
     print()
     print(f"预检汇总: ✅{passed} 通过  ❌{failed} 失败  ⏭️{skipped} 跳过")
 
-    # 写结果文件（供 ut_execute 读）
-    result_path = args.result or str(ts_path.parent / "ut_precheck_result.json")
+    # 写结果文件（供 ut_execute 读）——默认放 _internal/ 过程产物目录
+    internal_dir = ts_path.parent / "_internal"
+    internal_dir.mkdir(exist_ok=True)
+    result_path = args.result or str(internal_dir / "ut_precheck_result.json")
     Path(result_path).write_text(json.dumps({
         "results": results,
         "passed": passed,

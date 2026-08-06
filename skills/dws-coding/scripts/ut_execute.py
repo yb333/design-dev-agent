@@ -48,8 +48,8 @@ def main():
     business_key = design.get("business_key", [])
     data_flow = ts.get("data_flow", {})
 
-    # 读预检结果（确认表已建好）——读不到直接退出，避免在预检未通过时误灌数据
-    precheck_path = args.precheck_result or str(ts_path.parent / "ut_precheck_result.json")
+    # 读预检结果（确认表已建好）——默认从 _internal/ 读，读不到直接退出避免误灌数据
+    precheck_path = args.precheck_result or str(ts_path.parent / "_internal" / "ut_precheck_result.json")
     if not Path(precheck_path).exists():
         print(f"❌ 预检结果文件不存在: {precheck_path}\n   请先跑 ut_precheck.py（其 --result 路径需与本参数一致）。",
               file=sys.stderr)
