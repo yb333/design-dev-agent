@@ -374,8 +374,9 @@ def _check_db_schema(
     # 从 field_mappings 收集"要用到的来源字段"：{(schema, table): {column: target_field}}
     # 跳过纯派生行（赋值/序列、source_column 空）和审计字段——这些不查源表
     field_mappings = rs_input.get("field_mappings", [])
-    # {(schema, table): {source_column_lower: (原source_column, target_field, source_type)}}
-    needed: dict[tuple[str, str], dict[str, tuple[str, str, str]]] = {}
+    # {(schema, table): {source_column_lower: (原source_column, [target_fields], source_type)}}
+    # 同一来源字段映射多个目标时，target_fields 累积成列表（避免覆盖丢失）
+    needed: dict[tuple[str, str], dict[str, list]] = {}
     for fm in field_mappings:
         source_column = (fm.get("source_column") or "").strip()
         if not source_column:
@@ -386,10 +387,13 @@ def _check_db_schema(
         table = (fm.get("source_table") or "").strip()
         if not schema or not table:
             continue
-        source_type = (fm.get("source_type") or "").strip()
-        needed.setdefault((schema, table), {})[source_column.lower()] = (
-            source_column, fm.get("target_column", "?"), source_type
-        )
+        col_key = source_column.lower()
+        tbl_map = needed.setdefault((schema, table), {})
+        if col_key not in tbl_map:
+            source_type = (fm.get("source_type") or "").strip()
+            tbl_map[col_key] = [source_column, [], source_type]
+        # 累积目标字段（同一来源字段可能映射到多个目标）
+        tbl_map[col_key][1].append(fm.get("target_column", "?"))
 
     if not needed:
         return
@@ -454,23 +458,27 @@ def _check_db_schema(
 
     for (sch, tbl), cols_map in needed.items():
         found_cols = found.get((sch.lower(), tbl.lower()), {})
-        for col_lower, (orig_col, target_field, source_type) in cols_map.items():
+        for col_lower, entry in cols_map.items():
+            orig_col, target_fields, source_type = entry
+            # 报错归属以"来源字段"为主语（存在性/类型是来源字段的属性，与目标无关）
+            # 顺带显示受影响的目标字段：单个直接显示，多个显示数量
+            targets_str = target_fields[0] if len(target_fields) == 1 else f"{len(target_fields)}个目标字段"
+
             if col_lower not in found_cols:
                 result.add_error(
-                    f"DB 校验: 字段 {target_field} 的来源字段 '{orig_col}' "
-                    f"在表 {sch}.{tbl} 中不存在（或表/字段名错误）"
+                    f"DB 校验: 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
+                    f"在库中不存在（或表/字段名错误）"
                 )
                 continue
             # 类型严格匹配（mapping 的 source_type vs 库里实际类型）
-            # 两边都 lower + 去空白后比较；source_type 为空时不查类型（mapping 没写就不验）
             actual_type = found_cols.get(col_lower, "")
             if source_type and actual_type:
                 expected_norm = _normalize_type(source_type)
                 actual_norm = _normalize_type(actual_type)
                 if expected_norm != actual_norm:
                     result.add_error(
-                        f"DB 校验: 字段 {target_field} 的来源字段 '{orig_col}' 类型不符"
-                        f"（mapping={source_type}，库里={actual_type}）"
+                        f"DB 校验: 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
+                        f"类型不符（mapping={source_type}，库里={actual_type}）"
                     )
 
 

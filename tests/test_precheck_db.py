@@ -653,3 +653,60 @@ class TestTypeCheck:
         result = precheck(rs)
         type_errors = [e for e in result.errors if "类型不符" in e]
         assert type_errors == [], f"source_type 空不应查类型: {type_errors}"
+
+    def test_one_source_to_multi_target_single_error(self, monkeypatch):
+        """一个来源字段映射多个目标 → 类型错只报一次（以来源字段为主语，显示目标数）。
+
+        amount 映射到 total_amount 和 refund_amount 两个字段。
+        amount 类型错 → 只报一条（amount 的错），不重复报两个目标的。
+        """
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"amount": "bigint"}  # 库里 bigint
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+
+        # 同一来源 amount 映射到两个目标
+        rs = _make_rs_input([
+            {"source_schema": "ods", "source_table": "ods_test_f",
+             "source_column": "amount", "source_type": "DECIMAL(18,2)",
+             "transform_rule": "数据加工", "transform_detail": "SUM(amount)",
+             "target_column": "total_amount", "target_column_cn": "总额",
+             "target_type": "DECIMAL(18,2)", "source_alias": "t", "remark": ""},
+            {"source_schema": "ods", "source_table": "ods_test_f",
+             "source_column": "amount", "source_type": "DECIMAL(18,2)",
+             "transform_rule": "数据加工", "transform_detail": "SUM(amount) for refund",
+             "target_column": "refund_amount", "target_column_cn": "退款额",
+             "target_type": "DECIMAL(18,2)", "source_alias": "t", "remark": ""},
+        ])
+        result = precheck(rs)
+
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        # 只报一条（amount 类型错），不是两条
+        assert len(type_errors) == 1, f"应只报一条来源字段类型错，实际{len(type_errors)}: {type_errors}"
+        # 报错以来源字段为主语
+        assert "amount" in type_errors[0]
+        # 显示"2个目标字段"（不是某个具体目标）
+        assert "2个目标字段" in type_errors[0]
+
+    def test_one_source_to_single_target_shows_target_name(self, monkeypatch):
+        """一个来源映射单个目标 → 报错显示具体目标名（不是数量）。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"amount": "bigint"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "amount", "source_type": "DECIMAL(18,2)",
+            "transform_rule": "数据加工", "transform_detail": "SUM(amount)",
+            "target_column": "total_amount", "target_column_cn": "总额",
+            "target_type": "DECIMAL(18,2)", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert len(type_errors) == 1
+        # 单目标时显示具体目标名
+        assert "total_amount" in type_errors[0]
