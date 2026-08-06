@@ -262,6 +262,12 @@ class PsycopgExecutor(DBExecutor):
         if self._conn is None or self._conn.closed:
             self._conn = psycopg2.connect(**self._get_conn_params())
             self._conn.autocommit = True  # DDL 需要 autocommit
+            # 设置语句超时（security.timeout 秒，0=不限制）
+            # 在连接建立时设一次，后续复用的连接都带这个超时
+            if self._security.timeout > 0:
+                cur = self._conn.cursor()
+                cur.execute(f"SET statement_timeout = {self._security.timeout * 1000}")
+                cur.close()
         return self._conn
 
     def close(self):

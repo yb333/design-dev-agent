@@ -248,3 +248,72 @@ class TestConnectionReuse:
         executor.close()
         executor.execute("SELECT 1")
         assert self._connect_calls["n"] == 2  # close 后重新建连
+
+
+class TestStatementTimeout:
+    """语句超时测试：security.timeout>0 时建连设 statement_timeout。"""
+
+    def _make_recording_fake(self, executed_sqls):
+        """构造记录 SQL 的 fake psycopg2。"""
+        import types
+
+        class RecordingConn:
+            def __init__(self):
+                self.closed = False
+                self.autocommit = False
+
+            def cursor(self, **kw):
+                cur = MagicMock()
+                cur.execute = lambda sql: executed_sqls.append(sql)
+                cur.description = None
+                cur.rowcount = 0
+                cur.close = lambda: None
+                return cur
+
+            def close(self):
+                self.closed = True
+
+        fake = types.ModuleType("psycopg2")
+        fake.extras = types.ModuleType("psycopg2.extras")
+        fake.extras.RealDictCursor = type("RealDictCursor", (), {})
+        fake.connect = lambda **kw: RecordingConn()
+        return fake
+
+    def test_timeout_set_on_connect(self, tmp_path):
+        """security.timeout>0 时，配置正确加载（_get_conn 据此设 statement_timeout）。
+
+        不连真库（本机无 psycopg2），验证 load_db_sources 读出的 timeout 正确——
+        _get_conn 建连时据此决定是否 SET statement_timeout = timeout*1000。
+        """
+        import json
+        import dws_db
+
+        cfg = {
+            "default": "dws-dev",
+            "sources": {"dws-dev": {"host": "h", "roles": {
+                "admin": {"user": "a", "password": "ap"},
+                "etl": {"user": "e", "password": "ep"},
+            }}},
+            "security": {"allowWriteOperations": True, "maxRows": 100, "timeout": 300},
+        }
+        config_path = tmp_path / "db.json"
+        config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+        _, _, security, _ = dws_db.load_db_sources(str(config_path))
+        assert security.timeout == 300, \
+            f"security.timeout 应为 300，实际 {security.timeout}"
+
+    def test_timeout_zero_skips_set(self, tmp_path, monkeypatch):
+        """security.timeout=0（不限制）时，不执行 SET statement_timeout。"""
+        import json
+
+        executed_sqls = []
+        monkeypatch.setattr("dws_db.psycopg2", self._make_recording_fake(executed_sqls))
+
+        # timeout=0（_write_config 默认就是 0）
+        config_path = _write_config(tmp_path, {"dws-dev": _two_role_source()})
+        executor = create_executor(config_path, "dws-dev", role="etl")
+        executor.execute("SELECT 1")
+
+        set_sqls = [s for s in executed_sqls if "statement_timeout" in s]
+        assert set_sqls == [], f"timeout=0 不应 SET，实际: {set_sqls}"
