@@ -1158,9 +1158,6 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     if "data_exploration" in rs_data:
         rs_input["data_exploration"] = rs_data["data_exploration"]
 
-    # compact：分块紧凑视图（给 designer 读）。field_mappings 是真相源给脚本读。
-    rs_input["compact"] = build_compact(rs_input)
-
     return rs_input
 
 
@@ -1327,6 +1324,9 @@ def main():
     parser.add_argument("--mapping", required=True, help="mapping.xlsx 路径")
     parser.add_argument("--rs", help="RS.md 路径(可选, 无则只解析 mapping)")
     parser.add_argument("--output", required=True, help="rs_input.json 输出路径")
+    parser.add_argument("--view-output", default="",
+                        help="rs_input_view.json 输出路径（compact 视图，给 designer 读）。"
+                             "默认 output 同目录的 rs_input_view.json")
     args = parser.parse_args()
 
     # 1. 解析 mapping.xlsx
@@ -1365,6 +1365,13 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(rs_input, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"产出 rs_input.json: {output_path}")
+
+    # 5. 写 compact 视图（给 designer 读的紧凑格式，独立文件，只含 compact 块）
+    #    designer 用 Read 读这个文件（23KB），不读 rs_input.json 全文（120KB+）
+    view_path = Path(args.view_output) if args.view_output else output_path.parent / "rs_input_view.json"
+    compact = build_compact(rs_input)
+    view_path.write_text(json.dumps(compact, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"产出 rs_input_view.json: {view_path}（compact 视图，给 designer）")
 
 
 if __name__ == "__main__":

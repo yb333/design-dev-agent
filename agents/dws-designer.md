@@ -108,18 +108,15 @@ UT 跑通后发现"业务主键重复 / 审计字段空值 / 行数异常"，调
 
 # 输入
 
-调用方告诉你 rs_input.json 路径，例如：
-`10_project_deliver/{资产名}/ddlc_design_dev/_internal/rs_input.json`
-
-rs_input.json 是**单文件双块**：
-- **`compact` 块**——分块紧凑视图，**你读这块做设计判断**。三段：
+调用方告诉你两个文件路径：
+- **`rs_input_view.json`**——分块紧凑视图，**你主要读这个**做设计判断（只有 23KB 左右，不是全文）。三段：
   - `tables`：源表清单（哪些表、各自字段数、关联条件）→ 理解全貌、判断数据源缺口
   - `direct`：直取/赋值字段按源表分块（schema/alias 提块头，块体短 key）→ 批量搬运字段扫一眼过
   - `processed`：加工字段逐个平铺（含完整多步骤口径/多表来源合并）→ 逐个拆解加工链
   - `null_in_scene`（如有）：标注哪些字段在部分场景被赋 NULL（这些字段不在 direct/processed 里展开）
-- **`field_mappings` 块**——完整行对象列表，**脚本读这块**（assemble_ts/precheck）。你一般不用读，**仅当需要某字段的精确细节**（如完整 source_type 做类型核对、或某字段的全部来源行）时再查它。
+- **`rs_input.json`**——完整行对象列表（field_mappings），**脚本读这个**（assemble_ts/precheck）。你**一般不用读**，仅当需要某字段的精确细节（如完整 source_type 做类型核对、或某字段的全部来源行）时再查它。
 
-读 compact 块建立认知，需要精确细节才回查 field_mappings。
+读 view 建立认知，需要精确细节才回查 rs_input.json。
 
 你**不直接读** mapping.xlsx 或 RS.md——预处理已由调用方完成。
 

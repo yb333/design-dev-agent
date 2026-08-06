@@ -29,7 +29,8 @@ agent: build
     │   ├── schedule_tasks.xlsx           ← 调度平台导入（3 sheet）
     │   └── export_manifest.json          ← 元数据清单（给内网 skill 读）
     └── _internal/                        ← 过程产物
-        ├── rs_input.json                 ← 预处理产出（双块：field_mappings 给脚本 + compact 给 designer）
+        ├── rs_input.json                 ← 预处理产出（完整，给脚本读）
+        ├── rs_input_view.json            ← 预处理产出（compact 紧凑视图，给 designer 读，省70%）
         ├── design_decisions.yaml         ← 设计决策
         ├── ut_precheck_result.json       ← UT 预检结果（步骤6a 产，6b 读）
         ├── ut_report.txt                 ← UT 执行报告（如有数据库）
@@ -72,6 +73,8 @@ python DESIGN_SCRIPTS/preprocess.py \
   --output {deliver}/_internal/rs_input.json
 ```
 
+> 产出两个文件：`rs_input.json`（完整，给脚本读）+ `rs_input_view.json`（compact 紧凑视图，给 designer 读，约省 70%）。
+
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 
 ```bash
@@ -98,7 +101,7 @@ designer 内部会自行完成"产 design_decisions.yaml → 调 assemble_ts.py 
 Task(
   subagent_type="dws-designer",
   description="产出TS制品包",
-  prompt="读取 {deliver}/_internal/rs_input.json 的 compact 块（分块紧凑视图），产出 TS 制品包（ts.json + ts.md）到 {deliver}/。"
+  prompt="读取 {deliver}/_internal/rs_input_view.json（分块紧凑视图），产出 TS 制品包（ts.json + ts.md）到 {deliver}/。需要某字段精确细节时再查同目录 rs_input.json。"
 )
 ```
 

@@ -463,14 +463,18 @@ class TestBuildCompact:
         c_targets |= set(c.get("null_in_scene", []))
         assert fm_targets == c_targets, f"字段丢失：{fm_targets - c_targets} 或多余：{c_targets - fm_targets}"
 
-    def test_build_rs_input_includes_compact(self):
-        """build_rs_input 产出应含 compact 块（与 field_mappings 同级）。"""
+    def test_build_rs_input_excludes_compact(self):
+        """build_rs_input 产出不含 compact（compact 是独立 view 文件，由 main 写出）。"""
         from preprocess import build_rs_input
         mapping_raw = _mapping_raw()
         rs_data = _rs_data()
         result = build_rs_input(mapping_raw, rs_data)
-        assert "compact" in result, "rs_input 应含 compact 块"
-        assert "field_mappings" in result, "rs_input 仍应含 field_mappings（脚本读）"
-        assert "tables" in result["compact"]
-        assert "direct" in result["compact"]
-        assert "processed" in result["compact"]
+        # rs_input.json 是纯真相源（field_mappings 给脚本），不含 compact
+        assert "compact" not in result, "rs_input 不应含 compact（独立 view 文件）"
+        assert "field_mappings" in result
+        # compact 可从 rs_input 独立派生
+        from preprocess import build_compact
+        c = build_compact(result)
+        assert "tables" in c
+        assert "direct" in c
+        assert "processed" in c

@@ -55,7 +55,8 @@ ddlc_design_dev/
 ├── ut_report.md         ← 对外（UT 报告，给人看）
 ├── export/              ← 对外（平台制品包 xlsx，UT 通过后才生成）
 └── _internal/           ← ★ 过程产物（验证完就没用，不对外）
-    ├── rs_input.json              # 预处理产出（双块：field_mappings 给脚本 + compact 给 designer）
+    ├── rs_input.json              # 预处理产出（完整，给脚本读）
+    ├── rs_input_view.json         # 预处理产出（compact 紧凑视图，给 designer 读）
     ├── design_decisions.yaml      # designer 的设计决策
     ├── ut_precheck_result.json    # UT 预检结果（步骤6a 写，6b 读）
     ├── ut_report.txt              # 执行器内部报告
@@ -71,7 +72,7 @@ ddlc_design_dev/
 
 ## 核心流程（new-pipe.md 步骤）
 
-1. **预处理**：preprocess.py 转 rs_input.json（放 `_internal/`，**单文件双块**：`field_mappings` 行对象列表给脚本读 + `compact` 分块紧凑视图给 designer 读）→ precheck.py 校验输入完整性 + **连库校验字段类型**（pg_catalog UNION ALL 批量查，72h schema 缓存）
+1. **预处理**：preprocess.py 转 rs_input.json（完整，给脚本读）+ rs_input_view.json（compact 紧凑视图，给 designer 读，省 70%）→ precheck.py 校验输入完整性 + **连库校验字段类型**（pg_catalog UNION ALL 批量查，72h schema 缓存）
 2. **设计**：调 dws-designer 产 design_decisions.yaml → assemble_ts.py 组装 ts.json + ts.md
 3. **闸口①**：gate_summary.py 出摘要，人确认设计方向（非交互模式跳过）
 4. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
@@ -127,7 +128,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 - **测试不连库**：用 Python dict/fake executor 构造数据，`tests/conftest.py` 把三个 scripts 目录加进 sys.path。`make_rs_input`/`make_design_decisions`/`make_ts_json` 是数据工厂。
 - **Python snake_case**，提交规范 `feat/fix/refactor/docs: 描述`。
 - **designer 只改设计不改 SQL**；coder 只接 SQL 语法类问题。职责边界在 agent permission 白名单里硬约束。
-- **rs_input.json 单文件双块**：`field_mappings`（行对象列表，assemble_ts/precheck 脚本读）+ `compact`（分块紧凑视图，designer 读）。同一次 preprocess 产出，天然一致。改 compact 格式不影响脚本，改 field_mappings 不影响 compact（build_compact 每次从 field_mappings 现场派生）。
+- **rs_input 双文件**：`rs_input.json`（field_mappings 行对象列表，assemble_ts/precheck 脚本读）+ `rs_input_view.json`（compact 分块紧凑视图，designer 读）。同一次 preprocess 产出（view 是 build_compact 从 input 派生），天然一致。designer 用 Read 读 view（23KB）而非 input 全文（120KB）。
 
 ## 开发命令
 
