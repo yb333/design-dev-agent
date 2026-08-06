@@ -164,7 +164,7 @@ description: >-
 写好 design_decisions.yaml 后自检，再调脚本：
 
 - [ ] rules 里每个规则有 rule_code / rule_name / field_targets
-- [ ] **每个规则有 step_type**（full / aggregate / incremental_extract / merge，见 design-guide §4.4/§6）
+- [ ] **每个规则有 step_type**（full / aggregate / incremental_extract / merge，见 design-guide §4.4）
 - [ ] **中间表规则的 target_role=intermediate，目标表规则的 target_role=target**
 - [ ] **多步骤时声明依赖**：中间表填 produces_for，装配/merge 步骤填 reads
 - [ ] field_targets 覆盖 rs_input 的所有 target_column（不漏不重，含中间表字段）

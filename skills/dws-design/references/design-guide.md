@@ -117,7 +117,7 @@ designer 做规则拆分时，每个字段必须**只归属一个规则**。判�
 ## 四、步骤拆分与中间表决策
 
 designer 评估复杂度后决定**是否拆分步骤、是否建物理中间表**。
-这决定每个规则的 step_type（详见 §6）。
+这决定每个规则的 step_type（§4.4）。
 
 ### 4.1 复杂度评估指标
 
@@ -161,23 +161,55 @@ designer 评估复杂度后决定**是否拆分步骤、是否建物理中间表
 
 > 中间表的字段绝大多数与目标表字段同名同类型（透传/聚合），极少量 designer 自建字段（辅助计算中间产物）。中间表统一加审计字段。
 
-### 4.4 step_type 决策树
+### 4.4 step_type 决策（含字段参考）
 
-按以下顺序判断每个规则的 step_type：
+每个规则声明 step_type + target_role，多步骤间用 produces_for / reads 声明依赖。
+
+**决策顺序**：
 
 ```
 该规则是否处理增量数据？
 ├─ 否（全量）
 │   ├─ 命中复杂度阈值（§4.1）且满足物化条件（§4.2）？
-│   │   ├─ 是 → step_type=aggregate（聚合中间表，target_role=intermediate）
-│   │   └─ 否 → step_type=full（单规则直灌目标，CTE 内联，target_role=target）
-│   └─ 该规则是否读中间表装配目标？
-│       └─ 是 → step_type=full（装配步骤，target_role=target，reads=[中间表]）
+│   │   ├─ 是 → aggregate（聚合中间表，intermediate）
+│   │   └─ 否 → full（单规则直灌目标，CTE 内联，target）
+│   └─ 该规则读中间表装配目标？
+│       └─ 是 → full（装配步骤，target，reads=[中间表]）
 └─ 是（增量，详见 §5.2）
-    ├─ 该规则是从源表取增量到临时表？
-    │   └→ step_type=incremental_extract（target_role=intermediate，produces_for=[merge步骤]）
-    └─ 该规则是合并临时表到目标？
-        └→ step_type=merge（target_role=target，reads=[临时表]，load_mode=merge_into/分区删插）
+    ├─ 从源表取增量到临时表？→ incremental_extract（intermediate，produces_for=[merge步骤]）
+    └─ 合并临时表到目标？     → merge（target，reads=[临时表]，load_mode=merge_into/分区删插）
+```
+
+> 注：§4.1 阈值命中只是"考虑拆"的信号，最终拆不拆由 §4.2 物化条件决定。
+> 简单全量资产只有一个 full 规则（走老路），不涉及中间表和依赖声明。
+
+**四种 step_type**：
+
+| step_type | 用途 | target_role | 什么时候选 |
+|-----------|------|-------------|----------|
+| `full` | 单规则直灌目标（CTE 内联）；或读中间表装配目标 | target | 简单场景，或复杂场景的最终装配步骤 |
+| `aggregate` | 聚合产出物理中间表 | intermediate | 全量复杂：命中阈值（§4.1）且满足物化条件（§4.2） |
+| `incremental_extract` | 从源表取增量到临时表 | intermediate | 增量：每张驱动表一个，产出各自 tmp（§5.2） |
+| `merge` | 合并临时表/中间表到目标 | target | 增量合并：读 tmp，MERGE/分区删插到目标（§5.2） |
+
+**target_role**：`intermediate`（中间表，每次重建用完即丢）/ `target`（目标 F 表，按 load_mode 管理）
+
+**produces_for / reads**（与 data_flow.dependencies 互补）：
+- `produces_for`：中间表规则填，产出供哪些规则消费（rule_code 列表）
+- `reads`：装配/merge 规则填，读哪些中间表（表名列表）
+
+**示例**（全量复杂宽表）：
+```
+R0001: aggregate  → tmp1  (intermediate, produces_for=[R0003])
+R0002: aggregate  → tmp2  (intermediate, produces_for=[R0003])
+R0003: full       → 目标表 (target, reads=[tmp1,tmp2])
+```
+
+**示例**（多源增量）：
+```
+R0001: incremental_extract → tmp_a (intermediate, produces_for=[R0003], incremental={key:update_time,...})
+R0002: incremental_extract → tmp_b (intermediate, produces_for=[R0003], incremental={key:dt,...})
+R0003: merge → 目标表 (target, reads=[tmp_a,tmp_b], load_mode=merge_into)
 ```
 
 ## 五、调度设计
@@ -301,60 +333,3 @@ LTS 调度平台的跨任务依赖（弱依赖），每个上游依赖选 dep_ty
 - 不确定就用**宽依赖**（默认）
 - I 视图→F 表、DQ→I 视图：脚本自动补宽依赖，不需要填
 
----
-
-## 六、step_type / target_role 字段参考
-
-多步骤数据流的核心字段。每个规则声明自己的 step_type 和 target_role，
-多步骤间用 produces_for / reads 声明依赖。
-
-### step_type 四种类型
-
-| step_type | 用途 | target_role | 什么时候选 |
-|-----------|------|-------------|----------|
-| `full` | 单规则直接灌目标（CTE 内联中间逻辑）| target | 简单场景：JOIN 少、无粒度变化、字段加工直接。也用于读中间表装配目标 |
-| `aggregate` | 聚合产出物理中间表 | intermediate | 全量复杂场景：命中复杂度阈值（§4.1）且满足物化条件（§4.2） |
-| `incremental_extract` | 从源表取增量到临时表 | intermediate | 增量场景：每张驱动表一个，产出各自的 tmp（§5.2） |
-| `merge` | 合并临时表/中间表到目标表 | target | 增量合并：读 extract 步骤的 tmp，MERGE/分区删插到目标（§5.2） |
-
-> 简单全量资产只有一个 `full` 规则（走老路），不涉及中间表和依赖声明。
-
-### target_role
-
-| target_role | 含义 | 生命周期 |
-|-------------|------|---------|
-| `intermediate` | 中间表/临时表（供后续规则消费）| 每次重建（truncate 后灌，用完即丢）|
-| `target` | 目标 F 表（最终产出）| 按 load_mode 管理 |
-
-### produces_for / reads（步骤间依赖）
-
-多步骤数据流用这两个字段声明依赖（与 `data_flow.dependencies` 互补）：
-
-- `produces_for`: 本规则产出的中间表供哪些规则消费（rule_code 列表）
-- `reads`: 本规则读取哪些中间表（表名列表）
-
-示例（全量复杂宽表 order_center 模式）：
-```
-R0001: aggregate  → tmp1  (target_role=intermediate, produces_for=[R0003])
-R0002: aggregate  → tmp2  (target_role=intermediate, produces_for=[R0003])
-R0003: full       → 目标表 (target_role=target, reads=[tmp1,tmp2])
-```
-
-示例（多源增量）：
-```
-R0001: incremental_extract → tmp_a (target_role=intermediate, produces_for=[R0003], incremental={key:update_time,...})
-R0002: incremental_extract → tmp_b (target_role=intermediate, produces_for=[R0003], incremental={key:dt,...})
-R0003: merge → 目标表 (target_role=target, reads=[tmp_a,tmp_b], load_mode=merge_into, merge_key=business_key)
-```
-
-### 对应的产出字段
-
-| 字段 | 在哪声明 | ts-template 位置 |
-|------|---------|-----------------|
-| `step_type` | design_decisions.rules[].step_type | rules.{code}.step_type |
-| `target_role` | design_decisions.rules[].target_role | rules.{code}.target_role |
-| `produces_for` | design_decisions.rules[].produces_for | rules.{code}.produces_for |
-| `reads` | design_decisions.rules[].reads | rules.{code}.reads |
-| `incremental` | design_decisions.rules[].incremental | rules.{code}.incremental（extract 步骤填）|
-
-> assemble_ts.py 从 design_decisions 搬这些字段进 ts.json。designer 只在 design_decisions 填，不直接写 ts.json。

@@ -149,7 +149,7 @@
       "is_view_step": false,             // 是否视图步骤
       "design_intent": "",               // 该规则的设计意图(自然语言)
       "load_mode": "truncate_table",     // 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区级清空) | truncate_subpartition(子分区清空) | merge_into(upsert)
-      "step_type": "full",               // ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。详见 design-guide §4.4/§6
+      "step_type": "full",               // ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。详见 design-guide §4.4
       "target_role": "target",           // ★ 目标角色: intermediate(中间表,供后续规则消费) | target(目标F表)。决定生命周期和依赖
       "produces_for": [],                // ★ 本规则产出的中间表供哪些规则消费(rule_code列表)。中间表规则填，如 ["R0003"]
       "reads": [],                       // ★ 本规则读取哪些中间表(表名列表)。装配/merge规则填，如 ["tmp1","tmp2"]。与data_flow.dependencies互补
