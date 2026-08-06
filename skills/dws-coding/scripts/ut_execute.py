@@ -48,9 +48,13 @@ def main():
     business_key = design.get("business_key", [])
     data_flow = ts.get("data_flow", {})
 
-    # 读预检结果（确认表已建好）
+    # 读预检结果（确认表已建好）——读不到直接退出，避免在预检未通过时误灌数据
     precheck_path = args.precheck_result or str(ts_path.parent / "ut_precheck_result.json")
-    precheck = json.loads(Path(precheck_path).read_text(encoding="utf-8")) if Path(precheck_path).exists() else {}
+    if not Path(precheck_path).exists():
+        print(f"❌ 预检结果文件不存在: {precheck_path}\n   请先跑 ut_precheck.py（其 --result 路径需与本参数一致）。",
+              file=sys.stderr)
+        sys.exit(2)
+    precheck = json.loads(Path(precheck_path).read_text(encoding="utf-8"))
     precheck_results = {r["rule"]: r for r in precheck.get("results", [])}
 
     # 连库
@@ -223,11 +227,16 @@ def main():
                 report_lines.append("")
 
     if failed:
-        report_lines.append("## ⚠️ 问题清单")
+        report_lines.append("## ⚠️ 问题清单（数据质量类需回 designer）")
         report_lines.append("")
         for r in all_results:
             if r["status"] == "FAIL":
                 report_lines.append(f"- ❌ **{r['rule']}**（{r['target']}）: {r['detail']}")
+                for c in r.get("checks", []):
+                    if c["status"] == "FAIL" and c.get("samples"):
+                        report_lines.append(f"  - {c['check']} 样例:")
+                        for row in c["samples"]:
+                            report_lines.append(f"    - {row}")
 
     report_text = "\n".join(report_lines)
     report_path = args.report or str(ts_path.parent / "ut_report.md")

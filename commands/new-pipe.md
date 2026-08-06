@@ -218,8 +218,11 @@ python CODING_SCRIPTS/ut_execute.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
+  --precheck-result {deliver}/ut_precheck_result.json \
   --report {deliver}/ut_report.md
 ```
+
+> ⚠️ `--precheck-result` 路径必须与步骤6a 的 `--result` 一致。读到才会执行 INSERT，读不到会直接退出（避免在预检未通过时误灌数据）。
 
 > **超时设置**：INSERT + UT 检查可能跑 3-10 分钟，调脚本时设 timeout=600000ms（10分钟）。
 > 数据库端的 statement_timeout 会自动 cancel 超时查询。预检已通过的规则才执行 INSERT。
@@ -228,20 +231,89 @@ python CODING_SCRIPTS/ut_execute.py \
 
 ## 步骤 7：执行回路（如有失败）
 
-读 UT 报告，区分失败类型：
+读 UT 报告，**按失败项类型分流**。先判断是哪一类，再决定回谁。
 
-**SQL 问题**（字段/类型/语法错误）→ 恢复 coder 会话改：
+> ⚠️ **关键原则**：数据质量类失败（主键重复/空值/行数异常）一律不回 coder。
+> coder 拿到这类问题会本能地用 ROW_NUMBER/DISTINCT 去"消除症状"，掩盖了根因
+> （关联发散/关联键选错/缺过滤条件）。这类问题的根在设计层，必须退回 designer。
+
+### 7a. SQL 问题 → coder（改语法）
+
+**识别**：INSERT 报错信息含 COLUMN / TYPE / SYNTAX / DOES NOT EXIST；或预检阶段就 FAIL。
+这类是 SQL 语法/字段/类型错误，coder 改 SELECT 即可。
+
+恢复该规则的 coder 会话（**按规则恢复，不新开会话**）：
 ```
 Task(
   subagent_type="dws-coder",
-  task_id="{之前记住的 task_id}",   ← 恢复原会话，不重新加载上下文
-  description="修复 {rule_code} 执行报错",
-  prompt="{rule_code} 执行报错：{报错信息}。请修正 SELECT 后重跑。"
+  task_id="{该规则 coder 的 task_id，步骤5 记下的}",
+  description="修复 {rule_code} SQL 报错",
+  prompt="{rule_code} 执行报错：{报错信息}。请修正 SELECT。"
 )
 ```
-coder 改完后重跑步骤6验证。**每个规则限 3 轮**。
+coder 改完后重跑步骤6验证该规则。**每规则限 3 轮**。
 
-**环境问题**（权限/连接/源表不存在）→ 不回调 coder，闸口②报告给人。
+### 7b. 数据质量问题 → designer（改设计，回闸口①）
+
+**识别**：INSERT 成功，但 UT 检查项 FAIL：业务主键重复 / 审计字段空值 / 行数异常。
+UT 报告的"问题清单"段会带重复键/空值的**样例数据**。
+
+**第1步：组"精简依据包"传给 designer**。依据包内容（够判断即可，别堆数据）：
+- 失败规则编码 + 失败项 + 样例数据（UT 报告里已有，直接摘）
+- coder 实际跑的 SELECT 文件路径（`{deliver}/etl/{rule}.sql`）
+- designer 当初声明的 `join_safety` + `business_key`（从 ts.json 摘该规则段）
+
+调 designer（**新会话**，让它独立判断）：
+```
+Task(
+  subagent_type="dws-designer",
+  task_id="{之前 designer 的 task_id}",   ← 恢复原设计会话
+  description="诊断 {rule_code} 数据质量问题",
+  prompt="""
+{rule_code}（目标表 {target}）UT 数据质量检查失败：
+- 失败项: {检查项 + 样例，摘自 UT 报告}
+- coder 实际跑的 SELECT: {deliver}/etl/{rule}.sql
+- 你当初声明的 join_safety: {从 ts.json 摘}
+- 你当初声明的 business_key: {从 ts.json 摘}
+
+请对照判断：
+① 是关联设计该收敛（join_safety 该补策略）→ 你改 ts.json 的 joins/join_safety
+② 还是 business_key 标错了（产出粒度下不唯一）→ 你改 ts.json 的 business_key
+③ 还是源表本身多对一（RS mapping 把明细标成主关联）→ 标记"需业务确认"，不改
+
+判断依据：读 SELECT 的 JOIN 链 + 样例数据，定位哪个 JOIN 让行数放大；
+对照 join_safety 看你当时是否误判了键唯一性；
+对照 business_key_design 看主键是 RS 给的还是你调的。
+"""
+)
+```
+
+**第2步：designer 改完后，必须回闸口①让人确认**，不能跳过：
+```
+用 question 展示 designer 的修改（哪些 joins/join_safety/business_key 改了 + 改的原因）
+→ 用户确认 → 进入第3步
+→ 用户要再改 → 回 7b 第1步继续调 designer
+```
+
+**第3步：闸口①确认后，恢复该规则 coder 旧会话按新设计改 SELECT**：
+```
+Task(
+  subagent_type="dws-coder",
+  task_id="{该规则 coder 的 task_id}",
+  description="按新设计修正 {rule_code}",
+  prompt="设计变更（闸口①已确认）：{joins/join_safety/business_key 的具体变更}。请据此修正 {rule_code} 的 SELECT 后重跑。"
+)
+```
+coder 改完重跑步骤6验证该规则。**每规则限 3 轮**。
+
+> 💡 过程中 designer/coder 可能产出临时分析脚本或中间产物，统一放
+> `{deliver}/.diagnose/` 内部目录下（command 负责建目录引导）。后续积累稳定后
+> 再提炼成标准辅助脚本。
+
+### 7c. 环境问题 → 人（不回调任何 agent）
+
+**识别**：连接失败 / 权限不足 / 源表不存在 / 连库超时。
+不是 SQL 也不是设计能解决的，闸口②报告给人处理。
 
 ---
 

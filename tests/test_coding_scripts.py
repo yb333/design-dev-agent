@@ -241,6 +241,102 @@ class TestInsertWrapping:
 
 
 # ============================================================
+# run_ut_check 测试（用 fake executor，不连库）
+# 验证：主键重复/空值时捕获 samples 样例（数据质量回退包的硬数据来源）
+# ============================================================
+
+class _FakeResult:
+    def __init__(self, success=True, rows=None, columns=None, error=None):
+        self.success = success
+        self.rows = rows or []
+        self.columns = columns or []
+        self.error = error
+
+
+class _FakeExecutor:
+    """按 SQL 子串匹配返回预设结果，模拟 executor.execute"""
+    def __init__(self, responses):
+        # responses: list of (sql_substr, _FakeResult)
+        self.responses = responses
+        self.calls = []
+
+    def execute(self, sql):
+        self.calls.append(sql)
+        for substr, result in self.responses:
+            if substr in sql:
+                return result
+        return _FakeResult(success=True, rows=[{"cnt": 0}], columns=["cnt"])
+
+
+class TestRunUtCheck:
+    def test_pk_unique_pass_no_samples(self):
+        """主键无重复：PASS 且不带 samples"""
+        from run_ut import run_ut_check
+        exe = _FakeExecutor([
+            ("HAVING COUNT(*)", _FakeResult(rows=[])),  # 主键无重复
+            ("IS NULL", _FakeResult(rows=[{"cnt": 0}])),  # 审计字段无空值
+        ])
+        results = run_ut_check(exe, "schema.tbl", ["id"], {"del_flag": {}})
+        pk_check = [c for c in results if c["check"] == "业务主键唯一"][0]
+        assert pk_check["status"] == "PASS"
+        assert "samples" not in pk_check
+
+    def test_pk_duplicate_captures_samples(self):
+        """主键重复：FAIL 且 samples 含重复键样例（LIMIT 5）"""
+        from run_ut import run_ut_check
+        dup_rows = [
+            {"id": "A1", "cnt": 3},
+            {"id": "A2", "cnt": 2},
+        ]
+        exe = _FakeExecutor([
+            ("HAVING COUNT(*)", _FakeResult(rows=dup_rows)),  # 主键重复
+            ("IS NULL", _FakeResult(rows=[{"cnt": 0}])),  # 审计字段无空值
+        ])
+        results = run_ut_check(exe, "schema.tbl", ["id"], {"del_flag": {}})
+        pk_check = [c for c in results if c["check"] == "业务主键唯一"][0]
+        assert pk_check["status"] == "FAIL"
+        assert pk_check["samples"] == dup_rows
+        assert "A1" in str(pk_check["samples"])
+
+    def test_pk_query_uses_limit_5(self):
+        """主键重复检查 SQL 必须带 LIMIT 5（防抓一堆数据）"""
+        from run_ut import run_ut_check
+        exe = _FakeExecutor([
+            ("COUNT(*) AS cnt FROM schema.tbl", _FakeResult(rows=[{"cnt": 10}])),
+            ("HAVING COUNT(*)", _FakeResult(rows=[])),
+        ])
+        run_ut_check(exe, "schema.tbl", ["id"], {})
+        pk_sql = [c for c in exe.calls if "HAVING COUNT(*)" in c][0]
+        assert "LIMIT 5" in pk_sql
+
+    def test_audit_null_captures_samples(self):
+        """审计字段空值：FAIL 且 samples 含空值行样例（LIMIT 3）"""
+        from run_ut import run_ut_check
+        null_rows = [{"id": "A1", "del_flag": None}, {"id": "A2", "del_flag": None}]
+        exe = _FakeExecutor([
+            ("GROUP BY id", _FakeResult(rows=[])),                     # 主键检查通过
+            ("LIMIT 3", _FakeResult(rows=null_rows)),                  # 空值样例（特异子串放前）
+            ("IS NULL", _FakeResult(rows=[{"cnt": 2}])),                # del_flag 空值计数
+        ])
+        results = run_ut_check(exe, "schema.tbl", ["id"], {"del_flag": {"type": "nvarchar(1)"}})
+        null_check = [c for c in results if "审计字段非空(del_flag)" in c["check"]][0]
+        assert null_check["status"] == "FAIL"
+        assert null_check["samples"] == null_rows
+
+    def test_audit_null_pass_no_samples(self):
+        """审计字段无空值：PASS 且不带 samples"""
+        from run_ut import run_ut_check
+        exe = _FakeExecutor([
+            ("GROUP BY id", _FakeResult(rows=[])),                      # 主键通过
+            ("WHERE del_flag IS NULL", _FakeResult(rows=[{"cnt": 0}])),  # 无空值
+        ])
+        results = run_ut_check(exe, "schema.tbl", ["id"], {"del_flag": {}})
+        null_check = [c for c in results if "审计字段非空(del_flag)" in c["check"]][0]
+        assert null_check["status"] == "PASS"
+        assert "samples" not in null_check
+
+
+# ============================================================
 # dws_db.py 的配置解析测试（不连库）
 # ============================================================
 

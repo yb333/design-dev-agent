@@ -334,18 +334,21 @@ def run_ut_check(executor, target_table: str, business_key: list, audit_fields: 
             "detail": f"查询失败: {r.error}",
         })
 
-    # 检查2: 业务主键唯一
+    # 检查2: 业务主键唯一（重复时抓样例供 designer 归因，不抓一堆）
     if business_key:
         key_cols = ", ".join(business_key)
-        sql = f"SELECT {key_cols}, COUNT(*) AS cnt FROM {target_table} GROUP BY {key_cols} HAVING COUNT(*) > 1"
+        sql = f"SELECT {key_cols}, COUNT(*) AS cnt FROM {target_table} GROUP BY {key_cols} HAVING COUNT(*) > 1 LIMIT 5"
         r = executor.execute(sql)
         if r.success:
             dup_count = len(r.rows)
-            results.append({
+            entry = {
                 "check": "业务主键唯一",
                 "status": "PASS" if dup_count == 0 else "FAIL",
-                "detail": f"{'无重复' if dup_count == 0 else f'{dup_count} 个重复键'}（键: {key_cols}）",
-            })
+                "detail": f"{'无重复' if dup_count == 0 else f'{dup_count} 个重复键（最多展示5个）'}（键: {key_cols}）",
+            }
+            if dup_count > 0:
+                entry["samples"] = [dict(row) for row in r.rows]
+            results.append(entry)
         else:
             results.append({
                 "check": "业务主键唯一",
@@ -353,17 +356,24 @@ def run_ut_check(executor, target_table: str, business_key: list, audit_fields: 
                 "detail": f"查询失败: {r.error}",
             })
 
-    # 检查3: 审计字段非空
+    # 检查3: 审计字段非空（有空值时抓样例）
     for aname in audit_fields.keys():
         sql = f"SELECT COUNT(*) AS cnt FROM {target_table} WHERE {aname} IS NULL"
         r = executor.execute(sql)
         if r.success and r.rows:
             null_count = r.rows[0]["cnt"]
-            results.append({
+            entry = {
                 "check": f"审计字段非空({aname})",
                 "status": "PASS" if null_count == 0 else "FAIL",
                 "detail": f"{null_count} 行为空" if null_count > 0 else "无空值",
-            })
+            }
+            if null_count > 0:
+                # 抓3行空值样例，供 designer 判断是关联 LEFT JOIN 配错还是源数据问题
+                samp_sql = f"SELECT * FROM {target_table} WHERE {aname} IS NULL LIMIT 3"
+                rs = executor.execute(samp_sql)
+                if rs.success and rs.rows:
+                    entry["samples"] = [dict(row) for row in rs.rows]
+            results.append(entry)
 
     return results
 
