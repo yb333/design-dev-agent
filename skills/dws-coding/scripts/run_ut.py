@@ -94,6 +94,19 @@ def resolve_all_params(ts: dict, config_path: str) -> dict:
     test_cfg = load_test_params(config_path)
     values = {}
     missing = []
+    for pname in declared:
+        val = resolve_test_value(pname, test_cfg.get(pname))
+        if val is None or val == "":
+            missing.append(pname)
+        else:
+            values[pname] = val
+    if missing:
+        print(
+            f"❌ 以下参数声明了但 db-sources.json 没配测试值: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return values
 
 
 def resolve_sample_blocks(config_path: str, cli_value: int = 0) -> int:
@@ -118,19 +131,6 @@ def resolve_sample_blocks(config_path: str, cli_value: int = 0) -> int:
     except Exception:
         pass
     return 0
-    for pname in declared:
-        val = resolve_test_value(pname, test_cfg.get(pname))
-        if val is None or val == "":
-            missing.append(pname)
-        else:
-            values[pname] = val
-    if missing:
-        print(
-            f"❌ 以下参数声明了但 db-sources.json 没配测试值: {', '.join(missing)}",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    return values
 
 
 def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
