@@ -25,7 +25,7 @@ except AttributeError:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor
-from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, run_ut_check
+from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, run_ut_check, inject_tablesample
 
 
 def main():
@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--source", default="", help="数据源名")
     parser.add_argument("--report", default="", help="UT 报告输出路径（ut_report.md）")
     parser.add_argument("--precheck-result", default="", help="预检结果 JSON（默认 ts 同级 ut_precheck_result.json）")
+    parser.add_argument("--sample-blocks", type=int, default=0, help="主表块采样百分比（如 10=SYSTEM(10)），0=不采样。开发环境加速用")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -131,6 +132,8 @@ def main():
                 all_results.append(rule_result)
                 continue
             select_sql = substitute_params(select_sql, param_values)
+            # 开发环境加速：主表块采样（不破坏 SQL，注入失败回退原 SQL）
+            select_sql = inject_tablesample(select_sql, args.sample_blocks)
 
             # load_mode 预处理（模拟术加平台）
             load_mode = rule.get("load_mode", "truncate_table")

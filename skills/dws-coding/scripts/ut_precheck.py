@@ -28,7 +28,7 @@ except AttributeError:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor, load_test_params
-from run_ut import substitute_params, resolve_all_params, read_select
+from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample
 
 
 def main():
@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--rollback-dir", default="", help="回退脚本目录")
     parser.add_argument("--skip-ddl", action="store_true", help="跳过DDL执行")
     parser.add_argument("--result", default="", help="预检结果输出路径（JSON，默认 ts 同级 ut_precheck_result.json）")
+    parser.add_argument("--sample-blocks", type=int, default=0, help="主表块采样百分比（如 10=SYSTEM(10)），0=不采样。开发环境加速用")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -165,6 +166,7 @@ def main():
                 continue
 
             select_sql = substitute_params(select_sql, param_values)
+            select_sql = inject_tablesample(select_sql, args.sample_blocks)
             r_pre = etl_executor.execute(select_sql)
             if not r_pre.success:
                 error_msg = r_pre.error[:200] if r_pre.error else "未知错误"

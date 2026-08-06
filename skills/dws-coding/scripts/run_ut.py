@@ -152,6 +152,130 @@ def read_select(select_dir: Path, rule_code: str) -> str:
     return ""
 
 
+def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
+    """给 SELECT 的主表（最外层 FROM 第一张物理表）注入 TABLESAMPLE SYSTEM。
+
+    只注入主表（最外层 FROM 的第一张物理表），JOIN 的表不注入。
+    CTE/子查询里的表不注入（TABLESAMPLE 只能加在物理表上）。
+
+    设计原则（不可违背）：
+    - 注入失败时必须返回原 SQL，绝不破坏 coder 的 SQL 可执行性。
+    - 用 sqlglot 定位主表位置（只读 AST，不重建 SQL），用字符串插入注入。
+
+    Args:
+        select_sql: coder 产的 SELECT SQL。
+        sample_blocks: 采样块数百分比（如 10 = SYSTEM(10)）。0=不注入。
+
+    Returns:
+        注入后的 SQL；sample_blocks=0 或注入失败时返回原 SQL。
+    """
+    if sample_blocks <= 0:
+        return select_sql
+
+    try:
+        import sqlglot
+        from sqlglot import exp
+    except ImportError:
+        return select_sql  # 无 sqlglot，回退原 SQL
+
+    try:
+        trees = sqlglot.parse(select_sql, dialect="postgres")
+        tree = None
+        for t in trees:
+            if t is not None:
+                tree = t
+                break
+        if tree is None:
+            return select_sql
+
+        # 找最外层 SELECT 的 FROM 子句的第一张表
+        # 跳过 WITH/CTE 定义里的 SELECT（它们的 FROM 在 CTE 体里，不是最外层）
+        select_node = tree if isinstance(tree, exp.Select) else tree.find(exp.Select)
+        if select_node is None:
+            return select_sql
+
+        from_clause = select_node.args.get("from") or select_node.args.get("from_")
+        if from_clause is None:
+            # 兜底：用 find 找 From 节点
+            from_clause = tree.find(exp.From)
+        if from_clause is None:
+            return select_sql
+
+        # FROM 的第一张表（可能是 Table 或 Subquery）
+        main_table = from_clause.this  # From 的 this 是第一张表/子查询
+        if not isinstance(main_table, exp.Table):
+            return select_sql  # FROM 子查询，回退
+
+        # 必须有 schema（物理表）；无 schema 的可能是 CTE 引用
+        schema = main_table.db or ""
+        if not schema:
+            return select_sql  # 无 schema，可能是 CTE，回退
+
+        # 用 sqlglot 的位置信息精确定位（不重建 SQL，只在原文本插入）
+        # main_table.span 返回 (start, end) 在原 SQL 中的字符位置
+        # 但 sqlglot 的 span 要 copy/parse 后才可靠，这里用表名+schema 在原文本找
+        table_full = f"{schema}.{main_table.name}"
+        alias = main_table.alias or ""
+
+        # 在原 SQL 中找这张表的引用位置（schema.table 别名）
+        import re
+        if alias:
+            # 找 schema.table [AS] alias
+            pattern = re.compile(
+                rf'\b{re.escape(schema)}\.{re.escape(main_table.name)}\s+(?:AS\s+)?{re.escape(alias)}\b',
+                re.IGNORECASE,
+            )
+        else:
+            pattern = re.compile(
+                rf'\b{re.escape(schema)}\.{re.escape(main_table.name)}\b',
+                re.IGNORECASE,
+            )
+
+        match = pattern.search(select_sql)
+        if not match:
+            return select_sql  # 找不到，回退
+
+        # 确认这个匹配在 CTE 定义之外：
+        # 检查 match 之前是否有未闭合的 WITH/AS（ 表示在 CTE 体里）
+        # 简单判断：match 的位置应该在 WITH ... ) 之后（即 CTE 定义结束后）
+        # 更稳的做法：检查 match 前面最近的 SELECT 是不是 CTE 里的
+        # 用位置比较——CTE 定义在 SQL 前部，主查询的 FROM 在 CTE 定义之后
+        # 取 WITH 的结束位置（第一个 ) AS ( ... ) 的最后 ）作为 CTE 定义结束
+        # 如果 SQL 有 WITH，主表应该在最后一个 CTE 定义之后
+        if select_sql.strip().upper().startswith("WITH"):
+            # 找最后一个 CTE 定义结束的位置（粗略：找 "AS (" 的配对 ）
+            # 简化：主表位置必须 > 最后一个 ")" 的位置（CTE 体的闭合括号）
+            # 用括号配对找 CTE 体结束
+            cte_end = _find_cte_section_end(select_sql)
+            if cte_end is not None and match.start() < cte_end:
+                return select_sql  # 主表匹配位置在 CTE 定义内，回退
+
+        # 在匹配末尾插入 TABLESAMPLE
+        sample_clause = f" TABLESAMPLE SYSTEM ({sample_blocks})"
+        injected = select_sql[:match.end()] + sample_clause + select_sql[match.end():]
+        return injected
+
+    except Exception:
+        return select_sql  # 任何异常回退原 SQL
+
+
+def _find_cte_section_end(sql: str) -> int | None:
+    """找 WITH CTE 定义段的结束位置（最后一个 CTE 体闭合括号后）。
+
+    用于判断主表位置是否在 CTE 定义之后。
+    返回字符位置；找不到返回 None。
+    """
+    # 简化：找 WITH 后的括号配对，最后一个 ) AS 之前的 ) 就是 CTE 结束
+    # 更简单：找 "WITH ... ) SELECT" 模式里的 ) 位置
+    import re
+    # 找 CTE 定义结束（最后的 ")" 在主 SELECT 之前）
+    # 主 SELECT 的标志：) SELECT 或 ) 主查询
+    m = re.search(r'\)\s*(?:SELECT|INSERT)', sql, re.IGNORECASE)
+    if m:
+        return m.start()  # ) 的位置
+    return None
+
+
 def run_ut_check(executor, target_table: str, business_key: list, audit_fields: dict) -> list[dict]:
     """跑 UT 检查，返回检查结果列表"""
 
@@ -219,6 +343,7 @@ def main():
     parser.add_argument("--source", default="", help="数据源名（多schema多账号）")
     parser.add_argument("--skip-ddl", action="store_true", help="跳过DDL执行（表已存在）")
     parser.add_argument("--report", default="", help="UT 报告输出路径（ut_report.md）")
+    parser.add_argument("--sample-blocks", type=int, default=0, help="主表块采样百分比（如 10=SYSTEM(10)），0=不采样。开发环境加速用")
     args = parser.parse_args()
 
     # 读 ts.json
@@ -368,6 +493,8 @@ def main():
                 all_results.append(rule_result)
                 continue
             select_sql = substitute_params(select_sql, param_values)
+            # 开发环境加速：主表块采样（不破坏 SQL，注入失败回退原 SQL）
+            select_sql = inject_tablesample(select_sql, args.sample_blocks)
 
             # 步骤2.5: SELECT 预检（快速发现类型/字段问题，不写数据）—— etl 账号
             r_pre = etl_executor.execute(select_sql)

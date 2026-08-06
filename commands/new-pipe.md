@@ -198,6 +198,7 @@ python CODING_SCRIPTS/ut_precheck.py \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
   --result {deliver}/ut_precheck_result.json
+# 开发环境可选加 --sample-blocks 10（主表块采样，加速 SELECT 预检）
 ```
 
 **读预检结果，判断下一步**：
