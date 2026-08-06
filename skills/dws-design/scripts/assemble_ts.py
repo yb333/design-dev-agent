@@ -309,6 +309,12 @@ def validate_decisions(decisions, field_map):
 
     field_map: { target_column: field_mapping_record }
     返回 errors 列表(空=通过)。
+
+    多步骤模型下的字段分配语义：
+    - field_targets 表示该规则的 target_table 包含哪些字段
+    - 同一字段名可以出现在不同规则的 field_targets（中间表和目标表都有 user_id）
+    - 但同一张表不能被多个规则重复声明同一字段（同表内重复才报错）
+    - 覆盖完整性：目标表（target_role=target）的规则并集必须覆盖 rs_input 所有字段
     """
     errors = []
 
@@ -317,9 +323,12 @@ def validate_decisions(decisions, field_map):
         errors.append("design_decisions 里没有定义任何规则(rules 为空)")
         return errors
 
-    # 收集所有 field_targets, 检查重复和可查
-    seen_fields = {}  # target_column -> rule_code
     rs_fields = set(field_map.keys())
+
+    # 按 (table_short, field) 维度查重——同一字段可跨表，但不能在同表重复
+    seen_table_fields = {}  # (table_short, field) -> rule_code
+    # 收集目标表（target_role=target 或无 target_role 的规则）覆盖的字段
+    target_assigned = set()
 
     for rule in rules:
         code = rule.get("rule_code", "??")
@@ -327,26 +336,40 @@ def validate_decisions(decisions, field_map):
         if not targets:
             errors.append(f"规则 {code} 的 field_targets 为空")
             continue
+
+        tbl = rule.get("target_table", "")
+        tbl_short = tbl.rsplit(".", 1)[-1] if "." in tbl else tbl
+        is_target = rule.get("target_role", "target") == "target"
+
         for t in targets:
-            if t in seen_fields:
+            key = (tbl_short, t)
+            if key in seen_table_fields:
+                # 同一张表里重复声明同一字段 → 真重复（多 rule 写同表撞了）
                 errors.append(
-                    f"字段 '{t}' 重复分配: 同时在 {seen_fields[t]} 和 {code} 里"
+                    f"字段 '{t}' 在表 '{tbl_short}' 重复分配: "
+                    f"同时在 {seen_table_fields[key]} 和 {code} 里"
                 )
             else:
-                seen_fields[t] = code
+                seen_table_fields[key] = code
+
+            # 字段名必须在 rs_input 里找得到
             if t not in field_map:
                 errors.append(
                     f"规则 {code} 的 field_targets 里 '{t}' 在 rs_input.json 里找不到"
                     f"(检查字段名拼写)"
                 )
 
-    # 检查覆盖完整性: rs_input 的所有字段都被分配了
-    assigned = set(seen_fields.keys())
-    missing = rs_fields - assigned
+            # 目标表规则覆盖的字段计入完整性检查
+            if is_target:
+                target_assigned.add(t)
+
+    # 覆盖完整性：目标表规则必须覆盖 rs_input 所有字段
+    # （中间表的字段不要求覆盖 rs_input——它们可能是 designer 自建的聚合字段）
+    missing = rs_fields - target_assigned
     if missing:
         errors.append(
-            f"以下字段在 rs_input.json 里定义了, 但没有分配到任何规则: "
-            f"{sorted(missing)}"
+            f"以下字段在 rs_input.json 里定义了, 但没有分配到任何目标表规则"
+            f"(target_role=target): {sorted(missing)}"
         )
 
     return errors

@@ -48,7 +48,9 @@ rules:
     #   init_strategy: "首次全量加载，后续按 update_time 增量"  # 初始化策略
     #   init_mode: "参数控制"           # ★ 初始化实现方式：参数控制 | 独立规则组（designer 决定）
 
-    # 该规则产出哪些目标字段（填 target_column 名，脚本据此从 rs_input 搬字段详情）
+    # 该规则的 target_table 包含哪些字段（填 target_column 名）
+    # 中间表和目标表可以有同名字段（如 user_id 在 tmp1 和目标表各一份），不算重复
+    # 目标表规则（target_role=target）的并集必须覆盖 rs_input 所有字段
     field_targets:
       - contract_no
       - contract_name
