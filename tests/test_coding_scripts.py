@@ -256,6 +256,64 @@ class TestDbConfig:
         from dws_db import resolve_password
         assert resolve_password("${TEST_DB_PW}") == "secret123"
 
+
+# ============================================================
+# resolve_all_params 的直接单元测试（不连库，防函数体被意外截断）
+# ============================================================
+
+class TestResolveAllParams:
+    """resolve_all_params 行为测试。
+
+    这个测试的存在意义：之前 resolve_sample_blocks 插入时把 resolve_all_params
+    函数体撕裂了（无 return），但没有测试挡住——因为这个函数没有直接单元测试。
+    现在补上，确保函数行为正确（有返回值、缺值时 exit）。
+    """
+
+    def test_returns_values_when_configured(self, tmp_path):
+        """有 exec_params + 有 test_params → 返回正确参数值。"""
+        import json
+        from run_ut import resolve_all_params
+
+        cfg = {
+            "test_params": {"P_CYCLE_ID": {"type": "static", "value": "20260801000000"}},
+            "sources": {"x": {"roles": {"admin": {"user": "a", "password": ""}, "etl": {"user": "e", "password": ""}}}},
+        }
+        cfg_path = tmp_path / "db.json"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+        ts = {"meta": {"schedule": {"exec_params": {"P_CYCLE_ID": {"desc": "批次号"}}}}}
+        result = resolve_all_params(ts, str(cfg_path))
+        assert result == {"P_CYCLE_ID": "20260801000000"}, f"应返回参数值: {result}"
+
+    def test_returns_empty_when_no_exec_params(self, tmp_path):
+        """无 exec_params → 返回空 dict。"""
+        import json
+        from run_ut import resolve_all_params
+
+        cfg_path = tmp_path / "db.json"
+        cfg_path.write_text("{}", encoding="utf-8")
+
+        ts = {"meta": {"schedule": {}}}
+        result = resolve_all_params(ts, str(cfg_path))
+        assert result == {}, f"无 exec_params 应返回空 dict: {result}"
+
+    def test_exits_when_missing_test_param(self, tmp_path):
+        """有 exec_params + 缺 test_params → sys.exit(2)。"""
+        import json
+        from run_ut import resolve_all_params
+
+        cfg = {
+            "test_params": {},
+            "sources": {"x": {"roles": {"admin": {"user": "a", "password": ""}, "etl": {"user": "e", "password": ""}}}},
+        }
+        cfg_path = tmp_path / "db.json"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+        ts = {"meta": {"schedule": {"exec_params": {"P_CYCLE_ID": {"desc": "批次号"}}}}}
+        with pytest.raises(SystemExit) as exc_info:
+            resolve_all_params(ts, str(cfg_path))
+        assert exc_info.value.code == 2
+
     def test_resolve_password_missing_env(self, monkeypatch):
         """环境变量不存在返回空"""
         monkeypatch.delenv("NONEXISTENT_PW", raising=False)
