@@ -154,6 +154,73 @@ skills/dws-design/
 
 ---
 
+### 任务三：designer 试算 SQL（JOIN 键唯一性检查）
+
+**背景**：designer 做 join_safety 分析时，不确定 JOIN 键在右表唯一不唯一——这是"关联会不会发散"的事实依据。RS 只给了关联方式（文字），没给键唯一性（数据事实）。需要给 designer 一个试算手段。
+
+**注意**：只做 JOIN 键唯一性这一个场景。其他数据探索信息（表行数、空值率）RS L01 已提供，不重复。
+
+**核心约束**：
+- 复用 design-dev-shared/scripts/dws_db 的 `create_executor_for_schema`，**不重写连库逻辑**（选源/建连/超时/账号全复用）
+- 只读（etl 账号），只查单表（不跑 JOIN，不会发散）
+- 连不上库静默跳过（和 precheck 一致）
+- 不需要采样（单表 count/count(DISTINCT) 不会发散）
+
+**要做的**：
+
+1. **新建 `skills/dws-design/scripts/explore.py`**（设计探索脚本）：
+   - 参数：`--ts {ts路径}`（取 target schema 选源）`--check-join-key --schema {sch} --table {tbl} --key {col} [--where "{限定条件}"]`
+   - 内部逻辑（复用 dws_db）：
+     ```python
+     from dws_db import create_executor_for_schema
+     executor = create_executor_for_schema(target_schema, role="etl")
+     sql = f"SELECT count(*) AS total, count(DISTINCT {key}) AS distinct_cnt FROM {schema}.{table}"
+     if where_clause:
+         sql += f" WHERE {where_clause}"
+     r = executor.execute(sql)
+     executor.close()
+     ```
+   - 输出示例：
+     ```
+     表 dim.dim_store 的 store_id（限定: is_current = 1）：
+       总行数: 141753
+       去重数: 141750
+       重复数: 3
+       结论: ❌ 不唯一（JOIN 此表可能发散，join_safety 需给对齐策略）
+     ```
+   - `--where` 可选：designer 传 JOIN 时的范围限定（如 `is_current = 1`），验限定后的唯一性
+   - 连不上库（无配置/无 psycopg2）→ 输出"无法连库，跳过试算"，退出码 0（不阻断设计）
+
+2. **改 `skills/dws-design/assets/design-decisions-template.yaml` 的 join_safety 结构**：
+   ```yaml
+   join_safety:
+     - table: "dim_store"
+       join_filter: "is_current = 1"    # ← 新增：JOIN 此表时的范围限定（来自 mapping 的"关联&限定条件"）
+       join_key_unique: true             # 在 join_filter 限定下是否唯一
+       strategy: ""                      # 不唯一时的对齐策略
+       reason: ""
+   ```
+   join_filter 字段让 designer 明确写出"JOIN 此表加了什么 WHERE 限定"，explore.py 用它验唯一性。
+
+3. **改 `skills/dws-design/SKILL.md` 步骤 7（关联安全分析）**：
+   加引导——"对 JOIN 的非主表，如果不确定键唯一性，调 explore.py 验证：
+   `python DESIGN_SCRIPTS/explore.py --ts {deliver}/ts.json --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"`
+   看结果填 join_key_unique + strategy"
+
+4. **改 `skills/dws-design/scripts/assemble_ts.py`**：join_safety 段组装时保留 join_filter 字段（如果有）。
+
+**约束**：
+- explore.py 只做参数解析 + 拼 SQL + 调 dws_db + 格式化输出，连库逻辑零重写
+- 加测试：explore.py 的参数解析、SQL 拼接（带/不带 where）、输出格式
+- 如有需要，更新 install.py 的 DESIGN_SCRIPTS 路径引用
+
+**验证**：
+- `python3 -m pytest tests/ -q` 全套通过
+- explore.py 能跑（连不上库静默跳过，不报错）
+- 如实报告
+
+---
+
 ### 收尾
 1. 跑 `python3 -m pytest tests/ -q` 确认全套通过
 2. **自动提交**：`git add -A && git commit && git push origin main`，提交信息写明加了哪些陷阱用例、测试结果。
