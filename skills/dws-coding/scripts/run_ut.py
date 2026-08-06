@@ -177,14 +177,14 @@ def read_select(select_dir: Path, rule_code: str) -> str:
 
 
 def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
-    """给 SELECT 的主表（最外层 FROM 第一张物理表）注入 TABLESAMPLE SYSTEM。
+    """给 SELECT 的所有物理表（FROM + JOIN）注入 TABLESAMPLE SYSTEM。
 
-    只注入主表（最外层 FROM 的第一张物理表），JOIN 的表不注入。
-    CTE/子查询里的表不注入（TABLESAMPLE 只能加在物理表上）。
+    多主表场景（两个事实表 INNER JOIN）每张都要采样，否则没采样的那张
+    还是全量扫，照样慢。CTE/子查询里的表不注入。
 
     设计原则（不可违背）：
     - 注入失败时必须返回原 SQL，绝不破坏 coder 的 SQL 可执行性。
-    - 用 sqlglot 定位主表位置（只读 AST，不重建 SQL），用字符串插入注入。
+    - 用 sqlglot 定位物理表位置（只读 AST），用字符串插入注入（从后往前，避免位置偏移）。
 
     Args:
         select_sql: coder 产的 SELECT SQL。
@@ -200,7 +200,7 @@ def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
         import sqlglot
         from sqlglot import exp
     except ImportError:
-        return select_sql  # 无 sqlglot，回退原 SQL
+        return select_sql
 
     try:
         trees = sqlglot.parse(select_sql, dialect="postgres")
@@ -212,75 +212,88 @@ def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
         if tree is None:
             return select_sql
 
-        # 找最外层 SELECT 的 FROM 子句的第一张表
-        # 跳过 WITH/CTE 定义里的 SELECT（它们的 FROM 在 CTE 体里，不是最外层）
+        # 找最外层 SELECT（跳过 CTE 定义体内的 SELECT）
+        # 如果有 WITH，主查询的 SELECT 在 CTE 定义之后
+        main_select_start = 0
+        if select_sql.strip().upper().startswith("WITH"):
+            cte_end = _find_cte_section_end(select_sql)
+            if cte_end is not None:
+                main_select_start = cte_end
+
         select_node = tree if isinstance(tree, exp.Select) else tree.find(exp.Select)
         if select_node is None:
             return select_sql
 
-        from_clause = select_node.args.get("from") or select_node.args.get("from_")
-        if from_clause is None:
-            # 兜底：用 find 找 From 节点
-            from_clause = tree.find(exp.From)
-        if from_clause is None:
+        # 收集主查询里所有物理表（FROM + JOIN 的，有 schema 的）
+        # 用 sqlglot AST 找 Table 节点（可靠区分表引用 vs 列引用）
+        import re
+
+        # 从 sqlglot AST 拿到主查询里的所有 Table 节点
+        # Table 节点有 .db（schema）和 .name（表名）和 .alias
+        all_tables = []
+        for tbl in select_node.find_all(exp.Table):
+            schema = tbl.db or ""
+            if not schema:
+                continue  # 无 schema，可能是 CTE 引用，跳过
+            all_tables.append((schema, tbl.name, tbl.alias or ""))
+
+        if not all_tables:
             return select_sql
 
-        # FROM 的第一张表（可能是 Table 或 Subquery）
-        main_table = from_clause.this  # From 的 this 是第一张表/子查询
-        if not isinstance(main_table, exp.Table):
-            return select_sql  # FROM 子查询，回退
+        # 对每张表，在原 SQL 中找其引用位置并注入
+        insertions = []
+        for schema, table, alias in all_tables:
+            # 在原 SQL 中匹配 schema.table [AS] alias
+            if alias:
+                pattern_t = re.compile(
+                    rf'\b{re.escape(schema)}\.{re.escape(table)}\s+(?:AS\s+)?{re.escape(alias)}\b',
+                    re.IGNORECASE,
+                )
+            else:
+                pattern_t = re.compile(
+                    rf'\b{re.escape(schema)}\.{re.escape(table)}\b',
+                    re.IGNORECASE,
+                )
 
-        # 必须有 schema（物理表）；无 schema 的可能是 CTE 引用
-        schema = main_table.db or ""
-        if not schema:
-            return select_sql  # 无 schema，可能是 CTE，回退
+            match = pattern_t.search(select_sql)
+            if not match:
+                continue
 
-        # 用 sqlglot 的位置信息精确定位（不重建 SQL，只在原文本插入）
-        # main_table.span 返回 (start, end) 在原 SQL 中的字符位置
-        # 但 sqlglot 的 span 要 copy/parse 后才可靠，这里用表名+schema 在原文本找
-        table_full = f"{schema}.{main_table.name}"
-        alias = main_table.alias or ""
+            pos = match.end()
 
-        # 在原 SQL 中找这张表的引用位置（schema.table 别名）
-        import re
-        if alias:
-            # 找 schema.table [AS] alias
-            pattern = re.compile(
-                rf'\b{re.escape(schema)}\.{re.escape(main_table.name)}\s+(?:AS\s+)?{re.escape(alias)}\b',
-                re.IGNORECASE,
-            )
-        else:
-            pattern = re.compile(
-                rf'\b{re.escape(schema)}\.{re.escape(main_table.name)}\b',
-                re.IGNORECASE,
-            )
+            # 排除已经在 TABLESAMPLE 里的（避免重复注入）
+            after = select_sql[pos:pos + 30]
+            if "TABLESAMPLE" in after:
+                continue
 
-        match = pattern.search(select_sql)
-        if not match:
-            return select_sql  # 找不到，回退
+            # 排除 CTE 定义体里的表（位置在 CTE 段内的跳过）
+            if select_sql.strip().upper().startswith("WITH"):
+                cte_end = _find_cte_section_end(select_sql)
+                if cte_end is not None and pos < cte_end:
+                    continue  # 在 CTE 定义内，跳过
 
-        # 确认这个匹配在 CTE 定义之外：
-        # 检查 match 之前是否有未闭合的 WITH/AS（ 表示在 CTE 体里）
-        # 简单判断：match 的位置应该在 WITH ... ) 之后（即 CTE 定义结束后）
-        # 更稳的做法：检查 match 前面最近的 SELECT 是不是 CTE 里的
-        # 用位置比较——CTE 定义在 SQL 前部，主查询的 FROM 在 CTE 定义之后
-        # 取 WITH 的结束位置（第一个 ) AS ( ... ) 的最后 ）作为 CTE 定义结束
-        # 如果 SQL 有 WITH，主表应该在最后一个 CTE 定义之后
-        if select_sql.strip().upper().startswith("WITH"):
-            # 找最后一个 CTE 定义结束的位置（粗略：找 "AS (" 的配对 ）
-            # 简化：主表位置必须 > 最后一个 ")" 的位置（CTE 体的闭合括号）
-            # 用括号配对找 CTE 体结束
-            cte_end = _find_cte_section_end(select_sql)
-            if cte_end is not None and match.start() < cte_end:
-                return select_sql  # 主表匹配位置在 CTE 定义内，回退
+            insertions.append(pos)
 
-        # 在匹配末尾插入 TABLESAMPLE
+
+        if not insertions:
+            return select_sql
+
+        # 从后往前插入（避免位置偏移）
         sample_clause = f" TABLESAMPLE SYSTEM ({sample_blocks})"
-        injected = select_sql[:match.end()] + sample_clause + select_sql[match.end():]
-        return injected
+        result = select_sql
+        for pos in sorted(insertions, reverse=True):
+            result = result[:pos] + sample_clause + result[pos:]
+
+        # 验证注入后 SQL 仍可解析（不破坏结构）
+        try:
+            sqlglot.parse_one(result, dialect="postgres")
+        except Exception:
+            return select_sql  # 注入后解析失败，回退原 SQL
+
+        return result
 
     except Exception:
-        return select_sql  # 任何异常回退原 SQL
+        return select_sql
 
 
 def _find_cte_section_end(sql: str) -> int | None:
