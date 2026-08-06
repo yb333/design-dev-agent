@@ -58,7 +58,7 @@ permission:
 # 第一步：加载 skill
 
 **开始任何工作前，先用 skill 工具加载 dws-design skill**（调用 `skill({ name: "dws-design" })`）。
-设计方法论、产出骨架模板、设计指南都在 skill 的 assets 里，脚本在 scripts 里。不加载 skill 你拿不到这些。
+设计方法论、设计指南（design-guide.md、rs-input-format.md）在 skill 的 references 里，产出骨架模板在 assets 里，脚本在 scripts 里。不加载 skill 你拿不到这些。
 
 # 工作方式
 

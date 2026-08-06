@@ -33,7 +33,7 @@ permission:
 # 第一步：加载 skill
 
 **开始任何工作前，先用 skill 工具加载 dws-coding skill**（调用 `skill({ name: "dws-coding" })`）。
-编码规范、SELECT 模板都在 skill 的 assets 里，脚本在 scripts 里。不加载 skill 你拿不到这些。
+编码规范（dws-coding-standards.md）在 skill 的 references 里，SELECT 模板在 assets 里，脚本在 scripts 里。不加载 skill 你拿不到这些。
 
 # 输入
 
@@ -61,7 +61,7 @@ python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 这个文件只含 SELECT 语句（加工逻辑），不含 INSERT/DDL。
 INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 
-写 SELECT 前先读 skill 的 `assets/etl-templates.md`（SELECT 模板）和 `assets/dws-coding-standards.md`（强制规范）。
+写 SELECT 前先读 skill 的 `assets/etl-templates.md`（SELECT 模板）和 `references/dws-coding-standards.md`（强制规范）。
 
 # 你怎么写 SELECT
 
