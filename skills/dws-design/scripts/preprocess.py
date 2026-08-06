@@ -975,6 +975,108 @@ def validate_target_table(rs_schema: str, rs_table: str,
     return final_schema, final_table, errors, warnings
 
 
+def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
+    """从 field_mappings 生成分块紧凑视图（给 designer 读）。
+
+    三段结构，各服务一种认知粒度：
+    - tables：表级清单（哪些源表、规模、关联）——理解全貌
+    - direct：直取/赋值按表分块——批量搬运字段扫一眼过
+    - processed：加工字段逐个平铺——逐个拆解加工链（多表来源合并）
+
+    跳过"在某场景被赋 NULL"的赋值字段（对 designer 是噪音），但保留
+    null_in_scene 标记列表，让 designer 知道哪些字段在部分场景是 NULL。
+
+    去噪：空 remark 不出 note、scene_group 不出现、与 source_column
+    重复的 source_column_cn 不出现。
+    """
+    fms = rs_input.get("field_mappings", [])
+    source_tables = rs_input.get("source_tables", [])
+
+    # ① 表级清单
+    table_list = []
+    for st in source_tables:
+        sch = st.get("source_schema", "")
+        tbl = st.get("source_table", "")
+        alias = st.get("source_alias", "")
+        cnt = sum(1 for fm in fms
+                  if fm.get("source_table") == tbl
+                  and fm.get("source_alias", "") == alias)
+        table_list.append({
+            "schema": sch, "table": tbl, "alias": alias,
+            "fields": cnt, "join": st.get("join_condition", ""),
+        })
+
+    # ② 直取/赋值 按表分块；③ 加工平铺；NULL 赋值收集到标记
+    direct_blocks: dict = {}
+    proc_fields: list = []
+    null_fields: list = []
+    for fm in fms:
+        rule = fm.get("transform_rule", "直接复制")
+        # 兼容旧字段名 mapping_rule
+        if not fm.get("transform_rule"):
+            rule = fm.get("mapping_rule", "直接复制")
+        detail = fm.get("transform_detail", "") or fm.get("mapping_expression", "")
+
+        # NULL 赋值字段跳过（多场景里某场景无值的字段，对 designer 是噪音）
+        is_null_assign = (rule == "赋值" and detail.strip().upper() in ("NULL", "'NULL'", "无", ""))
+        if is_null_assign:
+            null_fields.append(fm.get("target_column", ""))
+            continue
+
+        if rule in ("赋值", "直接复制"):
+            key = (fm.get("source_schema", ""), fm.get("source_table", ""),
+                   fm.get("source_alias", ""), rule)
+            direct_blocks.setdefault(key, []).append(fm)
+        elif rule == "数据加工":
+            proc_fields.append(fm)
+        else:
+            # 未知规则归直取
+            key = (fm.get("source_schema", ""), fm.get("source_table", ""),
+                   fm.get("source_alias", ""), "直接复制")
+            direct_blocks.setdefault(key, []).append(fm)
+
+    direct_section = []
+    for (sch, tbl, alias, rule), fields in direct_blocks.items():
+        rows = []
+        for f in fields:
+            row = {"src": f.get("source_column", ""),
+                   "tgt": f.get("target_column", ""),
+                   "type": f.get("target_type", "")}
+            remark = f.get("remark", "")
+            if remark:
+                row["note"] = remark
+            if rule == "赋值":
+                row["val"] = f.get("transform_detail", "") or f.get("mapping_expression", "")
+            rows.append(row)
+        direct_section.append({"schema": sch, "table": tbl, "alias": alias,
+                               "rule": rule, "fields": rows})
+
+    # ③ 加工字段：按 target_column 聚合（多表来源合并成一段）
+    target_groups: dict = {}
+    for f in proc_fields:
+        target_groups.setdefault(f.get("target_column", ""), []).append(f)
+    proc_section = []
+    for target, fields in target_groups.items():
+        f0 = fields[0]
+        entry = {"tgt": target, "type": f0.get("target_type", "")}
+        cn = f0.get("target_column_cn", "")
+        if cn and cn != target:
+            entry["cn"] = cn
+        sources = [[f.get("source_schema", ""), f.get("source_table", ""),
+                    f.get("source_alias", ""), f.get("source_column", "")]
+                   for f in fields]
+        entry["sources"] = sources if len(sources) > 1 else sources[0]
+        detail = f0.get("transform_detail", "") or f0.get("mapping_expression", "")
+        if detail and detail not in ("-", "无", ""):
+            entry["logic"] = detail
+        proc_section.append(entry)
+
+    compact = {"tables": table_list, "direct": direct_section, "processed": proc_section}
+    if null_fields:
+        compact["null_in_scene"] = sorted(set(null_fields))
+    return compact
+
+
 def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict[str, Any]:
     """合并 mapping 数据和 RS 数据, 产出 rs_input.json 结构。"""
     slim_mapping = slim_mapping_data(mapping_raw)
@@ -1055,6 +1157,9 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     # 可选: 数据探索信息
     if "data_exploration" in rs_data:
         rs_input["data_exploration"] = rs_data["data_exploration"]
+
+    # compact：分块紧凑视图（给 designer 读）。field_mappings 是真相源给脚本读。
+    rs_input["compact"] = build_compact(rs_input)
 
     return rs_input
 
