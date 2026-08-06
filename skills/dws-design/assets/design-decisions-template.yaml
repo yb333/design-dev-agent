@@ -89,7 +89,8 @@ rules:
     # 关联安全分析（JOIN键唯一性 → 对齐策略）
     join_safety:
       - table: ""
-        join_key_unique: true           # JOIN键在限定条件下是否唯一
+        join_filter: ""                # JOIN 此表时的范围限定（来自 mapping 的"关联&限定条件"，如 is_current = 1）。explore.py 用它验唯一性
+        join_key_unique: true           # JOIN键在 join_filter 限定下是否唯一（不确定时调 explore.py 验证）
         strategy: ""                    # 不唯一时的对齐策略（GROUP BY收敛/取最新有效行）
         reason: ""
 
@@ -149,6 +150,17 @@ schedule:
   #     project: ""                     # 上游所属项目
   #     group: ""                       # 上游所属任务组
   #     app: ""                         # 上游所属应用
+
+  # 调度任务路径覆盖（★ 可选）：覆盖 schedule_config.json 的默认 project_name/task_group。
+  # 键为任务类型：f | view | dq | init。不填就用 schedule_config 的默认值（按 schema 取）。
+  # 场景：初始化任务组单独项目、DQ 单独项目组等。
+  # task_project_override:
+  #   init:
+  #     project_name: "SRP_INIT"
+  #     task_group: "GROUP_INIT"
+  #   dq:
+  #     project_name: "SRP_DQ"
+  #     task_group: "GROUP_DQ"
 
   # 注意：task_name/job_name/view/dq 全部由脚本标准化派生，designer 不填
   # lts_params 默认含 V_CYCLE_ID→P_CYCLE_ID + V_GROUP_CODE，需要时才改

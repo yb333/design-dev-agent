@@ -99,8 +99,14 @@ description: >-
 - design_logic = 自然语言口径（不含 SQL 表达式）
 
 ### 步骤 7：关联安全分析
-- 每个被关联表：JOIN 键在限定条件下是否唯一
+- 每个被关联表：JOIN 键在限定条件下是否唯一（`join_filter` 写清 JOIN 此表加了什么 WHERE 限定）
 - 不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行 / 等）
+- **不确定键唯一性时，调 explore.py 验证**（只读单表，不 JOIN，不会发散）：
+  ```
+  python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
+      --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
+  ```
+  看结果填 `join_key_unique`（✅ 唯一 / ❌ 不唯一）。连不上库会静默跳过，不阻断设计。
 
 ### 步骤 8：调度设计
 详见 `references/design-guide.md` §5 调度设计。增量识别已在步骤3完成，这里只填参数：

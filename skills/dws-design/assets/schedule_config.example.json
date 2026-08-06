@@ -1,0 +1,30 @@
+{
+  "_comment": "调度任务路径配置（设计阶段用）。assemble_ts 读这个配置，把 project_name/task_group 提前到设计阶段确定，写进 ts.json 每个 schedule task。designer 可在 design_decisions 覆盖（如初始化任务组）。实际配置放 ~/.config/opencode/schedule_config.json（install 时不覆盖已有的）。",
+  "_structure": "default=按 schema 默认；schema_mappings=不同 schema 的默认值；init_override=初始化调度覆盖（可选）；dq_override=DQ 调度覆盖（可选）。override 不配就和日常一样。",
+
+  "default": {
+    "project_name": "SRP_DAILY",
+    "task_group": "GROUP_SPRD"
+  },
+
+  "schema_mappings": {
+    "fin": {
+      "project_name": "FIN_DAILY",
+      "task_group": "GROUP_FIN"
+    },
+    "slprd": {
+      "project_name": "SLPRD_DAILY",
+      "task_group": "GROUP_SLPRD"
+    }
+  },
+
+  "init_override": {
+    "project_name": "SRP_INIT",
+    "task_group": "GROUP_INIT"
+  },
+
+  "dq_override": {
+    "project_name": "SRP_DQ",
+    "task_group": "GROUP_DQ"
+  }
+}

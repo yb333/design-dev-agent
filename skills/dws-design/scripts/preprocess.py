@@ -631,6 +631,13 @@ UPSTREAM_HEADER_MAP = {
     "任务组": "group",
 }
 
+# 增量表及增量字段表格: 表头列名 -> rs_input 字段名（RS L07 子段）
+# 增量驱动表 + 增量字段，给 designer 做增量识别用
+INCREMENTAL_HEADER_MAP = {
+    "来源表": "source_table",
+    "增量字段": "incremental_key",
+}
+
 # DQ 规则表格: 表头列名 -> dq 字段名
 DQ_HEADER_MAP = {
     "检查范围": "scope",
@@ -783,6 +790,67 @@ def _extract_list_table(section: str, header_map: dict[str, str]) -> list[dict[s
     return result
 
 
+def _find_bold_labeled_block(section: str, label: str) -> str:
+    """从 section 里提取"加粗标签下、到下一个加粗标签止"的子块文本。
+
+    RS 模板里 L07 同一段含三个表格（调度配置/增量表/湖表调度），后两者前面有
+    加粗行（如 `**增量表及增量字段**`、`**湖表调度信息**：`）作为子段标记。
+    本函数按 label 子串匹配加粗行，返回该行之后、下一个加粗行之前的内容。
+
+    Args:
+        section: _find_section 返回的整段文本。
+        label: 要匹配的加粗文字子串（如 "增量表及增量字段"）。
+
+    Returns:
+        子块文本（不含加粗标记行）。找不到返回空串。
+    """
+    result: list[str] = []
+    in_sub = False
+    for line in section.split("\n"):
+        stripped = line.strip()
+        # 识别加粗标记行：**xxx** 形式（**xxx**：这种尾部带冒号的也算）
+        # 用正则匹配，兼容尾部全角/半角冒号
+        m = re.match(r"^\*\*(.+?)\*\*[：:]?\s*$", stripped)
+        if m:
+            bold_text = m.group(1).strip()
+            if not in_sub:
+                if label in bold_text:
+                    in_sub = True
+                continue  # 标签行本身不入结果
+            else:
+                # 已在子段内遇到下一个加粗标签 -> 子段结束
+                break
+        if in_sub:
+            result.append(line)
+    return "\n".join(result)
+
+
+def _parse_incremental_tables(sched_section: str) -> list[dict[str, str]]:
+    """解析 RS L07 的"增量表及增量字段"子段表格。
+
+    返回 [{"source_table": "ods.ods_order_f", "incremental_key": "update_time"}, ...]。
+    容错：
+    - 子段不存在（全量资产 / 旧 RS）-> 空列表
+    - 只有占位行（xxxx.xxxx | xxxx）-> 过滤掉
+    - 行缺列 / 空行 -> 跳过
+    """
+    block = _find_bold_labeled_block(sched_section, "增量表及增量字段")
+    if not block:
+        return []
+    rows = _extract_list_table(block, INCREMENTAL_HEADER_MAP)
+    result: list[dict[str, str]] = []
+    for item in rows:
+        src = (item.get("source_table") or "").strip()
+        key = (item.get("incremental_key") or "").strip()
+        if not src or not key:
+            continue
+        # 过滤模板占位行（RS 模板示例行如 xxxx.xxxx | xxxx）
+        if re.fullmatch(r"[xX.]+", src) and re.fullmatch(r"[xX]+", key):
+            continue
+        result.append({"source_table": src, "incremental_key": key})
+    return result
+
+
 def extract_rs_data(rs_path: str) -> dict[str, Any]:
     """从 RS.md 的 markdown 表格提取结构化数据。
     必填项缺失->error；非必填项缺失->warning+容错为空。
@@ -813,6 +881,12 @@ def extract_rs_data(rs_path: str) -> dict[str, Any]:
     else:
         warnings.append("调度配置未找到(非必填, 使用默认值)")
         rs_data["schedule"] = {}
+
+    # 2b. 增量表及增量字段(RS L07 子段, 非必填, 容错为空列表)
+    #     designer 拿这个做增量识别（哪些驱动表、用哪个字段做增量键）。
+    #     全量资产的 RS 没有这段（或只有占位行），incremental_tables 为 []。
+    incremental_tables = _parse_incremental_tables(section)
+    rs_data["schedule"]["incremental_tables"] = incremental_tables
 
     # 3. 湖表调度(非必填, 容错为空列表)
     section = _find_section(content, RS_SECTION_KEYWORDS["upstream"])
@@ -1006,6 +1080,9 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "fields": cnt, "join": st.get("join_condition", ""),
         })
 
+    # 增量驱动表（来自 RS L07 增量表段，给 designer 看增量识别方式）
+    incremental_tables = rs_input.get("schedule", {}).get("incremental_tables", [])
+
     # ② 直取/赋值 按表分块；③ 加工平铺；NULL 赋值收集到标记
     direct_blocks: dict = {}
     proc_fields: list = []
@@ -1074,6 +1151,8 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     compact = {"tables": table_list, "direct": direct_section, "processed": proc_section}
     if null_fields:
         compact["null_in_scene"] = sorted(set(null_fields))
+    if incremental_tables:
+        compact["incremental_tables"] = incremental_tables
     return compact
 
 

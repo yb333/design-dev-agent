@@ -272,6 +272,172 @@ class TestExtractAndBuildE2E:
 
 
 # ============================================================
+# 5. 增量表及增量字段解析（RS L07 子段）
+# ============================================================
+
+# 一个最小但结构完整的 RS L07 段（含调度配置 + 增量表 + 湖表调度），
+# 用来测增量表解析的多种场景。包在资产信息 + L07 + L08 之间，
+# 让 _find_section 能正确切出 L07 段。
+def _rs_with_incremental(incr_rows_md: str) -> str:
+    """构造含 L07 段的 RS 文本。incr_rows_md 是增量表的数据行 markdown。"""
+    return f"""# RS
+
+**资产基本信息**
+
+| SCHEMA | 资产描述 |
+|--------|----------|
+| dws.dwb_test_f | 测试资产 |
+
+**L07 初始化及调度设计**
+
+| 配置项 | 内容 |
+|--------|------|
+| 调度方案 | 增量调度|
+| 初始化时间范围 | ALL |
+| 调度频率 | T+1调度，一天一调|
+| 调度完成时间要求 | SLA：3:30|
+| 增量识别方式 | update_time|
+
+**增量表及增量字段**
+|来源表|增量字段|
+|-----|-----|
+{incr_rows_md}
+
+**湖表调度信息**：
+
+| 湖表 | 任务名 | 环境 | 应用 | 项目 | 任务组 |
+|------|--------|------|------|------|--------|
+| ods.ods_a | task_a | dev | app1 | P1 | G1 |
+
+**L08 数据保留周期及清理规则**
+"""
+
+
+class TestIncrementalTablesParse:
+    """extract_rs_data 解析 L07 的"增量表及增量字段"子段。"""
+
+    def test_parses_incremental_rows(self, tmp_path):
+        """有真实增量行 -> 解析成 incremental_tables 列表。"""
+        from preprocess import extract_rs_data
+        rs = _rs_with_incremental(
+            "|ods.ods_order_f|update_time|\n|ods.ods_payment_f|dt|\n"
+        )
+        p = tmp_path / "rs.md"
+        p.write_text(rs, encoding="utf-8")
+        rs_data = extract_rs_data(str(p))
+        assert rs_data["schedule"]["incremental_tables"] == [
+            {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
+            {"source_table": "ods.ods_payment_f", "incremental_key": "dt"},
+        ]
+
+    def test_filters_template_placeholder(self, tmp_path):
+        """RS 模板占位行（xxxx.xxxx | xxxx）被过滤掉。"""
+        from preprocess import extract_rs_data
+        rs = _rs_with_incremental("|xxxx.xxxx|xxxx|\n")
+        p = tmp_path / "rs.md"
+        p.write_text(rs, encoding="utf-8")
+        rs_data = extract_rs_data(str(p))
+        assert rs_data["schedule"]["incremental_tables"] == []
+
+    def test_full_load_no_section(self, tmp_path):
+        """全量资产 RS 没有增量表子段 -> incremental_tables 为空列表不报错。"""
+        from preprocess import extract_rs_data
+        # 把增量表子段整个删掉（模拟全量资产）
+        rs = _rs_with_incremental("").replace("**增量表及增量字段**\n", "")
+        p = tmp_path / "rs.md"
+        p.write_text(rs, encoding="utf-8")
+        rs_data = extract_rs_data(str(p))
+        assert rs_data["schedule"]["incremental_tables"] == []
+
+    def test_old_rs_without_label_compat(self, tmp_path):
+        """旧 RS（完全没有增量表段）正常解析，incremental_tables 为空。"""
+        from preprocess import extract_rs_data
+        rs = """# RS
+**资产基本信息**
+
+| SCHEMA | 资产描述 |
+|--------|----------|
+| dws.dwb_old_f | 旧资产 |
+
+**L07 初始化及调度设计**
+
+| 配置项 | 内容 |
+|--------|------|
+| 调度方案 | 全量调度|
+
+**L08 数据保留周期及清理规则**
+"""
+        p = tmp_path / "rs.md"
+        p.write_text(rs, encoding="utf-8")
+        rs_data = extract_rs_data(str(p))
+        assert rs_data["schedule"]["incremental_tables"] == []
+
+    def test_partial_row_skipped(self, tmp_path):
+        """缺列/空行的行被跳过，不报错。"""
+        from preprocess import extract_rs_data
+        rs = _rs_with_incremental(
+            "|ods.ods_order_f|update_time|\n"   # 完整
+            "|ods.ods_payment_f|\n"            # 缺增量字段 -> 跳过
+            "||\n"                              # 空行 -> 跳过
+            "|ods.ods_log_f|create_time|\n"    # 完整
+        )
+        p = tmp_path / "rs.md"
+        p.write_text(rs, encoding="utf-8")
+        rs_data = extract_rs_data(str(p))
+        assert rs_data["schedule"]["incremental_tables"] == [
+            {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
+            {"source_table": "ods.ods_log_f", "incremental_key": "create_time"},
+        ]
+
+    def test_upstream_not_polluted(self, tmp_path):
+        """增量表子段解析到下一个加粗标签止，不吞湖表调度的行（子段边界正确）。"""
+        from preprocess import extract_rs_data
+        rs = _rs_with_incremental("|ods.ods_order_f|update_time|\n")
+        p = tmp_path / "rs.md"
+        p.write_text(rs, encoding="utf-8")
+        rs_data = extract_rs_data(str(p))
+        # incremental_tables 只含增量表那行，不含湖表调度行（task_a 等）
+        incr = rs_data["schedule"]["incremental_tables"]
+        assert incr == [{"source_table": "ods.ods_order_f",
+                         "incremental_key": "update_time"}]
+        # 验证子段边界：湖表那行的任何值都没渗进 incremental_tables
+        all_vals = " ".join(
+            f"{it.get('source_table','')}{it.get('incremental_key','')}" for it in incr
+        )
+        assert "task_a" not in all_vals
+        assert "湖表" not in all_vals
+
+
+class TestIncrementalTablesBuild:
+    """build_rs_input 把 incremental_tables 搬进 schedule 段。"""
+
+    def test_build_carries_incremental_tables(self):
+        """build_rs_input 的 schedule 段含 incremental_tables。"""
+        rs_data = {
+            "meta": {"schema": "dws", "table": "dwb_test_i", "cn": "", "grain": ""},
+            "schedule": {
+                "strategy": "增量调度", "frequency": "T+1", "incremental_key": "update_time",
+                "incremental_tables": [
+                    {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
+                ],
+                "upstream": [],
+            },
+        }
+        result = build_rs_input(_mapping_raw(), rs_data)
+        assert result["schedule"]["incremental_tables"] == [
+            {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
+        ]
+
+    def test_build_empty_when_absent(self):
+        """rs_data 没有 incremental_tables -> schedule 里也没有，不报错。"""
+        rs_data = _rs_data(schema="dws", table="dwb_test_i")
+        rs_data["schedule"] = {"strategy": "全量调度"}
+        result = build_rs_input(_mapping_raw(), rs_data)
+        # schedule 原样搬过来，没有 incremental_tables 键也不报错
+        assert result["schedule"]["strategy"] == "全量调度"
+
+
+# ============================================================
 # build_compact 测试：分块紧凑视图（给 designer 读）
 # ============================================================
 
@@ -478,3 +644,23 @@ class TestBuildCompact:
         assert "tables" in c
         assert "direct" in c
         assert "processed" in c
+
+    def test_compact_includes_incremental_tables(self):
+        """incremental_tables 非空时 compact 体现它（designer 读 view 能看到驱动表）。"""
+        from preprocess import build_compact
+        rs = _rs_input_with([_direct("id", "id")])
+        rs["schedule"] = {"incremental_tables": [
+            {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
+        ]}
+        c = build_compact(rs)
+        assert c["incremental_tables"] == [
+            {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
+        ]
+
+    def test_compact_no_incremental_when_empty(self):
+        """incremental_tables 为空时 compact 不含该键（全量资产）。"""
+        from preprocess import build_compact
+        rs = _rs_input_with([_direct("id", "id")])
+        rs["schedule"] = {}
+        c = build_compact(rs)
+        assert "incremental_tables" not in c

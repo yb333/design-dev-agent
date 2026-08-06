@@ -459,6 +459,10 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "is_view_step": rule_dec.get("is_view_step", False),
         "design_intent": rule_dec.get("design_intent", ""),
         "load_mode": rule_dec.get("load_mode", "truncate_table"),
+        "step_type": rule_dec.get("step_type", "full"),  # full/aggregate/incremental_extract/merge（design-guide §4.4）
+        "target_role": rule_dec.get("target_role", "target"),  # intermediate/target
+        "produces_for": rule_dec.get("produces_for", []) or [],  # 中间表规则填：产出供哪些规则消费
+        "reads": rule_dec.get("reads", []) or [],  # 装配/merge规则填：读哪些中间表
         "incremental": rule_dec.get("incremental", {}),  # 增量设计（key/filter/init_time_range/init_strategy）
         "source_tables": rule_sources,
         "ctes": rule_dec.get("ctes", []),
@@ -574,6 +578,64 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
     return tables
 
 
+# ============================================================
+# 调度任务路径配置（schedule_config.json）
+# ============================================================
+
+def load_schedule_config(config_path: str = "") -> dict:
+    """读 schedule_config.json。未找到返回空 dict。
+
+    实际配置在 ~/.config/opencode/schedule_config.json（install 时不覆盖已有，
+    和 db-sources/platform_config 一致）。
+    结构：{default: {project_name, task_group},
+           schema_mappings: {schema: {project_name, task_group}},
+           init_override: {project_name, task_group}（可选）,
+           dq_override: {project_name, task_group}（可选）}
+    """
+    if not config_path:
+        config_path = str(Path.home() / ".config" / "opencode" / "schedule_config.json")
+    p = Path(config_path)
+    if not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    # 过滤掉 _comment / _structure 等说明字段
+    return {k: v for k, v in raw.items() if not k.startswith("_")}
+
+
+def resolve_schedule_path(sched_config: dict, schema: str, task_kind: str) -> dict:
+    """按 schema + 任务类型解析调度任务路径（project_name/task_group）。
+
+    task_kind: 'f' | 'view' | 'dq' | 'init'
+    查找优先级：override 段（init_override / dq_override）→ schema_mappings → default
+
+    返回 {project_name, task_group}（找不到都为空串，不报错）。
+    """
+    if not sched_config:
+        return {"project_name": "", "task_group": ""}
+
+    default_cfg = sched_config.get("default", {}) or {}
+    schema_cfg = (sched_config.get("schema_mappings", {}) or {}).get(schema, {}) or {}
+
+    # 任务类型 override：init → init_override；dq → dq_override；f/view 走 schema 默认
+    override_cfg = {}
+    if task_kind == "init":
+        override_cfg = sched_config.get("init_override", {}) or {}
+    elif task_kind == "dq":
+        override_cfg = sched_config.get("dq_override", {}) or {}
+
+    # 合并优先级：override > schema_mappings > default
+    project_name = (override_cfg.get("project_name")
+                    or schema_cfg.get("project_name")
+                    or default_cfg.get("project_name", ""))
+    task_group = (override_cfg.get("task_group")
+                  or schema_cfg.get("task_group")
+                  or default_cfg.get("task_group", ""))
+    return {"project_name": project_name, "task_group": task_group}
+
+
 def build_meta(rs_input, decisions):
     """组装 meta(从 rs_input 搬确定性数据)。"""
     rs_meta = rs_input.get("meta", {})
@@ -633,6 +695,7 @@ def build_meta(rs_input, decisions):
     # 表名（用兜底后的 f_table/i_view，不用原始 target）
     f_table_short = f_table.get("table", "")
     i_view_short = i_view.get("table", "")
+    target_schema = f_table.get("schema", "") or i_view.get("schema", "")
 
     # F 表 upstream：RS 湖表调度提供的（原样保留 project/group/app/env + task）+ designer 新增的
     f_upstream = []
@@ -652,27 +715,58 @@ def build_meta(rs_input, decisions):
             "app": u.get("app", ""),
         })
 
+    # 调度任务路径（project_name/task_group）：从 schedule_config 取默认值，designer 可覆盖。
+    # 不同任务类型（F/view/dq/初始化）可能归属不同项目组，每个 task 单独确定。
+    sched_config = load_schedule_config()
+    # designer 的覆盖（task_project_override: {init: {...}, dq: {...}}）
+    task_override = dec_sched.get("task_project_override", {}) or {}
+
+    def _resolve_task_path(task_kind: str):
+        """按任务类型解析 project_name/task_group。
+        task_kind: 'f' | 'view' | 'dq' | 'init'
+        优先级：designer 覆盖 > schedule_config 的 override > schema 默认 > default
+        """
+        # designer 显式覆盖最优先
+        if task_kind in task_override and isinstance(task_override[task_kind], dict):
+            ov = task_override[task_kind]
+            if ov.get("project_name") or ov.get("task_group"):
+                return {
+                    "project_name": ov.get("project_name", ""),
+                    "task_group": ov.get("task_group", ""),
+                }
+        # schedule_config 按 schema 取默认（含 override 段）
+        return resolve_schedule_path(sched_config, target_schema, task_kind)
+
     # 标准化构建 tasks（F / view / dq）
+    f_path = _resolve_task_path("f")
     tasks = {
         "f": {
             "task_name": f"task_{f_table_short}" if f_table_short else "",
             "job_name": f"Pjob_{f_table_short}" if f_table_short else "",
             "cron": cron,
             "upstream": f_upstream,
+            "project_name": f_path["project_name"],
+            "task_group": f_path["task_group"],
         }
     }
     if i_view_short:
+        view_path = _resolve_task_path("view")
         tasks["view"] = {
             "task_name": f"task_{i_view_short}",
             "job_name": f"Pjob_{i_view_short}",
             "cron": cron,
             "upstream": [{"table": f_table_short, "task": f"task_{f_table_short}", "dep_type": "宽依赖"}],
+            "project_name": view_path["project_name"],
+            "task_group": view_path["task_group"],
         }
+        dq_path = _resolve_task_path("dq")
         tasks["dq"] = {
             "task_name": f"task_{f_table_short}_dq",
             "job_name": f"Pjob_{f_table_short}_dq",
             "cron": cron,
             "upstream": [{"table": i_view_short, "task": f"task_{i_view_short}", "dep_type": "宽依赖"}],
+            "project_name": dq_path["project_name"],
+            "task_group": dq_path["task_group"],
         }
 
     schedule = {
@@ -935,6 +1029,11 @@ def render_md(ts):
             lines.append(f"| 场景 | {scenario} |")
         lines.append(f"| 执行序 | {r['exec_sequence']} |")
         lines.append(f"| 产出表 | `{r['target_table']}` |")
+        # 步骤类型/目标角色：非默认值才展示（默认 full/target 不显示，减少噪音）
+        step_type = r.get("step_type", "full")
+        target_role = r.get("target_role", "target")
+        if step_type != "full" or target_role != "target":
+            lines.append(f"| 步骤类型 | {step_type}（{target_role}） |")
         lines.append(f"| 写入方式 | {r.get('load_mode', '-')} |")
         if r.get("design_intent"):
             lines.append(f"| 设计意图 | {r['design_intent']} |")
@@ -990,16 +1089,25 @@ def render_md(ts):
         lines.append("|--------|-----|")
         lines.append(f"| 调度任务 | {task_info.get('task_name', '-')} |")
         lines.append(f"| 执行Job | {task_info.get('job_name', '-')} |")
+        # 调度任务路径（项目/任务组，来自 schedule_config，designer 可覆盖）
+        project = task_info.get("project_name", "")
+        group = task_info.get("task_group", "")
+        if project or group:
+            lines.append(f"| 项目 / 任务组 | {project} / {group} |")
         lines.append(f"| 调度周期 | {task_info.get('cron', '-') or '-'} |")
         lines.append("")
         upstream = task_info.get("upstream", [])
         if upstream:
             lines.append("**上游依赖**:")
             lines.append("")
-            lines.append("| 源表 | 调度任务 | 依赖类型 |")
-            lines.append("|------|---------|---------|")
+            # 上游依赖加 项目/任务组 列（跨项目依赖归属可见）
+            lines.append("| 源表 | 项目 / 任务组 | 调度任务 | 依赖类型 |")
+            lines.append("|------|---------------|---------|---------|")
             for u in upstream:
-                lines.append(f"| {u.get('table', '')} | {u.get('task', '') or '-'} | {u.get('dep_type', '宽依赖')} |")
+                u_proj = u.get("project", "")
+                u_grp = u.get("group", "")
+                pg = f"{u_proj} / {u_grp}" if (u_proj or u_grp) else "-"
+                lines.append(f"| {u.get('table', '')} | {pg} | {u.get('task', '') or '-'} | {u.get('dep_type', '宽依赖')} |")
             lines.append("")
 
     # LTS 参数（全局，只在 F 表段前展示一次）

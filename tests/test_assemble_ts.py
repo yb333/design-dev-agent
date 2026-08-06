@@ -8,6 +8,7 @@ designer 在 design_decisions 里把 source_aliases 留空（或省略）时，
 留空时产出 []，导致 check_sql 报"SELECT 引用了不在 ts.json source_tables 里的表"。
 """
 
+import json
 import pytest
 
 from assemble_ts import build_rule
@@ -142,3 +143,250 @@ class TestValidateDecisions:
         ]}
         errors = validate_decisions(decisions, _field_map("id"))
         assert any("为空" in e for e in errors)
+
+
+# ============================================================
+# build_rule 多步骤字段搬运：step_type / target_role / produces_for / reads
+# ============================================================
+
+class TestBuildRuleStepFields:
+    """build_rule 把 step_type/target_role/produces_for/reads 搬进 ts.json 的 rule。
+
+    回归背景：design-decisions-template 里这几个字段 designer 已能填，但 build_rule
+    不搬，导致 ts.json 的 rule 丢了步骤类型/依赖声明——多步骤数据流断层。
+    """
+
+    def test_defaults_when_absent(self):
+        """旧 design_decisions（无新字段）-> 用默认值不报错。"""
+        rule, _ = build_rule(
+            {"rule_code": "R0001", "source_aliases": []}, {}, _rs_sources())
+        assert rule["step_type"] == "full"
+        assert rule["target_role"] == "target"
+        assert rule["produces_for"] == []
+        assert rule["reads"] == []
+
+    def test_explicit_values_carried(self):
+        """designer 显式填了 -> 正确搬入。"""
+        rule, _ = build_rule({
+            "rule_code": "R0001",
+            "source_aliases": [],
+            "step_type": "aggregate",
+            "target_role": "intermediate",
+            "produces_for": ["R0003"],
+            "reads": [],
+        }, {}, _rs_sources())
+        assert rule["step_type"] == "aggregate"
+        assert rule["target_role"] == "intermediate"
+        assert rule["produces_for"] == ["R0003"]
+        assert rule["reads"] == []
+
+    def test_merge_rule_reads_carried(self):
+        """merge 规则的 reads（读哪些中间表）正确搬入。"""
+        rule, _ = build_rule({
+            "rule_code": "R0003",
+            "source_aliases": [],
+            "step_type": "merge",
+            "target_role": "target",
+            "produces_for": [],
+            "reads": ["tmp1", "tmp2"],
+        }, {}, _rs_sources())
+        assert rule["step_type"] == "merge"
+        assert rule["target_role"] == "target"
+        assert rule["reads"] == ["tmp1", "tmp2"]
+
+    def test_none_produces_for_normalized_to_empty(self):
+        """produces_for 为 None（YAML 留空常见）-> 归一为 []，不出 None。"""
+        rule, _ = build_rule({
+            "rule_code": "R0001", "source_aliases": [],
+            "produces_for": None, "reads": None,
+        }, {}, _rs_sources())
+        assert rule["produces_for"] == []
+        assert rule["reads"] == []
+
+
+# ============================================================
+# 调度任务路径（schedule_config）：load_schedule_config / resolve_schedule_path
+# ============================================================
+
+from assemble_ts import load_schedule_config, resolve_schedule_path
+
+
+class TestLoadScheduleConfig:
+    def test_missing_file_returns_empty(self):
+        assert load_schedule_config("/nonexistent/schedule_config.json") == {}
+
+    def test_loads_valid_config(self, tmp_path):
+        cfg = {
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+            "schema_mappings": {"fin": {"project_name": "FIN_DAILY"}},
+        }
+        p = tmp_path / "schedule_config.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        result = load_schedule_config(str(p))
+        assert result["default"]["project_name"] == "SRP_DAILY"
+
+    def test_filters_comment_fields(self, tmp_path):
+        """_comment / _structure 等说明字段被过滤掉。"""
+        cfg = {
+            "_comment": "说明",
+            "_structure": "结构",
+            "default": {"project_name": "P"},
+        }
+        p = tmp_path / "schedule_config.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        result = load_schedule_config(str(p))
+        assert "_comment" not in result
+        assert "_structure" not in result
+        assert "default" in result
+
+    def test_invalid_json_returns_empty(self, tmp_path):
+        p = tmp_path / "schedule_config.json"
+        p.write_text("{not valid json", encoding="utf-8")
+        assert load_schedule_config(str(p)) == {}
+
+
+class TestResolveSchedulePath:
+    def test_empty_config_returns_empty(self):
+        assert resolve_schedule_path({}, "dws", "f") == {
+            "project_name": "", "task_group": ""}
+
+    def test_default_used(self):
+        cfg = {"default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"}}
+        r = resolve_schedule_path(cfg, "dws", "f")
+        assert r["project_name"] == "SRP_DAILY"
+        assert r["task_group"] == "GROUP_SPRD"
+
+    def test_schema_mapping_overrides_default(self):
+        cfg = {
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+            "schema_mappings": {"fin": {"project_name": "FIN_DAILY", "task_group": "GROUP_FIN"}},
+        }
+        r = resolve_schedule_path(cfg, "fin", "f")
+        assert r["project_name"] == "FIN_DAILY"
+        assert r["task_group"] == "GROUP_FIN"
+
+    def test_unknown_schema_uses_default(self):
+        cfg = {
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+            "schema_mappings": {"fin": {"project_name": "FIN_DAILY"}},
+        }
+        r = resolve_schedule_path(cfg, "unknown", "f")
+        assert r["project_name"] == "SRP_DAILY"
+
+    def test_dq_override(self):
+        """dq 任务类型走 dq_override 段。"""
+        cfg = {
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+            "dq_override": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"},
+        }
+        r = resolve_schedule_path(cfg, "dws", "dq")
+        assert r["project_name"] == "SRP_DQ"
+        assert r["task_group"] == "GROUP_DQ"
+
+    def test_init_override(self):
+        """init 任务类型走 init_override 段。"""
+        cfg = {
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+            "init_override": {"project_name": "SRP_INIT", "task_group": "GROUP_INIT"},
+        }
+        r = resolve_schedule_path(cfg, "dws", "init")
+        assert r["project_name"] == "SRP_INIT"
+
+    def test_override_priority_over_schema(self):
+        """override > schema_mappings > default。"""
+        cfg = {
+            "default": {"project_name": "DEF"},
+            "schema_mappings": {"fin": {"project_name": "FIN"}},
+            "dq_override": {"project_name": "DQ"},
+        }
+        r = resolve_schedule_path(cfg, "fin", "dq")
+        assert r["project_name"] == "DQ", "override 应优先于 schema"
+
+    def test_no_override_for_f_view(self):
+        """f/view 不走 override 段（只有 dq/init 有 override）。"""
+        cfg = {
+            "default": {"project_name": "DEF", "task_group": "G_DEF"},
+            "dq_override": {"project_name": "DQ", "task_group": "G_DQ"},
+        }
+        r = resolve_schedule_path(cfg, "dws", "f")
+        assert r["project_name"] == "DEF", "f 不应被 dq_override 影响"
+        assert r["task_group"] == "G_DEF"
+
+
+# ============================================================
+# build_meta：tasks 段带 project_name/task_group
+# ============================================================
+
+import json
+from assemble_ts import build_meta
+
+
+def _rs_input_for_meta(schema="dws", f_table="dwb_test_f", i_view="dwb_test_i"):
+    """构造 build_meta 的最小 rs_input。"""
+    return {
+        "meta": {
+            "target": {
+                "f_table": {"schema": schema, "table": f_table, "cn": "测试"},
+                "i_view": {"schema": schema, "table": i_view, "cn": "测试"},
+            },
+            "grain": "",
+        },
+        "source_tables": [],
+        "schedule": {},
+    }
+
+
+class TestBuildMetaTaskPath:
+    """build_meta 给每个 task 填 project_name/task_group。"""
+
+    def test_tasks_have_project_group(self, monkeypatch):
+        """有 schedule_config 时，tasks.f/view/dq 都有 project_name/task_group。"""
+        sched_cfg = {
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+            "dq_override": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"},
+        }
+        monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: sched_cfg)
+        meta = build_meta(_rs_input_for_meta(), {"schedule": {"cron": "0 30 3 * * ?"}})
+        tasks = meta["schedule"]["tasks"]
+        assert tasks["f"]["project_name"] == "SRP_DAILY"
+        assert tasks["f"]["task_group"] == "GROUP_SPRD"
+        assert tasks["view"]["project_name"] == "SRP_DAILY"
+        # dq 走 dq_override
+        assert tasks["dq"]["project_name"] == "SRP_DQ"
+        assert tasks["dq"]["task_group"] == "GROUP_DQ"
+
+    def test_no_config_empty_path(self, monkeypatch):
+        """无 schedule_config（旧环境）-> project/task_group 为空串，不报错（向后兼容）。"""
+        monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: {})
+        meta = build_meta(_rs_input_for_meta(), {"schedule": {"cron": "0 30 3 * * ?"}})
+        tasks = meta["schedule"]["tasks"]
+        assert tasks["f"]["project_name"] == ""
+        assert tasks["f"]["task_group"] == ""
+
+    def test_designer_override_wins(self, monkeypatch):
+        """designer 的 task_project_override 最优先（如初始化任务组）。"""
+        sched_cfg = {"default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"}}
+        monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: sched_cfg)
+        decisions = {"schedule": {
+            "cron": "0 30 3 * * ?",
+            "task_project_override": {
+                "dq": {"project_name": "CUSTOM_DQ", "task_group": "CUSTOM_GDQ"},
+            },
+        }}
+        meta = build_meta(_rs_input_for_meta(), decisions)
+        tasks = meta["schedule"]["tasks"]
+        assert tasks["dq"]["project_name"] == "CUSTOM_DQ"
+        assert tasks["dq"]["task_group"] == "CUSTOM_GDQ"
+        # f 不受影响，仍用默认
+        assert tasks["f"]["project_name"] == "SRP_DAILY"
+
+    def test_schema_mapping_applied(self, monkeypatch):
+        """target schema 在 schema_mappings 里 -> 用 schema 的配置。"""
+        sched_cfg = {
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+            "schema_mappings": {"fin": {"project_name": "FIN_DAILY", "task_group": "GROUP_FIN"}},
+        }
+        monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: sched_cfg)
+        meta = build_meta(_rs_input_for_meta(schema="fin"), {"schedule": {"cron": "x"}})
+        assert meta["schedule"]["tasks"]["f"]["project_name"] == "FIN_DAILY"
+        assert meta["schedule"]["tasks"]["f"]["task_group"] == "GROUP_FIN"

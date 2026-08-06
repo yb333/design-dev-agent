@@ -290,15 +290,31 @@ def run():
     pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "platform_config.example.json"
     if not pf_config.exists() and pf_example.exists():
         shutil.copy2(str(pf_example), str(pf_config))
-        print("[7/7] 平台配置初始化...")
+        print("[7/8] 平台配置初始化...")
         print(f"  ✓ 已创建 {pf_config}")
         print(f"  ⚠️  请编辑此文件，填入项目/子项目编码（部署到平台时用）")
         print()
     elif pf_config.exists():
-        print("[7/7] 平台配置已存在，跳过（不覆盖）")
+        print("[7/8] 平台配置已存在，跳过（不覆盖）")
         print()
     else:
-        print("[7/7] 平台配置 example 未找到，跳过")
+        print("[7/8] 平台配置 example 未找到，跳过")
+        print()
+
+    # ── 8. 调度任务路径配置初始化（assemble_ts 用，设计阶段确定 project/task_group）──
+    sc_config = config_dir / "schedule_config.json"
+    sc_example = SCRIPT_DIR / "skills" / "dws-design" / "assets" / "schedule_config.example.json"
+    if not sc_config.exists() and sc_example.exists():
+        shutil.copy2(str(sc_example), str(sc_config))
+        print("[8/8] 调度任务路径配置初始化...")
+        print(f"  ✓ 已创建 {sc_config}")
+        print(f"  ⚠️  请编辑此文件，填入各 schema 的默认 project_name/task_group")
+        print()
+    elif sc_config.exists():
+        print("[8/8] 调度任务路径配置已存在，跳过（不覆盖）")
+        print()
+    else:
+        print("[8/8] 调度任务路径配置 example 未找到，跳过")
         print()
 
     # ── 完成 ──

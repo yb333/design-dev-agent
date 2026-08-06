@@ -427,16 +427,29 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
 
     从 ts.json schedule.tasks 的 f/view/dq 三段取调度信息。
     虚拟依赖（dep_type=虚拟依赖）在 jobs sheet 额外生成 URL 类型 job 行。
+
+    project_name/task_group 来源（★ 任务四）：
+    - 优先从 ts.json 每个 task 的 project_name/task_group 取（设计阶段确定）
+    - ts.json 没有（旧产出）→ fallback 到 platform_config 的 lts 段（兼容）
     """
     meta = ts.get("meta", {})
     sched = meta.get("schedule", {})
     tasks_sched = sched.get("tasks", {})
 
     lts = config.get("lts", {})
-    project_name = _cfg(lts, "project_name")
-    task_group = _cfg(lts, "task_group")
+    # 兜底默认值（platform_config 的 lts 段，给旧 ts.json 没有 project/task_group 时用）
+    fallback_project = _cfg(lts, "project_name")
+    fallback_group = _cfg(lts, "task_group")
     appid = _cfg(lts, "appid", "")
     owner = _cfg(config.get("shujia", {}), "business_owner", "")
+
+    def _resolve_path(task_info):
+        """从 ts.json task 取 project/task_group，没有用 platform_config 兜底。"""
+        p = task_info.get("project_name") or fallback_project
+        g = task_info.get("task_group") or fallback_group
+        return p, g
+
+    project_name, task_group = _resolve_path(tasks_sched.get("f", {}))
 
     # job 参数模板（appid 从 platform_config 注入）
     job_params = DEFAULT_JOB_PARAMS.replace('"appid":""', f'"appid":"{appid}"') if appid else DEFAULT_JOB_PARAMS
@@ -444,17 +457,19 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     wb = openpyxl.Workbook()
 
     def _task_row(task_info):
-        """生成 tasks sheet 的任务行"""
+        """生成 tasks sheet 的任务行（project/task_group 从该 task 取）"""
+        p, g = _resolve_path(task_info)
         return [
-            project_name, task_group, task_info.get("task_name", ""), "周期任务",
+            p, g, task_info.get("task_name", ""), "周期任务",
             "", "", task_info.get("cron", ""), "是", "", owner,
             "", "", "", "", "", "", "", "", "", "", "", "",
         ]
 
     def _exec_job_row(task_info):
-        """生成 jobs sheet 的执行行（url 类型）"""
+        """生成 jobs sheet 的执行行（url 类型，project/task_group 从该 task 取）"""
+        p, g = _resolve_path(task_info)
         return [
-            project_name, task_group, task_info.get("task_name", ""),
+            p, g, task_info.get("task_name", ""),
             task_info.get("job_name", ""), "url",
             "start", "${V_URL}", job_params, "",
             "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
@@ -464,10 +479,11 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         """生成 jobs sheet 的依赖行。
 
         上游依赖的项目/任务组从 upstream 项取（跨项目依赖归属正确），
-        upstream 没配则用当前表的（同项目兜底）。
+        upstream 没配则用当前表 task 的（同项目兜底）。
         """
+        p, g = _resolve_path(task_info)
         return [
-            dep_project or project_name, dep_group or task_group, task_info.get("task_name", ""),
+            dep_project or p, dep_group or g, task_info.get("task_name", ""),
             dep_task, job_type,
             task_info.get("job_name", ""), "", "", "",
             "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
@@ -475,8 +491,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
 
     def _virtual_dep_row(task_info, dep_task, dep_project="", dep_group=""):
         """虚拟依赖：额外生成 URL 类型 job 行（查数据库判断依赖任务状态）"""
+        p, g = _resolve_path(task_info)
         return [
-            dep_project or project_name, dep_group or task_group, task_info.get("task_name", ""),
+            dep_project or p, dep_group or g, task_info.get("task_name", ""),
             dep_task, "url",
             task_info.get("job_name", ""), "${V_URL}", job_params, "",
             "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
@@ -543,10 +560,11 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     all_tasks = []
     for ti in [f_info, view_info, dq_info]:
         if ti.get("task_name"):
-            all_tasks.append(ti["task_name"])
-    for task_name in all_tasks:
+            all_tasks.append(ti)
+    for ti in all_tasks:
+        p, g = _resolve_path(ti)
         for param in param_names:
-            ws.append([project_name, task_group, task_name, param, ""])
+            ws.append([p, g, ti["task_name"], param, ""])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
@@ -585,6 +603,12 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
             "dep_type": u.get("dep_type", "宽依赖"),
         })
 
+    # project_name/task_group 优先从 ts.json F 表 task 取（设计阶段确定），
+    # 旧产出没有则 fallback 到 platform_config 的 lts 段
+    lts = config.get("lts", {})
+    project_name = f_info.get("project_name") or _cfg(lts, "project_name")
+    task_group = f_info.get("task_group") or _cfg(lts, "task_group")
+
     manifest = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "target_table": target_full,
@@ -597,8 +621,8 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
         "dq_task_name": dq_info.get("task_name", ""),
         "dq_job_name": dq_info.get("job_name", ""),
         "cron_expr": sched.get("cron", ""),
-        "project_name": _cfg(config.get("lts", {}), "project_name"),
-        "task_group": _cfg(config.get("lts", {}), "task_group"),
+        "project_name": project_name,
+        "task_group": task_group,
         "params": sorted(sched.get("exec_params", {}).keys()),
         "upstream_tasks": upstream_tasks,
         "rule_codes_needed": rule_codes_needed,

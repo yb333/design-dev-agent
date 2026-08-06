@@ -457,6 +457,74 @@ class TestGenerateScheduleExcel:
             if param_name == "V_GROUP_CODE":
                 assert param_value == "" or param_value is None
 
+    def test_project_group_from_ts_json(self, sample_config, tmp_path):
+        """★ 任务四：ts.json 的 task 有 project_name/task_group 时，exporter 直接用（不走 platform_config）。"""
+        # 构造 ts，每个 task 带 project_name/task_group（设计阶段确定的）
+        ts = {
+            "meta": {
+                "target": {"f_table": {"schema": "dws", "table": "dwb_test_f"},
+                           "i_view": {"schema": "dws", "table": "dwb_test_i"}},
+                "schedule": {
+                    "cron": "0 30 3 * * ?",
+                    "tasks": {
+                        "f": {"task_name": "task_dwb_test_f", "job_name": "Pjob_dwb_test_f",
+                              "cron": "0 30 3 * * ?", "upstream": [],
+                              "project_name": "TS_PROJ_F", "task_group": "TS_GRP_F"},
+                        "view": {"task_name": "task_dwb_test_i", "job_name": "Pjob_dwb_test_i",
+                                 "cron": "0 30 3 * * ?", "upstream": [],
+                                 "project_name": "TS_PROJ_V", "task_group": "TS_GRP_V"},
+                        "dq": {"task_name": "task_dwb_test_f_dq", "job_name": "Pjob_dwb_test_f_dq",
+                               "cron": "0 30 3 * * ?", "upstream": [],
+                               "project_name": "TS_PROJ_DQ", "task_group": "TS_GRP_DQ"},
+                    },
+                },
+            },
+            "rules": {},
+        }
+        # platform_config 的 lts 配的是另一套（验证不被用）
+        cfg = {"lts": {"project_name": "PC_PROJ", "task_group": "PC_GRP", "appid": ""},
+               "shujia": {}}
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(ts, cfg, out)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["tasks"]
+        header = [c.value for c in ws[1]]
+        proj_idx = header.index("项目名称")
+        group_idx = header.index("任务组名称")
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        # F 行用 ts.json 的 TS_PROJ_F
+        assert rows[0][proj_idx] == "TS_PROJ_F"
+        assert rows[0][group_idx] == "TS_GRP_F"
+        # view 行用 TS_PROJ_V
+        assert rows[1][proj_idx] == "TS_PROJ_V"
+        # dq 行用 TS_PROJ_DQ
+        assert rows[2][proj_idx] == "TS_PROJ_DQ"
+
+    def test_project_group_fallback_to_platform_config(self, sample_config, tmp_path):
+        """★ 任务四兼容：旧 ts.json 没有 project/task_group -> fallback 到 platform_config 的 lts。"""
+        ts = {
+            "meta": {
+                "target": {"f_table": {"schema": "dws", "table": "dwb_test_f"},
+                           "i_view": {"schema": "dws", "table": "dwb_test_i"}},
+                "schedule": {
+                    "cron": "0 30 3 * * ?",
+                    "tasks": {
+                        "f": {"task_name": "task_dwb_test_f", "job_name": "Pjob_dwb_test_f",
+                              "cron": "0 30 3 * * ?", "upstream": []},  # 无 project/task_group
+                    },
+                },
+            },
+            "rules": {},
+        }
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(ts, sample_config, out)  # sample_config lts=SRP_DAILY/GROUP_SPRD
+        wb = openpyxl.load_workbook(out)
+        ws = wb["tasks"]
+        header = [c.value for c in ws[1]]
+        proj_idx = header.index("项目名称")
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert rows[0][proj_idx] == "SRP_DAILY", "旧 ts.json 应回退到 platform_config"
+
 
 # ============================================================
 # Manifest
