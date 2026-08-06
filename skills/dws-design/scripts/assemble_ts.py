@@ -611,15 +611,22 @@ def build_meta(rs_input, decisions):
     f_table_short = f_table.get("table", "")
     i_view_short = i_view.get("table", "")
 
-    # F 表 upstream：rs_input 已有的（原样 task）+ designer 新增的（dep_type 默认宽依赖）
+    # F 表 upstream：RS 湖表调度提供的（原样保留 project/group/app/env + task）+ designer 新增的
     f_upstream = []
     for u in rs_sched.get("upstream", []):
-        f_upstream.append({"table": u.get("table", ""), "task": u.get("task", ""), "dep_type": "宽依赖"})
+        # RS 的湖表调度表含 table/task/env/app/project/group，原样保留（跨项目依赖归属正确）
+        item = {k: v for k, v in u.items() if v}
+        item.setdefault("dep_type", "宽依赖")
+        f_upstream.append(item)
     for u in dec_sched.get("upstream_added", []):
+        # designer 新增的依赖：table/task/dep_type 必填，project/group/app 可选
         f_upstream.append({
             "table": u.get("table", ""),
             "task": u.get("task", ""),
             "dep_type": u.get("dep_type", "宽依赖"),
+            "project": u.get("project", ""),
+            "group": u.get("group", ""),
+            "app": u.get("app", ""),
         })
 
     # 标准化构建 tasks（F / view / dq）

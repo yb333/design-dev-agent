@@ -15,7 +15,8 @@
     },
     "lts": {
       "project_name": "SRP_DAILY",
-      "task_group": "GROUP_SPRD"
+      "task_group": "GROUP_SPRD",
+      "appid": "ETL_APP_001"
     }
   },
 

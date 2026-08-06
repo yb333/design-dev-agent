@@ -382,6 +382,69 @@ class TestGenerateScheduleExcel:
         # 表头 + F执行 + 2依赖 + view执行 + view依赖 + dq执行 + dq依赖 = 8
         assert ws.max_row == 8
 
+    def test_cross_project_upstream_uses_dep_project(self, sample_ts, sample_config, tmp_path):
+        """跨项目上游依赖：jobs 依赖行的 project/group 用 upstream 项的（不是当前表的）。"""
+        # 构造一个跨项目的上游依赖
+        ts_cross = json.loads(json.dumps(sample_ts))  # 深拷贝
+        ts_cross["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
+            "table": "ods_cross_f",
+            "task": "task_ods_cross_f",
+            "dep_type": "宽依赖",
+            "project": "CROSS_PROJECT",  # 上游在别的项目
+            "group": "CROSS_GROUP",
+            "app": "CROSS_APP",
+        }]
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(ts_cross, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["jobs"]
+        # 找依赖行（job类型=tskdep 的那行）
+        header = [c.value for c in ws[1]]
+        proj_idx = header.index("项目名称")
+        group_idx = header.index("任务组名称")
+        jobtype_idx = header.index("job类型")
+        dep_rows = [row for row in ws.iter_rows(min_row=2, values_only=True)
+                    if row[jobtype_idx] == "tskdep"]
+        assert dep_rows, "应有依赖行"
+        # 依赖行的 project/group 应是上游的 CROSS_PROJECT/CROSS_GROUP
+        assert dep_rows[0][proj_idx] == "CROSS_PROJECT", \
+            f"跨项目依赖应用上游project，实际={dep_rows[0][proj_idx]}"
+        assert dep_rows[0][group_idx] == "CROSS_GROUP", \
+            f"跨项目依赖应用上游group，实际={dep_rows[0][group_idx]}"
+
+    def test_same_project_upstream_fallback_current(self, sample_ts, sample_config, tmp_path):
+        """同项目上游（upstream 没配 project/group）→ 用当前表的（兜底）。"""
+        # sample_ts 的 upstream 没有 project/group → 应兜底用当前表的 SRP_DAILY/GROUP_SPRD
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(sample_ts, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["jobs"]
+        header = [c.value for c in ws[1]]
+        proj_idx = header.index("项目名称")
+        jobtype_idx = header.index("job类型")
+        dep_rows = [row for row in ws.iter_rows(min_row=2, values_only=True)
+                    if row[jobtype_idx] == "tskdep"]
+        assert dep_rows
+        # 兜底用当前表的配置
+        assert dep_rows[0][proj_idx] == "SRP_DAILY", \
+            f"同项目应兜底用当前表project，实际={dep_rows[0][proj_idx]}"
+
+    def test_appid_injected_from_config(self, sample_ts, sample_config, tmp_path):
+        """appid 从 platform_config 的 lts.appid 注入到 job 参数。"""
+        # 给 sample_config 加 appid
+        cfg_with_appid = json.loads(json.dumps(sample_config))
+        cfg_with_appid["lts"]["appid"] = "MY_APP_123"
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(sample_ts, cfg_with_appid, out)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["jobs"]
+        header = [c.value for c in ws[1]]
+        params_idx = header.index("job参数")
+        exec_rows = [row for row in ws.iter_rows(min_row=2, values_only=True)
+                     if row[header.index("job类型")] == "url" and row[header.index("job的父节点名称")] == "start"]
+        assert exec_rows, "应有执行行"
+        assert "MY_APP_123" in str(exec_rows[0][params_idx]), "appid 应注入 job参数"
+
     def test_taskparams_v_group_code_empty(self, sample_ts, sample_config, tmp_path):
         """V_GROUP_CODE 值留空"""
         out = tmp_path / "schedule_tasks.xlsx"

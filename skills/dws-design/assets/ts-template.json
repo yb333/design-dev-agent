@@ -53,9 +53,11 @@
           "task_name": "task_{表名}",
           "job_name": "Pjob_{表名}",
           "cron": "",
-          "upstream": [                  // 上游依赖（RS给 + designer新增），task原样保留
-            { "table": "", "task": "", "dep_type": "宽依赖" }
+          "upstream": [                  // 上游依赖（RS湖表调度给 + designer新增）
+            // RS 提供的含 project/group/app/env（跨项目依赖归属）；designer 新增的可选填
+            { "table": "", "task": "", "dep_type": "宽依赖", "project": "", "group": "", "app": "", "env": "" }
             // dep_type: 宽依赖(默认) | 同周期依赖 | 时间点依赖 | 上周期依赖 | 虚拟依赖
+            // project/group/app/env: RS 湖表调度表提供，跨项目依赖时 exporter 用它写归属
           ]
         },
         "view": {                        // I 视图调度（如有，自动补依赖F表）

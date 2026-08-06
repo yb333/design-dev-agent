@@ -435,7 +435,11 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     lts = config.get("lts", {})
     project_name = _cfg(lts, "project_name")
     task_group = _cfg(lts, "task_group")
+    appid = _cfg(lts, "appid", "")
     owner = _cfg(config.get("shujia", {}), "business_owner", "")
+
+    # job 参数模板（appid 从 platform_config 注入）
+    job_params = DEFAULT_JOB_PARAMS.replace('"appid":""', f'"appid":"{appid}"') if appid else DEFAULT_JOB_PARAMS
 
     wb = openpyxl.Workbook()
 
@@ -452,25 +456,29 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         return [
             project_name, task_group, task_info.get("task_name", ""),
             task_info.get("job_name", ""), "url",
-            "start", "${V_URL}", DEFAULT_JOB_PARAMS, "",
+            "start", "${V_URL}", job_params, "",
             "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
         ]
 
-    def _dep_job_row(task_info, dep_task, job_type="tskdep"):
-        """生成 jobs sheet 的依赖行"""
+    def _dep_job_row(task_info, dep_task, dep_project="", dep_group="", job_type="tskdep"):
+        """生成 jobs sheet 的依赖行。
+
+        上游依赖的项目/任务组从 upstream 项取（跨项目依赖归属正确），
+        upstream 没配则用当前表的（同项目兜底）。
+        """
         return [
-            project_name, task_group, task_info.get("task_name", ""),
+            dep_project or project_name, dep_group or task_group, task_info.get("task_name", ""),
             dep_task, job_type,
             task_info.get("job_name", ""), "", "", "",
             "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
         ]
 
-    def _virtual_dep_row(task_info, dep_task):
+    def _virtual_dep_row(task_info, dep_task, dep_project="", dep_group=""):
         """虚拟依赖：额外生成 URL 类型 job 行（查数据库判断依赖任务状态）"""
         return [
-            project_name, task_group, task_info.get("task_name", ""),
+            dep_project or project_name, dep_group or task_group, task_info.get("task_name", ""),
             dep_task, "url",
-            task_info.get("job_name", ""), "${V_URL}", DEFAULT_JOB_PARAMS, "",
+            task_info.get("job_name", ""), "${V_URL}", job_params, "",
             "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
         ]
 
@@ -500,11 +508,14 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
             dep_task = u.get("task", "")
             if not dep_task:
                 continue
+            # 上游的 project/group 从 upstream 项取（跨项目依赖归属正确）
+            dep_project = u.get("project", "")
+            dep_group = u.get("group", "")
             dep_type = u.get("dep_type", "宽依赖")
             if dep_type == "虚拟依赖":
-                ws.append(_virtual_dep_row(f_info, dep_task))
+                ws.append(_virtual_dep_row(f_info, dep_task, dep_project, dep_group))
             else:
-                ws.append(_dep_job_row(f_info, dep_task))
+                ws.append(_dep_job_row(f_info, dep_task, dep_project, dep_group))
 
     # 视图执行行 + 依赖行
     if view_info.get("task_name"):

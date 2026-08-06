@@ -139,6 +139,10 @@ schedule:
   #   - table: "ods_order_f"
   #     task: "task_ods_order_f"        # RS 湖表调度给的任务名（原样保留，不转 job）
   #     dep_type: "宽依赖"
+  #     # 跨项目依赖时填上游归属（同项目可不填，export 时用当前表配置兜底）
+  #     project: ""                     # 上游所属项目
+  #     group: ""                       # 上游所属任务组
+  #     app: ""                         # 上游所属应用
 
   # 注意：task_name/job_name/view/dq 全部由脚本标准化派生，designer 不填
   # lts_params 默认含 V_CYCLE_ID→P_CYCLE_ID + V_GROUP_CODE，需要时才改
