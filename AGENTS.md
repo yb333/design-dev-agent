@@ -18,8 +18,8 @@
 ```
 skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
-│   ├── scripts/         # preprocess.py assemble_ts.py precheck.py gate_summary.py
-│   ├── assets/          # ts-template.json design-decisions-template.yaml
+│   ├── scripts/         # preprocess.py assemble_ts.py precheck.py gate_summary.py explore.py
+│   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json
 │   └── references/      # design-guide.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
 │   ├── scripts/         # run_ut.py ut_precheck.py ut_execute.py check_db.py check_sql.py
@@ -72,8 +72,9 @@ ddlc_design_dev/
 
 ## 核心流程（new-pipe.md 步骤）
 
-1. **预处理**：preprocess.py 转 rs_input.json（完整，给脚本读）+ rs_input_view.json（compact 紧凑视图，给 designer 读，省 70%）→ precheck.py 校验输入完整性 + **连库校验字段类型**（pg_catalog UNION ALL 批量查，72h schema 缓存）
+1. **预处理**：preprocess.py 转 rs_input.json（完整，给脚本读；含 schedule.incremental_tables 解析自 RS 增量表段）+ rs_input_view.json（compact 紧凑视图，给 designer 读，省 70%）→ precheck.py 校验输入完整性 + **连库校验字段类型**（pg_catalog UNION ALL 批量查，72h schema 缓存）
 2. **设计**：调 dws-designer 产 design_decisions.yaml → assemble_ts.py 组装 ts.json + ts.md
+   - **多步骤数据流模型**：每个 rule 有 step_type（full/aggregate/incremental_extract/merge）+ target_role（intermediate/target），多步骤间用 produces_for/reads 声明依赖。design-guide §4.4/§5.2。designer 可调 explore.py 试算 JOIN 键唯一性。
 3. **闸口①**：gate_summary.py 出摘要，人确认设计方向（非交互模式跳过）
 4. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
 5. **编码**：逐规则调 dws-coder，slice_ts.py 切片单规则上下文，coder 产 SELECT + DQ
@@ -129,6 +130,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 - **Python snake_case**，提交规范 `feat/fix/refactor/docs: 描述`。
 - **designer 只改设计不改 SQL**；coder 只接 SQL 语法类问题。职责边界在 agent permission 白名单里硬约束。
 - **rs_input 双文件**：`rs_input.json`（field_mappings 行对象列表，assemble_ts/precheck 脚本读）+ `rs_input_view.json`（compact 分块紧凑视图，designer 读）。同一次 preprocess 产出（view 是 build_compact 从 input 派生），天然一致。designer 用 Read 读 view（23KB）而非 input 全文（120KB）。
+- **ts 多步骤数据流模型**：rule 有 step_type（full 单规则直灌/装配 / aggregate 聚合中间表 / incremental_extract 增量取数到 tmp / merge 合并 tmp 到目标）+ target_role（intermediate/target）。中间表和目标表可有同名字段（validate_decisions 按 (表,字段) 查重，不按全局）。多步骤依赖用 produces_for/reads 声明（与 data_flow.dependencies 互补）。简单全量走 full 老路不受影响。design-guide §4.4 是 step_type 决策权威。
 
 ## 开发命令
 
