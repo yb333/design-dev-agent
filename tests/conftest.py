@@ -128,8 +128,13 @@ def make_rs_input(schema="dws", table="dwb_test_i", cn="测试表",
     }
 
 
-def make_design_decisions(rules=None, business_key=None, distribution_key=None, dq_rules=None):
-    """构造 design_decisions 的 dict。"""
+def make_design_decisions(rules=None, business_key=None, distribution_key=None, dq_rules=None,
+                          business_key_design=None, tables=None, exemptions=None):
+    """构造 design_decisions 的 dict。
+
+    默认产出能通过 run_all_validations 全部新校验的合法 decisions。
+    测试可通过传参注入特定坏值（如 business_key=[] 触发 N2）。
+    """
     if rules is None:
         rules = [{
             "rule_code": "R0001", "rule_name": "测试规则", "scenario": "default",
@@ -139,15 +144,145 @@ def make_design_decisions(rules=None, business_key=None, distribution_key=None, 
             "field_logics": {},
             "grain": {"input": "源", "output": "目标", "change": "无"},
         }]
+    bk = business_key if business_key is not None else ["id"]
+    if business_key_design is None:
+        business_key_design = {
+            "input_key": list(bk),
+            "adjusted": False,
+            "reason": "沿用输入主键，产出粒度未变",
+        }
     return {
         "rules": rules,
-        "complexity_analysis": {"join_count": 1, "has_grain_change": False, "segmentation_decision": "不分段"},
+        "complexity_analysis": {
+            "join_count": 1, "has_grain_change": False,
+            "segmentation_decision": "不分段",
+            "design_approach": "测试设计思路：单规则直灌目标表",
+        },
         "distribution_key": distribution_key or ["id"],
-        "business_key": business_key or ["id"],
-        "schedule": {"cron": "0 30 3 * * ?"},
+        "business_key": bk,
+        "business_key_design": business_key_design,
+        "schedule": {"schedule_type": "daily", "cron": "0 30 3 * * ?"},
         "data_flow": {"dependencies": [], "schedule_groups": [{"sequence": 1, "rules": ["R0001"]}]},
         "dq_rules": dq_rules or [],
+        "tables": tables or {},
+        "exemptions": exemptions or [],
     }
+
+
+def make_incremental_rs_input(schema="dws", table="dwb_test_i", cn="测试表",
+                              drivers=None):
+    """构造带增量驱动表的 rs_input（用于增量校验测试）。
+
+    drivers: 驱动表列表，None 用默认两张（ods_test_f 按 update_time，ods_pay_f 按 dt）。
+    """
+    rs = make_rs_input(schema=schema, table=table, cn=cn)
+    if drivers is None:
+        drivers = [
+            {"source_table": "ods_test_f", "incremental_key": "update_time"},
+            {"source_table": "ods_pay_f", "incremental_key": "dt"},
+        ]
+    # 确保驱动表在 source_tables 里
+    existing = {(s.get("source_table") or "").lower() for s in rs["source_tables"]}
+    for d in drivers:
+        short = (d.get("source_table") or "").split(".")[-1].lower()
+        if short not in existing and (d.get("source_table") or "").lower() not in existing:
+            rs["source_tables"].append({
+                "source_schema": "ods", "source_table": d["source_table"],
+                "source_table_cn": "增量源表", "source_alias": short[:3],
+            })
+    rs["schedule"]["incremental_key"] = "水位线"
+    rs["schedule"]["incremental_tables"] = drivers
+    return rs
+
+
+def make_incremental_decisions(drivers_config):
+    """构造增量场景的 design_decisions（多驱动表 → 多 extract + merge）。
+
+    drivers_config: [{key, table, seq}] 驱动表配置，每张产出一个 extract 规则。
+    返回的 decisions 默认能通过增量校验（N14-N17）。
+    """
+    rules = []
+    seq = 1
+    extract_codes = []
+    for i, dc in enumerate(drivers_config):
+        code = f"R{seq:04d}"
+        rules.append({
+            "rule_code": code, "rule_name": f"增量取数{dc['table']}", "scenario": "default",
+            "exec_sequence": seq, "target_table": f"dws.tmp_{dc['table']}", "is_view_step": False,
+            "step_type": "incremental_extract", "target_role": "intermediate",
+            "produces_for": [], "reads": [],
+            "field_targets": ["id"], "field_logics": {},
+            "incremental": {
+                "key": dc["key"],
+                "filter": f"{dc['key']} >= '${{BIZ_DATE_START}}' AND {dc['key']} < '${{BIZ_DATE_END}}'",
+                "init_filter": "1=1", "init_time_range": "ALL",
+            },
+        })
+        extract_codes.append(code)
+        seq += 1
+    # merge 步骤
+    merge_code = f"R{seq:04d}"
+    rules.append({
+        "rule_code": merge_code, "rule_name": "合并目标", "scenario": "default",
+        "exec_sequence": seq, "target_table": "dws.dwb_test_f", "is_view_step": False,
+        "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+        "write_condition": "T.id=T1.id",
+        "produces_for": [], "reads": [f"dws.tmp_{dc['table']}" for dc in drivers_config],
+        "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+        "field_logics": {},
+        "grain": {"input": "源", "output": "目标", "change": "无"},
+    })
+    # 回填 produces_for
+    for r in rules[:-1]:
+        r["produces_for"] = [merge_code]
+    return make_design_decisions(rules=rules)
+
+
+def make_accumulate_decisions(overlap_fields=("b", "c"), extra_a=("a",), extra_b=("d", "e")):
+    """构造累积共建场景的 design_decisions（两规则写同一中间表，字段重叠）。
+
+    临时表有字段 a/b/c/d/e，规则1写 abc，规则2写 bcde（b/c 重叠）。
+    """
+    flds_r1 = list(extra_a) + list(overlap_fields)
+    flds_r2 = list(overlap_fields) + list(extra_b)
+    # 所有字段都要在 rs_input field_map 里——这里用单字段 id 的默认 rs_input 不够，
+    # 调用方需配合 make_rs_input(fields=...) 造全字段。这里只造 decisions 结构。
+    tmp_table = "dws.dwb_acc_tmp1"
+    rules = [
+        {
+            "rule_code": "R0001", "rule_name": "来源A写入", "scenario": "default",
+            "exec_sequence": 1, "target_table": tmp_table, "is_view_step": False,
+            "step_type": "full", "target_role": "intermediate",
+            "produces_for": ["R0003"], "reads": [],
+            "field_targets": flds_r1, "field_logics": {},
+            "load_mode": "no_delete",
+        },
+        {
+            "rule_code": "R0002", "rule_name": "来源B追加(排重)", "scenario": "default",
+            "exec_sequence": 2, "target_table": tmp_table, "is_view_step": False,
+            "step_type": "full", "target_role": "intermediate",
+            "produces_for": ["R0003"], "reads": [tmp_table],  # 自引用
+            "field_targets": flds_r2, "field_logics": {},
+            "load_mode": "no_delete",
+            "dedup_strategy": {
+                "target": tmp_table, "key": ["id"], "priority": "R0001 > R0002",
+                "reason": "A来源优先",
+            },
+        },
+        {
+            "rule_code": "R0003", "rule_name": "装配目标", "scenario": "default",
+            "exec_sequence": 3, "target_table": "dws.dwb_acc_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "produces_for": [], "reads": [tmp_table],
+            "field_targets": list(extra_a) + list(overlap_fields) + list(extra_b),
+            "field_logics": {},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        },
+    ]
+    tables = {
+        "dwb_acc_tmp1": {"build_mode": "accumulate", "distribution_key": ["id"]},
+    }
+    return make_design_decisions(rules=rules, tables=tables)
 
 
 def make_ts_json(schema="dws", table="dwb_test_i", cn="测试表",

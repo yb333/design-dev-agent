@@ -101,6 +101,15 @@ rules:
         strategy: ""                    # 不唯一时的对齐策略（GROUP BY收敛/取最新有效行）
         reason: ""
 
+    # 排重策略（★ 仅累积共建场景填：build_mode=accumulate 的表，多来源有数据重叠需排重时）
+    # 三层分工：RS/mapping 给"需去重"→ designer 细化为可落地策略 → coder 翻译成 SQL
+    # transform 模式的表不需要填。
+    dedup_strategy:
+      target: ""                       # 对哪张共建表排重
+      key: []                          # 用什么键判断重复（如 ["order_id"]）
+      priority: ""                     # 来源优先级（如 "R0001 > R0002"，冲突时保留谁）
+      reason: ""                       # 策略理由（如"A来源优先，因为A是主数据"）
+
 # === 设计思路（自然语言，含设计考虑的指标 + 整体策略）===
 # 写清楚你的设计思路：为什么这样拆分、整体加工策略是什么。
 # 自然地引用指标（JOIN数、聚合字段数等），不要只列数字。
@@ -108,12 +117,18 @@ complexity_analysis:
   design_approach: ""                    # ★ 设计思路（自然语言，如"本资产按两个维度分别聚合收敛，产出中间表后统一装配..."）
   segmentation_decision: ""             # "不分段" / "分段"
   segmentation_reason: ""               # 分段理由（如果分段了）
+  data_volume: ""                       # ★ 数据量档位（尽力而为）：万级/百万级/亿级/未知。
+                                         #   来自 RS data_exploration 或 explore.py 估。只影响第2层物化决策（亿级倾向物化），
+                                         #   不影响分布键（分布键看主键/关联频率/离散度）。拿不到填"未知"，不阻断。
 
 # === 表物理属性（per-table）===
 # 每张表各自定义分布键和分布方式。大部分情况下分布键跟业务主键一致，
 # 但中间表可能不同（如按 user_id 聚合的 tmp 表用 user_id 做分布键）。
 # distribution_key: 分布键字段列表
 # distribute_type: 分布方式 HASH(默认) | ROUNDROBIN | REPLICATION（不填时有键=HASH，无键=ROUNDROBIN）
+# build_mode: 产出模式（仅中间表需要关注）
+#   transform（默认）：单一规则一次性产出（同表字段不可重复声明，assemble_ts C9 严格校验）
+#   accumulate：多规则累积共建（去重累积/union累积，同表字段可重叠，需配 dedup_strategy）
 # 其余属性不填走默认（列存 / 按 schema 推断逻辑集群）。
 # 字段定义由 assemble_ts.py 从 rs_input 自动搬入 tables.{表名}.fields，designer 不碰。
 tables:
@@ -125,9 +140,14 @@ tables:
   # dwb_xxx_d:
   #   distribution_key: []
   #   distribute_type: REPLICATION
-  # 中间表:
+  # 中间表（转换型，默认）:
   # dwb_xxx_tmp1:
   #   distribution_key: [id]
+  #   build_mode: transform        # 单一规则产出
+  # 中间表（累积共建型）:
+  # dwb_xxx_tmp2:
+  #   distribution_key: [id]
+  #   build_mode: accumulate       # 多规则累积共建（配合规则级 dedup_strategy）
 
 # === 业务主键（业务唯一字段组合，供 UT 主键唯一检查）===
 # 注意：≠ 分布键。分布键是数据分布最优选，业务主键是业务唯一性。
@@ -194,8 +214,20 @@ dq_rules: []
 #   - check_type: 检查类型（空值检查 / 重复数据检查 / 跨表数量一致性检查 / 值域约束检查 / 时间拉链检查 / 维度扩散检查）
 #   - rule_name: 规则名称
 #   - rule_desc: 规则描述（检查口径/阈值/告警级等）
-#   - rule_id: "DQ_001"
-#     scope: "字段级"
-#     check_type: "空值检查"
-#     rule_name: ""
-#     rule_desc: ""
+  #   - rule_id: "DQ_001"
+  #     scope: "字段级"
+  #     check_type: "空值检查"
+  #     rule_name: ""
+  #     rule_desc: ""
+
+# === 软阻断豁免（可选）===
+# 某些校验是"软阻断"（默认拦，但有合法通道可放行）。
+# designer 若要偏离标准模式，必须在此显式声明豁免——不偷偷溜过去。
+# 豁免内容会进 ts.json 的 design.exemptions，闸口①人可见。
+# 目前支持豁免的校验：
+#   N16: 增量驱动表未单独 extract（合并到一步），需说明合并理由
+#   N17: extract 规则数 > 驱动表数（多拆了 extract），需说明拆分理由
+exemptions: []
+#   - code: "N16"                       # 豁免哪条校验
+#     target: "ods_payment_f"           # 豁免对象（表名/规则号，视校验项而定）
+#     reason: "两张驱动表同按 dt 分区，合并为一个 extract 取数步骤合理"

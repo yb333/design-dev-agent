@@ -326,7 +326,13 @@ def validate_decisions(decisions, field_map):
     rs_fields = set(field_map.keys())
 
     # 按 (table_short, field) 维度查重——同一字段可跨表，但不能在同表重复
+    # ★ build_mode 分流：accumulate（累积共建）模式允许同表字段重叠，transform（默认）严格查重
     seen_table_fields = {}  # (table_short, field) -> rule_code
+    # 累积共建表集合（build_mode=accumulate 的表，字段可重叠不报 C9）
+    accumulate_tables = set()
+    for tbl_short_cfg, tbl_cfg in decisions.get("tables", {}).items():
+        if (tbl_cfg.get("build_mode", "transform") if isinstance(tbl_cfg, dict) else "transform") == "accumulate":
+            accumulate_tables.add(tbl_short_cfg)
     # 收集目标表（target_role=target 或无 target_role 的规则）覆盖的字段
     target_assigned = set()
 
@@ -340,15 +346,18 @@ def validate_decisions(decisions, field_map):
         tbl = rule.get("target_table", "")
         tbl_short = tbl.rsplit(".", 1)[-1] if "." in tbl else tbl
         is_target = rule.get("target_role", "target") == "target"
+        is_accumulate = tbl_short in accumulate_tables
 
         for t in targets:
             key = (tbl_short, t)
             if key in seen_table_fields:
-                # 同一张表里重复声明同一字段 → 真重复（多 rule 写同表撞了）
-                errors.append(
-                    f"字段 '{t}' 在表 '{tbl_short}' 重复分配: "
-                    f"同时在 {seen_table_fields[key]} 和 {code} 里"
-                )
+                # accumulate 模式允许同表字段重叠（多来源共建），不报 C9
+                if not is_accumulate:
+                    errors.append(
+                        f"字段 '{t}' 在表 '{tbl_short}' 重复分配: "
+                        f"同时在 {seen_table_fields[key]} 和 {code} 里"
+                        f"（若为累积共建表，请在 tables.{tbl_short}.build_mode 标 accumulate）"
+                    )
             else:
                 seen_table_fields[key] = code
 
@@ -392,6 +401,518 @@ def validate_decisions(decisions, field_map):
                 )
 
     return errors
+
+
+# ============================================================
+# 五层校验契约（新增）
+# ============================================================
+# ValidationResult: 按层收集校验结果，替代原来的 errors 平铺列表
+# 校验分三级：
+#   hard（硬阻断）：结构上不可能对，exit 1
+#   soft（软阻断）：默认拦，但有合法通道可填 exemptions 放行
+#   warn（提示）：可疑不致命
+class ValidationResult:
+    """按层组织的校验结果。"""
+
+    LAYER_ORDER = [
+        ("L0", "第0层-锚点"),
+        ("L1", "第1层-字段血缘"),
+        ("L2", "第2层-加工路径"),
+        ("L3", "第3层-增量"),
+        ("L4", "第4层-工程保障"),
+        ("LC", "横切"),
+        ("LA", "累积共建"),
+    ]
+
+    def __init__(self):
+        # list of {"layer", "code", "target", "level", "msg"}
+        # 用 list 而非 dict：同 code 多条错误（如多条 C9 重复字段）都保留
+        self.items: list[dict] = []
+
+    def add_hard(self, layer: str, code: str, msg: str):
+        self.items.append({"layer": layer, "code": code, "target": "", "level": "hard", "msg": msg})
+
+    def add_soft(self, layer: str, code: str, msg: str, target: str = ""):
+        self.items.append({"layer": layer, "code": code, "target": (target or "").strip().lower(), "level": "soft", "msg": msg})
+
+    def add_warn(self, layer: str, code: str, msg: str):
+        self.items.append({"layer": layer, "code": code, "target": "", "level": "warn", "msg": msg})
+
+    def _is_exempted(self, code: str, target: str, exemptions: list) -> bool:
+        """检查某条软阻断是否被豁免。target 用于匹配豁免对象（大小写不敏感）。"""
+        t = (target or "").strip().lower()
+        for ex in exemptions or []:
+            if ex.get("code") == code:
+                ex_target = (ex.get("target", "") or "").strip().lower()
+                # target 空匹配（code-only 豁免）或精确匹配
+                if ex_target == "" or ex_target == t:
+                    return True
+        return False
+
+    def hard_errors(self, exemptions: list = None) -> list[tuple[str, str, str]]:
+        """返回所有硬阻断项（含被未豁免的软阻断升级）。"""
+        exemptions = exemptions or []
+        out = []
+        for info in self.items:
+            if info["level"] == "hard":
+                out.append((info["layer"], info["code"], info["msg"]))
+            elif info["level"] == "soft":
+                # 软阻断：检查是否豁免（用该条携带的 target 匹配）
+                if not self._is_exempted(info["code"], info.get("target", ""), exemptions):
+                    out.append((info["layer"], info["code"], info["msg"]))
+        return out
+
+    def soft_errors(self, exemptions: list = None) -> list[tuple[str, str, str]]:
+        """返回所有软阻断项（用于单独提示可填豁免放行）。"""
+        exemptions = exemptions or []
+        out = []
+        for info in self.items:
+            if info["level"] == "soft" and not self._is_exempted(info["code"], info.get("target", ""), exemptions):
+                out.append((info["layer"], info["code"], info["msg"]))
+        return out
+
+    def warnings(self) -> list[tuple[str, str, str]]:
+        return [(info["layer"], info["code"], info["msg"]) for info in self.items if info["level"] == "warn"]
+
+    def format_report(self, exemptions: list = None) -> str:
+        """按层分组输出校验报告。"""
+        exemptions = exemptions or []
+        layer_names = dict(self.LAYER_ORDER)
+        hards = self.hard_errors(exemptions)
+        softs = self.soft_errors(exemptions)
+        warns = self.warnings()
+
+        if not hards and not softs and not warns:
+            return ""
+
+        lines = []
+        # 硬阻断区：含未豁免的软阻断（完整 msg，因为这些会拦住）
+        if hards:
+            # 区分真硬阻断 vs 未豁免软阻断（后者提示可豁免）
+            lines.append(f"❌ 设计校验失败（{len(hards)} 项阻断）:")
+            for layer, code, msg in hards:
+                lines.append(f"  [{layer_names.get(layer, layer)}] {code}: {msg}")
+        # 软阻断提示区：只列出 code+target（完整 msg 已在上面阻断区），告诉用户哪些可填豁免
+        if softs:
+            lines.append(f"\n⏸ 其中 {len(softs)} 项是软阻断，可填 design_decisions.exemptions 放行（需说明理由，闸口①可见）:")
+            seen = set()
+            for layer, code, msg in softs:
+                key = (layer, code)
+                if key in seen:
+                    continue
+                seen.add(key)
+                lines.append(f"  [{layer_names.get(layer, layer)}] {code} —— 在 exemptions 填 {{code: \"{code}\", target: \"...\", reason: \"...\"}}")
+        if warns:
+            lines.append(f"\n⚠ 提示（{len(warns)} 项，不阻断）:")
+            for layer, code, msg in warns:
+                lines.append(f"  [{layer_names.get(layer, layer)}] {code}: {msg}")
+        return "\n".join(lines)
+
+
+def validate_quartz_cron(cron: str) -> list[str]:
+    """校验 Quartz 6 段 cron 表达式。返回错误列表（空=合法）。
+
+    Quartz 格式：秒 分 时 日 月 周（6 段），支持修饰符 * ? , - / L W #
+    """
+    if not cron or not cron.strip():
+        return ["cron 为空"]
+    parts = cron.strip().split()
+    if len(parts) != 6:
+        return [f"cron 应为 6 段（秒 分 时 日 月 周），当前 {len(parts)} 段: '{cron}'"]
+
+    # 每段允许的字符：数字 + 修饰符 * ? , - / L W # + 字母（Quartz 周支持 MON-SUN，月支持 JAN-DEC）
+    import re
+    valid_pat = re.compile(r"^[0-9A-Za-z*\?,\-/LW#]+$")
+    errors = []
+    field_names = ["秒", "分", "时", "日", "月", "周"]
+    ranges = [(0, 59), (0, 59), (0, 23), (1, 31), (1, 12), (1, 7)]
+    for i, (part, fname, (lo, hi)) in enumerate(zip(parts, field_names, ranges)):
+        if not valid_pat.match(part):
+            errors.append(f"cron 第{i+1}段({fname}) '{part}' 含非法字符")
+            continue
+        # 单值范围检查（只查纯数字单值，含修饰符/字母的跳过——组合由平台解析）
+        if part.isdigit():
+            v = int(part)
+            if not (lo <= v <= hi):
+                errors.append(f"cron 第{i+1}段({fname}) 值 {v} 越界（应为 {lo}-{hi}）")
+    return errors
+
+
+def _table_short(name: str) -> str:
+    """取表短名（去掉 schema 前缀）。"""
+    return name.rsplit(".", 1)[-1] if "." in name else name
+
+
+def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> ValidationResult:
+    """运行五层校验全集。返回 ValidationResult。
+
+    存量校验（C7-C13）通过 validate_decisions 调用，结果并入 L1/L4。
+    新增校验按层独立函数。
+    """
+    vr = ValidationResult()
+    rules = decisions.get("rules", [])
+
+    # 存量校验 C7-C13 → 并入相应层（C7-C11 归 L1，C12-C13 归 L4）
+    legacy_errors = validate_decisions(decisions, field_map)
+    for err in legacy_errors:
+        # 按 error 文本特征归类层
+        if "write_condition" in err or "load_mode" in err:
+            vr.add_hard("L4", "C12_13", err)
+        elif "rules 为空" in err:
+            vr.add_hard("L1", "C7", err)
+        else:
+            vr.add_hard("L1", "C8_11", err)
+
+    # rules 为空时，后续校验无意义（与存量 C7 早退一致）
+    if not rules:
+        return vr
+
+    # ============================================================
+    # 第0层 锚点（N1-N4）
+    # ============================================================
+    # N1 grain 非空（每张目标表）
+    for rule in rules:
+        if rule.get("target_role", "target") != "target":
+            continue
+        grain = rule.get("grain") or {}
+        if not isinstance(grain, dict):
+            grain = {}
+        if not (grain.get("input") or "").strip() or not (grain.get("output") or "").strip():
+            vr.add_hard("L0", "N1", f"规则 {rule.get('rule_code','?')} 的 grain.input/output 为空（必须声明产出表粒度）")
+
+    # N2 business_key 非空
+    business_key = decisions.get("business_key") or []
+    if not business_key:
+        vr.add_hard("L0", "N2", "business_key 为空，无法框定产出表唯一行（后续加工和 UT 验证都基于此）")
+
+    # N3 business_key_design 论证完整
+    bkd = decisions.get("business_key_design") or {}
+    if not isinstance(bkd, dict):
+        bkd = {}
+    input_key = bkd.get("input_key") or []
+    adjusted = bkd.get("adjusted", False)
+    reason = (bkd.get("reason") or "").strip()
+    if not input_key:
+        vr.add_hard("L0", "N3", "business_key_design.input_key 为空（应填 mapping/RS 标注的主键）")
+    if adjusted and not reason:
+        vr.add_hard("L0", "N3", "business_key_design.adjusted=true 但 reason 为空（调整了主键必须说明原因）")
+    if not adjusted and not reason:
+        vr.add_hard("L0", "N3", "business_key_design.reason 为空（adjusted=false 时可写'沿用输入主键，产出粒度未变'）")
+
+    # N4 business_key 字段在目标表存在
+    # 目标表字段 = target_role=target 规则的 field_targets 并集
+    target_fields = set()
+    for rule in rules:
+        if rule.get("target_role", "target") == "target":
+            target_fields.update(rule.get("field_targets") or [])
+    for k in business_key:
+        if k not in target_fields:
+            vr.add_hard("L0", "N4", f"business_key 字段 '{k}' 不在目标表的字段中（检查拼写或补字段）")
+
+    # ============================================================
+    # 第1层 N5（加工字段缺 design_logic）—— 从 missing_logic 收集
+    # 注意：这里复用 build_rule 的逻辑判断，但 main 里已经算过。
+    # 为避免重复，N5 在 main 里基于 assemble_ts 返回的 missing_logic 注入。
+    # 此处不重复算。
+
+    # ============================================================
+    # 第2层 加工路径（N6-N12, N10b/c/d）
+    # ============================================================
+    valid_step_types = {"full", "aggregate", "incremental_extract", "merge"}
+    valid_target_roles = {"intermediate", "target"}
+
+    # 收集中间表信息
+    intermediate_tables = {}  # tbl_short -> [rule_codes]
+    target_rule_codes = set()
+    rule_seq = {}  # rule_code -> exec_sequence
+    all_rule_codes = set()
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        all_rule_codes.add(code)
+        rule_seq[code] = rule.get("exec_sequence", 1)
+        st = rule.get("step_type", "full")
+        tr = rule.get("target_role", "target")
+        tbl_short = _table_short(rule.get("target_table", ""))
+
+        # N6 step_type 合法
+        if st not in valid_step_types:
+            vr.add_hard("L2", "N6", f"规则 {code} 的 step_type='{st}' 不合法（应为 full/aggregate/incremental_extract/merge）")
+        # N7 target_role 合法
+        if tr not in valid_target_roles:
+            vr.add_hard("L2", "N7", f"规则 {code} 的 target_role='{tr}' 不合法（应为 intermediate/target）")
+        # N8 矛盾组合（只禁两种）
+        if tr == "intermediate" and st == "merge":
+            vr.add_hard("L2", "N8", f"规则 {code} 矛盾：target_role=intermediate + step_type=merge（中间表不会是合并步骤）")
+        if tr == "target" and st == "incremental_extract":
+            vr.add_hard("L2", "N8", f"规则 {code} 矛盾：target_role=target + step_type=incremental_extract（目标表不会是取数到tmp）")
+
+        if tr == "intermediate":
+            intermediate_tables.setdefault(tbl_short, []).append(code)
+
+    # N9 intermediate 的 produces_for 非空
+    for rule in rules:
+        if rule.get("target_role", "target") == "intermediate":
+            code = rule.get("rule_code", "?")
+            pf = rule.get("produces_for") or []
+            if not pf:
+                vr.add_hard("L2", "N9", f"规则 {code} 是中间表(intermediate)但 produces_for 为空（中间表必须声明被谁消费）")
+
+    # N10 下游 reads 非空（merge 必须；full 有中间表时必须；无中间表放行）
+    has_intermediate = len(intermediate_tables) > 0
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        st = rule.get("step_type", "full")
+        reads = rule.get("reads") or []
+        if st == "merge" and not reads:
+            vr.add_hard("L2", "N10", f"规则 {code} 是 merge 步骤但 reads 为空（合并必须读中间表）")
+        if st == "full" and has_intermediate and not reads:
+            # full 装配步骤应读中间表（但排除 full 产中间表的情况）
+            if rule.get("target_role", "target") == "target":
+                vr.add_hard("L2", "N10", f"规则 {code} 是 full(target) 但 reads 为空（存在中间表时，装配步骤必须读中间表）")
+
+    # N10b 每张产出的中间表必须被某下游 reads 引用
+    all_reads = set()
+    for rule in rules:
+        for r in rule.get("reads") or []:
+            all_reads.add(_table_short(r))
+    for tbl_short, producers in intermediate_tables.items():
+        if tbl_short not in all_reads:
+            vr.add_hard("L2", "N10b", f"中间表 '{tbl_short}' 产出了但没有下游 reads 引用它（悬空中间表）")
+
+    # N10c/N10d 依赖顺序 + 循环检测（基于 produces_for 图）
+    # 构建 produces_for 边：A produces_for B 表示 A->B
+    edges = []  # (from_code, to_code)
+    for rule in rules:
+        a = rule.get("rule_code", "?")
+        for b in rule.get("produces_for") or []:
+            edges.append((a, b))
+
+    # N11 produces_for 指向的 rule_code 存在
+    for a, b in edges:
+        if b not in all_rule_codes:
+            vr.add_hard("L2", "N11", f"规则 {a} 的 produces_for 指向 '{b}'，但该规则不存在")
+
+    # N12 reads 指向的表存在（∈ intermediate 产出的表）；自引用例外
+    intermediate_table_names = set(intermediate_tables.keys())
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        own_tbl = _table_short(rule.get("target_table", ""))
+        for r in rule.get("reads") or []:
+            r_short = _table_short(r)
+            if r_short == own_tbl:
+                continue  # 自引用例外（累积共建场景），不校验存在性
+            if r_short not in intermediate_table_names:
+                vr.add_hard("L2", "N12", f"规则 {code} 的 reads 指向 '{r}'，但没有中间表规则产出该表")
+
+    # N10c 依赖顺序：produces_for A->B 则 seq(A) < seq(B)
+    for a, b in edges:
+        if b not in all_rule_codes:
+            continue  # N11 已报
+        sa, sb = rule_seq.get(a), rule_seq.get(b)
+        if sa is not None and sb is not None and sa >= sb:
+            vr.add_hard("L2", "N10c", f"依赖顺序错误：{a}(seq={sa}) produces_for {b}(seq={sb})，应满足 seq({a}) < seq({b})")
+
+    # N10d 循环依赖检测（DFS）
+    def detect_cycle(graph_edges):
+        from collections import defaultdict
+        g = defaultdict(list)
+        nodes = set()
+        for f, t in graph_edges:
+            g[f].append(t)
+            nodes.add(f)
+            nodes.add(t)
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {n: WHITE for n in nodes}
+        cycle_path = []
+
+        def dfs(n, path):
+            color[n] = GRAY
+            for nb in g.get(n, []):
+                if nb not in color:
+                    continue
+                if color[nb] == GRAY:
+                    return path + [n, nb]
+                if color[nb] == WHITE:
+                    res = dfs(nb, path + [n])
+                    if res:
+                        return res
+            color[n] = BLACK
+            return None
+
+        for n in nodes:
+            if color.get(n) == WHITE:
+                res = dfs(n, [])
+                if res:
+                    return res
+        return None
+
+    cycle = detect_cycle(edges)
+    if cycle:
+        vr.add_hard("L2", "N10d", f"循环依赖：{' → '.join(cycle)}")
+
+    # ============================================================
+    # 第3层 增量（N14-N17）
+    # ============================================================
+    schedule = rs_input.get("schedule") or {}
+    incremental_tables = schedule.get("incremental_tables") or []
+    extract_rules = [r for r in rules if r.get("step_type") == "incremental_extract"]
+    n_drivers = len(incremental_tables)
+    n_extracts = len(extract_rules)
+
+    # 只在标了增量时校验（避免全量场景误报）
+    is_incremental_asset = bool(incremental_tables) or n_extracts > 0
+
+    if is_incremental_asset:
+        # N14 驱动表数 ≤ extract 规则数
+        if n_drivers > n_extracts:
+            vr.add_hard("L3", "N14", f"增量驱动表 {n_drivers} 张 > extract 规则 {n_extracts} 个（每张驱动表必须有对应 extract，否则丢增量数据）")
+
+        # N15 extract 的 incremental{} 填全
+        for rule in extract_rules:
+            code = rule.get("rule_code", "?")
+            inc = rule.get("incremental") or {}
+            if not isinstance(inc, dict):
+                inc = {}
+            for f in ("key", "filter", "init_filter"):
+                if not (inc.get(f) or "").strip():
+                    vr.add_hard("L3", "N15", f"规则 {code} 是 incremental_extract 但 incremental.{f} 为空（增量取数必须有 {f}）")
+
+        # N16 驱动表对账：每张驱动表的 incremental_key 至少被一个 extract 覆盖（软阻断，合并可豁免）
+        covered_keys = {(inc.get("key") or "").strip().lower() for inc in [r.get("incremental") or {} for r in extract_rules] if (inc.get("key") or "").strip()}
+        for dt in incremental_tables:
+            drv_table = (dt.get("source_table") or "").strip()
+            drv_key = (dt.get("incremental_key") or "").strip().lower()
+            if drv_key and drv_key not in covered_keys:
+                vr.add_soft("L3", "N16", f"驱动表 '{drv_table}' 的增量字段 '{drv_key}' 未被任何 extract 的 incremental.key 覆盖（若合并到一步取数，填 exemptions 放行并说明理由）", target=drv_table)
+
+        # N17 extract 数 > 驱动表数（软阻断，多拆需豁免）
+        if n_extracts > n_drivers and n_drivers > 0:
+            vr.add_soft("L3", "N17", f"extract 规则 {n_extracts} 个 > 驱动表 {n_drivers} 张（多拆了 extract，若按场景/分区拆合理，填 exemptions 放行）", target=f"{n_extracts}_extracts")
+
+    # ============================================================
+    # 第4层 工程（N18-N21）
+    # ============================================================
+    sched = decisions.get("schedule") or {}
+    # N18 schedule_type 合法
+    stype = (sched.get("schedule_type") or "").strip()
+    if stype and stype not in ("daily", "hourly", "realtime"):
+        vr.add_hard("L4", "N18", f"schedule_type='{stype}' 不合法（应为 daily/hourly/realtime）")
+
+    # N19 cron Quartz 6 段格式
+    cron = (sched.get("cron") or "").strip()
+    if cron:
+        for cerr in validate_quartz_cron(cron):
+            vr.add_hard("L4", "N19", cerr)
+
+    # N20/N21 distribution_key（per-table，校验字段在所属表存在）
+    dec_tables = decisions.get("tables") or {}
+    # 构建每张表的字段集合（从 rules 的 field_targets 按表聚合）
+    table_fields: dict[str, set] = {}
+    for rule in rules:
+        ts = _table_short(rule.get("target_table", ""))
+        table_fields.setdefault(ts, set()).update(rule.get("field_targets") or [])
+
+    valid_distribute_types = {"HASH", "ROUNDROBIN", "REPLICATION", ""}
+    for tbl_short, tbl_cfg in dec_tables.items():
+        if not isinstance(tbl_cfg, dict):
+            continue
+        dt = (tbl_cfg.get("distribute_type") or "").strip().upper()
+        if dt not in valid_distribute_types:
+            vr.add_hard("L4", "N20", f"表 '{tbl_short}' 的 distribute_type='{dt}' 不合法（应为 HASH/ROUNDROBIN/REPLICATION）")
+        dkeys = tbl_cfg.get("distribution_key") or []
+        tbl_flds = table_fields.get(tbl_short, set())
+        for dk in dkeys:
+            if dk not in tbl_flds:
+                vr.add_hard("L4", "N21", f"表 '{tbl_short}' 的 distribution_key 字段 '{dk}' 不在该表字段中（建表会报错）")
+
+    # ============================================================
+    # 横切（N22-N25）
+    # ============================================================
+    # N22 增量 filter/init_filter 里 ${PARAM} 引用的参数都在 params 声明过
+    declared_params = {p.get("name", "").upper() for p in (decisions.get("params") or []) if isinstance(p, dict)}
+    # P_CYCLE_ID 由脚本自动注入，不算未声明
+    declared_params.add("P_CYCLE_ID")
+    import re as _re2
+    for rule in extract_rules:
+        code = rule.get("rule_code", "?")
+        inc = rule.get("incremental") or {}
+        for f in ("filter", "init_filter"):
+            val = inc.get(f) or ""
+            for m in _re2.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", val):
+                if m.upper() not in declared_params:
+                    vr.add_hard("LC", "N22", f"规则 {code} 的 incremental.{f} 引用参数 '${{{m}}}' 未在 params 声明（P_CYCLE_ID 自动注入除外）")
+
+    # N25 design_approach 非空（进 ts 文档）
+    ca = decisions.get("complexity_analysis") or {}
+    if not isinstance(ca, dict):
+        ca = {}
+    if not (ca.get("design_approach") or "").strip():
+        vr.add_hard("LC", "N25", "complexity_analysis.design_approach 为空（设计思路必须写清，进 ts 文档）")
+
+    # N23/N24 data_flow/schedule_groups rule 引用存在（warn）
+    df = decisions.get("data_flow") or {}
+    for dep in df.get("dependencies") or []:
+        if not isinstance(dep, dict):
+            continue
+        for k in ("from", "to"):
+            v = dep.get(k, "")
+            if v and v not in all_rule_codes:
+                vr.add_warn("LC", "N23", f"data_flow.dependencies 的 {k}='{v}' 不在规则列表中")
+    for sg in df.get("schedule_groups") or []:
+        if not isinstance(sg, dict):
+            continue
+        for r in sg.get("rules") or []:
+            if r not in all_rule_codes:
+                vr.add_warn("LC", "N24", f"schedule_groups 的规则 '{r}' 不在规则列表中")
+
+    # ============================================================
+    # 累积共建专项（N26-N27）
+    # ============================================================
+    accumulate_tables_set = set()
+    for tbl_short, tbl_cfg in dec_tables.items():
+        if isinstance(tbl_cfg, dict) and (tbl_cfg.get("build_mode", "transform")) == "accumulate":
+            accumulate_tables_set.add(tbl_short)
+
+    # N26 声明了 dedup_strategy 的规则，target/key/priority 必填
+    for rule in rules:
+        ds = rule.get("dedup_strategy")
+        if not ds:
+            continue
+        code = rule.get("rule_code", "?")
+        if not isinstance(ds, dict):
+            vr.add_hard("LA", "N26", f"规则 {code} 的 dedup_strategy 格式错误（应为字典）")
+            continue
+        for f in ("target", "key", "priority"):
+            v = ds.get(f)
+            if f == "key":
+                if not v:
+                    vr.add_hard("LA", "N26", f"规则 {code} 的 dedup_strategy.key 为空（排重键必填）")
+            elif not (v or "").strip():
+                vr.add_hard("LA", "N26", f"规则 {code} 的 dedup_strategy.{f} 为空")
+
+    # N27 accumulate 表有字段重叠但没声明 dedup_strategy → warn
+    # 重新检测字段重叠（accumulate 模式下）
+    overlap_per_table: dict[str, int] = {}
+    field_rule_count: dict[tuple, int] = {}
+    for rule in rules:
+        ts = _table_short(rule.get("target_table", ""))
+        if ts not in accumulate_tables_set:
+            continue
+        for t in rule.get("field_targets") or []:
+            field_rule_count[(ts, t)] = field_rule_count.get((ts, t), 0) + 1
+    for (ts, t), cnt in field_rule_count.items():
+        if cnt > 1:
+            overlap_per_table[ts] = overlap_per_table.get(ts, 0) + 1
+    for ts, overlap_cnt in overlap_per_table.items():
+        # 该表的规则有没有声明 dedup_strategy
+        has_dedup = any(
+            (r.get("dedup_strategy") or {}).get("target", "") and _table_short((r.get("dedup_strategy") or {}).get("target", "")) == ts
+            for r in rules
+        )
+        if not has_dedup:
+            vr.add_warn("LA", "N27", f"累积共建表 '{ts}' 有 {overlap_cnt} 个重叠字段但没声明 dedup_strategy（确认多来源是否有数据重叠需排重）")
+
+    return vr
 
 
 # ============================================================
@@ -489,6 +1010,7 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "grain": rule_dec.get("grain", {}),
         "joins": rule_dec.get("joins", []),
         "join_safety": rule_dec.get("join_safety", []),
+        "dedup_strategy": rule_dec.get("dedup_strategy") or {},  # 排重策略（累积共建场景，designer定策略coder翻译）
         "field_targets": targets,
         "field_logics": logics,
     }, missing_logic
@@ -859,11 +1381,13 @@ def build_design(decisions, rs_input):
             "design_approach": comp.get("design_approach", ""),
             "segmentation_decision": comp.get("segmentation_decision", ""),
             "segmentation_reason": comp.get("segmentation_reason", ""),
+            "data_volume": comp.get("data_volume", ""),
         },
         "audit_fields": audit_fields,
         "audit_supplemented": sorted(supplemented),
         "business_key": decisions.get("business_key", []),
         "business_key_design": decisions.get("business_key_design", {}),
+        "exemptions": decisions.get("exemptions", []),
     }
 
 
@@ -1261,22 +1785,27 @@ def main():
     print(f"rs_input: {len(field_map)} 个目标字段, {len(rs_input.get('source_tables', []))} 个源表")
     print(f"design_decisions: {len(decisions.get('rules', []))} 个规则")
 
-    errors = validate_decisions(decisions, field_map)
-    if errors:
-        print("\n[校验失败] design_decisions 有以下问题:", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
-        print("\n请修正 design_decisions.yaml 后重跑。", file=sys.stderr)
-        sys.exit(1)
+    # 3a. 五层校验（含存量 C7-C13 + 新增 N1-N27）
+    vr = run_all_validations(decisions, rs_input, field_map)
+    exemptions = decisions.get("exemptions") or []
 
-    # 4. 组装 ts.json
+    # N5（W1 升级）：加工字段缺 design_logic 现在是硬阻断
+    # 先组装拿到 missing_logic（不落盘），再注入校验结果
+    # 注意：assemble_ts 内部会 build_rule 收集 missing_logic，这里先跑一次拿结果
     ts, missing_logic, _ = assemble_ts(rs_input, decisions)
+    for code, fields in missing_logic:
+        vr.add_hard("L1", "N5", f"规则 {code} 的加工字段未写 design_logic: {fields}（加工字段必须写口径，不允许占位）")
 
-    # 加工字段缺 logic 的警告(不阻断, 但提醒)
-    if missing_logic:
-        print("\n[警告] 以下加工字段未写 design_logic(已填占位, 请补):", file=sys.stderr)
-        for code, fields in missing_logic:
-            print(f"  {code}: {fields}", file=sys.stderr)
+    # 输出校验报告（按层分组）
+    report = vr.format_report(exemptions)
+    hard_errors = vr.hard_errors(exemptions)
+    if hard_errors:
+        print("\n" + report, file=sys.stderr)
+        print("\n请修正 design_decisions.yaml 后重跑（看 [第X层] 标识定位到对应 playbook）。", file=sys.stderr)
+        sys.exit(1)
+    # 软阻断/警告不阻断，但打印提示
+    if report:
+        print("\n" + report)
 
     # 5. 写出
     outdir = Path(args.outdir)
