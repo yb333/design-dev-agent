@@ -73,6 +73,7 @@ ddlc_design_dev/
 ## 核心流程（new-pipe.md 步骤）
 
 1. **预处理**：preprocess.py 转 rs_input.json（完整，给脚本读；含 schedule.incremental_tables 解析自 RS 增量表段）+ rs_input_view.json（compact 紧凑视图，给 designer 读，省 70%）→ precheck.py 校验输入完整性 + **连库校验字段类型**（pg_catalog UNION ALL 批量查，72h schema 缓存）
+   - **`--rs` 可选（无RS模式）**：无 RS 时 mapping 独立驱动核心链路，schedule 用默认值兜底（全量调度/T+1/无增量/无DQ），rs_input 加 `_no_rs_mode` 标记。precheck 给 warn 不阻断。90% 场景建议有 RS（调度/增量/DQ 信息更完整）。
 2. **设计**：调 dws-designer 产 design_decisions.yaml → assemble_ts.py 组装 ts.json + ts.md
    - **多步骤数据流模型**：每个 rule 有 step_type（full/aggregate/incremental_extract/merge）+ target_role（intermediate/target），多步骤间用 produces_for/reads 声明依赖。design-guide §4.4/§5.2。designer 可调 explore.py 试算 JOIN 键唯一性。
 3. **闸口①**：gate_summary.py 出摘要，人确认设计方向（非交互模式跳过）

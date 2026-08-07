@@ -148,10 +148,18 @@ def precheck(
 
     # 5. 调度信息 (来自 RS)
     schedule = rs_input.get("schedule", {})
-    if not schedule.get("frequency"):
-        result.add_warn("调度频率缺失 (RS L07 调度频率)")
-    if not schedule.get("upstream"):
-        result.add_warn("上游调度任务缺失 (RS L07 湖表调度信息)")
+    no_rs = rs_input.get("_no_rs_mode", False)
+    if no_rs:
+        # 无RS模式：调度信息是默认值兜底的，提示 designer/export 阶段需注意
+        result.add_warn(
+            "无RS模式：调度/增量/DQ 信息用默认值兜底（全量调度/T+1/无DQ）。"
+            "export 阶段的调度配置和上游依赖可能不完整，建议后续补 RS 再重跑"
+        )
+    else:
+        if not schedule.get("frequency"):
+            result.add_warn("调度频率缺失 (RS L07 调度频率)")
+        if not schedule.get("upstream"):
+            result.add_warn("上游调度任务缺失 (RS L07 湖表调度信息)")
 
     # 5b. 增量校验：标了增量必须有驱动表+增量字段，驱动表须在 source_tables 里
     incremental_key = (schedule.get("incremental_key") or "").strip()

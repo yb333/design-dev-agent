@@ -74,6 +74,7 @@ python DESIGN_SCRIPTS/preprocess.py \
 ```
 
 > 产出两个文件：`rs_input.json`（完整，给脚本读）+ `rs_input_view.json`（compact 紧凑视图，给 designer 读，约省 70%）。
+> **`--rs` 可选**：无 RS 时进入"无RS模式"，调度/增量/DQ 用默认值兜底（全量调度/T+1/无DQ），mapping 独立驱动核心链路。90% 场景建议有 RS。
 
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 

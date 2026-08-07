@@ -764,3 +764,83 @@ class TestBuildCompact:
         rs["schedule"] = {}
         c = build_compact(rs)
         assert "incremental_tables" not in c
+
+
+class TestNoRsMode:
+    """无RS模式：mapping 独立驱动，schedule 用默认值兜底。
+
+    场景：RS 不稳定是已知痛点，正式支持无RS模式——mapping 能独立跑通
+    核心 链路（设计+编码+UT），缺的调度/增量/DQ 用默认值兜底。
+    """
+
+    def test_build_rs_input_no_rs_has_defaults(self):
+        """★ 无RS（rs_data={}）→ schedule 有默认值，不崩。"""
+        from preprocess import build_rs_input
+        mapping_raw = _mapping_raw()
+        result = build_rs_input(mapping_raw, {})  # 空 rs_data = 无RS
+        sched = result["schedule"]
+        assert sched["strategy"] == "全量调度"
+        assert sched["frequency"] == "T+1"
+        assert sched["incremental_key"] == "不涉及"
+        assert sched["incremental_tables"] == []
+        assert "_no_rs_mode" in result, "应有无RS模式标记"
+
+    def test_build_rs_input_with_rs_overrides_defaults(self):
+        """有RS时 RS 的值覆盖默认（不丢失RS提供的信息）。"""
+        from preprocess import build_rs_input
+        mapping_raw = _mapping_raw()
+        rs_data = _rs_data()
+        rs_data["schedule"] = {"strategy": "增量调度", "frequency": "小时调度"}
+        result = build_rs_input(mapping_raw, rs_data)
+        assert result["schedule"]["strategy"] == "增量调度"
+        assert result["schedule"]["frequency"] == "小时调度"
+        assert "_no_rs_mode" not in result
+
+    def test_no_rs_field_mappings_intact(self):
+        """★ 无RS时 field_mappings（核心数据）完整不丢。"""
+        from preprocess import build_rs_input
+        mapping_raw = _mapping_raw()
+        mapping_raw["field_mappings"] = [
+            {"source_column": "id", "target_column": "id", "target_type": "bigint",
+             "transform_rule": "直接复制", "source_alias": "t"}]
+        mapping_raw["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_test_f", "source_alias": "t"}]
+        result = build_rs_input(mapping_raw, {})
+        assert len(result["field_mappings"]) > 0, "无RS不应影响字段映射"
+        assert len(result["source_tables"]) > 0, "无RS不应影响源表"
+
+    def test_no_rs_precheck_warns_not_blocks(self, monkeypatch):
+        """★ 无RS模式 precheck 给 warn 不阻断（核心链路可继续）。"""
+        from precheck import precheck
+        # mock 掉连库（测试环境无 DB）
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        # 构造无RS模式的 rs_input
+        rs = {
+            "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_test_f", "cn": "测试"},
+                                "i_view": {"schema": "dws", "table": "dwb_test_i", "cn": "测试"}}},
+            "source_tables": [{"source_schema": "ods", "source_table": "ods_test_f",
+                               "source_alias": "t", "source_table_cn": "测试"}],
+            "field_mappings": [{"source_schema": "ods", "source_table": "ods_test_f",
+                                 "source_column": "id", "source_type": "bigint",
+                                 "transform_rule": "直接复制", "transform_detail": "-",
+                                 "target_column": "id", "target_column_cn": "ID",
+                                 "target_type": "bigint", "source_alias": "t"}],
+            "schedule": {"strategy": "全量调度", "frequency": "T+1",
+                         "incremental_key": "不涉及", "incremental_tables": [], "upstream": []},
+            "_no_rs_mode": True,
+        }
+        result = precheck(rs)
+        # 无RS模式应该是 warning 不阻断（return_code ≤ 1）
+        assert result.return_code <= 1, f"无RS模式不应阻断: {result.errors}"
+        no_rs_warns = [w for w in result.warnings if "无RS" in w]
+        assert no_rs_warns, f"应有无RS模式提示: {result.warnings}"
+
+    def test_schedule_with_defaults_function(self):
+        """_schedule_with_defaults：RS提供的不覆盖，缺的补默认。"""
+        from preprocess import _schedule_with_defaults
+        # RS 提供了 strategy，缺 frequency
+        sched = _schedule_with_defaults({"strategy": "增量调度"})
+        assert sched["strategy"] == "增量调度"  # RS 提供的保留
+        assert sched["frequency"] == "T+1"      # 缺的补默认
+        assert sched["incremental_key"] == "不涉及"

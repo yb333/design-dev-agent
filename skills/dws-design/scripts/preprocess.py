@@ -1177,6 +1177,30 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _schedule_with_defaults(schedule: dict) -> dict:
+    """给 schedule 补默认值（无RS模式下 RS 的段是空的）。
+
+    无RS模式时 RS 没提供调度信息，这里给合理默认：
+    - strategy: 全量调度
+    - frequency: T+1
+    - incremental_key: 不涉及（全量）
+    - incremental_tables: []（无增量驱动表）
+    - upstream: []（湖表调度空）
+
+    RS 提供了的字段优先（不覆盖）。
+    """
+    defaults = {
+        "strategy": "全量调度",
+        "frequency": "T+1",
+        "incremental_key": "不涉及",
+        "incremental_tables": [],
+        "upstream": [],
+    }
+    result = dict(defaults)
+    result.update(schedule)  # RS 提供的覆盖默认
+    return result
+
+
 def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict[str, Any]:
     """合并 mapping 数据和 RS 数据, 产出 rs_input.json 结构。"""
     slim_mapping = slim_mapping_data(mapping_raw)
@@ -1249,7 +1273,7 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
         },
         "source_tables": slim_mapping["source_tables"],
         "field_mappings": slim_mapping["field_mappings"],
-        "schedule": rs_data.get("schedule", {}),
+        "schedule": _schedule_with_defaults(rs_data.get("schedule", {})),
         "data_flow_hint": rs_data.get("data_flow_hint", {}),
         "dq_requirements": rs_data.get("dq_requirements", []),
     }
@@ -1257,6 +1281,11 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     # 可选: 数据探索信息
     if "data_exploration" in rs_data:
         rs_input["data_exploration"] = rs_data["data_exploration"]
+
+    # 无RS模式标记：rs_data 为空（preprocess 没 --rs 或文件不存在）
+    # precheck 据此区分"调度信息缺失因为无RS" vs "RS写了但没解析出来"
+    if not rs_data:
+        rs_input["_no_rs_mode"] = True
 
     return rs_input
 
@@ -1446,8 +1475,9 @@ def main():
     if not mapping_raw.get("target_table"):
         print(f"  ⚠️ 目标表名未从 mapping 提取到（检查实体级'目标表物理名称'列名和数据）")
 
-    # 2. 提取 RS(如果有)
+    # 2. 提取 RS(可选——无RS时进入"无RS模式"，用默认值兜底)
     rs_data = {}
+    no_rs_mode = True
     if args.rs:
         rs_path = Path(args.rs)
         if rs_path.exists():
@@ -1465,8 +1495,19 @@ def main():
                     print(f"  - {e}", file=sys.stderr)
                 # 必填项缺失不应继续——rs_data 关键段是空的，下游会出错
                 sys.exit(1)
+            no_rs_mode = False
         else:
-            print(f"警告: RS 文件不存在: {args.rs}", file=sys.stderr)
+            print(f"⚠️ RS 文件不存在: {args.rs}，进入无RS模式", file=sys.stderr)
+
+    if no_rs_mode:
+        # 无RS模式：mapping 独立驱动。以下信息用默认值兜底。
+        print("⚠️ 无RS模式：以下信息将用默认值（后续可补充RS再重跑）:")
+        print("     调度方案 → 全量调度(默认)")
+        print("     调度频率 → T+1(默认)")
+        print("     增量识别 → 不涉及(全量)")
+        print("     DQ规则   → 空(用标准检查:主键唯一/非空/行数 兜底)")
+        print("     湖表调度 → 空(export时上游依赖需手补)")
+        print("     目标表schema/table → 用 mapping 实体级的")
 
     # 3. 合并
     rs_input = build_rs_input(mapping_raw, rs_data)
