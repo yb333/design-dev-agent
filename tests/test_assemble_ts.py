@@ -144,6 +144,57 @@ class TestValidateDecisions:
         errors = validate_decisions(decisions, _field_map("id"))
         assert any("为空" in e for e in errors)
 
+    def test_write_condition_required_for_merge(self):
+        """merge_into 的 write_condition 为空 → 报错。"""
+        decisions = {"rules": [
+            {"rule_code": "R0001", "target_table": "dwb_test_f",
+             "target_role": "target", "field_targets": ["id"],
+             "load_mode": "merge_into", "write_condition": ""}
+        ]}
+        errors = validate_decisions(decisions, _field_map("id"))
+        wc_errors = [e for e in errors if "write_condition" in e]
+        assert wc_errors, f"merge 无 write_condition 应报错: {errors}"
+
+    def test_write_condition_required_for_partition(self):
+        """truncate_partition 的 write_condition 为空 → 报错。"""
+        decisions = {"rules": [
+            {"rule_code": "R0001", "target_table": "dwb_test_f",
+             "target_role": "target", "field_targets": ["id"],
+             "load_mode": "truncate_partition", "write_condition": ""}
+        ]}
+        errors = validate_decisions(decisions, _field_map("id"))
+        assert any("write_condition" in e for e in errors)
+
+    def test_write_condition_chinese_reports(self):
+        """write_condition 含中文 → 报错。"""
+        decisions = {"rules": [
+            {"rule_code": "R0001", "target_table": "dwb_test_f",
+             "target_role": "target", "field_targets": ["id"],
+             "load_mode": "merge_into", "write_condition": "T.id=匹配ID"}
+        ]}
+        errors = validate_decisions(decisions, _field_map("id"))
+        assert any("中文" in e for e in errors)
+
+    def test_write_condition_valid_passes(self):
+        """merge 的 write_condition 合法（英文SQL片段）→ 不报 write_condition 错。"""
+        decisions = {"rules": [
+            {"rule_code": "R0001", "target_table": "dwb_test_f",
+             "target_role": "target", "field_targets": ["id"],
+             "load_mode": "merge_into", "write_condition": "T.id=T1.id"}
+        ]}
+        errors = validate_decisions(decisions, _field_map("id"))
+        assert not any("write_condition" in e for e in errors)
+
+    def test_truncate_table_no_write_condition_ok(self):
+        """truncate_table 不需要 write_condition → 不报错。"""
+        decisions = {"rules": [
+            {"rule_code": "R0001", "target_table": "dwb_test_f",
+             "target_role": "target", "field_targets": ["id"],
+             "load_mode": "truncate_table", "write_condition": ""}
+        ]}
+        errors = validate_decisions(decisions, _field_map("id"))
+        assert not any("write_condition" in e for e in errors)
+
 
 # ============================================================
 # build_rule 多步骤字段搬运：step_type / target_role / produces_for / reads
@@ -174,11 +225,19 @@ class TestBuildRuleStepFields:
             "target_role": "intermediate",
             "produces_for": ["R0003"],
             "reads": [],
+            "write_condition": "P_1001",
         }, {}, _rs_sources())
         assert rule["step_type"] == "aggregate"
         assert rule["target_role"] == "intermediate"
         assert rule["produces_for"] == ["R0003"]
         assert rule["reads"] == []
+        assert rule["write_condition"] == "P_1001"
+
+    def test_write_condition_defaults_empty(self):
+        """旧 design_decisions 无 write_condition -> 默认空。"""
+        rule, _ = build_rule(
+            {"rule_code": "R0001", "source_aliases": []}, {}, _rs_sources())
+        assert rule["write_condition"] == ""
 
     def test_merge_rule_reads_carried(self):
         """merge 规则的 reads（读哪些中间表）正确搬入。"""

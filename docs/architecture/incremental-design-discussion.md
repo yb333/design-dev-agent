@@ -316,14 +316,10 @@ RS L07 当前只到资产级（增量识别方式），缺**规则级/表级的�
 - [x] designer.md / design-guide / SKILL.md 引导做增量设计（三层已填充，design-guide §4.4/§5.2）
 - [x] assemble_ts 组装 step_type 等新字段进 ts.json（闲时任务已落地）
 - [x] preprocess 解析 RS 增量表段进 rs_input.json（闲时任务已落地）
-- [ ] **write_condition 字段承载**（load_mode 的写入条件：MERGE ON / partition 分区名 / delete WHERE）
-  → 方案已定（见 §十一），待落地
-- [ ] run_ut 的 wrap_insert 扩展为 wrap_write（按 load_mode 拼 INSERT/MERGE/PARTITION/DELETE）
-  → 依赖 write_condition，待落地
-- [ ] assemble_export 删除模式从 ts.json load_mode 读（不再硬编码 "1"）
-  → 依赖 write_condition，待落地
-- [ ] coder 按 step_type 产 SELECT（extract 加增量 WHERE、merge 读 tmp）+ etl-templates 补模板
-  → 待落地
+- [x] **write_condition 字段承载**（ts-template/design-decisions-template 加字段，assemble_ts 搬运+校验）
+- [x] run_ut 的 wrap_insert 扩展为 wrap_write（按 load_mode 拼 INSERT/MERGE，partition/delete 预处理）
+- [x] assemble_export 删除模式从 ts.json load_mode 读（load_mode→delete_mode 映射，write_condition 填删除条件列）
+- [x] coder 按 step_type 产 SELECT（coder.md 补 step_type 感知，etl-templates 加增量取数/读tmp合并模板）
 
 ---
 

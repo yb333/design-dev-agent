@@ -372,6 +372,25 @@ def validate_decisions(decisions, field_map):
             f"(target_role=target): {sorted(missing)}"
         )
 
+    # write_condition 校验：非全量 load_mode 必填且不含中文
+    import re
+    needs_condition = {"truncate_partition", "delete", "merge_into", "update"}
+    for rule in rules:
+        code = rule.get("rule_code", "??")
+        load_mode = rule.get("load_mode", "truncate_table")
+        cond = (rule.get("write_condition", "") or "").strip()
+        if load_mode in needs_condition:
+            if not cond:
+                errors.append(
+                    f"规则 {code} 的 load_mode={load_mode} 需要 write_condition"
+                    f"（merge_into/update填ON条件如'T.id=T1.id'，"
+                    f"truncate_partition填分区名，delete填删除WHERE）"
+                )
+            elif re.search(r'[\u4e00-\u9fff]', cond):
+                errors.append(
+                    f"规则 {code} 的 write_condition 含中文（应为SQL片段）: {cond}"
+                )
+
     return errors
 
 
@@ -459,6 +478,7 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "is_view_step": rule_dec.get("is_view_step", False),
         "design_intent": rule_dec.get("design_intent", ""),
         "load_mode": rule_dec.get("load_mode", "truncate_table"),
+        "write_condition": rule_dec.get("write_condition", ""),  # 写入条件（MERGE ON/分区名/delete WHERE），designer填脚本只搬运
         "step_type": rule_dec.get("step_type", "full"),  # full/aggregate/incremental_extract/merge（design-guide §4.4）
         "target_role": rule_dec.get("target_role", "target"),  # intermediate/target
         "produces_for": rule_dec.get("produces_for", []) or [],  # 中间表规则填：产出供哪些规则消费

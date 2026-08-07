@@ -65,6 +65,14 @@ INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 
 # 你怎么写 SELECT
 
+**先看切片的 step_type**（决定 SELECT 读什么、加不加增量过滤）：
+- `full`（简单直灌/装配）：读源表或中间表，正常写 SELECT
+- `aggregate`（聚合中间表）：读源表聚合，产出中间表字段
+- `incremental_extract`（增量取数到 tmp）：读源表，WHERE **必须**加 `incremental.filter` 的增量过滤条件
+- `merge`（合并 tmp 到目标）：**读中间表（tmp_a/tmp_b）**产出合并结果集。不读源表。写入动作（MERGE）由平台配置，你只写 SELECT。
+
+> **所有 step_type 都只产 SELECT**。写入动作（INSERT/MERGE/PARTITION/DELETE）由平台配置 + run_ut 拼接，不在你的 SQL 文件里。write_condition（MERGE 的 ON 条件等）是 designer 填的，不归你。
+
 1. 从切片读每个字段的 `design_logic`（自然语言口径）
 2. 翻译成 SQL 表达式：
    - `direct`（直取）→ 直接取源字段

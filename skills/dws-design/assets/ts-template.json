@@ -154,7 +154,8 @@
       "target_table": "",                // 产出表(中间表/目标F表/视图I表)
       "is_view_step": false,             // 是否视图步骤
       "design_intent": "",               // 该规则的设计意图(自然语言)
-      "load_mode": "truncate_table",     // 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区级清空) | truncate_subpartition(子分区清空) | merge_into(upsert)
+      "load_mode": "truncate_table",     // 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区清空) | merge_into(upsert)
+      "write_condition": "",             // 写入条件(对应平台delete_condition)。merge_into/update填ON条件如"T.id=T1.id"(T=目标表,T1=源);truncate_partition填分区名如"P_1001";delete填删除WHERE如"rule_id>0";truncate_table/no_delete留空。designer填,脚本只搬运+校验
       "step_type": "full",               // ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。详见 design-guide §4.4
       "target_role": "target",           // ★ 目标角色: intermediate(中间表,供后续规则消费) | target(目标F表)。决定生命周期和依赖
       "produces_for": [],                // ★ 本规则产出的中间表供哪些规则消费(rule_code列表)。中间表规则填，如 ["R0003"]

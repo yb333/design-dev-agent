@@ -33,7 +33,14 @@ rules:
     target_table: ""                    # 产出表名（中间表/目标F表/视图I表）
     is_view_step: false                 # 是否视图步骤
     design_intent: ""                   # 该规则的设计意图（自然语言，一句话说清为什么这样拆）
-    load_mode: "truncate_table"         # 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区级清空) | truncate_subpartition(子分区清空) | merge_into(upsert)
+    load_mode: "truncate_table"         # 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区清空) | merge_into(upsert)
+    # write_condition: 写入条件（对应平台delete_condition）。非全量load_mode时必填：
+    #   merge_into/update → ON条件如 "T.id=T1.id"（T=目标表别名，T1=源SELECT别名）
+    #   truncate_partition → 分区名如 "P_1001"
+    #   delete → 删除WHERE如 "rule_id>0"（目标表别名T）
+    #   truncate_table/no_delete → 留空
+    # designer 填，脚本只搬运+校验（非空、不含中文）。不推导，统一手填。
+    write_condition: ""
     step_type: "full"                   # ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。决策树见 design-guide §4.4
     target_role: "target"               # ★ 目标角色: intermediate(中间表) | target(目标F表)
     produces_for: []                    # ★ 中间表规则填：产出供哪些规则消费（rule_code列表），如 ["R0003"]

@@ -159,6 +159,58 @@ def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
 """
 
 
+def wrap_write(select_sql: str, target_table: str, table_fields: list,
+               load_mode: str = "truncate_table", write_condition: str = "") -> str:
+    """按 load_mode + write_condition 把 SELECT 包装成平台写入语句（模拟平台构建）。
+
+    平台规则（用户确认）：目标表别名 T，源（SELECT 结果）别名 T1。
+    - truncate_table / no_delete → INSERT（wrap_insert）
+    - truncate_partition → INSERT（分区清空由 ut_execute 预处理做，这里仍 INSERT）
+    - delete → INSERT（删除由 ut_execute 预处理做，这里仍 INSERT）
+    - merge_into / update → MERGE INTO ... USING (SELECT) T1 ON ... WHEN MATCHED/NOT MATCHED
+
+    Args:
+        select_sql: coder 产的 SELECT。
+        target_table: 目标表全名（schema.table）。
+        table_fields: 目标表全部字段（dict列表或字符串列表）。
+        load_mode: 写入方式。
+        write_condition: 写入条件（merge 的 ON、partition 的分区名、delete 的 WHERE）。
+    """
+    # 非 merge/update 的都走 INSERT（partition/delete 的清空动作在 ut_execute 预处理）
+    if load_mode not in ("merge_into", "update"):
+        return wrap_insert(select_sql, target_table, table_fields)
+
+    # MERGE / UPDATE：拼 MERGE INTO 语句
+    if table_fields and isinstance(table_fields[0], dict):
+        field_names = [f.get("target_field", "") for f in table_fields]
+    elif table_fields and isinstance(table_fields[0], str):
+        field_names = list(table_fields)
+    else:
+        field_names = []
+    if not field_names:
+        # 没有字段清单，回退 INSERT（无法拼 MERGE 的字段映射）
+        return wrap_insert(select_sql, target_table, table_fields)
+
+    columns = ", ".join(field_names)
+    # UPDATE SET：源字段赋值（T1.col 对应每个目标字段，审计字段不更新由业务定，这里全量 UPDATE）
+    update_set = ",\n        ".join(f"T.{c} = T1.{c}" for c in field_names)
+    on_cond = write_condition.strip() if write_condition.strip() else "1=1"
+
+    return f"""MERGE INTO {target_table} T
+USING (
+{select_sql.strip().rstrip(';')}
+) T1
+ON {on_cond}
+WHEN MATCHED THEN UPDATE SET
+        {update_set}
+WHEN NOT MATCHED THEN INSERT (
+        {columns}
+    ) VALUES (
+        {", ".join(f"T1.{c}" for c in field_names)}
+    );
+"""
+
+
 def read_select(select_dir: Path, rule_code: str) -> str:
     """读 coder 产的 SELECT 文件。
 

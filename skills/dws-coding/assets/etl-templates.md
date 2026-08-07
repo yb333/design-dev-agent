@@ -276,3 +276,52 @@ t.contract_no                   -- ❌ 隐式，check_sql 检查不到
 SELECT t.contract_no, t.amount    -- ✅ 列出字段
 SELECT t.*                         -- ❌ 禁止
 ```
+
+## 8. 增量取数 SELECT（step_type=incremental_extract）
+
+从源表按增量范围取数到临时表。**WHERE 必须加增量过滤条件**（从切片 incremental.filter 取）：
+
+```sql
+/* R0001: 订单增量取数（按 update_time 取增量到 tmp_order） */
+SELECT
+    t.order_id AS order_id,
+    t.cust_id AS cust_id,
+    t.order_amt AS order_amt,
+    'N' AS del_flag,
+    '${P_CYCLE_ID}' AS crt_cycle_id,
+    '${P_CYCLE_ID}' AS last_upd_cycle_id,
+    CURRENT_TIMESTAMP AS dw_last_update_date
+FROM ods.ods_order_f t
+WHERE t.update_time >= '${BIZ_DATE_START}' AND t.update_time < '${BIZ_DATE_END}'
+;
+```
+
+要点：
+- WHERE 的增量条件从切片的 `incremental.filter` 取（如 `update_time >= '${BIZ_DATE_START}'`）
+- 分区增量用分区字段过滤（如 `dt >= '${BIZ_DATE_START}'`）
+- 只写增量版，初始化版由脚本自动生成（filter 换 init_filter）
+
+## 9. 读中间表合并 SELECT（step_type=merge）
+
+读临时表（tmp_a/tmp_b）产出合并结果集。**写入动作（MERGE）由平台配置，这里只写 SELECT**：
+
+```sql
+/* R0003: 合并订单+支付增量到目标宽表（读 tmp_order/tmp_payment） */
+SELECT
+    o.order_id AS order_id,
+    o.cust_id AS cust_id,
+    o.order_amt AS order_amt,
+    COALESCE(p.pay_amt, 0) AS pay_amt,
+    'N' AS del_flag,
+    '${P_CYCLE_ID}' AS crt_cycle_id,
+    '${P_CYCLE_ID}' AS last_upd_cycle_id,
+    CURRENT_TIMESTAMP AS dw_last_update_date
+FROM slord.tmp_order o
+LEFT JOIN slord.tmp_payment p
+    ON o.order_id = p.order_id
+;
+```
+
+要点：
+- FROM 读的是临时表（tmp_order/tmp_payment），不是源表
+- MERGE 的 ON 条件（如 `T.order_id=T1.order_id`）由 designer 填 write_condition，平台/run_ut 配置，不在 SELECT 里

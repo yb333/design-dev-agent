@@ -241,6 +241,91 @@ class TestInsertWrapping:
 
 
 # ============================================================
+# wrap_write 测试：按 load_mode 拼 INSERT/MERGE
+# ============================================================
+
+class TestWrapWrite:
+    """wrap_write 按 load_mode 产生不同的写入语句（模拟平台）。"""
+
+    def _select(self):
+        return "SELECT t.id AS id, 'N' AS del_flag FROM tmp t"
+
+    def _fields(self):
+        return [{"target_field": "id"}, {"target_field": "del_flag"}]
+
+    def test_truncate_table_returns_insert(self):
+        """truncate_table → 走 INSERT（和 wrap_insert 一致）"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "truncate_table", "")
+        assert "INSERT INTO" in result
+        assert "MERGE" not in result
+
+    def test_no_delete_returns_insert(self):
+        """no_delete → 走 INSERT"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "no_delete", "")
+        assert "INSERT INTO" in result
+
+    def test_delete_returns_insert(self):
+        """delete → 走 INSERT（删除由 ut_execute 预处理做）"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "delete", "rule_id>0")
+        assert "INSERT INTO" in result
+
+    def test_partition_returns_insert(self):
+        """truncate_partition → 走 INSERT（分区清空由 ut_execute 预处理做）"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "truncate_partition", "P_1001")
+        assert "INSERT INTO" in result
+
+    def test_merge_into_produces_merge_statement(self):
+        """★ merge_into → 拼 MERGE INTO ... ON ... WHEN MATCHED/NOT MATCHED"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "merge_into", "T.id=T1.id")
+        assert "MERGE INTO sch.tbl T" in result
+        assert "USING" in result
+        assert "T1" in result  # 源别名
+        assert "ON T.id=T1.id" in result
+        assert "WHEN MATCHED THEN UPDATE SET" in result
+        assert "WHEN NOT MATCHED THEN INSERT" in result
+
+    def test_update_produces_merge_statement(self):
+        """update → 同 merge（MERGE 语句）"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "update", "T.id=T1.id")
+        assert "MERGE INTO" in result
+
+    def test_merge_no_condition_fallback_on_condition(self):
+        """merge 无 write_condition → ON 用 1=1 兜底（不崩）"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "merge_into", "")
+        assert "ON 1=1" in result
+
+    def test_merge_update_set_has_all_fields(self):
+        """MERGE 的 UPDATE SET 覆盖所有字段"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "merge_into", "T.id=T1.id")
+        assert "T.id = T1.id" in result
+        assert "T.del_flag = T1.del_flag" in result
+
+    def test_merge_insert_values_uses_t1(self):
+        """MERGE 的 INSERT VALUES 用 T1 别名"""
+        from run_ut import wrap_write
+        result = wrap_write(self._select(), "sch.tbl", self._fields(),
+                            "merge_into", "T.id=T1.id")
+        assert "T1.id" in result
+        assert "T1.del_flag" in result
+
+
+# ============================================================
 # run_ut_check 测试（用 fake executor，不连库）
 # 验证：主键重复/空值时捕获 samples 样例（数据质量回退包的硬数据来源）
 # ============================================================

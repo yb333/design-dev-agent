@@ -25,7 +25,7 @@ except AttributeError:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor
-from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, run_ut_check, inject_tablesample, resolve_sample_blocks
+from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks
 
 
 def main():
@@ -140,21 +140,27 @@ def main():
             sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
             select_sql = inject_tablesample(select_sql, sample_n)
 
-            # load_mode 预处理（模拟术加平台）
+            # load_mode 预处理（模拟平台写入前的清空动作）
             load_mode = rule.get("load_mode", "truncate_table")
+            write_condition = rule.get("write_condition", "")
             if load_mode == "truncate_table":
                 executor.execute(f"TRUNCATE TABLE {target}")
                 print(f"  🔄 TRUNCATE")
-            elif load_mode == "delete" and rule.get("delete_condition"):
-                executor.execute(f"DELETE FROM {target} WHERE {rule['delete_condition']}")
-                print(f"  🔄 DELETE")
+            elif load_mode == "truncate_partition" and write_condition:
+                # write_condition 是分区名（如 P_1001）
+                executor.execute(f"TRUNCATE TABLE {target} PARTITION ( {write_condition} )")
+                print(f"  🔄 TRUNCATE PARTITION {write_condition}")
+            elif load_mode == "delete" and write_condition:
+                executor.execute(f"DELETE FROM {target} WHERE {write_condition}")
+                print(f"  🔄 DELETE WHERE {write_condition}")
+            # merge_into/update 不预处理（MERGE 语句自带 upsert 语义）
 
-            # INSERT
+            # 写入语句（按 load_mode 拼 INSERT 或 MERGE）
             target_short = target.rsplit(".", 1)[-1] if "." in target else target
             tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
             if not tbl_fields:
                 tbl_fields = rule.get("fields", [])
-            insert_sql = wrap_insert(select_sql, target, tbl_fields)
+            insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition)
 
             print(f"  ⏳ INSERT 执行中...")
             r = executor.execute(insert_sql)

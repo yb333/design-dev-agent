@@ -251,7 +251,16 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
         row[_RULE_COL["运行条件"]] = "0"
         row[_RULE_COL["目标Schema"]] = sch
         row[_RULE_COL["目标表"]] = tbl
-        row[_RULE_COL["删除模式"]] = "1"
+        # 删除模式 + 删除条件：从 ts.json 的 load_mode + write_condition 映射（不再硬编码"1"）
+        load_mode = rule.get("load_mode", "truncate_table")
+        write_condition = rule.get("write_condition", "")
+        delete_mode_map = {
+            "truncate_table": "1", "no_delete": "2", "delete": "4",
+            "truncate_partition": "5", "merge_into": "6", "update": "6",
+        }
+        row[_RULE_COL["删除模式"]] = delete_mode_map.get(load_mode, "1")
+        if write_condition:
+            row[_RULE_COL["删除条件"]] = write_condition
         row[_RULE_COL["业务责任人"]] = business_owner
         row[_RULE_COL["行迁移开关"]] = "1"
         row[_RULE_COL["并行开关"]] = "0"
