@@ -255,6 +255,9 @@ def precheck(
     # 8. 审计字段校验
     _check_audit_fields(field_mappings, result)
 
+    # 8b. 命名规范校验（字典型内容下沉：表名前缀/后缀、字段后缀类型一致性）
+    _check_naming_conventions(target_table, source_tables, field_mappings, result)
+
     # 9. DB 校验：连得上库或缓存可用时，校验来源表/字段真实性（连不上则静默跳过）
     # ★ 短路：静态检查已有 error 就不进 DB 校验（schema/字段都没了，查库白费几百毫秒建连）
     # 缓存命中时不需要连库，不受"连库白费"影响，但仍遵守短路（静态错了先解决静态）
@@ -319,6 +322,75 @@ def _check_audit_fields(field_mappings: list, result: PrecheckResult):
                     f"审计字段 {target} 的映射规则是 '{rule}'，"
                     f"标准审计字段应是赋值（固定值），请确认"
                 )
+
+
+# DWS 分层前缀（接入/明细/连接）
+LAYER_PREFIXES = ("DWD", "DWB", "DWL")
+# 表后缀：F（物理表）/I（视图）/tmp（临时表，后跟数字）
+TABLE_SUFFIX_F = "_f"
+TABLE_SUFFIX_I = "_i"
+# 字段后缀 → 期望类型关键词（用于校验 target_type 与命名后缀一致性）
+FIELD_SUFFIX_TYPE_MAP = {
+    "_id": ("bigint", "int"),
+    "_code": ("varchar", "char", "text", "nvarchar"),
+    "_name": ("varchar", "char", "text", "nvarchar"),
+    "_amt": ("decimal", "numeric", "number"),
+    "_rate": ("decimal", "numeric", "number"),
+    "_qty": ("decimal", "numeric", "number"),
+    "_num": ("bigint", "int"),
+    "_dt": ("date",),
+    "_time": ("timestamp", "datetime"),
+    "_flag": ("nvarchar", "varchar", "char"),
+    "_type": ("varchar", "char", "text"),
+    "_desc": ("varchar", "char", "text"),
+}
+
+
+def _check_naming_conventions(
+    target_table: str,
+    source_tables: list,
+    field_mappings: list,
+    result: PrecheckResult,
+):
+    """命名规范校验（字典型内容下沉，designer 不背字典）。
+
+    - 目标表名分层前缀（DWD/DWB/DWL）+ 后缀（F/I）校验
+    - 字段后缀与 target_type 一致性（warn，不阻断——类型映射可能合法地偏离）
+    """
+    import re as _re
+
+    # 目标表命名：前缀 + 后缀
+    if target_table:
+        tbl_upper = target_table.upper()
+        has_prefix = any(tbl_upper.startswith(p + "_") for p in LAYER_PREFIXES)
+        if not has_prefix:
+            result.add_warn(
+                f"目标表名 '{target_table}' 未以分层前缀开头（DWD/DWB/DWL），"
+                f"不符合 DWS 命名规范"
+            )
+        # 后缀：_f / _i / _tmp{n}（临时表后缀在校验 design_decisions 的中间表时才出现，这里只看目标表）
+        if not (tbl_upper.endswith(TABLE_SUFFIX_F) or tbl_upper.endswith(TABLE_SUFFIX_I)):
+            # 临时表 tmp{n} 后缀不在目标表场景，这里不报
+            result.add_warn(
+                f"目标表名 '{target_table}' 未以 F 或 I 后缀结尾（物理表/视图），"
+                f"不符合 DWS 命名规范"
+            )
+
+    # 字段后缀 → 类型一致性（warn）
+    for fm in field_mappings:
+        tf = (fm.get("target_column") or "").strip().lower()
+        tt = (fm.get("target_type") or "").strip().lower()
+        if not tf or not tt:
+            continue
+        for suffix, expected_types in FIELD_SUFFIX_TYPE_MAP.items():
+            if tf.endswith(suffix):
+                if not any(et in tt for et in expected_types):
+                    result.add_warn(
+                        f"字段 '{tf}' 后缀 '{suffix}' 暗示类型应为 "
+                        f"{'/'.join(expected_types)}，但 target_type='{tt}'，"
+                        f"确认是否命名与类型不一致"
+                    )
+                break  # 匹配到一个后缀即可，不重复判
 
 
 def _load_schema_cache(cache_path: Path) -> dict:
