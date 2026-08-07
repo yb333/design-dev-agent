@@ -311,14 +311,58 @@ RS L07 当前只到资产级（增量识别方式），缺**规则级/表级的�
 
 ## 十、待决（落地进度跟踪）
 
-- [x] RS L07 驱动表/增量条件规范（RS 模板已补"增量表及增量字段"段；preprocess 解析 → 闲时任务五）
+- [x] RS L07 驱动表/增量条件规范（RS 模板已补"增量表及增量字段"段；preprocess 解析 → 闲时任务已落地）
 - [x] step_type / target_role / produces_for / reads 字段定义进 ts-template + design-decisions-template（已加，含注释）
 - [x] designer.md / design-guide / SKILL.md 引导做增量设计（三层已填充，design-guide §4.4/§5.2）
-- [ ] assemble_ts 组装 step_type 等新字段进 ts.json → **闲时任务四**
-- [ ] preprocess 解析 RS 增量表段进 rs_input.json → **闲时任务五**
-- [ ] coder 怎么按 step_type 产不同 SQL（extract 产增量取数、merge 产 MERGE 语句）→ **待讨论**（不是简单适配，需专门讨论 coder 的多步骤产出模式）
-- [ ] UT 怎么按 produces_for 依赖编排执行顺序（现有 schedule_groups 能否承载）→ **待讨论**（同上，UT 的多步骤执行编排需专门讨论）
+- [x] assemble_ts 组装 step_type 等新字段进 ts.json（闲时任务已落地）
+- [x] preprocess 解析 RS 增量表段进 rs_input.json（闲时任务已落地）
+- [ ] **write_condition 字段承载**（load_mode 的写入条件：MERGE ON / partition 分区名 / delete WHERE）
+  → 方案已定（见 §十一），待落地
+- [ ] run_ut 的 wrap_insert 扩展为 wrap_write（按 load_mode 拼 INSERT/MERGE/PARTITION/DELETE）
+  → 依赖 write_condition，待落地
+- [ ] assemble_export 删除模式从 ts.json load_mode 读（不再硬编码 "1"）
+  → 依赖 write_condition，待落地
+- [ ] coder 按 step_type 产 SELECT（extract 加增量 WHERE、merge 读 tmp）+ etl-templates 补模板
+  → 待落地
 
 ---
 
-*本文档随讨论持续更新。闲时任务四/五完成后，剩余 coder/UT 两项待讨论落地。*
+## 十一、write_condition 设计方案（已定，待落地）
+
+### 核心决策：统一 designer 填，不做推导
+
+写入条件（MERGE ON / partition 分区名 / delete WHERE）**全部由 designer 声明**，
+assemble_ts 只搬运不推导。理由：复杂的能填对，简单的更不在话下；半推导半手填
+增加系统复杂度（推导逻辑+覆盖合并+边界处理），不如统一手填+输出校验。
+
+### 平台写入配置规范
+
+| load_mode | delete_mode | write_condition 填什么 | designer 填 |
+|-----------|------------|----------------------|------------|
+| truncate_table | 1 | 空 | 不用填 |
+| no_delete | 2 | 空 | 不用填 |
+| truncate_partition | 5 | 分区名（如 `P_1001`）| ✅ 填 |
+| delete | 4 | delete 的 WHERE（如 `rule_id>0`，目标表别名 `T`）| ✅ 填 |
+| merge_into | 6 | ON 条件（如 `T.id=T1.id`，T=目标表 T1=源）| ✅ 填 |
+| update | (类似merge) | ON 条件 | ✅ 填 |
+
+约定：目标表别名固定 `T`，源（SELECT 结果）别名 `T1`。
+
+### 校验规则（assemble_ts 输出时）
+
+- load_mode ∈ {truncate_partition/delete/merge_into/update} 时，write_condition 不能为空
+- write_condition 不能含中文（必须是 SQL 片段）
+- truncate_partition 的 write_condition 应像分区名（字母数字下划线，不确认就只校验非空+非中文）
+
+### 改动清单（六处）
+
+1. **ts-template + design-decisions-template**：rule 加 write_condition 字段
+2. **assemble_ts build_rule**：搬 write_condition（只搬运不推导）+ 输出校验（非空/非中文）
+3. **run_ut.py**：wrap_insert 扩展为 wrap_write（按 load_mode+write_condition 拼 INSERT/MERGE/PARTITION/DELETE）
+4. **ut_execute.py**：预处理按 load_mode 分流（merge 不预处理、partition 加 TRUNCATE PARTITION）
+5. **assemble_export.py**：删除模式从 load_mode 映射（不再硬编码 "1"），write_condition 填删除条件列
+6. **coder.md + etl-templates.md**：extract 的 SELECT 加增量 WHERE、merge 的 SELECT 读 tmp 产出结果集
+
+---
+
+*闲时任务全部完成。剩余 write_condition 承载 + run_ut/export/coder 适配待落地。*
