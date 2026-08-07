@@ -153,6 +153,48 @@ def precheck(
     if not schedule.get("upstream"):
         result.add_warn("上游调度任务缺失 (RS L07 湖表调度信息)")
 
+    # 5b. 增量校验：标了增量必须有驱动表+增量字段，驱动表须在 source_tables 里
+    incremental_key = (schedule.get("incremental_key") or "").strip()
+    incremental_tables = schedule.get("incremental_tables", [])
+    is_incremental = bool(incremental_key) and incremental_key not in ("不涉及", "无", "")
+
+    if is_incremental:
+        # 增量场景：必须有驱动表信息
+        if not incremental_tables:
+            result.add_error(
+                f"调度方案标了增量（增量识别方式={incremental_key}），"
+                f"但 RS 的'增量表及增量字段'段为空——必须有驱动表+增量字段"
+            )
+        else:
+            result.add_pass(f"增量场景: {len(incremental_tables)} 张驱动表")
+            # 校验每张驱动表：须有增量字段、表名须在 source_tables 里
+            src_table_names = {
+                (st.get("source_table") or "").strip().lower() for st in source_tables
+            }
+            for it in incremental_tables:
+                drv_table = (it.get("source_table") or "").strip()
+                drv_key = (it.get("incremental_key") or "").strip()
+                if not drv_table:
+                    result.add_error("增量驱动表的来源表名为空")
+                elif not drv_key:
+                    result.add_error(f"增量驱动表 '{drv_table}' 没填增量字段")
+                else:
+                    # 驱动表名可能是 schema.table 或纯表名，取表名部分比对
+                    drv_table_short = drv_table.split(".")[-1].lower()
+                    if (drv_table_short not in src_table_names
+                            and drv_table.lower() not in src_table_names):
+                        result.add_error(
+                            f"增量驱动表 '{drv_table}' 不在 mapping 的 source_tables 里"
+                            f"（检查表名拼写或补充源表）"
+                        )
+    else:
+        # 全量场景：不应有增量驱动表（RS 增量识别=不涉及，但填了驱动表→矛盾）
+        if incremental_tables:
+            result.add_warn(
+                f"增量识别方式='{incremental_key}'（全量），但 RS 填了 "
+                f"{len(incremental_tables)} 张增量驱动表——确认是否应为增量"
+            )
+
     # 6. 别名一致性 + 表别名重复 + 字段级/表级一致性
     entity_aliases = {st.get("source_alias") for st in source_tables if st.get("source_alias")}
     for fm in field_mappings:

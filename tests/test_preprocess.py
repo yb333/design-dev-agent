@@ -218,6 +218,54 @@ class TestFactoryIntegration:
 # 4. 端到端：extract_rs_data → build_rs_input（真实数据流）
 # ============================================================
 
+class TestExtractErrorReporting:
+    """RS 解析错误必须被收集到 _extract_errors（之前 main 静默吞掉）。
+
+    回归：extract_rs_data 把 errors 收集到 _extract_errors/_extract_warnings，
+    但 main 没读它们。现在 main 会打印+exit(1)，前提是 errors 被正确收集。
+    """
+
+    def test_missing_asset_section_reports_error(self, tmp_path):
+        """缺必填的资产基本信息段 → _extract_errors 非空。"""
+        from preprocess import extract_rs_data
+        # 一个几乎空的 RS，没有任何标准段
+        rs_file = tmp_path / "bad_rs.md"
+        rs_file.write_text("# 某文档\n\n一些无关内容\n", encoding="utf-8")
+        rs_data = extract_rs_data(str(rs_file))
+        errors = rs_data.get("_extract_errors", [])
+        assert errors, f"缺必填段应收集到 errors: {errors}"
+        assert any("资产基本信息" in e for e in errors)
+
+    def test_missing_optional_section_warns_not_errors(self, tmp_path):
+        """缺非必填段（调度/DQ）→ _extract_warnings，不是 errors。"""
+        from preprocess import extract_rs_data
+        rs_file = tmp_path / "min_rs.md"
+        # 只有资产基本信息段（真实格式：### 标题 + 属性/内容表头），其他都缺
+        rs_file.write_text(
+            "### 1.1 资产基本信息\n\n"
+            "| 属性 | 内容 |\n|------|------|\n"
+            "| 业务对象 | 订单 |\n"
+            "| 资产 SCHEMA.接口视图 | dws.dwb_test_i |\n"
+            "| 资产描述 | 测试表 |\n\n",
+            encoding="utf-8")
+        rs_data = extract_rs_data(str(rs_file))
+        errors = rs_data.get("_extract_errors", [])
+        warnings = rs_data.get("_extract_warnings", [])
+        # 资产段有了，不应有"资产基本信息"相关的 error
+        assert not any("资产基本信息" in e for e in errors), f"资产段有不应报错: {errors}"
+        # 调度/DQ 缺失应是 warning
+        assert warnings, f"缺非必填段应有 warnings: {warnings}"
+
+    def test_valid_rs_no_errors(self, tmp_path):
+        """标准 RS → _extract_errors 为空。"""
+        from preprocess import extract_rs_data
+        from pathlib import Path
+        rs_path = Path(__file__).resolve().parent.parent / "docs" / "templates" / "RS模板.md"
+        rs_data = extract_rs_data(str(rs_path))
+        errors = rs_data.get("_extract_errors", [])
+        assert not errors, f"标准 RS 不应有解析错误: {errors}"
+
+
 class TestExtractAndBuildE2E:
     """用真实的 extract_rs_data 提取 RS，传给 build_rs_input。
 

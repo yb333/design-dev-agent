@@ -593,6 +593,83 @@ class TestStaticChecks:
         assert db_errors == [], f"两张表字段都存在应通过: {db_errors}"
 
 
+class TestIncrementalChecks:
+    """增量校验：标了增量必须有驱动表+增量字段，驱动表须在 source_tables 里。"""
+
+    def _rs_incremental(self, incremental_tables, incremental_key="时间戳字段"):
+        """构造增量场景的 rs_input。"""
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        rs["schedule"]["incremental_key"] = incremental_key
+        rs["schedule"]["incremental_tables"] = incremental_tables
+        return rs
+
+    def test_incremental_with_valid_driver_passes(self, monkeypatch):
+        """增量场景 + 驱动表在 source_tables 里 + 有增量字段 → 通过。"""
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        rs = self._rs_incremental([
+            {"source_table": "ods_test_f", "incremental_key": "update_time"}
+        ])
+        result = precheck(rs)
+        incr_errors = [e for e in result.errors if "增量" in e or "驱动表" in e]
+        assert incr_errors == [], f"合法增量场景应通过: {incr_errors}"
+
+    def test_incremental_without_driver_tables_blocks(self, monkeypatch):
+        """★ 标了增量但驱动表为空 → error（核心校验）。"""
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        rs = self._rs_incremental([])
+        result = precheck(rs)
+        driver_errors = [e for e in result.errors if "驱动表" in e and "为空" in e]
+        assert driver_errors, f"标了增量但无驱动表应报错: {result.errors}"
+
+    def test_incremental_driver_missing_key_blocks(self, monkeypatch):
+        """驱动表没填增量字段 → error。"""
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        rs = self._rs_incremental([
+            {"source_table": "ods_test_f", "incremental_key": ""}  # 没填增量字段
+        ])
+        result = precheck(rs)
+        key_errors = [e for e in result.errors if "增量字段" in e]
+        assert key_errors, f"驱动表没填增量字段应报错: {result.errors}"
+
+    def test_incremental_driver_not_in_sources_blocks(self, monkeypatch):
+        """★ 驱动表不在 source_tables 里 → error（核心校验）。"""
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        rs = self._rs_incremental([
+            {"source_table": "ods_nonexistent_f", "incremental_key": "update_time"}
+        ])
+        result = precheck(rs)
+        src_errors = [e for e in result.errors if "source_tables" in e]
+        assert src_errors, f"驱动表不在 sources 里应报错: {result.errors}"
+
+    def test_full_load_no_incremental_ok(self, monkeypatch):
+        """全量场景（增量识别=不涉及）+ 无驱动表 → 通过。"""
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        rs["schedule"]["incremental_key"] = "不涉及"
+        # 不设 incremental_tables（全量场景不该有）
+        result = precheck(rs)
+        incr_errors = [e for e in result.errors if "增量" in e or "驱动表" in e]
+        assert incr_errors == [], f"全量场景不应报增量错: {incr_errors}"
+
+    def test_full_load_but_has_driver_warns(self, monkeypatch):
+        """全量场景但填了驱动表 → warn（可能漏标了增量）。"""
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        rs["schedule"]["incremental_key"] = "不涉及"
+        rs["schedule"]["incremental_tables"] = [
+            {"source_table": "ods_test_f", "incremental_key": "update_time"}
+        ]
+        result = precheck(rs)
+        warns = [w for w in result.warnings if "增量" in w or "驱动表" in w]
+        assert warns, f"全量+有驱动表应 warn: {result.warnings}"
+
+
 class TestTypeCheck:
     """字段类型严格匹配检查。"""
 

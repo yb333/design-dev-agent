@@ -1433,6 +1433,17 @@ def main():
             print(f"提取 RS: {args.rs}")
             rs_data = extract_rs_data(str(rs_path))
             print(f"  提取的 RS 数据块: {list(rs_data.keys())}")
+            # RS 解析的 errors/warnings 必须报告（之前静默吞掉）
+            rs_errors = rs_data.pop("_extract_errors", [])
+            rs_warnings = rs_data.pop("_extract_warnings", [])
+            for w in rs_warnings:
+                print(f"  ⚠️ RS 解析告警: {w}")
+            if rs_errors:
+                print(f"\n❌ RS 解析错误（必填项缺失）:", file=sys.stderr)
+                for e in rs_errors:
+                    print(f"  - {e}", file=sys.stderr)
+                # 必填项缺失不应继续——rs_data 关键段是空的，下游会出错
+                sys.exit(1)
         else:
             print(f"警告: RS 文件不存在: {args.rs}", file=sys.stderr)
 
