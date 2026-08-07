@@ -861,6 +861,7 @@ def extract_rs_data(rs_path: str) -> dict[str, Any]:
     warnings: list[str] = []
 
     # 1. 资产基本信息(必填)
+    asset_section_found = bool(_find_section(content, RS_SECTION_KEYWORDS["asset"]))
     section = _find_section(content, RS_SECTION_KEYWORDS["asset"])
     asset = _extract_kv_table(section, ASSET_HEADER_MAP)
     if asset:
@@ -870,16 +871,36 @@ def extract_rs_data(rs_path: str) -> dict[str, Any]:
             asset.setdefault("schema", parts[0])
             asset.setdefault("table", ".".join(parts[1:]))
         rs_data["meta"] = asset
+        # 核心字段校验：段在且解析出内容，但 schema/table 没提取到
+        # （源端表头写法变了导致"资产 SCHEMA.接口视图"没匹配上）
+        if not asset.get("schema") and not asset.get("table"):
+            errors.append(
+                "资产基本信息段找到了，但目标表 schema/table 未提取到"
+                "（检查 RS 的'资产 SCHEMA.接口视图'行写法是否标准）"
+            )
     else:
-        errors.append("资产基本信息表格未找到或为空(必填)")
+        if asset_section_found:
+            errors.append(
+                "资产基本信息段找到了，但表格未解析出任何字段"
+                "（检查 RS 表头格式：应为 | 属性 | 内容 |）"
+            )
+        else:
+            errors.append("资产基本信息表格未找到(必填)")
 
     # 2. 调度配置(非必填, 容错为空)
+    sched_section_found = bool(_find_section(content, RS_SECTION_KEYWORDS["sched"]))
     section = _find_section(content, RS_SECTION_KEYWORDS["sched"])
     sched = _extract_kv_table(section, SCHED_HEADER_MAP)
     if sched:
         rs_data["schedule"] = sched
     else:
-        warnings.append("调度配置未找到(非必填, 使用默认值)")
+        if sched_section_found:
+            warnings.append(
+                "调度配置段找到了，但表格未解析出任何字段"
+                "（检查 RS 表头写法，如'调度方案'/'调度频率'等列名）"
+            )
+        else:
+            warnings.append("调度配置未找到(非必填, 使用默认值)")
         rs_data["schedule"] = {}
 
     # 2b. 增量表及增量字段(RS L07 子段, 非必填, 容错为空列表)

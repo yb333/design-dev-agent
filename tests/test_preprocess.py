@@ -265,6 +265,58 @@ class TestExtractErrorReporting:
         errors = rs_data.get("_extract_errors", [])
         assert not errors, f"标准 RS 不应有解析错误: {errors}"
 
+    def test_asset_section_found_but_schema_missing_reports(self, tmp_path):
+        """★ 段在但核心字段（schema/table）没解析到 → error。
+
+        回归场景：源端把'资产 SCHEMA.接口视图'写成了别的措辞，
+        段找到了、其他字段也解析了，但 schema/table 丢了。
+        """
+        from preprocess import extract_rs_data
+        rs_file = tmp_path / "bad_schema.md"
+        rs_file.write_text(
+            "### 1.1 资产基本信息\n\n"
+            "| 属性 | 内容 |\n|------|------|\n"
+            "| 业务对象 | 订单 |\n"
+            "| 资产描述 | 测试表 |\n"  # 没有 SCHEMA.接口视图 行
+            "\n### L07 初始化及调度设计\n\n"
+            "| 配置项 | 内容 |\n|------|------|\n"
+            "| 调度方案 | 全量调度 |\n\n",
+            encoding="utf-8")
+        rs_data = extract_rs_data(str(rs_file))
+        errors = rs_data.get("_extract_errors", [])
+        schema_errors = [e for e in errors if "schema" in e.lower() or "未提取到" in e]
+        assert schema_errors, f"段在但 schema 没解析到应报 error: {errors}"
+
+    def test_asset_section_found_but_table_garbled_reports(self, tmp_path):
+        """段在但表格格式完全不对（没解析出任何字段）→ error。"""
+        from preprocess import extract_rs_data
+        rs_file = tmp_path / "garbled.md"
+        rs_file.write_text(
+            "### 1.1 资产基本信息\n\n"
+            "这里没有表格，只有一段文字描述\n",
+            encoding="utf-8")
+        rs_data = extract_rs_data(str(rs_file))
+        errors = rs_data.get("_extract_errors", [])
+        garbled_errors = [e for e in errors if "未解析" in e or "未找到" in e]
+        assert garbled_errors, f"段在但表格没解析出应报 error: {errors}"
+
+    def test_sched_section_found_but_unparseable_warns(self, tmp_path):
+        """调度段在但表头写法不标准 → warning（非必填不报 error）。"""
+        from preprocess import extract_rs_data
+        rs_file = tmp_path / "bad_sched.md"
+        rs_file.write_text(
+            "### 1.1 资产基本信息\n\n"
+            "| 属性 | 内容 |\n|------|------|\n"
+            "| 业务对象 | 订单 |\n"
+            "| 资产 SCHEMA.接口视图 | dws.dwb_test_i |\n\n"
+            "### L07 初始化及调度设计\n\n"
+            "调度方案是每天跑一次\n",  # 段在但没有标准表格
+            encoding="utf-8")
+        rs_data = extract_rs_data(str(rs_file))
+        warnings = rs_data.get("_extract_warnings", [])
+        sched_warns = [w for w in warnings if "调度配置" in w and "未解析" in w]
+        assert sched_warns, f"调度段在但没解析出应 warn: {warnings}"
+
 
 class TestExtractAndBuildE2E:
     """用真实的 extract_rs_data 提取 RS，传给 build_rs_input。
