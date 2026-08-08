@@ -63,6 +63,7 @@ def precheck(
     rs_input: dict[str, Any],
     cache_path: Path | None = None,
     refresh_schema: bool = False,
+    decision_path: Path | None = None,
 ) -> PrecheckResult:
     """预检 rs_input.json 完整性。
 
@@ -70,6 +71,7 @@ def precheck(
         rs_input: rs_input.json 的 dict。
         cache_path: 表结构缓存路径（schema_cache.json），None 则不缓存。
         refresh_schema: 强制连库刷新缓存（忽略过期判断）。
+        decision_path: 类型风险决策文件路径（type_risk_decision.yaml），None 则不做类型风险检测。
     """
     result = PrecheckResult()
 
@@ -261,7 +263,213 @@ def precheck(
     if not result.errors:
         _check_db_schema(rs_input, result, cache_path, refresh_schema)
 
+    # 10. 类型转换风险检测（仅"直接复制"字段，DB 校验之后）
+    # ★ 短路：有 error 就不检测类型风险（先解决前面的错）
+    if not result.errors and decision_path is not None:
+        _check_type_risk(rs_input, result, decision_path)
+
     return result
+
+
+# ============================================================
+# 类型转换风险检测（仅"直接复制"字段）
+# ============================================================
+
+# 风险分类：常规（批量定）vs 跨大类（逐个定）
+BATCH_RISKS = {"length_overflow", "precision_loss"}
+INDIVIDUAL_RISKS = {"type_incompatible"}
+
+# 处置选项（中文，给决策文件校验用）
+BATCH_OPTIONS = {"加安全处理", "不加"}
+INDIVIDUAL_OPTIONS = {"转换", "不加", "返源端"}
+
+
+def _detect_type_risks(rs_input: dict) -> tuple[list, list]:
+    """检测所有"直接复制"字段的类型风险，返回 (常规风险列表, 跨大类风险列表)。
+
+    每个风险项: {target_column, source_type, target_type, risk}
+    跳过：非直接复制字段、缺 source_type/target_type 的字段。
+    """
+    from type_compat import assess_type_risk, RISK_LABEL_CN
+
+    batch = []
+    individual = []
+    for fm in rs_input.get("field_mappings", []):
+        rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        if rule != "直接复制":
+            continue
+        source_type = (fm.get("source_type") or "").strip()
+        target_type = (fm.get("target_type") or "").strip()
+        target_column = (fm.get("target_column") or "").strip()
+        if not source_type or not target_type:
+            continue  # 缺类型无法判，跳过
+        risk = assess_type_risk(source_type, target_type)
+        if risk is None:
+            continue
+        item = {
+            "target_column": target_column,
+            "source_type": source_type,
+            "target_type": target_type,
+            "risk": risk,
+            "risk_cn": RISK_LABEL_CN.get(risk, risk),
+        }
+        if risk in BATCH_RISKS:
+            batch.append(item)
+        else:
+            individual.append(item)
+    return batch, individual
+
+
+def _generate_type_risk_skeleton(decision_path: Path, batch: list, individual: list):
+    """生成决策文件骨架（全中文 key）。字段列表预填，处置留空待人/agent 填。"""
+    lines = [
+        "# 类型转换风险处置决策（预检自动生成，编排层 agent 会用 question 问用户填写）",
+        "# 只有\"直接复制\"字段才检测类型风险；加工类字段由设计师在 design_logic 处理。",
+        "",
+    ]
+    if batch:
+        lines += [
+            "# === 批量决策（常规风险：长度超长/精度收窄，性质一致，批量定一个策略）===",
+            "# 这些字段风险相同，填一个处置策略即可全部适用。",
+            '批量处置策略: ""    # ★ 填：加安全处理 | 不加',
+            "                  # 加安全处理 = 程序里对超长截取、精度收窄做转换，保证不出错",
+            "                  # 不加 = 接受风险，数据问题以报错暴露（人签字接受）",
+            "常规风险字段:",
+        ]
+        for item in batch:
+            lines.append(f'  - 目标字段: "{item["target_column"]}"')
+            lines.append(f'    源类型: "{item["source_type"]}"')
+            lines.append(f'    目标类型: "{item["target_type"]}"')
+            lines.append(f'    风险: "{item["risk_cn"]}"')
+        lines.append("")
+    else:
+        lines += ["# （无常规风险字段）", '批量处置策略: ""', "常规风险字段: []", ""]
+
+    if individual:
+        lines += [
+            "# === 逐个决策（跨大类不兼容，风险高，需单独看每个字段）===",
+            "跨大类风险字段:",
+        ]
+        for item in individual:
+            lines.append(f'  - 目标字段: "{item["target_column"]}"')
+            lines.append(f'    源类型: "{item["source_type"]}"')
+            lines.append(f'    目标类型: "{item["target_type"]}"')
+            lines.append(f'    风险: "{item["risk_cn"]}"')
+            lines.append('    处置: ""          # ★ 填：转换 | 不加 | 返源端')
+            lines.append('    原因: ""          # 选"返源端"时必填')
+        lines.append("")
+    else:
+        lines += ["# （无跨大类风险字段）", "跨大类风险字段: []", ""]
+
+    decision_path.parent.mkdir(parents=True, exist_ok=True)
+    decision_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _validate_type_risk_decision(
+    decision_path: Path, batch: list, individual: list, result: PrecheckResult
+) -> bool:
+    """校验决策文件是否填全。返回 True=通过，False=有问题（已 add_error）。"""
+    try:
+        import yaml
+        dec = yaml.safe_load(decision_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        result.add_error(f"类型风险决策文件解析失败({decision_path}): {e}")
+        return False
+    if not isinstance(dec, dict):
+        result.add_error(f"类型风险决策文件格式错误（顶层应为字典）")
+        return False
+
+    ok = True
+    # 字段一致性校验：检测到的风险字段必须和决策文件里的字段清单一致（防 mapping 改了决策过期）
+    dec_batch_cols = {item.get("目标字段", "") for item in (dec.get("常规风险字段") or []) if isinstance(item, dict)}
+    detected_batch_cols = {item["target_column"] for item in batch}
+    if dec_batch_cols != detected_batch_cols:
+        missing_b = detected_batch_cols - dec_batch_cols
+        extra_b = dec_batch_cols - detected_batch_cols
+        hint = []
+        if missing_b:
+            hint.append(f"决策缺字段: {missing_b}")
+        if extra_b:
+            hint.append(f"决策多余字段: {extra_b}")
+        result.add_error(f"常规风险字段清单与决策不一致（{'; '.join(hint)}），已重新生成骨架，请填后重跑")
+        ok = False
+
+    dec_ind_cols = {item.get("目标字段", "") for item in (dec.get("跨大类风险字段") or []) if isinstance(item, dict)}
+    detected_ind_cols = {item["target_column"] for item in individual}
+    if dec_ind_cols != detected_ind_cols:
+        missing_i = detected_ind_cols - dec_ind_cols
+        extra_i = dec_ind_cols - detected_ind_cols
+        hint = []
+        if missing_i:
+            hint.append(f"决策缺字段: {missing_i}")
+        if extra_i:
+            hint.append(f"决策多余字段: {extra_i}")
+        result.add_error(f"跨大类风险字段清单与决策不一致（{'; '.join(hint)}），已重新生成骨架，请填后重跑")
+        ok = False
+
+    # 批量决策
+    if batch:
+        strategy = (dec.get("批量处置策略") or "").strip()
+        if not strategy:
+            result.add_error("类型风险决策未填：批量处置策略（加安全处理/不加）")
+            ok = False
+        elif strategy not in BATCH_OPTIONS:
+            result.add_error(f"批量处置策略 '{strategy}' 不合法（应为：加安全处理/不加）")
+            ok = False
+    # 跨大类逐个决策
+    ind_dec = dec.get("跨大类风险字段") or []
+    ind_filled = {item.get("目标字段", ""): item for item in ind_dec if isinstance(item, dict)}
+    for item in individual:
+        col = item["target_column"]
+        entry = ind_filled.get(col)
+        if not entry:
+            result.add_error(f"类型风险决策未填：跨大类字段 '{col}' 的处置")
+            ok = False
+            continue
+        action = (entry.get("处置") or "").strip()
+        if not action:
+            result.add_error(f"类型风险决策未填：跨大类字段 '{col}' 的处置")
+            ok = False
+        elif action not in INDIVIDUAL_OPTIONS:
+            result.add_error(f"字段 '{col}' 的处置 '{action}' 不合法（应为：转换/不加/返源端）")
+            ok = False
+        elif action == "返源端":
+            reason = (entry.get("原因") or "").strip()
+            if not reason:
+                result.add_error(f"字段 '{col}' 选了'返源端'但没填原因")
+                ok = False
+    return ok
+
+
+def _check_type_risk(rs_input: dict, result: PrecheckResult, decision_path: Path):
+    """检测直接复制字段的类型风险，阻断式交互（生成骨架→人/agent填→重跑放行）。"""
+    import json
+
+    batch, individual = _detect_type_risks(rs_input)
+
+    # 无风险 → 不生成文件、不阻断
+    if not batch and not individual:
+        return
+
+    # 有风险 → 看决策文件是否已填全
+    if decision_path.exists():
+        if _validate_type_risk_decision(decision_path, batch, individual, result):
+            return  # 决策已填全，放行
+        # 决策没填全或不一致 → 重新生成骨架（覆盖），下面阻断
+        result.add_error("类型风险决策文件未填全或字段不一致，已重新生成骨架，请填后重跑")
+    else:
+        result.add_error(f"检测到类型风险待人工决策（决策文件将生成于：{decision_path}）")
+
+    # 生成/覆盖骨架
+    _generate_type_risk_skeleton(decision_path, batch, individual)
+
+    # stdout 输出 TYPE_RISK_PENDING 摘要（给编排层 agent 解析）
+    summary = {
+        "batch": batch,
+        "individual": individual,
+        "decision_file": str(decision_path),
+    }
+    print(f"TYPE_RISK_PENDING {json.dumps(summary, ensure_ascii=False)}")
 
 
 # 标准审计字段（4个固定字段）
@@ -575,6 +783,12 @@ def main():
         action="store_true",
         help="强制连库刷新表结构缓存（忽略过期判断）",
     )
+    parser.add_argument(
+        "--decision",
+        default=None,
+        help="类型风险决策文件路径（type_risk_decision.yaml）。"
+        "默认 rs_input 同目录下。不传则不做类型风险检测。",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -588,7 +802,19 @@ def main():
     # 缓存放 rs_input.json 同目录（_internal/schema_cache.json）
     cache_path = input_path.parent / "schema_cache.json"
 
-    result = precheck(rs_input, cache_path, args.refresh_schema)
+    # 类型风险决策文件路径（默认 rs_input 同目录，即 _internal/type_risk_decision.yaml）
+    decision_path = None
+    if args.decision:
+        decision_path = Path(args.decision)
+    else:
+        default_decision = input_path.parent / "type_risk_decision.yaml"
+        if default_decision.exists():
+            decision_path = default_decision
+        else:
+            # 检测是否有风险，有则启用（生成在默认路径）
+            decision_path = default_decision
+
+    result = precheck(rs_input, cache_path, args.refresh_schema, decision_path)
     print(result.summary())
     sys.exit(result.return_code)
 

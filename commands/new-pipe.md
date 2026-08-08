@@ -80,15 +80,51 @@ python DESIGN_SCRIPTS/preprocess.py \
 
 ```bash
 python DESIGN_SCRIPTS/precheck.py \
-  --input {deliver}/_internal/rs_input.json
+  --input {deliver}/_internal/rs_input.json \
+  --decision {deliver}/_internal/type_risk_decision.yaml
 ```
 
 **校验返回码**：
 - 0（PASS）→ 继续
 - 1（WARNING）→ 显示警告，问用户是否继续
-- 2（INCOMPLETE）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
+- 2（INCOMPLETE）→ 看阻断原因分两种：
+  - **普通阻断**（schema/字段缺失等，stdout 不含 `TYPE_RISK_PENDING`）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
+  - **★ 类型风险阻断**（stdout 含 `TYPE_RISK_PENDING`）→ 走类型风险决策流程（见下）
 
 > ⚠️ 用户修改的是 mapping.xlsx 或 RS.md（源文件），不是 rs_input.json（产物）。
+
+### 类型风险决策流程（stdout 含 TYPE_RISK_PENDING 时）
+
+precheck 检测到"直接复制"字段有源→目标类型转换风险时，会阻断并输出 `TYPE_RISK_PENDING {JSON}` 摘要行。
+解析这行 JSON 拿到风险清单后，**用 question 问用户决策**（不要让用户去手填 YAML）：
+
+1. **解析 TYPE_RISK_PENDING**：从 precheck 的 stdout 抓 `TYPE_RISK_PENDING` 开头那行，解析后面的 JSON。结构：
+   ```
+   {batch: [常规风险字段], individual: [跨大类风险字段], decision_file: ".../type_risk_decision.yaml"}
+   ```
+
+2. **批量决策**（如果有 batch 风险字段）——用 question 问用户：
+   ```
+   question("检测到 {len(batch)} 个常规类型风险（长度超长/精度收窄），是否批量加安全处理？",
+            options=["加安全处理", "不加"])
+   ```
+   - 加安全处理 = 程序里对超长截取、精度收窄做转换，保证不出错
+   - 不加 = 接受风险，数据问题以报错暴露
+
+3. **逐个决策**（对每个 individual 跨大类风险字段）——用 question 问用户：
+   ```
+   question("字段 {target_column}（{source_type}→{target_type}，跨大类不兼容），怎么处理？",
+            options=["转换", "不加", "返源端"])
+   ```
+   - 转换 = 加转换函数（TO_DATE/TO_CHAR/CAST 等）
+   - 不加 = 接受风险
+   - 返源端 = 源端改类型更合适（选这个追问原因，用 question 收集 reason）
+
+4. **写决策文件**：把用户的选择写进 `{deliver}/_internal/type_risk_decision.yaml`（中文 key）：
+   - `批量处置策略: "加安全处理"` 或 `"不加"`
+   - 跨大类字段每个填 `处置: "转换"` / `"不加"` / `"返源端"`，返源端填 `原因: "..."`
+
+5. **重跑步骤 1b**：这次 precheck 读到决策文件已填全 → 放行（exit 0）→ 继续。
 
 ---
 

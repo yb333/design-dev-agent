@@ -330,3 +330,27 @@ def make_ts_json(schema="dws", table="dwb_test_i", cn="测试表",
         "data_flow": {"tables": [], "dependencies": [], "schedule_groups": [{"sequence": 1, "rules": ["R0001"]}]},
         "dq_rules": dq_rules or [],
     }
+
+
+def make_type_risk_rs_input(risky_fields=None):
+    """构造有类型风险的 rs_input（直接复制字段 source_type/target_type 不匹配）。
+
+    risky_fields: [{target_column, source_type, target_type}] 列表，默认造两种风险：
+      一个长度超长、一个跨大类不兼容。
+    """
+    if risky_fields is None:
+        risky_fields = [
+            {"target_column": "remark", "source_type": "varchar(200)", "target_type": "varchar(50)"},  # 长度超长
+            {"target_column": "biz_date", "source_type": "varchar(20)", "target_type": "date"},  # 跨大类
+        ]
+    fields = []
+    for rf in risky_fields:
+        fields.append({
+            "source_table": "ods_test_f", "source_column": rf["target_column"],
+            "source_type": rf["source_type"],
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": rf["target_column"], "target_column_cn": rf["target_column"],
+            "target_type": rf["target_type"],
+            "source_alias": "t", "remark": "",
+        })
+    return make_rs_input(table="dwb_risk_i", fields=fields, has_audit=False)
