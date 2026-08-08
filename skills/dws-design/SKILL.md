@@ -98,14 +98,14 @@ description: >-
 ### 第3层 时间属性（含场景横切）— 每条路径单独定性增量/全量
 
 **想清楚**：每条数据路径是增量还是全量？增量的话驱动表是谁、增量字段是什么？
-- **增量是"路径属性"，不是"表属性"**——多张驱动表 = 多条独立路径，各自有增量范围
-- **逐表对账**（防臆想）：RS 声明了 N 张增量驱动表，就必须有对应覆盖的 extract 步骤。最容易出错的是臆想"主从关系只做主表"——每张驱动表漏做都会丢增量数据
+- **增量范围由谁决定**——单一驱动表 / 多源独立取增量 / 多表 JOIN 并集重建，三种模式选哪种见 incremental-playbook §二
+- **核心铁律**：凡是进了驱动表清单的表，它的变化都要被增量范围覆盖（驱动表之间没有主次，都是变化源）。最容易出错的是漏掉某张驱动表的变化条件
 - 场景在这层也是横切：不同来源路径可能增量/全量不同
 
-→ 增量设计的完整决策（数据流/load_mode/初始化/累积共建排重）见 `references/incremental-playbook.md`
+→ 增量设计的完整决策（三种模式/load_mode/初始化/累积共建排重）见 `references/incremental-playbook.md`
 
 **产出**：增量规则的 `incremental` 段（key/filter/init_*）；merge 规则的 `load_mode`
-**闭合条件**（assemble_ts 硬校验）：驱动表数 ≤ extract 规则数；extract 的 incremental 填全；每张驱动表字段被覆盖（默认拦，合并场景可填豁免 reason）
+**闭合条件**（assemble_ts 校验）：标了增量但不能完全没增量处理（硬阻断）；extract 的 incremental 填全；每张驱动表的增量字段是否在增量范围里（warn，语义判断由 designer + 闸口①保证）
 
 ### 第4层 工程保障 — 分布键 + 关联安全 + 调度
 
@@ -196,7 +196,7 @@ description: >-
 - [ ] 累积共建表标了 `build_mode: accumulate`，排重场景填了 dedup_strategy
 
 **第3层 时间属性**
-- [ ] 增量场景：每张驱动表都有对应的 extract 步骤覆盖（见 incremental-playbook）
+- [ ] 增量场景：每张驱动表的变化都被增量范围覆盖（见 incremental-playbook 三种模式）
 - [ ] extract 规则的 incremental.key/filter/init_filter 填全
 
 **第4层 工程保障**

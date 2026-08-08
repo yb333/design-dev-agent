@@ -763,11 +763,36 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
     is_incremental_asset = bool(incremental_tables) or n_extracts > 0
 
     if is_incremental_asset:
-        # N14 驱动表数 ≤ extract 规则数
-        if n_drivers > n_extracts:
-            vr.add_hard("L3", "N14", f"增量驱动表 {n_drivers} 张 > extract 规则 {n_extracts} 个（每张驱动表必须有对应 extract，否则丢增量数据）")
+        # N14（松绑后语义）：资产标了增量但"完全没管增量"才硬阻断。
+        # "完全没管" = 没有 extract 规则 + 没有任何规则的 incremental 段非空 + 没有规则的 source 涉及驱动表。
+        # 至于用几个规则、extract 数和驱动表数关系——是 designer 的设计自由（见 incremental-playbook 三种模式）。
+        has_extract = n_extracts > 0
+        has_incremental_section = any(
+            (r.get("incremental") or {}) and
+            any((r.get("incremental", {}) or {}).get(f) for f in ("key", "filter"))
+            for r in rules
+        )
+        # 规则的 source_aliases 涉及任一驱动表
+        driver_table_shorts = {_table_short((dt.get("source_table") or "")).lower() for dt in incremental_tables}
+        rs_source_shorts = {
+            (st.get("source_table") or "").split(".")[-1].lower()
+            for st in (rs_input.get("source_tables") or [])
+        }
+        rules_touch_driver = False
+        for r in rules:
+            r_aliases = r.get("source_aliases") or []
+            # 别名映射到表名（从 rs_input source_tables 找），看是否涉及驱动表
+            for st in (rs_input.get("source_tables") or []):
+                if (st.get("source_alias") or "") in (r_aliases or []):
+                    if (st.get("source_table") or "").split(".")[-1].lower() in driver_table_shorts:
+                        rules_touch_driver = True
+            # source_aliases 留空 = 用全部源表（build_rule 兜底逻辑），涉及驱动表即算
+            if not r_aliases and driver_table_shorts & rs_source_shorts:
+                rules_touch_driver = True
+        if not has_extract and not has_incremental_section and not rules_touch_driver:
+            vr.add_hard("L3", "N14", f"资产标了增量（{n_drivers} 张驱动表）但完全没增量处理（无 extract 规则、无 incremental 段、规则 source 不涉驱动表）——增量变化完全没被覆盖")
 
-        # N15 extract 的 incremental{} 填全
+        # N15 extract 的 incremental{} 填全（仅在存在 extract 规则时查）
         for rule in extract_rules:
             code = rule.get("rule_code", "?")
             inc = rule.get("incremental") or {}
@@ -777,17 +802,20 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
                 if not (inc.get(f) or "").strip():
                     vr.add_hard("L3", "N15", f"规则 {code} 是 incremental_extract 但 incremental.{f} 为空（增量取数必须有 {f}）")
 
-        # N16 驱动表对账：每张驱动表的 incremental_key 至少被一个 extract 覆盖（软阻断，合并可豁免）
-        covered_keys = {(inc.get("key") or "").strip().lower() for inc in [r.get("incremental") or {} for r in extract_rules] if (inc.get("key") or "").strip()}
+        # N16（降 warn）：每张驱动表的增量字段是否出现在增量范围里。
+        # 这是语义判断（取决于该表字段是否落到目标），校验只提示，由 designer + 闸口①保证。
+        # 收集所有增量规则（extract + 有 incremental 段的规则）引用的增量字段
+        all_inc_keys = set()
+        for r in rules:
+            inc = r.get("incremental") or {}
+            k = (inc.get("key") or "").strip().lower()
+            if k:
+                all_inc_keys.add(k)
         for dt in incremental_tables:
             drv_table = (dt.get("source_table") or "").strip()
             drv_key = (dt.get("incremental_key") or "").strip().lower()
-            if drv_key and drv_key not in covered_keys:
-                vr.add_soft("L3", "N16", f"驱动表 '{drv_table}' 的增量字段 '{drv_key}' 未被任何 extract 的 incremental.key 覆盖（若合并到一步取数，填 exemptions 放行并说明理由）", target=drv_table)
-
-        # N17 extract 数 > 驱动表数（软阻断，多拆需豁免）
-        if n_extracts > n_drivers and n_drivers > 0:
-            vr.add_soft("L3", "N17", f"extract 规则 {n_extracts} 个 > 驱动表 {n_drivers} 张（多拆了 extract，若按场景/分区拆合理，填 exemptions 放行）", target=f"{n_extracts}_extracts")
+            if drv_key and drv_key not in all_inc_keys:
+                vr.add_warn("L3", "N16", f"驱动表 '{drv_table}' 的增量字段 '{drv_key}' 未在任何规则的 incremental.key 中出现——确认该表的变化已被增量范围覆盖（并集场景检查 OR 条件是否覆盖每张驱动表）")
 
     # ============================================================
     # 第4层 工程（N18-N21）
