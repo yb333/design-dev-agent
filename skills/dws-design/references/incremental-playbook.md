@@ -24,25 +24,89 @@ RS L07 的"增量表及增量字段"段给出**驱动表 + 增量字段**。一�
 > "源表取增量 → 临时表（staging）中转 → MERGE 合并到目标表"。临时表中转的原因：
 > 可验证可回滚、幂等（重跑不重复）、性能（MERGE 在临时表和目标表间做比边查边写快）。
 
-### 标准数据流
+### ★ 核心铁律：凡进驱动表清单的，变化都要抓
+
+> 凡是 RS 标进"增量驱动表"清单的表，**它的任何变化都必须能被增量范围覆盖**。
+> 因为每张驱动表的字段都可能落到目标字段上——哪怕是所谓的"从表"，它的金额/状态变了，
+> 对应目标行的那个字段就是旧的，数据错误。
+>
+> **驱动表之间没有主次之分，都是变化源。** 漏了任一张的变化 = 目标数据错误。
+
+### 三种增量模式（按"增量范围怎么算"选）
+
+增量设计的关键不是"几个规则"，而是**增量范围怎么确定**。决策主轴：多张驱动表的变化，是各自独立进目标，还是 JOIN 进同一行要并集重建？
+
+**模式一：单驱动表**
+
+只有一张驱动表，增量范围 = 该表的增量条件。
 
 ```
-驱动表A（按 update_time 取增量）→ 临时表 tmp_a  [step_type=incremental_extract]
-驱动表B（按 dt 取增量）         → 临时表 tmp_b  [step_type=incremental_extract]
-tmp_a + tmp_b → MERGE 合并      → 目标表        [step_type=merge]
+驱动表A（按 update_time 取增量）→ 目标表  [一个 incremental 规则]
+WHERE A.update_time >= ${BIZ_DATE_START} AND A.update_time < ${BIZ_DATE_END}
 ```
 
-- 每个驱动表一个 `incremental_extract` 规则，产出各自的物理临时表（target_role=intermediate）
-- 临时表**每次重建**（先 truncate 再灌，用完即丢——业界 staging 模式）
-- 最终一个 `merge` 规则读临时表 + 必要维表，合并到目标表
+适用：只一张表的变化要抓。
 
-### ★ 多驱动表逐表对账（校验兜底，防臆想）
+**模式二：多源独立取增量（每张一个 extract → merge）**
 
-**这是最易出错的地方**：designer 容易臆想"主从表关系，只做主表增量即可"。这是错的——**每张驱动表都必须有对应的 extract 步骤**，否则该来源的增量数据会丢。
+多张驱动表各自独立写进目标（union 累积），互不影响。增量范围 = 各自各自的 delta。
 
-assemble_ts 会做硬校验：
-- `驱动表数 ≤ extract 规则数`（漏做必拦）
-- 每张驱动表的增量字段至少被一个 extract 覆盖（默认拦，合并场景可填豁免 reason 放行，见 §五）
+```
+驱动表A（按 update_time）→ 临时表 tmp_a  [incremental_extract]
+驱动表B（按 dt）         → 临时表 tmp_b  [incremental_extract]
+tmp_a + tmp_b → MERGE 合并 → 目标表       [merge]
+```
+
+适用：多来源 union / 累积共建场景（见 §三 accumulate 模式）。每张表一个 extract 规则，产出各自物理临时表（每次重建），最后 merge。
+
+**模式三：并集影响范围（多表 JOIN 进同一行，任一表变都要重建）★ 最易出错**
+
+多张驱动表 JOIN 进同一目标行，**任一张表变化都要重建该目标行**。增量范围 = 所有驱动表变化的**并集**。
+
+```
+驱动表A + 驱动表B JOIN 进同一目标行
+增量范围 = A 变化的行 ∪ B 变化的行
+用这个并集范围 JOIN 所有表，重建受影响的目标行
+```
+
+可以用一个规则搞定，关键在于增量范围必须覆盖每张驱动表的变化。两种 SQL 写法（designer 选）：
+
+```sql
+-- 写法1：增量条件用 OR 连接（并集体现在 WHERE）
+SELECT A.*, B.amount FROM A JOIN B ON A.id = B.a_id
+WHERE A.update_time >= ${BIZ_DATE_START}
+   OR B.update_time >= ${BIZ_DATE_START}
+
+-- 写法2：先各取 delta 求 union，再用影响集 JOIN 重建
+WITH chg AS (
+  SELECT id FROM A WHERE A.update_time >= ${BIZ_DATE_START}
+  UNION
+  SELECT a_id FROM B WHERE B.update_time >= ${BIZ_DATE_START}
+)
+SELECT A.*, B.amount FROM A JOIN B ON A.id = B.a_id
+JOIN chg ON A.id = chg.id
+```
+
+适用：多张表 JOIN 进同一目标，字段来自不同表，任一源表变化都影响目标字段值。
+
+> **业界共识**（Stack Overflow 多表 CDC）：load each source's delta independently,
+> then rebuild the affected target rows from the **union of all deltas** that touched any contributing source.
+> 任一源变了，重建受影响的目标行。
+
+### 模式选择决策表
+
+| 场景 | 增量范围 | 推荐模式 |
+|------|---------|---------|
+| 只一张表的变化要抓 | 该表的增量条件 | 模式一 |
+| 多张表各自独立写进目标（union） | 各自各自的 delta | 模式二（每张一个 extract → merge）|
+| 多张表 JOIN 进同一行，任一表变都影响目标 | 各驱动表变化的**并集** | 模式三（一个规则，并集范围重建）|
+
+### ★ 防臆想（校验兜底 + 闸口①人确认）
+
+最易出错的是：**漏掉某张驱动表的变化**。比如模式三里只写了 A 的增量条件、忘了 OR B 的条件 → B 变化的行没进增量范围 → 目标字段用了旧值。
+
+- assemble_ts 会校验"资产标了增量但完全没增量处理"（无 extract、无 incremental 段、source 不涉驱动表）→ 硬阻断兜底。
+- 但"增量范围里漏了某张驱动表的条件"是语义判断（取决于该表字段是否落到目标），校验做不到——**由 designer 保证 + 闸口①人确认**。warn 会提示"确认每张驱动表的增量变化已被增量范围覆盖"。
 
 ---
 
@@ -125,20 +189,13 @@ rules:
 
 ---
 
-## 五、增量合并到一步（豁免机制）
+## 五、关于校验（不限制设计模式）
 
-正常情况一张驱动表一个 extract。但**两张驱动表都按相同增量字段（如同按 dt 分区）**时，合并到一个 extract 是合理的工程优化（减少临时表数量）。
+assemble_ts 的增量校验**只兜底线，不规定用哪种模式**：
+- **硬阻断**：资产标了增量但完全没增量处理（无 extract 规则、无 incremental 段、规则的 source 不涉及任何驱动表）→ 这是"完全没管增量"的铁证。
+- **warn**：某张驱动表的增量字段未在增量条件里出现 → 提示"确认这张驱动表的变化已被增量范围覆盖"（语义判断，由 designer + 闸口①保证）。
 
-这种情况 `extract 规则数 < 驱动表数`，会触发软阻断。designer 可在 `decisions.exemptions` 填豁免：
-
-```yaml
-exemptions:
-  - code: "N16"
-    target: "ods_payment_f"          # 豁免哪张驱动表
-    reason: "两张驱动表同按 dt 分区，合并为一个 extract 取数步骤合理"
-```
-
-豁免内容会进 ts.json，闸口①人可见。
+至于用模式一/二/三、几个规则、extract 数和驱动表数是否相等——**都是 designer 的设计自由，校验不限制**。extract 数可以小于驱动表数（模式三一个规则搞定），也可以等于（模式二），甚至一张表按场景拆多个 extract。
 
 ---
 

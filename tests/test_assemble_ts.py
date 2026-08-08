@@ -703,7 +703,7 @@ class TestLayer3Incremental:
     """第3层 增量（N14-N17）。"""
 
     def test_valid_multi_driver_passes(self):
-        """两张驱动表 + 两个 extract + merge → 无 N14-N17。"""
+        """两张驱动表 + 两个 extract + merge → 无硬阻断。"""
         rs = make_incremental_rs_input()
         dd = make_incremental_decisions([
             {"key": "update_time", "table": "ods_test_f"},
@@ -712,20 +712,39 @@ class TestLayer3Incremental:
         # 补 params 声明增量参数
         dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
         vr = _run(dd, rs)
-        for code in ("N14", "N15", "N16", "N17"):
+        # N14(完全没管) / N15(extract填全) 不该触发
+        for code in ("N14", "N15"):
             msgs = [i['msg'] for i in vr.items if i['code'] == code]
             assert code not in _codes(vr, "L3"), f"{code} 不该触发: {msgs}"
 
-    def test_n14_missing_extract_reports(self):
-        """两张驱动表但只做一个 extract → N14（攻问题2 臆想）。"""
+    def test_n14_completely_no_incremental_processing_reports(self):
+        """标了增量但完全没增量处理（无 extract、无 incremental 段、source 不涉驱动表）→ N14。"""
+        rs = make_incremental_rs_input()
+        # 用一个普通的 full 规则，source 是别的表（不涉驱动表），完全没增量处理
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "全量", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+            "source_aliases": ["other"],  # 不是驱动表
+        }])
+        # rs_input 的 source_tables 改成别的表（不涉驱动表）
+        rs["source_tables"] = [{"source_schema": "ods", "source_table": "ods_other_f",
+                                "source_table_cn": "其他", "source_alias": "other"}]
+        vr = _run(dd, rs)
+        assert "N14" in _codes(vr, "L3")
+
+    def test_n14_partial_increment_still_ok(self):
+        """只做一个 extract（漏了另一张驱动表）不再报 N14——松绑后是 designer 设计自由。"""
         rs = make_incremental_rs_input()
         dd = make_incremental_decisions([
             {"key": "update_time", "table": "ods_test_f"},
-            # 漏了 ods_pay_f 的 extract
+            # 没做 ods_pay_f 的 extract，但做过增量处理 → 不触发 N14
         ])
         dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
         vr = _run(dd, rs)
-        assert "N14" in _codes(vr, "L3")
+        assert "N14" not in _codes(vr, "L3"), "有增量处理就不该报 N14（模式自由）"
 
     def test_n15_extract_missing_key_reports(self):
         rs = make_incremental_rs_input()
@@ -734,8 +753,8 @@ class TestLayer3Incremental:
         vr = _run(dd, rs)
         assert "N15" in _codes(vr, "L3")
 
-    def test_n16_driver_uncovered_soft_block(self):
-        """驱动表增量字段未被任何 extract 覆盖 → N16 软阻断。"""
+    def test_n16_driver_uncovered_warns(self):
+        """驱动表增量字段未在增量范围里出现 → N16 warn（降级，不阻断）。"""
         rs = make_incremental_rs_input()
         # 两个 extract 但都用同一个 key，另一张驱动表的 key 没覆盖
         dd = make_incremental_decisions([
@@ -743,20 +762,11 @@ class TestLayer3Incremental:
             {"key": "update_time", "table": "ods_pay_f"},  # 应该是 dt，这里故意用 update_time
         ])
         vr = _run(dd, rs)
-        softs = vr.soft_errors()
-        assert any("N16" == c for _, c, _ in softs)
-
-    def test_n16_exempted_passes(self):
-        """N16 软阻断，填 exemptions 放行。"""
-        rs = make_incremental_rs_input()
-        dd = make_incremental_decisions([
-            {"key": "update_time", "table": "ods_test_f"},
-            {"key": "update_time", "table": "ods_pay_f"},
-        ])
-        dd["exemptions"] = [{"code": "N16", "target": "ods_pay_f", "reason": "合并取数合理"}]
-        vr = _run(dd, rs)
-        hard = vr.hard_errors(dd["exemptions"])
-        assert not any(c == "N16" for _, c, _ in hard), "豁免后 N16 不该是硬阻断"
+        warns = vr.warnings()
+        assert any(c == "N16" for _, c, _ in warns), "N16 应是 warn"
+        # 且不是硬阻断
+        hard = vr.hard_errors()
+        assert not any(c == "N16" for _, c, _ in hard), "N16 不该是硬阻断（已降 warn）"
 
     def test_n22_undeclared_param_reports(self):
         """增量 filter 引用未声明参数 → N22。"""

@@ -137,15 +137,12 @@ class ExcelMappingParser:
                 elif any(s in sheet_lower for s in [sn.lower() for sn in self.DATA_FLOW_SHEET_NAMES]):
                     self.data_flow_df = pd.read_excel(xlsx, sheet_name=sheet)
                     recognized_sheets.add(sheet)
-            
-            for sheet in sheet_names:
-                if sheet not in recognized_sheets:
-                    self.diagnostics.append({
-                        'type': 'sheet_unrecognized',
-                        'sheet': sheet,
-                        'message': f'Sheet "{sheet}" 未被识别, 建议使用标准名称: 实体级mapping, 属性级mapping, 调度配置, 执行平台配置, 设计配置',
-                    })
-            
+
+            # 多余的 sheet（不在标准名清单里的）静默跳过，不告警。
+            # mapping 模板可能有各种辅助 sheet（说明页/备注页/模板自带页等），不影响产出。
+            # 真正的问题（实体级+属性级都没有）由下面的 sheet_missing_critical 覆盖。
+            # 这与列处理的"未匹配列静默跳过"逻辑一致。
+
             if self.entity_df is None and self.attribute_df is None:
                 self.diagnostics.append({
                     'type': 'sheet_missing_critical',
@@ -428,8 +425,8 @@ class ExcelMappingParser:
         lines = [f'# 解析诊断 — {len(self.diagnostics)} 个问题', '']
         
         col_issues = [d for d in self.diagnostics if d['type'] == 'column_missing']
-        sheet_issues = [d for d in self.diagnostics if d['type'] in ('sheet_unrecognized', 'sheet_missing_critical')]
-        other_issues = [d for d in self.diagnostics if d['type'] not in ('column_missing', 'sheet_unrecognized', 'sheet_missing_critical')]
+        sheet_issues = [d for d in self.diagnostics if d['type'] in ('sheet_missing_critical',)]
+        other_issues = [d for d in self.diagnostics if d['type'] not in ('column_missing', 'sheet_missing_critical')]
         
         if col_issues:
             lines.append('## 列匹配问题')
