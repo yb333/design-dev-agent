@@ -54,24 +54,31 @@ description: >-
 python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule {规则号}
 ```
 
-### 步骤 2：理解规则
+### 步骤 2：生成直取骨架 ★
 
-从切片读取：
+**调 codegen_direct.py 生成填空骨架**——direct 字段（按 field_type 自动 COALESCE）+ assign 审计字段（固定4行）+ FROM/JOIN/WHERE 骨架都已生成好，aggregate/计算字段/CTE 收敛逻辑留 `-- TODO` 占位：
+
+```bash
+python {skill目录}/scripts/codegen_direct.py --ts {ts路径} --rule {规则号} --output {etl路径}/R0001_xxx.sql
+```
+
+**你的工作是填 TODO，不是从头写整个 SELECT。** 工具拿不准的内容会留 TODO（不会瞎生成），填完它就行。
+
+### 步骤 3：理解规则 + 填 TODO
+
+从切片读取 + 在骨架上填 TODO：
 - target_table（产出表）/ source_tables / joins / ctes / grain
 - fields 列表（每个字段的 design_logic + transform_type + source_fields）
 - join_safety（关联安全策略，如"取最新有效行"）
 
-### 步骤 3：写 SELECT
-
-把每个字段的 design_logic 翻译成 SQL 表达式：
-- `direct` → `t.contract_no`
-- `pivot` → `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)`
+把 TODO 占位翻译成 SQL 表达式：
 - `aggregate` → `SUM(inv_mtr.inv_inst_amt_usd)` + GROUP BY
-- `assign` → `'N'`（审计字段固定值）
+- `pivot` → `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)`
+- CTE 收敛 → 按 join_safety.strategy 实现（GROUP BY 收敛 / ROW_NUMBER 去重）
+- 计算字段 → 按 design_logic 实现完整逻辑（禁止硬编码 0）
 
-JOIN 条件从切片的 joins 取。
+JOIN 条件、审计字段、direct 字段已在骨架生成好，检查是否正确即可。
 关联安全策略（不唯一的 JOIN 键）体现在 CTE 或子查询里（先收敛再关联）。
-审计字段从切片 `_global.audit_fields` 取（4 个标准赋值）。
 
 详见 `assets/etl-templates.md` 的 SELECT 模板。
 
@@ -138,16 +145,18 @@ JOIN 条件从切片的 joins 取。
 | `assets/etl-templates.md` | SELECT 标准模板（各种加工模式） |
 | `references/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
 
-> 工具脚本（slice_ts.py / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在 `scripts/` 下，agent 通过 bash 调用。
+> 工具脚本（slice_ts.py / **codegen_direct.py** / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在 `scripts/` 下，agent 通过 bash 调用。
 
 ---
 
 ## 6. 产出检查清单
 
-产出 SELECT 前自检：
+产出 SELECT 前自检（codegen 骨架已处理 ★ 项，重点检查你填的 TODO）：
+- [ ] 所有 `-- TODO` 占位都已填充（没有遗留的 TODO）
 - [ ] SELECT 覆盖切片里所有目标字段（不漏字段）
-- [ ] 每个字段有对应的 SQL 表达式（翻译自 design_logic）
-- [ ] 审计字段 4 个带上（从 _global.audit_fields 取，**中间表/tmp 规则也要带**）
+- [ ] 每个 aggregate/计算字段实现了完整逻辑（禁止硬编码 0）
+- [ ] ★ 审计字段 4 个带上（codegen 已生成，确认在）——**中间表/tmp 规则也要带**
+- [ ] ★ direct 字段 COALESCE 正确（codegen 已生成，确认默认值合理）
 - [ ] JOIN 条件和切片的 joins 一致
 - [ ] 不能 SELECT *
 - [ ] NULL 字段有 COALESCE
