@@ -641,14 +641,19 @@ def _check_db_schema(
     账号选用逻辑与 UT 一致：按目标 schema 查 schema_mapping 选源。
     """
     # 从 field_mappings 收集"要用到的来源字段"：{(schema, table): {column: target_field}}
-    # 跳过纯派生行（赋值/序列、source_column 空）和审计字段——这些不查源表
+    # 跳过纯派生行（赋值/序列、source_column 空/占位符）和审计字段——这些不查源表
     field_mappings = rs_input.get("field_mappings", [])
     # {(schema, table): {source_column_lower: (原source_column, [target_fields], source_type)}}
     # 同一来源字段映射多个目标时，target_fields 累积成列表（避免覆盖丢失）
     needed: dict[tuple[str, str], dict[str, list]] = {}
     for fm in field_mappings:
+        # 赋值/序列字段无真实来源表（值是固定的或自增），不查库
+        rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        if rule in ("赋值", "序列"):
+            continue
+        # source_column 空 或 占位符（-、/、\ 等）都不是真实列名，跳过
         source_column = (fm.get("source_column") or "").strip()
-        if not source_column:
+        if not source_column or source_column in ("-", "/", "\\", "—", "--"):
             continue
         if _is_audit_field(fm):
             continue
@@ -734,9 +739,10 @@ def _check_db_schema(
             targets_str = target_fields[0] if len(target_fields) == 1 else f"{len(target_fields)}个目标字段"
 
             if col_lower not in found_cols:
+                # 字段不存在 = mapping 写错了表名/列名，或源表结构变了
                 result.add_error(
-                    f"DB 校验: 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
-                    f"在库中不存在（或表/字段名错误）"
+                    f"[字段不存在] 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
+                    f"在库中不存在——检查 mapping 的表名/列名拼写，或源表结构是否已变更"
                 )
                 continue
             # 类型严格匹配（mapping 的 source_type vs 库里实际类型）
@@ -745,9 +751,12 @@ def _check_db_schema(
                 expected_norm = _normalize_type(source_type)
                 actual_norm = _normalize_type(actual_type)
                 if expected_norm != actual_norm:
+                    # 类型不符 = mapping 标的 source_type 和库里的对不上（mapping 可能标错，或库改了类型）
+                    # 与 type_risk（source→target 转换风险）不同：这是 source 本身标错
                     result.add_error(
-                        f"DB 校验: 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
-                        f"类型不符（mapping={source_type}，库里={actual_type}）"
+                        f"[类型不符] 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
+                        f"mapping 标的 source_type='{source_type}' 与库里的实际类型 '{actual_type}' 不一致"
+                        f"——以库为准修正 mapping，或确认库结构是否已变更"
                     )
 
 
