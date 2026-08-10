@@ -63,6 +63,71 @@ class TestSliceTs:
         result = slice_rule(ts_data, "R0001")
         assert "business_key" in result["_global"]
 
+    def test_compact_view_compresses_direct(self, ts_data):
+        """compact 模式：direct 字段压成单行字符串"""
+        from slice_ts import slice_rule, to_compact_view
+        sliced = slice_rule(ts_data, "R0001")
+        compact = to_compact_view(sliced)
+        # direct 字段应在 fields_direct（字符串列表）
+        assert "fields_direct" in compact
+        assert "fields_detail" in compact
+        # compact 不应再有旧的 fields 键
+        assert "fields" not in compact
+        # fields_direct 是字符串列表（每个是一行）
+        for line in compact["fields_direct"]:
+            assert isinstance(line, str)
+            assert " | direct | " in line  # 格式: target | type | direct | alias.src
+
+    def test_compact_keeps_non_direct_detail(self, ts_data):
+        """compact 模式：非 direct 字段完整保留在 fields_detail"""
+        from slice_ts import slice_rule, to_compact_view
+        sliced = slice_rule(ts_data, "R0001")
+        compact = to_compact_view(sliced)
+        # 非 direct 字段（aggregate/assign等）应在 fields_detail 完整
+        for f in compact["fields_detail"]:
+            assert isinstance(f, dict)
+            assert "target_field" in f
+            assert f.get("transform_type") != "direct"
+
+    def test_compact_keeps_rule_info(self, ts_data):
+        """compact 模式：规则信息（joins/grain/ctes等）原样保留"""
+        from slice_ts import slice_rule, to_compact_view
+        sliced = slice_rule(ts_data, "R0001")
+        compact = to_compact_view(sliced)
+        for key in ("rule_code", "rule_name", "joins", "join_safety", "grain", "ctes", "_global"):
+            assert key in compact, f"compact 丢了规则信息: {key}"
+
+    def test_compact_direct_field_format(self, ts_data):
+        """compact 的 direct 行格式: target | type | direct | alias.src"""
+        from slice_ts import _compact_direct_field
+        f = {
+            "target_field": "user_name", "field_type": "varchar(100)",
+            "transform_type": "direct",
+            "source_fields": [{"table": "t1", "field": "user_name", "alias": "t"}],
+        }
+        line = _compact_direct_field(f)
+        assert line == "user_name | varchar(100) | direct | t.user_name"
+
+    def test_compact_direct_field_missing_alias(self, ts_data):
+        """compact 的 direct 字段缺 alias → 用 ? 标记（不崩）"""
+        from slice_ts import _compact_direct_field
+        f = {
+            "target_field": "x", "field_type": "int", "transform_type": "direct",
+            "source_fields": [{"table": "t1", "field": "", "alias": ""}],
+        }
+        line = _compact_direct_field(f)
+        assert "?" in line  # 缺 alias/field → ?
+
+    def test_compact_view_smaller_than_full(self, ts_data):
+        """compact 模式 YAML 体积应小于全量（direct 多时明显）"""
+        import yaml
+        from slice_ts import slice_rule, to_compact_view
+        sliced = slice_rule(ts_data, "R0001")
+        full_yaml = yaml.dump(sliced, allow_unicode=True, default_flow_style=False)
+        compact = to_compact_view(sliced)
+        compact_yaml = yaml.dump(compact, allow_unicode=True, default_flow_style=False)
+        assert len(compact_yaml) <= len(full_yaml)
+
 
 # ============================================================
 # check_sql.py 测试
@@ -136,6 +201,45 @@ class TestCheckSql:
         bad_sql = "SELECT t.x AS x FROM t WHERE ((t.x = 1)"
         issues = check_sql(bad_sql, ts_data, "R0001")
         assert any("括号" in i for i in issues)
+
+    # ---- 输出格式：大规则字段列表折行 + 计数汇总 ----
+
+    def test_format_field_list_wraps(self):
+        """_format_field_list 超过 per_line 个字段应折行"""
+        from check_sql import _format_field_list
+        result = _format_field_list({"a", "b", "c", "d", "e", "f", "g"}, per_line=5)
+        # 7个字段，每行5个 → 两行
+        assert result.count("\n") == 1
+        # 第一行5个，第二行2个
+        lines = result.split("\n")
+        assert len(lines[0].split(",")) == 5
+        assert len(lines[1].split(",")) == 2
+
+    def test_format_field_list_sorted(self):
+        """_format_field_list 应排序输出"""
+        from check_sql import _format_field_list
+        result = _format_field_list({"c", "a", "b"})
+        assert result.startswith("  a, b, c")
+
+    def test_missing_fields_issue_has_count(self, ts_data):
+        """缺字段时 issue 应含计数 '共 N 个'"""
+        from check_sql import check_sql
+        bad_sql = "SELECT t.contract_no AS contract_no, 'N' AS del_flag FROM fin_dwl_cnb.dwl_con_pu_mtr_f t"
+        issues = check_sql(bad_sql, ts_data, "R0001")
+        missing_issues = [i for i in issues if "缺少字段" in i]
+        assert len(missing_issues) > 0
+        assert "共" in missing_issues[0]
+        assert "个" in missing_issues[0]
+
+    def test_missing_fields_not_truncated(self, ts_data):
+        """大量缺失字段时，issue 应完整列出所有字段（不截断）"""
+        from check_sql import check_sql
+        # 只写一个字段，缺其余所有
+        bad_sql = "SELECT t.contract_no AS contract_no, 'N' AS del_flag FROM fin_dwl_cnb.dwl_con_pu_mtr_f t"
+        issues = check_sql(bad_sql, ts_data, "R0001")
+        missing_issue = [i for i in issues if "缺少字段" in i][0]
+        # 应包含换行（折行显示）
+        assert "\n" in missing_issue
 
     # ---- CTE（WITH ... AS (...)）相关：回归 012 大案例发现的误报 ----
 

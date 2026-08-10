@@ -119,6 +119,57 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
     }
 
 
+def _compact_direct_field(f: dict) -> str:
+    """把 direct 字段压成单行字符串。
+
+    格式: target_field | field_type | direct | alias.src_field
+    例: user_name | varchar(100) | direct | oub.user_name
+
+    source_fields 缺失或 alias/field 为空 → 用 placeholder 标记
+    （codegen 消费 compact 行时会把这些标 TODO，不瞎生成）
+    """
+    target = f.get("target_field", "")
+    ftype = f.get("field_type", "")
+    sf_list = f.get("source_fields", [])
+    if sf_list:
+        sf = sf_list[0]
+        alias = sf.get("alias", "")
+        src = sf.get("field", "")
+        src_ref = f"{alias}.{src}" if alias and src else "?"
+    else:
+        src_ref = "?"
+    return f"{target} | {ftype} | direct | {src_ref}"
+
+
+def to_compact_view(sliced: dict) -> dict:
+    """生成 compact 视图（给 coder 读，大规则场景省 70%+ 体积）。
+
+    - direct 字段压成单行字符串，放进 fields_direct 列表（一行一个）
+    - 非 direct 字段（aggregate/assign/其他）完整保留在 fields_detail
+    - 其余规则信息（joins/join_safety/ctes/grain 等）原样保留
+
+    注意：assign 审计字段既不在 fields_direct 也不在 fields_detail
+    （它们固定4个，codegen 自动处理，coder 不需要看）。
+    若 assign 字段非审计类，保留在 fields_detail。
+    """
+    fields = sliced.get("fields", [])
+    direct_compact = []
+    detail = []
+    for f in fields:
+        ttype = f.get("transform_type", "")
+        if ttype == "direct":
+            direct_compact.append(_compact_direct_field(f))
+        else:
+            detail.append(f)
+
+    # 拷贝切片，替换 fields 段
+    view = dict(sliced)
+    view["fields_direct"] = direct_compact
+    view["fields_detail"] = detail
+    view.pop("fields", None)
+    return view
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="TS 规则切片: 从 ts.json 切出单个规则的 YAML（给 coder 读）"
@@ -126,6 +177,8 @@ def main():
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
     parser.add_argument("--output", default="", help="输出 YAML 路径（默认打印到 stdout）")
+    parser.add_argument("--compact", action="store_true",
+                        help="compact 模式：direct 字段压一行（大规则场景省 70%% 体积，coder 读用）")
     args = parser.parse_args()
 
     # 读 ts.json
@@ -142,14 +195,18 @@ def main():
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # compact 模式：direct 压行
+    output_data = to_compact_view(sliced) if args.compact else sliced
+
     # 输出
-    yaml_text = yaml.dump(sliced, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    yaml_text = yaml.dump(output_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(yaml_text, encoding="utf-8")
-        print(f"切片产出: {out}", file=sys.stderr)
+        mode = " [compact]" if args.compact else ""
+        print(f"切片产出: {out}{mode}", file=sys.stderr)
         print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
     else:
         print(yaml_text)

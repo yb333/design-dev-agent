@@ -192,6 +192,20 @@ def check_no_select_star(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _format_field_list(fields, per_line: int = 5) -> str:
+    """把字段列表格式化成多行显示（每行 per_line 个），避免超长单行被截断。
+
+    例: {'b', 'a', 'c'} → "  a, b, c"
+        7个字段 → 两行（每行最多5个）
+    """
+    sorted_fields = sorted(fields)
+    lines = []
+    for i in range(0, len(sorted_fields), per_line):
+        chunk = sorted_fields[i:i + per_line]
+        lines.append("  " + ", ".join(chunk))
+    return "\n".join(lines)
+
+
 def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
     """静态对比 SELECT vs ts.json。
 
@@ -257,12 +271,13 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
 
         if missing:
             issues.append(
-                f"[字段覆盖] SELECT 缺少字段（ts.json 定义了但 SELECT 没输出）: "
-                f"{sorted(missing)}"
+                f"[字段覆盖] SELECT 缺少字段（ts.json 定义了但 SELECT 没输出），"
+                f"共 {len(missing)} 个:\n{_format_field_list(missing)}"
             )
         if missing_audit:
             issues.append(
-                f"[字段覆盖] SELECT 缺少审计字段: {sorted(missing_audit)}（检查是否带了 AS 别名）"
+                f"[字段覆盖] SELECT 缺少审计字段，共 {len(missing_audit)} 个:\n"
+                f"{_format_field_list(missing_audit)}\n（检查是否带了 AS 别名）"
             )
 
         # SELECT 多出的字段（不在 ts.json 里的）
@@ -272,8 +287,9 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
             real_extra = {e for e in extra if not e.startswith('_')}
             if real_extra:
                 issues.append(
-                    f"[字段覆盖] SELECT 输出了 ts.json 没定义的字段: "
-                    f"{sorted(real_extra)}（可能是拼写错误）"
+                    f"[字段覆盖] SELECT 输出了 ts.json 没定义的字段，"
+                    f"共 {len(real_extra)} 个:\n{_format_field_list(real_extra)}\n"
+                    f"（可能是拼写错误）"
                 )
 
     # 5. FROM 表引用：SELECT 引用的表 vs ts.json 的 source_tables
@@ -338,6 +354,7 @@ def main():
         print(f"[静态对比未通过] {args.rule} 有 {len(issues)} 个问题:", file=sys.stderr)
         for i, issue in enumerate(issues, 1):
             print(f"  {i}. {issue}", file=sys.stderr)
+            print(file=sys.stderr)  # issue 之间空行，避免多行字段列表粘连
         sys.exit(1)
     else:
         print(f"[静态对比通过] {args.rule}: 字段覆盖完整, 表引用正确, 语法OK")
