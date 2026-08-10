@@ -275,3 +275,149 @@ assemble_ts 会校验：增量 filter/init_filter 里 `${PARAM}` 引用的参数
 > 也可以是增量取数（step_type=incremental_extract）。
 > 增量场景的临时表通常是 incremental_extract 产出，不涉及聚合。
 > step_type 的完整决策见 complexity-playbook。
+
+---
+
+## 附录：多步骤标准 design_decisions 示例
+
+> designer 从零摸索常出错，这里给两个最常见的多步骤完整示例。
+> 关键认知：**装配/merge 步骤的字段从临时表搬运，默认直取，不要求重写 design_logic**（加工逻辑在前序步骤已完成）。
+
+### 示例一：增量 extract → merge（模式二）
+
+两张驱动表各自取增量到临时表，merge 合并到目标。R0003（merge）的字段从 tmp 搬运，不写 field_logics。
+
+```yaml
+rules:
+  # R0001：驱动表A 取增量到临时表（加工在这一步完成）
+  - rule_code: R0001
+    rule_name: "订单增量取数"
+    scenario: "default"
+    exec_sequence: 1
+    target_table: "dws.tmp_order_a"           # 临时表（intermediate）
+    step_type: incremental_extract
+    target_role: intermediate
+    produces_for: ["R0003"]                   # 产出供 merge 步骤消费
+    reads: []
+    incremental:
+      key: "update_time"
+      filter: "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'"
+      init_filter: "1=1"
+      init_time_range: "ALL"
+      init_strategy: "首次全量加载，后续按 update_time 增量"
+      init_mode: "参数控制"
+    field_targets: [order_id, order_amt, order_dt]  # 这些字段的加工逻辑在这一步写
+    field_logics:
+      order_amt: "订单本币金额，取已确认状态金额"     # ★ 加工字段在 extract 步骤写 logic
+    load_mode: truncate_table                 # 临时表每次重建
+
+  # R0002：驱动表B 取增量到临时表（同上，不同驱动表）
+  - rule_code: R0002
+    rule_name: "支付增量取数"
+    scenario: "default"
+    exec_sequence: 2
+    target_table: "dws.tmp_pay_b"
+    step_type: incremental_extract
+    target_role: intermediate
+    produces_for: ["R0003"]
+    reads: []
+    incremental:
+      key: "dt"
+      filter: "dt >= '${BIZ_DATE_START}' AND dt < '${BIZ_DATE_END}'"
+      init_filter: "1=1"
+      init_time_range: "ALL"
+      init_strategy: "首次全量加载，后续按 dt 增量"
+      init_mode: "参数控制"
+    field_targets: [pay_amt]
+    field_logics:
+      pay_amt: "支付金额，取已支付状态汇总"
+    load_mode: truncate_table
+
+  # R0003：merge 合并到目标（纯搬运，字段从 tmp 取，不写 field_logics）
+  - rule_code: R0003
+    rule_name: "合并到目标表"
+    scenario: "default"
+    exec_sequence: 3
+    target_table: "dws.dwb_order_f"           # 最终目标表
+    step_type: merge
+    target_role: target
+    produces_for: []
+    reads: ["dws.tmp_order_a", "dws.tmp_pay_b"]  # ★ 读两张临时表
+    load_mode: merge_into
+    write_condition: "T.order_id=T1.order_id"     # MERGE ON 条件
+    field_targets: [order_id, order_amt, order_dt, pay_amt, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date]
+    field_logics: {}                            # ★ 留空：字段从前序步骤搬过来，默认直取
+    grain: {input: "一行=一个订单", output: "一行=一个订单", change: "无变化"}
+
+params:
+  - {name: "BIZ_DATE_START", value_type: "date", desc: "增量起始业务日期"}
+  - {name: "BIZ_DATE_END", value_type: "date", desc: "增量结束业务日期"}
+
+business_key: [order_id]
+business_key_design:
+  input_key: [order_id]
+  adjusted: false
+  reason: "沿用输入主键，产出粒度未变"
+
+schedule:
+  schedule_type: daily
+  cron: "0 30 3 * * ?"
+```
+
+### 示例二：全量 aggregate → 装配（复杂宽表拆步骤）
+
+两张维度各自聚合到临时表，最终 full 装配到目标。R0003（装配）的字段从 tmp 搬运。
+
+```yaml
+rules:
+  - rule_code: R0001
+    rule_name: "用户维度聚合"
+    exec_sequence: 1
+    target_table: "dws.tmp_user_dim"
+    step_type: aggregate                       # 聚合产出中间表
+    target_role: intermediate
+    produces_for: ["R0003"]
+    field_targets: [user_id, fav_pay_method, user_level]
+    field_logics:
+      fav_pay_method: "取近30天最常用支付方式"
+      user_level: "按累计消费金额分级"
+    load_mode: truncate_table
+
+  - rule_code: R0002
+    rule_name: "商品维度聚合"
+    exec_sequence: 2
+    target_table: "dws.tmp_prod_dim"
+    step_type: aggregate
+    target_role: intermediate
+    produces_for: ["R0003"]
+    field_targets: [product_id, product_sales_cnt, product_cat]
+    field_logics:
+      product_sales_cnt: "近30天销量汇总"
+    load_mode: truncate_table
+
+  # R0003：装配目标（从两张 tmp 搬运 + 关联源表取直取字段）
+  - rule_code: R0003
+    rule_name: "装配宽表"
+    exec_sequence: 3
+    target_table: "dws.dwb_order_product_f"
+    step_type: full
+    target_role: target
+    reads: ["dws.tmp_user_dim", "dws.tmp_prod_dim"]   # ★ 读两张中间表
+    field_targets: [order_id, user_id, product_id, fav_pay_method, user_level, product_sales_cnt, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date]
+    field_logics: {}   # ★ 留空：加工字段从前序步骤搬，直取字段脚本自动填
+    grain: {input: "一行=一个订单商品", output: "一行=一个订单商品", change: "无变化"}
+    load_mode: truncate_table
+
+business_key: [order_id, product_id]
+business_key_design:
+  input_key: [order_id]
+  adjusted: true
+  reason: "头行整合后头表主键 order_id 发散，补 product_id 行字段"
+```
+
+### 两个示例的关键规律
+
+1. **加工逻辑只在"做加工的步骤"写**——extract/aggregate 步骤写 field_logics，装配/merge 步骤留空
+2. **装配/merge 步骤必须声明 reads**——告诉脚本从哪些临时表搬（脚本据此构建 source_tables + 判定字段为直取）
+3. **produces_for / reads 双向声明依赖**——中间表填 produces_for，装配/merge 填 reads
+4. **临时表 load_mode 是 truncate_table**（每次重建）；目标表看增量/全量定

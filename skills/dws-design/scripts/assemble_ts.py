@@ -583,7 +583,10 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
     # N2 business_key 非空
     business_key = decisions.get("business_key") or []
     if not business_key:
-        vr.add_hard("L0", "N2", "business_key 为空，无法框定产出表唯一行（后续加工和 UT 验证都基于此）")
+        vr.add_hard("L0", "N2",
+                    "business_key 为空。修正：填 business_key 为能唯一框定产出表一行的字段组合"
+                    "（通常取 mapping/RS 标的主键，粒度变化时补字段），"
+                    "并在 business_key_design 论证。这是第0层锚点，后续加工和 UT 验证都基于此。")
 
     # N3 business_key_design 论证完整
     bkd = decisions.get("business_key_design") or {}
@@ -946,12 +949,14 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
 # ============================================================
 # 组装 ts.json
 # ============================================================
-def build_field(field_rec, logic, rule_aliases):
+def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None):
     """从 rs_input 的 field_mapping 记录 + design_logic 组装 ts 的 field 对象。
 
     field_rec: rs_input.field_mappings 的一条记录
     logic: design_decisions 里该字段的 design_logic(可能为 None -> 用默认)
     rule_aliases: 该规则关联的源表别名集合(用于决定 source_fields)
+    is_assembly: 是否装配/merge 规则（reads 非空）。装配规则字段默认直取（从临时表搬）。
+    reads_tables: 装配规则读取的临时表名列表（用于生成"直取 tmp.xxx"的默认 logic）
     """
     transform_rule = field_rec.get("transform_rule", "直接复制")
     transform_type = TRANSFORM_MAP.get(transform_rule, "direct")
@@ -959,14 +964,19 @@ def build_field(field_rec, logic, rule_aliases):
     alias = field_rec.get("source_alias", "")
     source_column = field_rec.get("source_column", "")
     source_table = field_rec.get("source_table", "")
+    target_column = field_rec.get("target_column", "")
 
-    # design_logic: AI 写了就用 AI 的; 没写就根据 transform_type 生成默认
+    # design_logic: AI 写了就用 AI 的; 没写就根据规则角色生成默认
     if logic:
         design_logic = logic
     elif transform_type == "direct":
         design_logic = f"直取 {alias}.{source_column}" if alias else f"直取 {source_table}.{source_column}"
     elif transform_type == "assign":
         design_logic = "固定赋值"
+    elif is_assembly:
+        # 装配/merge 规则的加工字段没写 logic → 默认从临时表直取（前面步骤已加工）
+        src_tbl = reads_tables[0] if reads_tables else "临时表"
+        design_logic = f"直取 {src_tbl}.{target_column}（前序步骤已加工，本步搬运）"
     else:
         # 加工类字段没写 logic 是个问题, 但先给个占位, 校验层会警告
         design_logic = f"[需补充] 加工逻辑未写, transform_detail: {field_rec.get('transform_detail', '')}"
@@ -994,6 +1004,10 @@ def build_rule(rule_dec, field_map, rs_source_tables):
     logics = rule_dec.get("field_logics") or {}
 
     # 检查加工类字段是否写了 logic（字段定义已搬到 tables，这里只做口径完整性校验）
+    # ★ 面向多步骤：reads 非空的规则（装配/merge，从临时表搬运）字段默认直取，不强制写 logic。
+    # 只有 reads 为空的规则（extract/aggregate/full 单灌，字段在本规则加工）才要求加工字段写 logic。
+    reads = rule_dec.get("reads") or []
+    is_assembly_rule = bool(reads)  # 装配/merge 规则：字段从临时表搬，默认直取
     missing_logic = []
     for t in targets:
         rec = field_map.get(t)
@@ -1002,6 +1016,8 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         logic = logics.get(t)
         transform_rule = rec.get("transform_rule", "直接复制")
         transform_type = TRANSFORM_MAP.get(transform_rule, "direct")
+        if is_assembly_rule:
+            continue  # 装配规则字段默认直取，不强制写 logic（designer 显式写了则当二次加工）
         if transform_type != "direct" and not logic and not is_audit_field(rec):
             missing_logic.append(t)
 
@@ -1018,6 +1034,21 @@ def build_rule(rule_dec, field_map, rs_source_tables):
             "table": rs_st.get("source_table", ""),
             "alias": sa,
         })
+
+    # ★ 装配/merge 规则（reads 非空）：把 reads 的临时表也加进 source_tables
+    # 临时表不在 rs_input 的 source_tables 里（它是前序步骤产出的），但要作为伪源表声明，
+    # 否则下游 coder/slice_ts 拿不到该规则读的临时表信息。
+    reads = rule_dec.get("reads") or []
+    existing_tables = {src["table"].split(".")[-1].lower() for src in rule_sources if src.get("table")}
+    for r in reads:
+        r_short = _table_short(r) if "." in str(r) else str(r)
+        if r_short and r_short.split(".")[-1].lower() not in existing_tables:
+            rule_sources.append({
+                "schema": "",           # 临时表无 schema（或同 schema，coder 推断）
+                "table": r_short,
+                "alias": "",            # 临时表别名 coder 按表名推
+                "_from_reads": True,    # 标记来自 reads（临时表），区别于 rs_input 源表
+            })
 
     return {
         "rule_name": rule_dec.get("rule_name", ""),
@@ -1090,12 +1121,17 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
 
         # 字段定义：从 field_map 按 field_targets 组装（design_logic 取规则 field_logics）
         rule_logics = rule.get("field_logics", {})
+        rule_reads = rule.get("reads") or []
+        # reads 的表短名（用于装配规则字段的"直取 tmp.xxx"默认 logic）
+        reads_short = [_table_short(r) if ("." in str(r)) else r for r in rule_reads]
+        is_asm = bool(rule_reads)  # 装配/merge 规则
         fields = []
         for tname in rule.get("field_targets", []):
             rec = field_map.get(tname)
             if not rec:
                 continue
-            f = build_field(rec, rule_logics.get(tname), rule.get("source_aliases"))
+            f = build_field(rec, rule_logics.get(tname), rule.get("source_aliases"),
+                            is_assembly=is_asm, reads_tables=reads_short)
             fields.append(f)
 
         # 目标表补充审计字段
@@ -1822,7 +1858,12 @@ def main():
     # 注意：assemble_ts 内部会 build_rule 收集 missing_logic，这里先跑一次拿结果
     ts, missing_logic, _ = assemble_ts(rs_input, decisions)
     for code, fields in missing_logic:
-        vr.add_hard("L1", "N5", f"规则 {code} 的加工字段未写 design_logic: {fields}（加工字段必须写口径，不允许占位）")
+        vr.add_hard("L1", "N5",
+                    f"规则 {code} 的加工字段未写 design_logic: {fields}。"
+                    f"修正：在该规则的 field_logics 里给每个字段写自然语言口径，"
+                    f"如 '{fields[0] if fields else '字段名'}: 本币金额=原币×汇率'。" +
+                    (f"（若该规则是装配/merge 步骤、字段从临时表搬运，请在 reads 里声明读取的临时表，"
+                      f"装配规则字段默认直取不要求写 logic）" if not any(r.get("reads") for r in decisions.get("rules", []) if r.get("rule_code") == code) else ""))
 
     # 输出校验报告（按层分组）
     report = vr.format_report(exemptions)
