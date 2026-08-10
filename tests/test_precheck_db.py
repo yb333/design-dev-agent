@@ -533,6 +533,44 @@ class TestStaticChecks:
         mismatch_errors = [e for e in result.errors if "未定义" in e]
         assert mismatch_errors == [], f"一致时不应报: {mismatch_errors}"
 
+    def test_assign_field_skips_source_check(self, monkeypatch):
+        """赋值字段无来源表（source_table='-'）→ 跳过表一致性/别名校验，不报错。
+
+        BA 写赋值字段时表达式如 'NULL AS status'，preprocess 可能解析出
+        source_table='-'，赋值字段本来就没有真实来源表，不该校验。
+        """
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([
+            _biz_field(source_column="id"),
+            {"transform_rule": "赋值", "transform_detail": "NULL AS status",
+             "target_column": "status", "target_column_cn": "状态",
+             "target_type": "varchar(2)", "source_alias": "",
+             "source_schema": "-", "source_table": "-", "source_column": "",
+             "remark": ""},
+        ])
+        result = precheck(rs)
+        source_errors = [e for e in result.errors if "未定义" in e or "别名" in e]
+        assert source_errors == [], f"赋值字段无来源表不该报: {source_errors}"
+
+    def test_direct_copy_with_expression_no_warn(self, monkeypatch):
+        """直接复制填了映射表达式 → 不该 warn（BA 从关联从表取值时标注关联是习惯写法）。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([{
+            "source_table": "ods_test_f", "source_column": "amt", "source_type": "numeric(10,2)",
+            "transform_rule": "直接复制", "transform_detail": "关联从表b取amt",
+            "target_column": "amt", "target_column_cn": "金额", "target_type": "numeric(10,2)",
+            "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        expr_warns = [w for w in result.warnings if "直接复制" in w and "表达式" in w]
+        assert expr_warns == [], f"直接复制填表达式不该 warn: {expr_warns}"
+
     def test_multi_table_union_all_single_query(self, tmp_path, monkeypatch):
         """多张表缺失 → 一条 UNION ALL SQL 查回（不是多次往返）。
 
@@ -622,6 +660,16 @@ class TestIncrementalChecks:
         result = precheck(rs)
         driver_errors = [e for e in result.errors if "驱动表" in e and "为空" in e]
         assert driver_errors, f"标了增量但无驱动表应报错: {result.errors}"
+
+    def test_full_load_with_variants_no_driver_passes(self, monkeypatch):
+        """全量资产，增量识别方式含'不涉及'/'全量'变体，无驱动表 → 不该阻断。"""
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        for variant in ["不涉及（全量调度）", "不涉及", "全量", "无"]:
+            rs = self._rs_incremental([], incremental_key=variant)
+            result = precheck(rs)
+            incr_errors = [e for e in result.errors if "增量" in e or "驱动表" in e]
+            assert incr_errors == [], f"全量变体'{variant}'不该报增量错: {incr_errors}"
 
     def test_incremental_driver_missing_key_blocks(self, monkeypatch):
         """驱动表没填增量字段 → error。"""
