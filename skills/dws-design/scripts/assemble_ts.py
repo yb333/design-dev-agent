@@ -966,15 +966,20 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
     source_table = field_rec.get("source_table", "")
     target_column = field_rec.get("target_column", "")
 
-    # design_logic: AI 写了就用 AI 的; 没写就根据规则角色生成默认
+    # design_logic + transform_type：根据规则角色 + designer 是否写了 logic 共同决定
+    # 装配/merge 规则：designer 没写 logic 的字段 = 从临时表搬运（直取），transform_type 改 direct
+    #                 designer 写了 logic 的字段 = 二次加工，transform_type 保持原值
     if logic:
         design_logic = logic
+        # designer 显式写了口径 → 按原 transform_type（加工）走，不改
     elif transform_type == "direct":
         design_logic = f"直取 {alias}.{source_column}" if alias else f"直取 {source_table}.{source_column}"
     elif transform_type == "assign":
         design_logic = "固定赋值"
     elif is_assembly:
         # 装配/merge 规则的加工字段没写 logic → 默认从临时表直取（前面步骤已加工）
+        # transform_type 也改成 direct（跟 design_logic 的"直取"一致，避免 coder 看到矛盾）
+        transform_type = "direct"
         src_tbl = reads_tables[0] if reads_tables else "临时表"
         design_logic = f"直取 {src_tbl}.{target_column}（前序步骤已加工，本步搬运）"
     else:
