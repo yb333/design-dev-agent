@@ -123,8 +123,7 @@ def precheck(
 
             # 3b. 交叉校验
             if rule == "直接复制":
-                if expr and expr != "-":
-                    result.add_warn(f"字段 {target_field} 是'直接复制'但填了映射表达式 '{expr[:30]}', 若有加工逻辑应改为'数据加工'")
+                # 直接复制填了表达式不报——BA 从关联从表取值时常在这里标注关联关系，是习惯写法
                 if not source_field:
                     result.add_error(f"字段 {target_field} 是'直接复制'但缺少来源字段 (source_column)")
             elif rule == "数据加工":
@@ -166,7 +165,10 @@ def precheck(
     # 5b. 增量校验：标了增量必须有驱动表+增量字段，驱动表须在 source_tables 里
     incremental_key = (schedule.get("incremental_key") or "").strip()
     incremental_tables = schedule.get("incremental_tables", [])
-    is_incremental = bool(incremental_key) and incremental_key not in ("不涉及", "无", "")
+    # 增量识别方式判断：值为空 或 含"不涉及"/"无"/"全量" 都算全量（覆盖"不涉及（全量调度）"等变体）
+    is_incremental = bool(incremental_key) and not any(
+        kw in incremental_key for kw in ("不涉及", "无", "全量")
+    )
 
     if is_incremental:
         # 增量场景：必须有驱动表信息
@@ -206,8 +208,12 @@ def precheck(
             )
 
     # 6. 别名一致性 + 表别名重复 + 字段级/表级一致性
+    # 跳过赋值/序列字段——它们无真实来源表，别名是 preprocess 兜底填的（可能不在实体级 mapping 里）
     entity_aliases = {st.get("source_alias") for st in source_tables if st.get("source_alias")}
     for fm in field_mappings:
+        fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        if fm_rule in ("赋值", "序列"):
+            continue
         fm_alias = fm.get("source_alias", "")
         if fm_alias and fm_alias not in entity_aliases:
             result.add_error(f"字段 {fm.get('target_column', '?')} 的来源别名 '{fm_alias}' 在实体级 mapping 中不存在")
@@ -223,11 +229,16 @@ def precheck(
             result.add_error(f"实体级表别名 '{al}' 重复出现 {cnt} 次（JOIN 时会歧义）")
 
     # 6b. 字段级与表级一致性：字段级的 source_schema/source_table 应在实体级定义范围内
+    # 跳过赋值/序列字段——它们没有真实来源表（赋值是固定值，如 NULL AS），
+    # preprocess 可能把表达式的字符解析成 source_table='-'，不该校验
     entity_tables = {
         ((st.get("source_schema") or "").strip(), (st.get("source_table") or "").strip())
         for st in source_tables
     }
     for fm in field_mappings:
+        fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        if fm_rule in ("赋值", "序列"):
+            continue  # 赋值/序列无来源表，跳过
         fm_sch = (fm.get("source_schema") or "").strip()
         fm_tbl = (fm.get("source_table") or "").strip()
         if fm_sch and fm_tbl and (fm_sch, fm_tbl) not in entity_tables:
