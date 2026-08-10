@@ -277,20 +277,35 @@ Task(subagent_type="dws-coder", task_id="{该规则 task_id}",
 ```
 改完重跑步骤6。**每规则限 3 轮**。
 
-**7b. 数据质量问题 → designer → 闸口① → coder**。
+**7b. 数据质量问题 → 人确认根因 → （要改设计才回 designer）→ coder**。
 INSERT 成功但 UT 检查 FAIL（主键重复/空值/行数异常，报告带样例数据）。
 
-① 组**精简依据包**传给 designer（怎么判断是 designer 的角色能力，见 designer.md）：
+> ★ **不回退 designer 诊断给方案**。designer 基于自己的设计立场会给偏向性结论（如"改 join_safety 加 GROUP BY / 改 business_key"），这俩方案往往站不住脚——前者掩盖 JOIN 发散丢数据，后者是凑假主键。根因判断（设计问题 / 环境数据脏 / 业务一对多）需要业务认知，是人的领域。
+
+① **主控读 UT 报告**（含重复键+样例+开发环境数据免责提示），用 question 问人根因：
 ```
-Task(subagent_type="dws-designer", task_id="{designer 的 task_id}",
-     description="诊断 {rule_code} 数据质量问题",
-     prompt="{rule_code}（{target}）UT 失败：{失败项+样例，摘 UT 报告}\n
-              coder 的 SELECT: {deliver}/etl/{rule}.sql\n
-              你当初的 join_safety: {摘 ts.json 该规则}\n
-              你当初的 business_key: {摘 ts.json}\n
-              判断是改设计 / 标需业务确认 / 还是 coder 没按 join_safety 写。")
+question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，摘 UT 报告}\n"
+         "请确认根因是哪种：\n"
+         "  - 关联设计问题（JOIN 发散，需调整关联/限定条件）\n"
+         "  - 源表数据问题（开发环境数据脏，不改设计）\n"
+         "  - 业务粒度问题（业务上一对多，business_key 该补行字段——需与 BA 确认）\n"
+         "  - coder 实现与设计不符（如漏了 GROUP BY）",
+         options=["关联设计问题", "源表数据问题", "业务粒度问题", "coder实现不符"])
 ```
-② designer 改完后**必须回闸口①**（question 展示改了哪些 joins/join_safety/business_key + 原因，人确认）——**不能跳过直接让 coder 改**。
+> 人看重复样例往往一眼就能判断根因（比 designer 猜快得多）。开发环境数据量/质量与生产不一致，不能仅凭 UT 结果下结论。
+
+② **按人定的根因分流**：
+- **源表数据问题** → 不改设计，闸口②报告给人（环境问题归 7c）
+- **coder 实现不符** → 恢复 coder 旧会话，指出 SELECT 哪里没按 join_safety 写，改完重跑步骤6
+- **关联设计问题 / 业务粒度问题** → 人定具体怎么改（如"JOIN dim_xxx 要加 is_current=1 限定""business_key 补 line_no"），**这时才回 designer 执行修改**：
+  ```
+  Task(subagent_type="dws-designer", task_id="{designer 的 task_id}",
+       description="按确认方案修改 {rule_code}",
+       prompt="人已确认根因和方案：{人定的具体改法}\n"
+              "请按此方案修改 design_decisions 的 joins/join_safety/business_key，不要自行给其他方案。")
+  ```
+  designer 改完后**必须回闸口①**（question 展示改了什么 + 人当初定的方案，确认一致）——**不能跳过直接让 coder 改**。
+
 ③ 闸口①确认后，恢复该规则 coder 旧会话按新设计改 SELECT，改完重跑步骤6。每规则限 3 轮。
 
 > designer/coder 产出的临时分析脚本统一放 `{deliver}/_internal/diagnose/`。

@@ -233,7 +233,11 @@ def main():
                 report_lines.append("")
 
     if failed:
-        report_lines.append("## ⚠️ 问题清单（数据质量类需回 designer）")
+        report_lines.append("## ⚠️ 问题清单（数据质量类，需人确认根因）")
+        report_lines.append("")
+        report_lines.append("> **提示**：开发环境数据量/质量与生产不一致，主键重复等问题需结合业务认知判断根因")
+        report_lines.append("> （设计问题 / 环境数据脏 / 业务一对多），不能仅凭 UT 结果下结论。")
+        report_lines.append("> 下面是客观事实（重复键+样例），请人确认根因后再决定处理方案。")
         report_lines.append("")
         for r in all_results:
             if r["status"] == "FAIL":

@@ -80,27 +80,21 @@ RS L07 的"增量表及增量字段"段给出驱动表和增量字段。你从�
 
 > **中间表 ≠ 聚合**。target_role=intermediate 按"产出供谁消费"定义，跟聚合无关——它可以是 aggregate（聚合产出）、full（非聚合的分步加工）、incremental_extract（增量取数）。“中间表"不是只有 aggregate 一种 step_type。详见 complexity-playbook §四。
 
-**数据质量诊断**（UT 失败回退给你时）：
+**数据质量问题的修改执行**（UT 失败、人确认根因后回退给你时）：
 
-UT 跑通后发现"业务主键重复 / 审计字段空值 / 行数异常"，调用方会带一份**精简依据包**回退给你判断。**这是设计问题还是输入（RS）问题，只有你能判断**——coder 拿到只会用 ROW_NUMBER 掩盖症状，不能给它。
+UT 跑通后发现"业务主键重复 / 审计字段空值 / 行数异常"，**调用方（主控）已先问人确认了根因**。只有人判定"确实是设计问题、需要改设计"时，才会带着**人定的具体方案**回退给你执行。
 
-依据包内容（调用方会传）：失败项 + 样例数据、coder 实际跑的 SELECT 路径、你当初声明的 join_safety 和 business_key。
+> ★ **你不做根因诊断、不给方案选项**。根因判断（设计问题 / 环境数据脏 / 业务一对多）需要业务认知，是人的领域。你之前基于自己的设计立场给"改 join_safety 加 GROUP BY / 改 business_key"这类方案，往往站不住脚——前者掩盖 JOIN 发散丢数据，后者是凑假主键。所以根因和方案都由人定，你只执行。
 
-你的判断路径：
-1. **读 coder 的 SELECT**（`etl/{rule}.sql`）——这是你中文 joins 落地后的结构化精确版，比你自己当时的自然语言描述可靠。看 JOIN 链 + 样例数据，定位**哪个 JOIN 让行数放大**。
-2. **对照你当初声明的 join_safety**：
-   - 当时声明了 `join_key_unique: true` 但实际发散了 → **你误判了**，是设计问题。改 join_safety 加收敛策略（GROUP BY 收敛 / 取最新有效行 / WHERE 收敛）。
-   - 当时声明了 `join_key_unique: false` 并写了 strategy，但 coder 没落实 → coder 没按你的策略写，退回让 coder 按你的 join_safety 改。
-3. **对照 business_key_design**：
-   - 主键是 RS 给的（`input_key`）但你没调整（`adjusted: false`），结果在产出粒度下不唯一 → 看是源表本身多对一（**输入问题，标"需业务确认"**），还是粒度变化后该补字段（**设计问题，你补 business_key**）。
-   - 你调整过主键（`adjusted: true`）但调错了 → 设计问题，重新调整 business_key。
+人回退给你时会带：
+1. **人定的具体改法**（如"JOIN dim_xxx 要加 is_current=1 限定""business_key 补 line_no"）
+2. 失败项 + 样例数据（供你参考）
+3. coder 实际跑的 SELECT 路径
 
-判断结论三选一，回报给调用方（**你只改设计，不碰 SQL**）：
-- **改设计**：改 ts.json 的 joins / join_safety / business_key，说清改了什么。改完调用方会走闸口①人确认，确认后才让 coder 按新设计改 SELECT。
-- **需业务确认**：源表本身多对一，RS 的 mapping 把明细标成了主关联。明确标注哪个 JOIN 的源表有问题、建议怎么处理，调用方报告给人。
-- **不是设计问题**：极少数情况，确认是 coder 的 SQL 实现与你设计不符（如漏了 GROUP BY），明确指出 coder 哪里没按 join_safety 写。
+你的职责：**按人定的方案修改 design_decisions**（joins / join_safety / business_key），不要自行换成其他方案。改完说清改了什么，调用方走闸口①让人确认一致后，才让 coder 按新设计改 SELECT。
 
 > ⚠️ 不要为了"让主键唯一"而建议加 ROW_NUMBER 取一行、或建议 coder 去重——那是掩盖根因、丢数据。根因在关联设计就修关联，根因在源表就标出来问业务。
+> ⚠️ business_key 是 BA 在需求里定的，**你不要擅自改**——只有人确认"业务粒度本该如此"后，按人的指示补字段。
 
 **参数审视**（涉及参数化场景时）：
 - 批次号 `P_CYCLE_ID` 所有资产都有，脚本自动注入，**你不需要声明它**。
