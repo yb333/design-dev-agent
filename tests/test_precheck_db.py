@@ -118,7 +118,7 @@ class TestCheckDbSchema:
         result = precheck(rs)
 
         # 不应有 DB 校验相关的 error
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"连不上库不应报 DB error: {db_errors}"
 
     def test_connection_fails_skips_silently(self, monkeypatch):
@@ -131,7 +131,7 @@ class TestCheckDbSchema:
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"连接失败不应报 DB error: {db_errors}"
 
     def test_table_not_exists_blocks(self, monkeypatch):
@@ -146,7 +146,7 @@ class TestCheckDbSchema:
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert any("id" in e and "不存在" in e for e in db_errors), \
             f"表不存在时其字段应报不存在: {db_errors}"
         # 阻断：return_code 应为 2
@@ -164,7 +164,7 @@ class TestCheckDbSchema:
                                         target_column="bad_field")])
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert any("not_exist_col" in e and "不存在" in e for e in db_errors), \
             f"字段不存在应报 error: {db_errors}"
         assert result.return_code == 2
@@ -184,7 +184,7 @@ class TestCheckDbSchema:
         ])
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"全部存在不应报 error: {db_errors}"
         # 应有 DB 校验通过的 pass（含表数/字段数）
         db_passes = [p for p in result.passed if "DB 校验" in p]
@@ -202,7 +202,7 @@ class TestCheckDbSchema:
         rs = _make_rs_input([_biz_field(source_column="id")])  # 小写
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"大小写不敏感应匹配: {db_errors}"
 
     def test_audit_field_not_checked(self, monkeypatch):
@@ -219,7 +219,7 @@ class TestCheckDbSchema:
         ])
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"审计字段不应被校验: {db_errors}"
 
     def test_derived_field_not_checked(self, monkeypatch):
@@ -239,8 +239,56 @@ class TestCheckDbSchema:
         rs = _make_rs_input([_biz_field(source_column="id"), derived])
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"纯派生字段不应被校验: {db_errors}"
+
+    def test_assign_field_with_placeholder_not_checked(self, monkeypatch):
+        """赋值字段 source_column 是占位符（-、/ 等）也不查源表。
+
+        BA 写赋值字段时 mapping 可能填 source_column='-'，preprocess 解析进去后
+        不该拿 '-' 去库里查（必然报字段不存在）。
+        """
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): ["id"]
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+
+        # 赋值字段，source_column 填了占位符 '-'
+        assign_placeholder = {
+            "transform_rule": "赋值", "transform_detail": "NULL AS status",
+            "target_column": "status", "target_column_cn": "状态",
+            "target_type": "VARCHAR(2)", "source_column": "-",
+            "source_schema": "-", "source_table": "-", "source_alias": "",
+            "remark": "",
+        }
+        rs = _make_rs_input([_biz_field(source_column="id"), assign_placeholder])
+        result = precheck(rs)
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
+        assert db_errors == [], f"赋值字段占位符不该查库: {db_errors}"
+
+    def test_field_not_exist_vs_type_mismatch_distinct(self, monkeypatch):
+        """字段不存在 vs 类型不符 是两种不同错误，报错文案应明确区分。"""
+        # 场景1：字段在库里不存在 → [字段不存在] 标记
+        executor1 = _make_mock_executor({("ods", "ods_test_f"): ["id"]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor1)
+        rs1 = _make_rs_input([
+            _biz_field(source_column="ghost_col"),  # 库里没有这列
+        ])
+        result1 = precheck(rs1)
+        not_exist_errs = [e for e in result1.errors if "[字段不存在]" in e]
+        assert any("ghost_col" in e for e in not_exist_errs), \
+            f"字段不存在应有[字段不存在]标记: {result1.errors}"
+
+        # 场景2：字段存在但类型不符 → [类型不符] 标记
+        executor2 = _make_mock_executor({("ods", "ods_test_f"): {"id": "varchar(50)"}})
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor2)
+        rs2 = _make_rs_input([_biz_field(source_column="id")])  # mapping 标 bigint，库是 varchar
+        result2 = precheck(rs2)
+        type_errs = [e for e in result2.errors if "[类型不符]" in e]
+        assert type_errs, f"类型不符应有[类型不符]标记: {result2.errors}"
 
     def test_union_all_batch_query(self, monkeypatch):
         """连库查表结构用 UNION ALL（实测 DWS 最快），走 pg_catalog 精确表名。
@@ -275,7 +323,7 @@ class TestCheckDbSchema:
         # 精确表名（每个分支 WHERE c.relname=）
         assert "c.relname = 'ods_test_f'" in sql_text, f"应精确表名: {sql_text}"
         # 校验通过（id 确实存在）
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == []
 
     def test_static_error_skips_db_check(self, monkeypatch):
@@ -347,7 +395,7 @@ class TestSchemaCache:
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs, cache_path)
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"缓存命中应校验通过: {db_errors}"
         assert executor_called["n"] == 0, "缓存命中不应连库"
 
@@ -371,7 +419,7 @@ class TestSchemaCache:
         result = precheck(rs, cache_path)
 
         assert executor_called["n"] == 1, "缓存无效应整体连库查一次"
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"查到后应校验通过: {db_errors}"
         # 缓存应被写入（含 ods_test_f）
         updated = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -403,7 +451,7 @@ class TestSchemaCache:
         # 不连库（缓存有效）
         assert executor_called["n"] == 0, "缓存有效不连库"
         # ods_test_f 不在缓存 → 当空集 → 报 id 不存在
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert any("id" in e and "不存在" in e for e in db_errors), \
             f"缓存缺该表应报字段不存在: {db_errors}"
 
@@ -456,7 +504,7 @@ class TestSchemaCache:
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs, None)  # 无缓存
 
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], "无缓存+连不上库应静默跳过"
 
 
@@ -627,7 +675,7 @@ class TestStaticChecks:
         assert "UNION ALL" in main_sqls[0], f"应含 UNION ALL"
         assert "table_a" in main_sqls[0] and "table_b" in main_sqls[0]
         # 校验通过
-        db_errors = [e for e in result.errors if "DB 校验" in e]
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
         assert db_errors == [], f"两张表字段都存在应通过: {db_errors}"
 
 
