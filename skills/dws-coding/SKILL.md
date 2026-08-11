@@ -90,7 +90,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} --field order_status
 ```
 
-`--alias` 返回的字段行已按 field_type 推断好 COALESCE 默认值（数值→0、字符串→''、时间→不 COALESCE），可直接粘贴。
+`--alias` 返回的字段行是纯取值表达式（`别名.字段 AS 目标字段`），**不含 COALESCE**——该不该 COALESCE、用什么默认值由你判断（金额 NULL→0 合理，主键 NULL→0 会掩盖关联失败，状态字段 NULL 可能有含义）。
 **SQL 框架（FROM/JOIN/WHERE/CTE/del_flag 过滤/聚合）完全由你决定**——工具不生成这些，因为它们取决于加工字段和关联逻辑。
 
 ### 2.4 pick_fields 场景速查
@@ -182,7 +182,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 - [ ] SELECT 覆盖切片里所有目标字段（不漏字段）
 - [ ] 每个 aggregate/计算字段实现了完整逻辑（禁止硬编码 0）
 - [ ] 审计字段 4 个带上（del_flag/crt_cycle_id/last_upd_cycle_id/dw_last_update_date）——**中间表/tmp 规则也要带**
-- [ ] direct 字段 COALESCE 正确（数值→0、字符串→''、时间→按需）
+- [ ] direct 字段的 COALESCE 处理正确（按字段语义判断：金额→0、主键/外键不 COALESCE、状态字段按需）
 - [ ] JOIN 条件和切片的 joins 一致
 - [ ] 不能 SELECT *
 - [ ] NULL 字段有 COALESCE

@@ -9,7 +9,7 @@
 
 三个查询命令：
   --list          规则总览：每个源表有多少直取字段 + 加工字段数
-  --alias <别名>  该表的直取字段行（COALESCE 已填好，可直接粘贴）
+  --alias <别名>  该表的直取字段行（别名.字段 AS 目标，可直接粘贴）
   --field <字段>  单字段详情（类型/来源/design_logic/是否直取）
 
 用法:
@@ -21,7 +21,6 @@
 """
 
 import sys
-import re
 import argparse
 from pathlib import Path
 
@@ -36,68 +35,21 @@ except ImportError:
 
 
 # ============================================================
-# field_type → COALESCE 默认值推断
+# direct 字段行生成
 # ============================================================
 
-_NUMERIC_TYPES = {
-    "int", "integer", "bigint", "smallint", "tinyint",
-    "decimal", "numeric", "number",
-    "float", "double", "real", "double precision", "money",
-}
-_STRING_TYPES = {
-    "varchar", "char", "text", "nvarchar", "nchar",
-    "varchar2", "nvarchar2", "clob",
-}
-_TIME_TYPES = {
-    "date", "datetime", "timestamp", "time",
-    "timestamp without time zone", "timestamp with time zone",
-    "timestamp(0)", "timestamp(0) without time zone",
-    "datetime2", "smalldatetime",
-}
-
-
-def _normalize_type(field_type: str) -> str:
-    """归一化 field_type：去括号数值参数、转小写。"""
-    if not field_type:
-        return ""
-    t = field_type.strip().lower()
-    t = re.sub(r"\(\s*\d+\s*(,\s*\d+\s*)?\)", "", t)
-    return t.strip()
-
-
-def infer_default(field_type: str) -> str | None:
-    """推断 COALESCE 默认值：'0'(数值) / "''"(字符串) / None(时间或未知，不 COALESCE)。"""
-    t = _normalize_type(field_type)
-    if not t:
-        return None
-    if t in _NUMERIC_TYPES:
-        return "0"
-    if t in _STRING_TYPES:
-        return "''"
-    if t in _TIME_TYPES:
-        return None
-    # 前缀模糊匹配（处理带精度的类型名）
-    for nt in _NUMERIC_TYPES:
-        if t.startswith(nt):
-            return "0"
-    for st in _STRING_TYPES:
-        if t.startswith(st):
-            return "''"
-    for tt in ("date", "time", "timestamp"):
-        if t.startswith(tt):
-            return None
-    if t.startswith("bool") or t.startswith("bit"):
-        return None
-    return None
-
-
 def gen_direct_line(field: dict) -> str:
-    """生成 direct 字段的 COALESCE 行（拿不准留注释，不猜 alias）。
+    """生成 direct 字段的取值行（别名.字段 AS 目标字段）。
+
+    ★ 不自动加 COALESCE——该不该 COALESCE、用什么默认值，是业务语义判断：
+      - 金额类 NULL→0 合理
+      - 主键/外键 NULL→0 会掩盖 LEFT JOIN 关联失败，不该加
+      - 状态字段 NULL 可能有业务含义，不该盲目转空串
+    这些由 coder 根据字段语义决定，工具只负责机械填充取值表达式。
 
     不带缩进、不带尾逗号——调用方决定格式。
     """
     target = field.get("target_field", "")
-    ftype = field.get("field_type", "")
     sf_list = field.get("source_fields", [])
     if not sf_list:
         return f"-- TODO: {target} — 直取但 source_fields 为空"
@@ -106,13 +58,7 @@ def gen_direct_line(field: dict) -> str:
     src = sf.get("field", "").strip()
     if not alias or not src:
         return f"-- TODO: {target} — 直取但源别名/源字段缺失"
-
-    default = infer_default(ftype)
-    if default is not None:
-        return f"COALESCE({alias}.{src}, {default}) AS {target}"
-    if ftype:
-        return f"{alias}.{src} AS {target}"
-    return f"{alias}.{src} AS {target}  -- REVIEW: 类型未知，未加 COALESCE"
+    return f"{alias}.{src} AS {target}"
 
 
 # ============================================================

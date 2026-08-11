@@ -17,7 +17,6 @@ CODING_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-coding" /
 sys.path.insert(0, str(CODING_REFS))
 
 from pick_fields import (
-    infer_default,
     gen_direct_line,
     query_list,
     query_alias,
@@ -56,47 +55,31 @@ def make_slice(fields=None, source_tables=None, rule_code="R0001", rule_name="�
 
 
 # ============================================================
-# infer_default
-# ============================================================
-
-class TestInferDefault:
-    def test_numeric(self):
-        for t in ("int", "bigint", "decimal", "numeric", "DECIMAL(18,2)", "NUMBER(10,2)"):
-            assert infer_default(t) == "0", f"{t} 应返回 0"
-
-    def test_string(self):
-        for t in ("varchar", "char", "text", "VARCHAR(100)", "NVARCHAR2(50)"):
-            assert infer_default(t) == "''", f"{t} 应返回 ''"
-
-    def test_time_returns_none(self):
-        for t in ("date", "datetime", "timestamp", "TIMESTAMP(0)"):
-            assert infer_default(t) is None
-
-    def test_empty(self):
-        assert infer_default("") is None
-        assert infer_default(None) is None
-
-
-# ============================================================
-# gen_direct_line（注意：不带缩进、不带尾逗号，调用方决定格式）
+# gen_direct_line
+# 注意：不带缩进、不带尾逗号（调用方决定格式）；
+#       不自动加 COALESCE（语义判断由 coder 做）。
 # ============================================================
 
 class TestGenDirectLine:
-    def test_numeric_field(self):
-        f = make_field("amount", "decimal(18,2)")
-        assert gen_direct_line(f) == "COALESCE(t.amount, 0) AS amount"
-
-    def test_string_field(self):
+    def test_basic_direct_field(self):
+        """direct 字段 → 别名.字段 AS 目标字段（不带 COALESCE）"""
         f = make_field("user_name", "varchar(100)")
-        assert gen_direct_line(f) == "COALESCE(t.user_name, '') AS user_name"
+        assert gen_direct_line(f) == "t.user_name AS user_name"
 
-    def test_time_field_no_coalesce(self):
+    def test_numeric_field_no_coalesce(self):
+        """数值字段也不自动加 COALESCE（主键/金额语义不同，由 coder 判断）"""
+        f = make_field("amount", "decimal(18,2)")
+        assert gen_direct_line(f) == "t.amount AS amount"
+        f2 = make_field("user_id", "bigint")
+        assert gen_direct_line(f2) == "t.user_id AS user_id"
+
+    def test_time_field(self):
         f = make_field("create_time", "timestamp")
         assert gen_direct_line(f) == "t.create_time AS create_time"
 
     def test_different_source_name(self):
         f = make_field("order_time", "datetime", src_field="create_time")
-        assert "t.create_time AS order_time" == gen_direct_line(f)
+        assert gen_direct_line(f) == "t.create_time AS order_time"
 
     def test_missing_alias_returns_todo(self):
         f = make_field("amount", "int", alias="", src_field="amount")
@@ -181,8 +164,9 @@ class TestQueryAlias:
                {"schema": "ods", "table": "tb", "alias": "b"}]
         s = make_slice(fields=fields, source_tables=sts)
         result = query_alias(s, "a")
-        assert "COALESCE(t_a" not in result  # 不该混入 b 表
-        assert "COALESCE" in result
+        assert "a.a1 AS a1" in result
+        assert "a.a2 AS a2" in result
+        assert "b.b1" not in result  # 不该混入 b 表
         assert "2 个" in result  # a 表 2 个字段
 
     def test_lines_have_indent_and_trailing_comma(self):
@@ -190,7 +174,7 @@ class TestQueryAlias:
         fields = [make_field("id", "int", alias="t")]
         s = make_slice(fields=fields)
         result = query_alias(s, "t")
-        lines = [l for l in result.split("\n") if "COALESCE" in l]
+        lines = [l for l in result.split("\n") if "AS id" in l]
         assert lines
         assert lines[0].startswith("    ")  # 4 空格缩进
         assert lines[0].rstrip().endswith(",")  # 尾逗号
@@ -229,23 +213,23 @@ class TestQueryAlias:
 
 class TestQueryField:
     def test_direct_field_shows_generated_line(self):
-        """直取字段查询 → 给出 COALESCE 生成行"""
+        """直取字段查询 → 给出取值表达式行"""
         fields = [make_field("amount", "decimal(18,2)")]
         s = make_slice(fields=fields)
         result = query_field(s, "amount")
         assert "类型" in result
         assert "来源" in result
-        assert "COALESCE" in result  # 直取给生成行
+        assert "t.amount AS amount" in result  # 直取给取值行
 
     def test_aggregate_field_shows_design_logic(self):
-        """加工字段查询 → 给出 design_logic，不生成 SQL 行"""
+        """加工字段查询 → 给出 design_logic，不生成取值行"""
         fields = [{"target_field": "total", "transform_type": "aggregate",
                    "design_logic": "按 user_id 分组 SUM", "source_fields": [],
                    "field_type": "decimal", "field_comment": "合计"}]
         s = make_slice(fields=fields)
         result = query_field(s, "total")
         assert "按 user_id 分组 SUM" in result
-        assert "COALESCE" not in result  # 加工字段不给生成行
+        assert "生成行" not in result  # 加工字段不给取值行
 
     def test_field_case_insensitive(self):
         """字段名大小写不敏感"""
@@ -302,8 +286,7 @@ class TestRealTsIntegration:
         # dof 是主表，应该有最多直取字段
         result = query_alias(sliced, "dof")
         assert "dwd_order_f" in result
-        assert "COALESCE(dof.order_id" in result
-        assert "order_id" in result
+        assert "dof.order_id AS order_id" in result
 
     def test_user_profile_alias_dul(self, real_ts_path):
         """user_profile 的 dim_user_level_d 表直取字段"""
@@ -315,7 +298,7 @@ class TestRealTsIntegration:
         sliced = slice_rule(ts, "R0001")
         result = query_alias(sliced, "dul")
         assert "level_name" in result
-        assert "COALESCE(dul." in result
+        assert "dul.level_name AS level_name" in result
 
     def test_user_profile_field_lookup(self, real_ts_path):
         """查 user_profile 的某个加工字段"""

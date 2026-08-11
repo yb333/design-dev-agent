@@ -54,7 +54,7 @@ python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 
 **SQL 框架由你决定**——你看加工字段的 design_logic 构思整体框架（需要哪些 CTE、怎么 JOIN、哪里 GROUP BY），搭好骨架。
 
-**写直取字段时，优先用 `pick_fields.py` 随写随查**（省去逐字段手写 COALESCE 的机械劳动；字段少时手写也行）。
+**写直取字段时，优先用 `pick_fields.py` 随写随查**（省去逐字段手写取值表达式的机械劳动；字段少时手写也行）。
 三个命令示例（与 SKILL.md §2 保持一致，改动要同步）：
 
 ```bash
@@ -66,7 +66,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --alias
 python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --field order_status
 ```
 
-`--alias` 返回的字段行已按 field_type 推断好 COALESCE 默认值（数值→0、字符串→''、时间→不 COALESCE），可直接粘贴。FROM/JOIN/WHERE/CTE/del_flag 过滤等结构完全由你决定——工具不生成这些。
+`--alias` 返回的字段行是纯取值表达式（`别名.字段 AS 目标字段`），**不含 COALESCE**——该不该 COALESCE、用什么默认值，是业务语义判断（金额 NULL→0 合理，主键 NULL→0 会掩盖关联失败，状态字段 NULL 可能有含义），由你根据字段语义决定。FROM/JOIN/WHERE/CTE/del_flag 过滤等结构也完全由你决定。
 
 具体流程见 SKILL.md §2，场景→命令速查见 SKILL.md §2.4。
 

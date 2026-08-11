@@ -120,9 +120,18 @@ precheck 检测到"直接复制"字段有源→目标类型转换风险时，会
    - 不加 = 接受风险
    - 返源端 = 源端改类型更合适（选这个追问原因，用 question 收集 reason）
 
-4. **写决策文件**：把用户的选择写进 `{deliver}/_internal/type_risk_decision.yaml`（中文 key）：
-   - `批量处置策略: "加安全处理"` 或 `"不加"`
-   - 跨大类字段每个填 `处置: "转换"` / `"不加"` / `"返源端"`，返源端填 `原因: "..."`
+4. **填决策文件**（★ 不要手写 yaml，调脚本填值，避免中文 key/枚举值写错）：
+   ```bash
+   python DESIGN_SCRIPTS/fill_type_risk_decision.py \
+     --decision {deliver}/_internal/type_risk_decision.yaml \
+     --batch-strategy "加安全处理" \
+     --field-decisions 'biz_date:转换,amount_str:返源端' \
+     --reasons 'amount_str:源端建议改decimal类型'
+   ```
+   - `--batch-strategy`：`加安全处理` 或 `不加`（无 batch 风险字段时省略）
+   - `--field-decisions`：`字段:处置` 逗号分隔（处置：`转换`/`不加`/`返源端`）
+   - `--reasons`：选 `返源端` 的字段必填原因（`字段:原因`）
+   - 脚本校验枚举值和字段名，错了当场报（exit 1），不会把错误写进文件
 
 5. **重跑步骤 1b**：这次 precheck 读到决策文件已填全 → 放行（exit 0）→ 继续。
 
