@@ -386,6 +386,40 @@ class TestInsertWrapping:
         assert "t.x AS x" in result
         assert "FROM t" in result
 
+    def test_insert_columns_follow_select_order_not_table_fields(self):
+        """★ INSERT 字段列表按 SELECT 输出顺序，不按 table_fields 顺序（模拟平台行为）"""
+        from run_ut import wrap_insert
+        # table_fields 顺序: a, b, c
+        table_fields = [{"target_field": "a"}, {"target_field": "b"},
+                        {"target_field": "c"}, {"target_field": "del_flag"}]
+        # SELECT 输出顺序: c, a, b（与 table_fields 不一致）
+        select = "SELECT t.c3 AS c, t.c1 AS a, t.c2 AS b, 'N' AS del_flag FROM t"
+        result = wrap_insert(select, "schema.tbl", table_fields)
+        # INSERT 字段列表应该是 c, a, b, del_flag（SELECT 顺序）
+        # 验证：INSERT(...)<到>SELECT 之间的字段列表保持 SELECT 顺序
+        insert_cols_section = result.split("INSERT INTO schema.tbl (")[1].split(")")[0]
+        cols = [c.strip() for c in insert_cols_section.split(",")]
+        assert cols == ["c", "a", "b", "del_flag"], f"INSERT 字段顺序应跟 SELECT，实际 {cols}"
+
+    def test_insert_columns_with_string_table_fields(self):
+        """table_fields 是字符串列表时，INSERT 字段顺序仍按 SELECT"""
+        from run_ut import wrap_insert
+        table_fields = ["a", "b", "del_flag"]
+        select = "SELECT t.b AS b, t.a AS a, 'N' AS del_flag FROM t"
+        result = wrap_insert(select, "schema.tbl", table_fields)
+        insert_cols_section = result.split("INSERT INTO schema.tbl (")[1].split(")")[0]
+        cols = [c.strip() for c in insert_cols_section.split(",")]
+        assert cols == ["b", "a", "del_flag"]
+
+    def test_insert_fallback_to_table_fields_when_no_aliases(self):
+        """SELECT 无 AS 别名时，回退到 table_fields 顺序兜底"""
+        from run_ut import wrap_insert
+        table_fields = [{"target_field": "a"}, {"target_field": "b"}]
+        # 无 AS 别名（解析不出顺序）
+        select = "SELECT t.a, t.b FROM t"
+        result = wrap_insert(select, "schema.tbl", table_fields)
+        assert "a" in result and "b" in result  # 回退不崩
+
 
 # ============================================================
 # wrap_write 测试：按 load_mode 拼 INSERT/MERGE
@@ -440,6 +474,18 @@ class TestWrapWrite:
         assert "ON T.id=T1.id" in result
         assert "WHEN MATCHED THEN UPDATE SET" in result
         assert "WHEN NOT MATCHED THEN INSERT" in result
+
+    def test_merge_columns_follow_select_order(self):
+        """★ MERGE 的 INSERT/UPDATE 字段也按 SELECT 顺序（和平台一致）"""
+        from run_ut import wrap_write
+        # table_fields 顺序 a,b；SELECT 顺序 b,a
+        fields = [{"target_field": "a"}, {"target_field": "b"}]
+        select = "SELECT t.fb AS b, t.fa AS a FROM t"
+        result = wrap_write(select, "sch.tbl", fields, "merge_into", "T.a=T1.a")
+        # INSERT VALUES 的字段顺序应跟 SELECT: b, a
+        insert_values = result.split("VALUES (")[1].split(")")[0]
+        vals = [v.strip() for v in insert_values.split(",")]
+        assert vals == ["T1.b", "T1.a"], f"MERGE INSERT 值顺序应跟 SELECT，实际 {vals}"
 
     def test_update_produces_merge_statement(self):
         """update → 同 merge（MERGE 语句）"""

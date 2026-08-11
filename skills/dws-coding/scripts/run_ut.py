@@ -41,6 +41,7 @@ except AttributeError:
 # dws_db 在 design-dev-shared 公共库（与本 skill 平级）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from dws_db import create_executor, ExecuteResult, load_test_params
+from check_sql import extract_select_aliases
 
 
 # ============================================================
@@ -133,23 +134,47 @@ def resolve_sample_blocks(config_path: str, cli_value: int = 0) -> int:
     return 0
 
 
+def _resolve_insert_columns(select_sql: str, table_fields: list) -> list[str]:
+    """解析 INSERT 字段列表的顺序——按 SELECT 输出列的出现顺序（模拟平台行为）。
+
+    平台按 SELECT 输出列的顺序拼 INSERT 字段列表（有映射能力）。
+    本函数用 check_sql.extract_select_aliases 从 SELECT 提取 AS 别名（按出现顺序）。
+
+    回退策略：SELECT 解析不出字段（无 AS 别名等异常情况）→ 用 table_fields 顺序兜底。
+    coder 已被规范要求"所有字段用 AS 显式命名"，正常情况都能解析。
+
+    Args:
+        select_sql: coder 产的 SELECT。
+        table_fields: 表的全部字段（dict 列表或字符串列表），回退用。
+
+    返回: 字段名列表（按 SELECT 顺序），空列表表示两边都拿不到。
+    """
+    try:
+        aliases = extract_select_aliases(select_sql)
+        if aliases:
+            return aliases
+    except Exception:
+        pass
+    # 回退：table_fields 顺序
+    if table_fields and isinstance(table_fields[0], dict):
+        return [f.get("target_field", "") for f in table_fields]
+    if table_fields and isinstance(table_fields[0], str):
+        return list(table_fields)
+    return []
+
+
 def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
-    """把 SELECT 包装成完整 INSERT（按平台固定规则）。
+    """把 SELECT 包装成 INSERT 语句（模拟平台构建）。
 
     平台规则：
     - INSERT INTO 目标表 (字段列表)
     - SELECT 内容不变
+    - ★ 字段列表按 SELECT 输出列的顺序拼（平台有映射能力，解析 SELECT 别名顺序）
 
     table_fields: 该表的全部字段（从 tables 段取，已含审计字段）。
-    INSERT 的字段列表 = 表的全部字段 = SELECT 输出的字段，一一对应。
+    作为解析失败时的回退（兜底用 table_fields 顺序）。
     """
-    # 字段列表：取表的全部字段名（业务 + 审计，已在 tables 段里）
-    if table_fields and isinstance(table_fields[0], dict):
-        field_names = [f.get("target_field", "") for f in table_fields]
-    elif table_fields and isinstance(table_fields[0], str):
-        field_names = list(table_fields)
-    else:
-        field_names = []
+    field_names = _resolve_insert_columns(select_sql, table_fields)
     columns = ",\n    ".join(field_names)
 
     return f"""INSERT INTO {target_table} (
@@ -181,12 +206,8 @@ def wrap_write(select_sql: str, target_table: str, table_fields: list,
         return wrap_insert(select_sql, target_table, table_fields)
 
     # MERGE / UPDATE：拼 MERGE INTO 语句
-    if table_fields and isinstance(table_fields[0], dict):
-        field_names = [f.get("target_field", "") for f in table_fields]
-    elif table_fields and isinstance(table_fields[0], str):
-        field_names = list(table_fields)
-    else:
-        field_names = []
+    # ★ 字段列表按 SELECT 输出列顺序（和平台一致），解析失败回退 table_fields
+    field_names = _resolve_insert_columns(select_sql, table_fields)
     if not field_names:
         # 没有字段清单，回退 INSERT（无法拼 MERGE 的字段映射）
         return wrap_insert(select_sql, target_table, table_fields)
