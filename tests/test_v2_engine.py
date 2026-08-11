@@ -193,9 +193,9 @@ class TestDesignFieldNotMappedFrom:
 
 
 def _write_select(tmp_path, rule_code, sql):
-    select_dir = tmp_path / "select"
-    select_dir.mkdir(exist_ok=True)
-    (select_dir / f"{rule_code}_select.sql").write_text(sql, encoding="utf-8")
+    etl_dir = tmp_path / "etl"
+    etl_dir.mkdir(exist_ok=True)
+    (etl_dir / f"{rule_code}.sql").write_text(sql, encoding="utf-8")
 
 
 class TestCodeFieldsRequired:
