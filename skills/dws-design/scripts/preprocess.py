@@ -1188,6 +1188,19 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         proc_section.append(entry)
 
     compact = {"tables": table_list, "direct": direct_section, "processed": proc_section}
+
+    # 目标表信息（告知 designer：设计目标是 F 表，I 视图由 assemble_ddl 按 i_view 生成）
+    meta_target = rs_input.get("meta", {}).get("target", {})
+    f_table = meta_target.get("f_table", {})
+    i_view = meta_target.get("i_view", {})
+    if f_table or i_view:
+        compact["target"] = {
+            "f_table": f_table,
+            "i_view": i_view,
+            "说明": ("设计目标表是 F 表（_f 后缀）。design_decisions 的 target_table 填 F 表名。"
+                     "I 视图是 F 表的固定镜像，由 assemble_ddl 按 meta.target.i_view 自动生成（i_view 为空则不建）。"),
+        }
+
     if null_fields:
         compact["null_in_scene"] = sorted(set(null_fields))
     if incremental_tables:

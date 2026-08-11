@@ -949,14 +949,17 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
 # ============================================================
 # 组装 ts.json
 # ============================================================
-def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None):
+def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None,
+                all_source_rows=None):
     """从 rs_input 的 field_mapping 记录 + design_logic 组装 ts 的 field 对象。
 
-    field_rec: rs_input.field_mappings 的一条记录
+    field_rec: rs_input.field_mappings 的一条记录（取 target_type/transform_rule/design_logic 默认）
     logic: design_decisions 里该字段的 design_logic(可能为 None -> 用默认)
     rule_aliases: 该规则关联的源表别名集合(用于决定 source_fields)
     is_assembly: 是否装配/merge 规则（reads 非空）。装配规则字段默认直取（从临时表搬）。
     reads_tables: 装配规则读取的临时表名列表（用于生成"直取 tmp.xxx"的默认 logic）
+    all_source_rows: 该 target_column 的所有 rs_input 来源行（多来源合并 source_fields 用）。
+                     None 时用 field_rec 单行。field_type 只取 field_rec 的（对着目标，不对来源）。
     """
     transform_rule = field_rec.get("transform_rule", "直接复制")
     transform_type = TRANSFORM_MAP.get(transform_rule, "direct")
@@ -986,18 +989,28 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
         # 加工类字段没写 logic 是个问题, 但先给个占位, 校验层会警告
         design_logic = f"[需补充] 加工逻辑未写, transform_detail: {field_rec.get('transform_detail', '')}"
 
+    # source_fields：收集该 target_column 的所有来源行（多来源合并，不丢来源）
+    if all_source_rows:
+        source_fields_list = [
+            {
+                "table": r.get("source_table", ""),
+                "field": r.get("source_column", ""),
+                "alias": r.get("source_alias", ""),
+            }
+            for r in all_source_rows
+            if r.get("source_column")  # 跳过无来源的（赋值/序列）
+        ]
+    else:
+        source_fields_list = [
+            {"table": source_table, "field": source_column, "alias": alias}
+        ] if source_column else []
+
     return {
         "target_field": field_rec.get("target_column", ""),
         "field_type": field_rec.get("target_type", ""),
         "field_comment": field_rec.get("target_column_cn", ""),
         "transform_type": transform_type,
-        "source_fields": [
-            {
-                "table": source_table,
-                "field": source_column,
-                "alias": alias,
-            }
-        ],
+        "source_fields": source_fields_list,
         "design_logic": design_logic,
     }
 
@@ -1130,14 +1143,49 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         # reads 的表短名（用于装配规则字段的"直取 tmp.xxx"默认 logic）
         reads_short = [_table_short(r) if ("." in str(r)) else r for r in rule_reads]
         is_asm = bool(rule_reads)  # 装配/merge 规则
+        # 中间表 designer 声明的字段类型（自建字段/rs_input 没有的字段）
+        dec_tbl_cfg = dec_tables.get(tbl_short, {})
+        if not isinstance(dec_tbl_cfg, dict):
+            dec_tbl_cfg = {}
+        dec_tbl_fields = dec_tbl_cfg.get("fields") or {}  # {字段名: 类型}
         fields = []
+        missing_types = []  # 找不到类型的字段（rs_input 没 + designer 没声明）
         for tname in rule.get("field_targets", []):
             rec = field_map.get(tname)
-            if not rec:
-                continue
-            f = build_field(rec, rule_logics.get(tname), rule.get("source_aliases"),
-                            is_assembly=is_asm, reads_tables=reads_short)
+            # 收集该 target_column 的所有来源行（多来源合并 source_fields）
+            all_source_rows = [fm for fm in all_fm if fm.get("target_column") == tname]
+            if rec:
+                f = build_field(rec, rule_logics.get(tname), rule.get("source_aliases"),
+                                is_assembly=is_asm, reads_tables=reads_short,
+                                all_source_rows=all_source_rows)
+            elif tname in dec_tbl_fields:
+                # 中间表自建字段（rs_input 没有，designer 在 tables.fields 声明了类型）
+                declared_type = dec_tbl_fields[tname]
+                f = {
+                    "target_field": tname,
+                    "field_type": declared_type,
+                    "field_comment": "",
+                    "transform_type": "direct",
+                    "source_fields": [],
+                    "design_logic": f"中间表自建字段（designer 声明类型 {declared_type}）",
+                }
+            elif tname.lower() in STANDARD_AUDIT_NAMES:
+                continue  # 审计字段后面统一补
+            else:
+                # rs_input 没有 + designer 没声明 → 类型缺失，记下来后面 warn
+                missing_types.append(tname)
+                f = {
+                    "target_field": tname,
+                    "field_type": "",
+                    "field_comment": "",
+                    "transform_type": "direct",
+                    "source_fields": [],
+                    "design_logic": "[类型缺失] rs_input 无此字段且 designer 未声明类型",
+                }
             fields.append(f)
+        if missing_types:
+            import sys as _sys
+            print(f"[warn] 表 {tbl_short} 以下字段类型缺失（rs_input 无 + designer 未在 tables.fields 声明）: {missing_types}", file=_sys.stderr)
 
         # 目标表补充审计字段
         if is_final:
@@ -1853,6 +1901,22 @@ def main():
 
     print(f"rs_input: {len(field_map)} 个目标字段, {len(rs_input.get('source_tables', []))} 个源表")
     print(f"design_decisions: {len(decisions.get('rules', []))} 个规则")
+
+    # ★ target_table _i→_f 兜底转换：ts 设计针对 F 表，designer 填了 _i 自动转 _f
+    _i_converted_rules = []
+    for rule in decisions.get("rules", []):
+        tbl = rule.get("target_table", "")
+        if tbl and (tbl.endswith("_i") or (".") in tbl and tbl.rsplit(".", 1)[-1].endswith("_i")):
+            # 短名以 _i 结尾 → 转 _f
+            schema_part = tbl.rsplit(".", 1)[0] + "." if "." in tbl else ""
+            short = tbl.rsplit(".", 1)[-1]
+            new_tbl = schema_part + short[:-2] + "_f"
+            rule["target_table"] = new_tbl
+            _i_converted_rules.append(f"{rule.get('rule_code','?')}: {tbl} → {new_tbl}")
+    if _i_converted_rules:
+        print(f"[warn] target_table 填的是 _i，已自动转 _f（ts 设计针对 F 表）:")
+        for r in _i_converted_rules:
+            print(f"  {r}")
 
     # 3a. 五层校验（含存量 C7-C13 + 新增 N1-N27）
     vr = run_all_validations(decisions, rs_input, field_map)

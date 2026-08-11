@@ -254,3 +254,44 @@ class TestAuditAndDistribute:
         table_content = ddls["create_table_dwb_test_f.sql"]
 
         assert "DISTRIBUTE BY HASH(contract_id, pu_id)" in table_content
+
+
+# ============================================================
+# 5. I 视图按 meta.target.i_view（不加戏）
+# ============================================================
+class TestIViewByMeta:
+    """I 视图建不建，由 meta.target.i_view 决定（assemble_ddl 不自动配套）。"""
+
+    def test_i_view_empty_no_view(self):
+        """meta.target.i_view 为空 → 不建视图（即使目标是 _f 表）"""
+        ts = make_ts_json(table="dwb_test_f", rules={"R0001": _rule("dwb_test_f")})
+        # 清空 i_view
+        ts["meta"]["target"]["i_view"] = {}
+        ddls, _ = generate_ddl(ts)
+        assert "create_table_dwb_test_f.sql" in ddls
+        assert not any("view" in f for f in ddls), \
+            f"i_view 为空不该建视图: {list(ddls.keys())}"
+
+    def test_i_view_present_builds_view(self):
+        """meta.target.i_view 非空 + 目标是 _f 表 → 建视图"""
+        ts = make_ts_json(table="dwb_test_f", rules={"R0001": _rule("dwb_test_f")})
+        # i_view 非空（make_ts_json 默认推导了）
+        ddls, _ = generate_ddl(ts)
+        assert "create_table_dwb_test_f.sql" in ddls
+        assert "create_view_dwb_test_i.sql" in ddls, \
+            f"i_view 非空 + F 表应建视图: {list(ddls.keys())}"
+
+    def test_intermediate_table_no_view_even_if_i_view_present(self):
+        """中间表即使 meta.target.i_view 非空，也不建视图（不是最终目标 F 表）"""
+        ts = make_ts_json(table="dwb_test_f", rules={
+            "R0001": _rule("tmp_order_agg"),  # 中间表
+            "R0002": _rule("dwb_test_f"),     # 目标 F 表
+        })
+        ddls, _ = generate_ddl(ts)
+        # 中间表只建表
+        assert "create_table_tmp_order_agg.sql" in ddls
+        assert not any("tmp_order_agg" in f and "view" in f for f in ddls), \
+            f"中间表不该建视图: {list(ddls.keys())}"
+        # 目标 F 表建表 + 视图
+        assert "create_table_dwb_test_f.sql" in ddls
+        assert "create_view_dwb_test_i.sql" in ddls
