@@ -42,6 +42,31 @@ class TestFindSelectFile:
         assert f is not None
         assert f.name == "R0001.sql"
 
+    def test_etl_with_suffix_loadmode_naming(self, tmp_path):
+        """new-pipe 带 load_mode/表名后缀：etl/R0001_shop_truncate_table.sql → 能找到。
+
+        覆盖内网真实产出命名（assemble_export.py 同款处理）。
+        """
+        (tmp_path / "etl").mkdir()
+        (tmp_path / "etl" / "R0001_shop_truncate_table.sql").write_text("-- x", encoding="utf-8")
+        f = _paths.find_select_file(tmp_path, "R0001")
+        assert f is not None
+        assert f.name == "R0001_shop_truncate_table.sql"
+
+    def test_exact_preferred_over_suffix(self, tmp_path):
+        """精确 {code}.sql 和 {code}_xxx.sql 都有 → 优先精确。"""
+        (tmp_path / "etl").mkdir()
+        (tmp_path / "etl" / "R0001.sql").write_text("-- exact", encoding="utf-8")
+        (tmp_path / "etl" / "R0001_shop_truncate_table.sql").write_text("-- suffix", encoding="utf-8")
+        f = _paths.find_select_file(tmp_path, "R0001")
+        assert f.name == "R0001.sql"
+
+    def test_suffix_prefix_not_match_other_rule(self, tmp_path):
+        """R0001_ 前缀不会误匹配 R0002 的查找。"""
+        (tmp_path / "etl").mkdir()
+        (tmp_path / "etl" / "R0001_shop_truncate_table.sql").write_text("-- x", encoding="utf-8")
+        assert _paths.find_select_file(tmp_path, "R0002") is None
+
     def test_none_when_both_absent(self, tmp_path):
         """两种都没有 → None。"""
         assert _paths.find_select_file(tmp_path, "R0001") is None
@@ -61,6 +86,13 @@ class TestListSelectRules:
 
     def test_empty_when_no_dir(self, tmp_path):
         assert _paths.list_select_rules(tmp_path) == []
+
+    def test_extract_code_from_suffix_filename(self, tmp_path):
+        """带后缀文件名提取 code：R0001_shop_truncate_table.sql → R0001。"""
+        (tmp_path / "etl").mkdir()
+        (tmp_path / "etl" / "R0001_shop_truncate_table.sql").write_text("x", encoding="utf-8")
+        (tmp_path / "etl" / "R0002_user_merge_into.sql").write_text("x", encoding="utf-8")
+        assert _paths.list_select_rules(tmp_path) == ["R0001", "R0002"]
 
 
 class TestFindTsMd:

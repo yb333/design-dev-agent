@@ -20,12 +20,27 @@ from pathlib import Path
 def find_select_file(output_dir: Path, code: str) -> Path | None:
     """定位某规则的 SELECT 文件。
 
-    优先 new-pipe 新格式 etl/{code}.sql，回退老格式 select/{code}_select.sql。
-    返回存在的 Path，都找不到返回 None。
+    new-pipe 的 ETL 命名有两种合法形态（assemble_export.py 同款处理）：
+    - 规范：etl/{code}.sql
+    - 带后缀：etl/{code}_{table}_{load_mode}.sql（如 R0001_shop_truncate_table.sql）
+
+    优先级：
+    1. etl/{code}.sql（精确，最规范）
+    2. etl/{code}_*.sql（前缀匹配，覆盖带后缀命名；用 startswith 不用 glob，
+       sorted 保证多候选时确定性）
+    3. select/{code}_select.sql（历史老格式）
     """
+    # 1. 精确 etl/{code}.sql
     new_fmt = output_dir / "etl" / f"{code}.sql"
     if new_fmt.exists():
         return new_fmt
+    # 2. etl/{code}_*.sql（new-pipe 带后缀命名）
+    etl_dir = output_dir / "etl"
+    if etl_dir.exists():
+        for f in sorted(etl_dir.iterdir()):
+            if f.is_file() and f.suffix == ".sql" and f.name.startswith(f"{code}_"):
+                return f
+    # 3. 老格式 select/{code}_select.sql
     old_fmt = output_dir / "select" / f"{code}_select.sql"
     if old_fmt.exists():
         return old_fmt
@@ -35,15 +50,17 @@ def find_select_file(output_dir: Path, code: str) -> Path | None:
 def list_select_rules(output_dir: Path) -> list[str]:
     """枚举产出里所有规则的 code（合并 etl/ 和 select/，去重排序）。
 
-    etl/{code}.sql          → code（文件名去后缀）
-    select/{code}_select.sql → code（去 _select.sql 后缀）
+    etl/{code}.sql            → code
+    etl/{code}_{后缀}.sql     → code（取首个 _ 之前；规则 code 一般无下划线）
+    select/{code}_select.sql  → code
     """
     codes: set[str] = set()
     etl_dir = output_dir / "etl"
     if etl_dir.exists():
         for f in etl_dir.iterdir():
             if f.is_file() and f.suffix == ".sql":
-                codes.add(f.stem)
+                # R0001.sql → R0001；R0001_shop_truncate_table.sql → R0001
+                codes.add(f.stem.split("_")[0])
     select_dir = output_dir / "select"
     if select_dir.exists():
         for f in select_dir.iterdir():
