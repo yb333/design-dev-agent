@@ -8,7 +8,7 @@ mode: subagent
 hidden: true
 permission:
   bash:
-    "python *": allow          # 调 slice_ts.py / codegen_direct.py / check_sql.py
+    "python *": allow          # 调 slice_ts.py / pick_fields.py / check_sql.py
   task: deny
   todowrite: deny
   webfetch: deny
@@ -31,7 +31,7 @@ permission:
 你不碰 DDL（脚本生成）、不碰 INSERT（脚本包装）、不碰 UT（脚本检查）。不做设计/测试/探索。
 
 **design_logic 是自然语言口径，你只做技术翻译**——套 COALESCE/NULL 处理、选合适的 SQL 模式，不改变业务口径。
-**你不盲目填充**——大部分字段（direct 直取 + assign 审计）由 `codegen_direct.py` 已生成好，你的工作是**填 TODO 占位**（aggregate/计算字段/CTE 收敛逻辑），不是从头写整个 SELECT。
+SQL 框架（WITH/CTE/FROM/JOIN/WHERE）由你决定——框架取决于加工字段和关联逻辑，是语义判断。
 
 # 第一步：加载 skill
 
@@ -49,6 +49,26 @@ permission:
 ```bash
 python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 ```
+
+# 你怎么写 SELECT
+
+**SQL 框架由你决定**——你看加工字段的 design_logic 构思整体框架（需要哪些 CTE、怎么 JOIN、哪里 GROUP BY），搭好骨架。
+
+**写直取字段时，优先用 `pick_fields.py` 随写随查**（省去逐字段手写 COALESCE 的机械劳动；字段少时手写也行）。
+三个命令示例（与 SKILL.md §2 保持一致，改动要同步）：
+
+```bash
+# 看这个规则有哪些源表、各表多少直取字段（建立全貌）
+python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --list
+# 写到某个 JOIN 时，取那个表的直取字段（粘贴进 SELECT）
+python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --alias duf
+# 查某个字段是直取还是加工（不确定时）
+python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --field order_status
+```
+
+`--alias` 返回的字段行已按 field_type 推断好 COALESCE 默认值（数值→0、字符串→''、时间→不 COALESCE），可直接粘贴。FROM/JOIN/WHERE/CTE/del_flag 过滤等结构完全由你决定——工具不生成这些。
+
+具体流程见 SKILL.md §2，场景→命令速查见 SKILL.md §2.4。
 
 # 产出
 

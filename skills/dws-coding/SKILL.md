@@ -46,41 +46,68 @@ description: >-
 
 ## 2. 编码流程
 
-### 步骤 1：拿规则切片
+> 核心思路：**SQL 框架由你决定，工具只帮你省直取字段的机械誊写。**
+> 你先看加工字段构思框架（WITH/CTE/FROM/JOIN/WHERE 怎么组织），搭好骨架后，
+> 用 pick_fields 随写随查——写到哪个 JOIN，查那个表的直取字段，粘贴进 SELECT。
 
-调 slice_ts.py 拿到自己负责的规则的数据（不读整个 ts.json）：
+### 步骤 1：拿规则切片，看全貌
 
-```bash
-python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule {规则号}
-```
-
-### 步骤 2：生成直取骨架 ★
-
-**调 codegen_direct.py 生成填空骨架**——direct 字段（按 field_type 自动 COALESCE）+ assign 审计字段（固定4行）+ FROM/JOIN/WHERE 骨架都已生成好，aggregate/计算字段/CTE 收敛逻辑留 `-- TODO` 占位：
+调 slice_ts.py 拿规则数据（大规则用 `--compact` 省体积）：
 
 ```bash
-python {skill目录}/scripts/codegen_direct.py --ts {ts路径} --rule {规则号} --output {etl路径}/R0001_xxx.sql
+python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule {规则号} --compact
 ```
 
-**你的工作是填 TODO，不是从头写整个 SELECT。** 工具拿不准的内容会留 TODO（不会瞎生成），填完它就行。
+或先用 pick_fields 看字段分布（哪个源表多少直取字段、有哪些加工字段）：
 
-### 步骤 3：理解规则 + 填 TODO
+```bash
+python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} --list
+```
 
-从切片读取 + 在骨架上填 TODO：
-- target_table（产出表）/ source_tables / joins / ctes / grain
-- fields 列表（每个字段的 design_logic + transform_type + source_fields）
-- join_safety（关联安全策略，如"取最新有效行"）
+### 步骤 2：看加工字段，构思 SQL 框架 ★
 
-把 TODO 占位翻译成 SQL 表达式：
-- `aggregate` → `SUM(inv_mtr.inv_inst_amt_usd)` + GROUP BY
-- `pivot` → `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)`
-- CTE 收敛 → 按 join_safety.strategy 实现（GROUP BY 收敛 / ROW_NUMBER 去重）
+**加工字段决定框架**——读切片的加工字段 design_logic（slice_ts 输出或 `pick_fields --field <字段>`），
+构思：需要哪些 CTE？怎么 JOIN？哪里要 GROUP BY？哪些表要先收敛？
+
+加工字段翻译：
+- `aggregate` → `SUM(...)` / `COUNT(...)` + GROUP BY
+- `pivot` → `SUM(CASE WHEN ...)`
+- CTE 收敛 → 按 join_safety.strategy（GROUP BY 收敛 / ROW_NUMBER 去重）
 - 计算字段 → 按 design_logic 实现完整逻辑（禁止硬编码 0）
 
-JOIN 条件、审计字段、direct 字段已在骨架生成好，检查是否正确即可。
-关联安全策略（不唯一的 JOIN 键）体现在 CTE 或子查询里（先收敛再关联）。
+搭好框架：WITH...CTE...SELECT(...)FROM...JOIN...WHERE...
 
-详见 `assets/etl-templates.md` 的 SELECT 模板。
+### 步骤 3：随写随查，填直取字段 ★
+
+框架搭好后，写 SELECT 时遇到直取字段，**用 pick_fields 随取随用**——
+写到某个 JOIN 的表，查那个表的直取字段，粘贴进 SELECT：
+
+```bash
+# 写到 dim_user_f duf 这个 JOIN → 取 duf 的直取字段
+python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} --alias duf
+
+# 不确定某个字段是直取还是加工 → 查详情
+python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} --field order_status
+```
+
+`--alias` 返回的字段行已按 field_type 推断好 COALESCE 默认值（数值→0、字符串→''、时间→不 COALESCE），可直接粘贴。
+**SQL 框架（FROM/JOIN/WHERE/CTE/del_flag 过滤/聚合）完全由你决定**——工具不生成这些，因为它们取决于加工字段和关联逻辑。
+
+### 2.4 pick_fields 场景速查
+
+不知道该用哪个命令时，按场景对照：
+
+| 你在做什么 | 用什么命令 |
+|---|---|
+| 刚拿到规则，想看全貌（哪些源表、各多少直取字段、有哪些加工字段） | `--list` |
+| 已搭好框架，开始写某个 `LEFT JOIN xxx 别名`，要这个表的直取字段 | `--alias 别名` |
+| 不确定某字段是直取还是加工，或想看它的 design_logic | `--field 字段名` |
+| 字段少（2-3个）或你很熟悉这张表 | 直接手写，不必走工具 |
+
+注意：
+- `--alias` 输出的字段行**带尾逗号**，最后一个字段贴进 SELECT 后记得去掉逗号
+- alias 打错了不报错，会列出所有合法别名；字段名打错了会给模糊匹配建议
+- 同表多别名场景（一张表按不同关联逻辑 JOIN 多次），每个别名单独查
 
 ### 步骤 4：套规范
 
@@ -145,18 +172,17 @@ JOIN 条件、审计字段、direct 字段已在骨架生成好，检查是否�
 | `assets/etl-templates.md` | SELECT 标准模板（各种加工模式） |
 | `references/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
 
-> 工具脚本（slice_ts.py / **codegen_direct.py** / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在 `scripts/` 下，agent 通过 bash 调用。
+> 工具脚本（slice_ts.py / **pick_fields.py** / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在 `scripts/` 下，agent 通过 bash 调用。
 
 ---
 
 ## 6. 产出检查清单
 
-产出 SELECT 前自检（codegen 骨架已处理 ★ 项，重点检查你填的 TODO）：
-- [ ] 所有 `-- TODO` 占位都已填充（没有遗留的 TODO）
+产出 SELECT 前自检：
 - [ ] SELECT 覆盖切片里所有目标字段（不漏字段）
 - [ ] 每个 aggregate/计算字段实现了完整逻辑（禁止硬编码 0）
-- [ ] ★ 审计字段 4 个带上（codegen 已生成，确认在）——**中间表/tmp 规则也要带**
-- [ ] ★ direct 字段 COALESCE 正确（codegen 已生成，确认默认值合理）
+- [ ] 审计字段 4 个带上（del_flag/crt_cycle_id/last_upd_cycle_id/dw_last_update_date）——**中间表/tmp 规则也要带**
+- [ ] direct 字段 COALESCE 正确（数值→0、字符串→''、时间→按需）
 - [ ] JOIN 条件和切片的 joins 一致
 - [ ] 不能 SELECT *
 - [ ] NULL 字段有 COALESCE
