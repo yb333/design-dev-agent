@@ -114,7 +114,8 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 ### 步骤 4：套规范
 
 详见 `references/dws-coding-standards.md`：
-- 不能 SELECT *、NULL 必须 COALESCE、审计字段齐全、命名规范
+- 不能 SELECT *、审计字段齐全、命名规范、注释用 `/* */` 禁 `--`
+- NULL 处理按业务语义判断（不是必须 COALESCE，见 §1.3）
 
 ### 步骤 5：静态对比
 
@@ -184,10 +185,9 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 - [ ] SELECT 覆盖切片里所有目标字段（不漏字段）
 - [ ] 每个 aggregate/计算字段实现了完整逻辑（禁止硬编码 0）
 - [ ] 审计字段 4 个带上（del_flag/crt_cycle_id/last_upd_cycle_id/dw_last_update_date）——**中间表/tmp 规则也要带**
-- [ ] direct 字段的 COALESCE 处理正确（按字段语义判断：金额→0、主键/外键不 COALESCE、状态字段按需）
+- [ ] direct 字段的 COALESCE 处理正确（按业务语义判断：金额→0、主键/外键不 COALESCE、可选字段保留 NULL，见 coding-standards §1.3）
 - [ ] JOIN 条件和切片的 joins 一致
 - [ ] 不能 SELECT *
-- [ ] NULL 字段有 COALESCE
 - [ ] 字段名符合命名规范
 - [ ] **注释一律 `/* */` 块注释，无 `--` 行注释**（check_sql 会报错）
 - [ ] check_sql.py 静态对比通过

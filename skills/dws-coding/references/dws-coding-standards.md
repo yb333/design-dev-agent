@@ -31,18 +31,21 @@ SELECT t.*
 
 ### 1.3 NULL 处理
 
-所有可能为 NULL 的字段必须 COALESCE：
+**该不该 COALESCE、用什么默认值，是业务语义判断，不是铁律**——业务诉求就是要 NULL 时（可选字段没值、未知状态），保留 NULL 才对，硬塞默认值反而错。根据字段语义决定：
+
 ```sql
-/* 金额默认0 */
+/* 金额类：业务上 NULL = 0，COALESCE 合理 */
 COALESCE(t.amount, 0) AS amount
-/* 字符串默认空 */
-COALESCE(t.name, '') AS name
-/* LEFT JOIN 结果默认0 */
-COALESCE(inv_agg.total, 0) AS total
+/* LEFT JOIN 可能失败的：看业务要不要保留关联失败的信号 */
+COALESCE(inv_agg.total, 0) AS total   /* 取0 = 当作没数据 */
+inv_agg.total AS total                /* 不 COALESCE = 保留"关联失败"的 NULL 信号 */
 ```
 
-> ★ 该不该 COALESCE、用什么默认值是业务语义判断（金额 NULL→0 合理，
-> 主键/外键 NULL→0 会掩盖关联失败，状态字段 NULL 可能有含义），由你根据字段语义决定。
+判断参考：
+- 金额/计数类（NULL 在业务里等于 0）→ COALESCE(..., 0)
+- 主键/外键（NULL→0 会掩盖 LEFT JOIN 关联失败）→ 不 COALESCE
+- 状态/标识字段（NULL 可能有业务含义，如"未知"）→ 按业务口径
+- 可选字段（没值就是 NULL）→ 保留 NULL
 
 ### 1.4 聚合字段规范
 

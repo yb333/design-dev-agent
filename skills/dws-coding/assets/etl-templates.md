@@ -255,15 +255,14 @@ CURRENT_TIMESTAMP AS dw_last_update_date
 
 ### NULL 处理
 
-所有可能为 NULL 的字段必须 COALESCE：
+**该不该 COALESCE 是业务语义判断，不是铁律**——业务要 NULL 时（可选字段没值）保留 NULL 才对。需要默认值时：
 ```sql
-/* 金额默认0 */
+/* 金额类：NULL 在业务里等于 0 */
 COALESCE(t.amount, 0) AS amount
-/* 字符串默认空 */
-COALESCE(t.name, '') AS name
-/* LEFT JOIN 结果默认0 */
+/* LEFT JOIN 结果按业务：要默认值就 COALESCE，要保留关联失败信号就不加 */
 COALESCE(inv_agg.total, 0) AS total
 ```
+> 主键/外键不要 COALESCE（NULL→0 会掩盖关联失败）；可选字段保留 NULL。详见 coding-standards §1.3。
 
 ### 字段别名
 

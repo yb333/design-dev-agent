@@ -90,7 +90,7 @@ INSERT 由 run_ut.py 按平台规则包装，DDL 由 assemble_ddl.py 生成。
 
 - **design_logic 是自然语言口径，你只做技术翻译**——套 COALESCE/NULL 处理，不改变业务口径
 - 若发现口径本身有问题，**回报给调用方，不自己改 TS**
-- **遵守编码规范**（SKILL.md §references/dws-coding-standards.md）：不能 SELECT *、NULL 必须 COALESCE、审计字段齐全、**注释一律用 `/* */` 块注释禁止 `--`**（check_sql 会检测报错）
+- **遵守编码规范**（SKILL.md §references/dws-coding-standards.md）：不能 SELECT *、审计字段齐全、**注释一律用 `/* */` 块注释禁止 `--`**（check_sql 会检测报错）。NULL 处理不是铁律——该不该 COALESCE 由业务语义定（见 coding-standards §1.3）
 - **不写 INSERT/DDL**——只写 SELECT
 - 若切片拿不到或规则不存在，用 question 向调用方报告
 
