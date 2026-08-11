@@ -619,6 +619,40 @@ class TestStaticChecks:
         expr_warns = [w for w in result.warnings if "直接复制" in w and "表达式" in w]
         assert expr_warns == [], f"直接复制填表达式不该 warn: {expr_warns}"
 
+    def test_direct_copy_empty_alias_blocks(self, monkeypatch):
+        """直接复制/数据加工字段 source_alias 为空 → error（多表 JOIN 歧义，单表也无法定位来源）。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([{
+            "source_table": "ods_test_f", "source_column": "amt", "source_type": "numeric(10,2)",
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "amt", "target_column_cn": "金额", "target_type": "numeric(10,2)",
+            "source_alias": "",  # ★ 空
+            "remark": "",
+        }])
+        result = precheck(rs)
+        alias_errors = [e for e in result.errors if "source_alias" in e and "为空" in e]
+        assert alias_errors, f"直接复制字段 source_alias 空应报 error: {result.errors}"
+
+    def test_assign_empty_alias_ok(self, monkeypatch):
+        """赋值字段 source_alias 为空 → 不报（赋值无来源表）。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([
+            _biz_field(source_column="id"),
+            {"transform_rule": "赋值", "transform_detail": "'N'",
+             "target_column": "status", "target_column_cn": "状态",
+             "target_type": "varchar(2)", "source_alias": "",  # 赋值字段空 alias 正常
+             "remark": ""},
+        ])
+        result = precheck(rs)
+        alias_errors = [e for e in result.errors if "source_alias" in e and "为空" in e]
+        assert alias_errors == [], f"赋值字段空 alias 不该报: {alias_errors}"
+
     def test_multi_table_union_all_single_query(self, tmp_path, monkeypatch):
         """多张表缺失 → 一条 UNION ALL SQL 查回（不是多次往返）。
 
