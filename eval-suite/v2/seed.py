@@ -38,10 +38,13 @@ for p in (str(_EVAL_SUITE), str(_V2_DIR)):
 
 ROOT = _EVAL_SUITE.parent
 CASES_DIR = _EVAL_SUITE / "cases"
+CASES_REAL_DIR = _EVAL_SUITE / "cases_real"
 DELIVER_BASE = ROOT / "10_project_deliver"
+UNCATEGORIZED = "未分类"  # deliver_only 案例的默认分类（后续可 mv 到合适分类）
 
 # 复用 assert_sql 的提取函数（已兼容裸 SELECT）
 import assert_sql  # noqa: E402
+from _paths import find_select_file  # noqa: E402
 
 
 def seed_case(case_dir: Path) -> str:
@@ -50,7 +53,6 @@ def seed_case(case_dir: Path) -> str:
     deliver = DELIVER_BASE / case_name / "ddlc_design_dev"
     ts_path = deliver / "ts.json"
     rs_input_path = deliver / "_internal" / "rs_input.json"
-    select_dir = deliver / "select"
 
     if not ts_path.exists():
         return f"# 错误: {ts_path} 不存在，请先跑流水线再 seed"
@@ -122,8 +124,8 @@ def seed_case(case_dir: Path) -> str:
     # code 段（按规则，从 SELECT 抽取）
     lines.append("code:")
     for code in rules:
-        select_file = select_dir / f"{code}_select.sql" if select_dir.exists() else None
-        if not select_file or not select_file.exists():
+        select_file = find_select_file(deliver, code)
+        if not select_file:
             lines.append(f"  {code}:  # [AUTO-SEEDED] SELECT 文件不存在，跳过")
             lines.append("    fields_required: []")
             continue
@@ -133,7 +135,7 @@ def seed_case(case_dir: Path) -> str:
         join_tables = assert_sql._extract_join_tables(sql_text)
         groupby = sorted(assert_sql._extract_groupby_columns(sql_text))
 
-        lines.append(f"  {code}:  # [AUTO-SEEDED] 从 {code}_select.sql 抽取")
+        lines.append(f"  {code}:  # [AUTO-SEEDED] 从 {select_file.name} 抽取")
         lines.append(f"    fields_required: {fields}")
         if join_tables:
             lines.append(f"    join_tables: {join_tables}")
@@ -144,6 +146,43 @@ def seed_case(case_dir: Path) -> str:
         lines.append("    audit_fields_in_select: true")
 
     return "\n".join(lines)
+
+
+def _resolve_case_dir(case_arg: str, cases_dir: Path) -> Path | None:
+    """解析用例目录：cases_dir 精确/前缀/二级分类匹配 → 回退 10_project_deliver 有产出。
+
+    支持三种结构：
+    - cases/{资产}/（假设案例，一级）
+    - cases_real/{分类}/{资产}/（真实案例，二级分类）
+    - 回退：10_project_deliver 有产出 → 建 cases_real/未分类/{资产}/ 占位
+    """
+    import re
+
+    # 1. 一级精确匹配（目录存在即可，含占位目录）
+    exact = cases_dir / case_arg
+    if exact.is_dir():
+        return exact
+    # 2. 数字前缀（002 → 002_xxx）
+    if re.match(r"^\d+$", case_arg) and cases_dir.exists():
+        for d in sorted(cases_dir.iterdir()):
+            if d.is_dir() and d.name.startswith(f"{case_arg}_"):
+                return d
+    # 3. 二级分类匹配（cases_real/{分类}/{case_arg}）
+    if cases_dir.exists():
+        for cat_dir in sorted(cases_dir.iterdir()):
+            if not cat_dir.is_dir():
+                continue
+            candidate = cat_dir / case_arg
+            if candidate.is_dir():
+                return candidate
+    # 4. 回退：10_project_deliver/{case} 有产出 → 建 cases_real/未分类/{case} 占位
+    if (DELIVER_BASE / case_arg / "ddlc_design_dev" / "ts.json").exists():
+        placeholder = CASES_REAL_DIR / UNCATEGORIZED / case_arg
+        placeholder.mkdir(parents=True, exist_ok=True)
+        print(f"  ℹ️ 用例 {case_arg} 无输入目录，已建占位 {placeholder}")
+        print(f"     后续可补 mapping.xlsx + RS.md，并 mv 到合适分类")
+        return placeholder
+    return None
 
 
 def main() -> int:
@@ -160,20 +199,9 @@ def main() -> int:
     # 用例目录（默认 cases/，可指向 cases_real/）
     cases_dir = Path(args.cases_dir) if args.cases_dir else CASES_DIR
 
-    # 解析用例
-    import re
-
-    case_dir: Path | None = None
-    exact = cases_dir / args.case
-    if exact.exists():
-        case_dir = exact
-    elif re.match(r"^\d+$", args.case):
-        for d in sorted(cases_dir.iterdir()):
-            if d.is_dir() and d.name.startswith(f"{args.case}_"):
-                case_dir = d
-                break
+    case_dir = _resolve_case_dir(args.case, cases_dir)
     if not case_dir:
-        print(f"用例不存在: {args.case}（在 {cases_dir}）", file=sys.stderr)
+        print(f"用例不存在: {args.case}（在 {cases_dir} 和 {DELIVER_BASE} 都没找到）", file=sys.stderr)
         return 1
 
     draft = seed_case(case_dir)

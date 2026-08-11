@@ -38,22 +38,60 @@ DELIVER_BASE = ROOT / "10_project_deliver"
 
 
 def resolve_case(case_arg: str, cases_dir: Path) -> Path:
-    """把 --case 002 解析成 cases_dir/002_xxx 目录。
+    """把 --case 解析成案例目录。
 
-    支持数字（002）或完整目录名。
+    支持三种结构：
+    - 一级精确 cases_dir/{case_arg}（假设案例 cases/{资产}）
+    - 数字前缀（002 → 002_dwb_xxx）
+    - 二级分类 cases_dir/{分类}/{case_arg}（真实案例 cases_real）
     """
     if not cases_dir.exists():
         return Path()
-    # 精确匹配
+    # 1. 一级精确匹配
     exact = cases_dir / case_arg
     if exact.exists():
         return exact
-    # 数字前缀匹配（002 → 002_dwb_xxx）
+    # 2. 数字前缀匹配（002 → 002_dwb_xxx）
     if re.match(r"^\d+$", case_arg):
         for d in sorted(cases_dir.iterdir()):
             if d.is_dir() and d.name.startswith(f"{case_arg}_"):
                 return d
+    # 3. 二级分类匹配（cases_real/{分类}/{case_arg}）
+    for cat_dir in sorted(cases_dir.iterdir()):
+        if not cat_dir.is_dir():
+            continue
+        candidate = cat_dir / case_arg
+        if candidate.is_dir():
+            return candidate
     return Path()
+
+
+def _is_case_dir(d: Path) -> bool:
+    """判断目录是否为有效案例（有输入 mapping.xlsx 或 10_project_deliver 同名产出）。"""
+    has_input = (d / "mapping.xlsx").exists()
+    has_deliver = (DELIVER_BASE / d.name / "ddlc_design_dev" / "ts.json").exists()
+    return has_input or has_deliver
+
+
+def _scan_all_cases(cases_dir: Path) -> list[Path]:
+    """扫描全部案例，兼容一级（cases/{资产}）和二级（cases_real/{分类}/{资产}）。
+
+    一级目录若是有效案例直接收；否则当分类目录扫其下的二级资产目录。
+    """
+    results: list[Path] = []
+    if not cases_dir.exists():
+        return results
+    for entry in sorted(cases_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        if _is_case_dir(entry):
+            results.append(entry)
+        else:
+            # 当分类目录处理，扫二级
+            for sub in sorted(entry.iterdir()):
+                if sub.is_dir() and _is_case_dir(sub):
+                    results.append(sub)
+    return results
 
 
 def run_one_case(case_dir: Path, eval_only: bool, skip_ai: bool) -> int:
@@ -122,10 +160,9 @@ def main() -> int:
     cases_dir = Path(args.cases_dir) if args.cases_dir else CASES_DIR_DEFAULT
 
     if args.all:
-        if not cases_dir.exists():
-            print(f"[v2] 无用例: {cases_dir}", file=sys.stderr)
-            return 1
-        cases = sorted(d for d in cases_dir.iterdir() if d.is_dir() and (d / "mapping.xlsx").exists())
+        # 扫描兼容一级（cases/{资产}）和二级（cases_real/{分类}/{资产}）
+        # 后者覆盖内网真实案例分类组织 + "只有产出没有输入目录"的 deliver_only 场景
+        cases = _scan_all_cases(cases_dir)
         if not cases:
             print(f"[v2] 无用例: {cases_dir}", file=sys.stderr)
             return 1

@@ -34,6 +34,8 @@ from validators.content import (  # type: ignore
     _extract_join_tables,
 )
 
+from _paths import find_select_file, list_select_rules
+
 
 def _extract_groupby_columns(sql_text: str) -> set[str]:
     """提取 GROUP BY 列名（兼容裸 SELECT 和 INSERT...SELECT）。
@@ -79,46 +81,32 @@ def run_code_checks(
     cfg = checks or {}
     results: list[CheckResult] = []
 
-    select_dir = output_dir / "select"
-    if not select_dir.exists():
-        return [
-            CheckResult(
-                check_type="code",
-                status=CheckStatus.SKIP,
-                detail="select/ 目录不存在，跳过 code 检查",
-            )
-        ]
-
-    # 确定要检查的规则：checks.yaml 的 code 段 keys，或 ts.json 的 rules
+    # 确定要检查的规则：checks.yaml.code > ts.json.rules > 扫描产出（etl/select 合并）
     if cfg:
         rule_codes = list(cfg.keys())
     elif ts:
         rule_codes = list(ts.get("rules", {}).keys())
     else:
-        # 找 select/ 下的 {rule}_select.sql
-        rule_codes = []
-        for f in select_dir.iterdir():
-            if f.name.endswith("_select.sql"):
-                rule_codes.append(f.name.replace("_select.sql", ""))
+        rule_codes = list_select_rules(output_dir)
 
     if not rule_codes:
         return [
             CheckResult(
                 check_type="code",
                 status=CheckStatus.SKIP,
-                detail="无规则可检查",
+                detail="无规则可检查（未配置 code 断言且产出无 SELECT）",
             )
         ]
 
     for code in rule_codes:
-        # 确定性文件名（不用 glob）
-        select_file = select_dir / f"{code}_select.sql"
-        if not select_file.exists():
+        # 兼容 new-pipe etl/{code}.sql 和老格式 select/{code}_select.sql
+        select_file = find_select_file(output_dir, code)
+        if not select_file:
             results.append(
                 CheckResult(
                     check_type="code",
                     status=CheckStatus.FAIL,
-                    detail=f"{code}: SELECT 文件不存在 ({code}_select.sql)",
+                    detail=f"{code}: SELECT 文件不存在 (etl/{code}.sql 和 select/{code}_select.sql 都没有)",
                 )
             )
             continue

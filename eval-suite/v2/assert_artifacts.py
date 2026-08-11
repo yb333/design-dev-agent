@@ -23,6 +23,7 @@ if str(_EVAL_SUITE) not in sys.path:
 from validators.base import CheckResult, CheckStatus  # type: ignore
 
 from checks_schema import DEFAULT_ARTIFACT_CHECKS
+from _paths import find_select_file, find_ts_md
 
 
 def run_artifact_checks(
@@ -195,10 +196,13 @@ def _check_files(output_dir: Path, ts: dict) -> list[CheckResult]:
     results: list[CheckResult] = []
     missing_files: list[str] = []
 
-    # ts.json / ts.md / design_decisions.yaml
-    for rel in ["ts.json", "ts.md", "_internal/design_decisions.yaml"]:
+    # ts.json / design_decisions.yaml（固定路径）
+    for rel in ["ts.json", "_internal/design_decisions.yaml"]:
         if not (output_dir / rel).exists():
             missing_files.append(rel)
+    # ts.md（兼容 ts.md 和 {资产}_ts.md 两种命名）
+    if not find_ts_md(output_dir):
+        missing_files.append("ts.md")
 
     # DDL: create_table_{f_table}.sql + create_view_{i_view}.sql
     meta = ts.get("meta", {}).get("target", {})
@@ -214,11 +218,10 @@ def _check_files(output_dir: Path, ts: dict) -> list[CheckResult]:
         if not view_file.exists():
             missing_files.append(f"ddl/create_view_{i_view}.sql")
 
-    # SELECT: select/{rule_code}_select.sql（每规则）
+    # SELECT: 每规则的取数 SQL（兼容 etl/{code}.sql 和 select/{code}_select.sql）
     for code in ts.get("rules", {}):
-        sel_file = output_dir / "select" / f"{code}_select.sql"
-        if not sel_file.exists():
-            missing_files.append(f"select/{code}_select.sql")
+        if not find_select_file(output_dir, code):
+            missing_files.append(f"SELECT for {code} (etl/{code}.sql 或 select/{code}_select.sql)")
 
     if missing_files:
         results.append(
