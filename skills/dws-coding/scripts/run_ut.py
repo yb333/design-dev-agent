@@ -250,14 +250,17 @@ def read_select(select_dir: Path, rule_code: str) -> str:
 
 
 def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
-    """给 SELECT 的所有物理表（FROM + JOIN）注入 TABLESAMPLE SYSTEM。
+    """给 SELECT 注入 TABLESAMPLE SYSTEM（只切 FROM 主表 + INNER/逗号/CROSS JOIN 表）。
 
-    多主表场景（两个事实表 INNER JOIN）每张都要采样，否则没采样的那张
-    还是全量扫，照样慢。CTE/子查询里的表不注入。
+    切片范围（避免切片太狠导致空表 UT 假通过 / 外连接从表关联不上变 NULL）：
+    - FROM 主表：切
+    - INNER JOIN / 隐式逗号 JOIN / CROSS JOIN 表：切（必要表，两边都要匹配才有结果）
+    - LEFT/RIGHT/FULL JOIN 从表：**不切**（外连接侧保留全量，避免切片后关联不上字段变 NULL）
+    - 子查询里的表 / CTE 定义里的表：不切（只在主查询层注入）
 
     设计原则（不可违背）：
     - 注入失败时必须返回原 SQL，绝不破坏 coder 的 SQL 可执行性。
-    - 用 sqlglot 定位物理表位置（只读 AST），用字符串插入注入（从后往前，避免位置偏移）。
+    - 用 sqlglot 定位物理表位置 + 判断 JOIN 类型（只读 AST 的 side/kind），用字符串插入注入（从后往前，避免位置偏移）。
 
     Args:
         select_sql: coder 产的 SELECT SQL。
@@ -297,18 +300,28 @@ def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
         if select_node is None:
             return select_sql
 
-        # 收集主查询里所有物理表（FROM + JOIN 的，有 schema 的）
-        # 用 sqlglot AST 找 Table 节点（可靠区分表引用 vs 列引用）
+        # 收集要切 TABLESAMPLE 的物理表（按 JOIN 类型筛选）
+        # - FROM 主表：切
+        # - INNER/隐式逗号/CROSS JOIN 表：切（side 为空 = 必要表）
+        # - LEFT/RIGHT/FULL JOIN 从表：不切（外连接侧保留全量，避免切片后关联不上变 NULL）
+        # 只看主查询的直接表（args["from_"]/args["joins"]），不深入子查询
         import re
 
-        # 从 sqlglot AST 拿到主查询里的所有 Table 节点
-        # Table 节点有 .db（schema）和 .name（表名）和 .alias
         all_tables = []
-        for tbl in select_node.find_all(exp.Table):
-            schema = tbl.db or ""
-            if not schema:
-                continue  # 无 schema，可能是 CTE 引用，跳过
-            all_tables.append((schema, tbl.name, tbl.alias or ""))
+        # ① FROM 主表（from_.this 是直接表，不深入子查询）
+        from_node = select_node.args.get("from_") or select_node.args.get("from")
+        if from_node:
+            ft = from_node.this
+            if isinstance(ft, exp.Table) and ft.db:
+                all_tables.append((ft.db, ft.name, ft.alias or ""))
+        # ② 主查询的直接 JOIN（不深入子查询里的 JOIN）
+        for j in (select_node.args.get("joins") or []):
+            side = j.args.get("side")
+            if side in ("LEFT", "RIGHT", "FULL"):
+                continue  # 外连接从表不切
+            jt = j.this
+            if isinstance(jt, exp.Table) and jt.db:
+                all_tables.append((jt.db, jt.name, jt.alias or ""))
 
         if not all_tables:
             return select_sql

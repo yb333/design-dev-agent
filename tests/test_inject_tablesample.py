@@ -57,7 +57,7 @@ class TestInjectJoin:
             f"FROM+JOIN 两张表都应注入，实际 {result.count('TABLESAMPLE')} 处: {result}"
 
     def test_multi_join_all_injected(self):
-        """多表 JOIN：每张物理表都注入。"""
+        """多表 JOIN（都是 INNER）：每张物理表都注入。"""
         sql = (
             "SELECT a.id FROM ods.fact a "
             "JOIN dim.user b ON a.uid=b.id "
@@ -66,6 +66,83 @@ class TestInjectJoin:
         result = inject_tablesample(sql, 10)
         assert result.count("TABLESAMPLE") == 3, \
             f"3张表都应注入，实际 {result.count('TABLESAMPLE')} 处: {result}"
+
+
+class TestInjectJoinType:
+    """JOIN 类型决定切不切：FROM/INNER/逗号/CROSS 切，LEFT/RIGHT/FULL 从表不切。
+
+    核心场景：外连接从表保留全量，避免切片后关联不上变 NULL；
+    必要表（INNER）切了控制总量。避免主表被切太狠空表 UT 假通过。
+    """
+
+    def test_left_join_slave_not_injected(self):
+        """LEFT JOIN 从表不切（避免关联不上变 NULL）；主表切。"""
+        sql = (
+            "SELECT a.id, b.name FROM ods.fact a "
+            "LEFT JOIN dim.dim_user b ON a.uid = b.id WHERE a.dt = 'x'"
+        )
+        result = inject_tablesample(sql, 10)
+        assert result.count("TABLESAMPLE") == 1, f"只切主表，LEFT从表不切: {result}"
+
+    def test_right_join_slave_not_injected(self):
+        """RIGHT JOIN 从表不切。"""
+        sql = "SELECT a.id FROM ods.fact a RIGHT JOIN dim.dim_user b ON a.uid = b.id"
+        result = inject_tablesample(sql, 10)
+        assert result.count("TABLESAMPLE") == 1, f"只切主表: {result}"
+
+    def test_full_join_slave_not_injected(self):
+        """FULL JOIN 从表不切。"""
+        sql = "SELECT a.id FROM ods.fact a FULL JOIN dim.dim_user b ON a.uid = b.id"
+        result = inject_tablesample(sql, 10)
+        assert result.count("TABLESAMPLE") == 1, f"只切主表: {result}"
+
+    def test_mixed_inner_left(self):
+        """混合：主表 + INNER JOIN 表切，LEFT JOIN 从表不切。"""
+        sql = (
+            "SELECT a.id FROM ods.fact a "
+            "INNER JOIN ods.fact2 b ON a.id=b.id "
+            "LEFT JOIN dim.dim_user c ON a.uid=c.id"
+        )
+        result = inject_tablesample(sql, 10)
+        # 主表 fact + INNER 的 fact2 切（2 处），LEFT 的 dim_user 不切
+        assert result.count("TABLESAMPLE") == 2, f"主表+INNER切，LEFT不切: {result}"
+
+    def test_implicit_comma_join_injected(self):
+        """隐式逗号 JOIN（FROM t1, t2）：两张都切（等价 INNER，必要表）。"""
+        sql = "SELECT a.id FROM ods.fact a, ods.fact2 b WHERE a.id=b.id"
+        result = inject_tablesample(sql, 10)
+        assert result.count("TABLESAMPLE") == 2, f"逗号JOIN都切: {result}"
+
+    def test_cross_join_injected(self):
+        """CROSS JOIN：两张都切（笛卡尔积，两边必要）。"""
+        sql = "SELECT a.id FROM ods.fact a CROSS JOIN ods.fact2 b"
+        result = inject_tablesample(sql, 10)
+        assert result.count("TABLESAMPLE") == 2, f"CROSS都切: {result}"
+
+    def test_subquery_left_join_not_injected(self):
+        """LEFT JOIN 子查询：主表切，子查询不切（不是直接物理表）。"""
+        sql = (
+            "SELECT a.id FROM ods.fact a "
+            "LEFT JOIN (SELECT id FROM ods.dim) b ON a.id=b.id"
+        )
+        result = inject_tablesample(sql, 10)
+        assert result.count("TABLESAMPLE") == 1, f"只切主表，子查询不切: {result}"
+
+    def test_join_type_not_broken(self):
+        """各种 JOIN 类型注入后 SQL 结构不被破坏。"""
+        import sqlglot
+        sqls = [
+            "SELECT a.id FROM ods.fact a LEFT JOIN dim.dim_user b ON a.uid=b.id",
+            "SELECT a.id FROM ods.fact a RIGHT JOIN ods.f2 b ON a.uid=b.id",
+            "SELECT a.id FROM ods.fact a FULL JOIN ods.f2 b ON a.uid=b.id",
+            "SELECT a.id FROM ods.fact a INNER JOIN ods.f2 b ON a.id=b.id LEFT JOIN dim.c c ON a.id=c.id",
+        ]
+        for sql in sqls:
+            result = inject_tablesample(sql, 10)
+            try:
+                sqlglot.parse_one(result, dialect="postgres")
+            except Exception as e:
+                assert False, f"注入后 SQL 结构被破坏: {result} ({e})"
 
 
 class TestInjectSafety:
