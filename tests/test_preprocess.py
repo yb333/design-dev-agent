@@ -844,3 +844,65 @@ class TestNoRsMode:
         assert sched["strategy"] == "增量调度"  # RS 提供的保留
         assert sched["frequency"] == "T+1"      # 缺的补默认
         assert sched["incremental_key"] == "不涉及"
+
+
+class TestColumnMatch:
+    """列名校验：缺任一标准列 → column_missing（不再只查 required）。"""
+
+    def _make_parser(self):
+        """构造不读文件的 parser 实例。"""
+        from preprocess import ExcelMappingParser
+        return ExcelMappingParser("dummy.xlsx")
+
+    def test_missing_standard_column_reports(self):
+        """缺标准列（如 source_alias）→ 报 column_missing。"""
+        import pandas as pd
+        parser = self._make_parser()
+        # 实体级缺 '源表别名'（source_alias）
+        cols = ['源表schema', '源表物理表名', '源表中文名', '目标表逻辑schema',
+                '目标表中文名', '目标表物理名称', '关联&限定条件', '备注', '分组']
+        df = pd.DataFrame(columns=cols)
+        parser._check_column_match(df, parser.ENTITY_COLUMN_MAP, '实体级',
+                                   optional=['remark', 'scene_group', 'join_condition'])
+        missing = [d for d in parser.diagnostics if d['type'] == 'column_missing']
+        assert missing, f"缺 source_alias 列应报 column_missing: {parser.diagnostics}"
+        assert any('源表别名' in d['message'] for d in missing), \
+            f"报错应提到期望列名 '源表别名': {missing}"
+
+    def test_missing_optional_column_no_report(self):
+        """可选列（备注/分组/关联条件）缺失 → 不报。"""
+        import pandas as pd
+        parser = self._make_parser()
+        cols = ['源表schema', '源表物理表名', '源表中文名', '源表别名',
+                '目标表逻辑schema', '目标表中文名', '目标表物理名称']
+        df = pd.DataFrame(columns=cols)
+        parser._check_column_match(df, parser.ENTITY_COLUMN_MAP, '实体级',
+                                   optional=['remark', 'scene_group', 'join_condition'])
+        missing = [d for d in parser.diagnostics if d['type'] == 'column_missing']
+        assert missing == [], f"可选列缺失不该报: {missing}"
+
+    def test_all_columns_present_no_report(self):
+        """所有标准列都齐 → 不报。"""
+        import pandas as pd
+        parser = self._make_parser()
+        cols = list(parser.ENTITY_COLUMN_MAP.keys())
+        df = pd.DataFrame(columns=cols)
+        parser._check_column_match(df, parser.ENTITY_COLUMN_MAP, '实体级',
+                                   optional=['remark', 'scene_group', 'join_condition'])
+        missing = [d for d in parser.diagnostics if d['type'] == 'column_missing']
+        assert missing == [], f"列都齐不该报: {missing}"
+
+    def test_attribute_missing_source_alias_reports(self):
+        """属性级缺 '源表物理表别名' → 报（用户遇到的根因场景）。"""
+        import pandas as pd
+        parser = self._make_parser()
+        # 属性级缺 '源表物理表别名'（BA 可能写成 '源表别名'）
+        cols = ['源schema', '源表物理表名', '源表字段名', '源表字段中文名', '源表字段类型',
+                '映射规则', '映射表达式', '目标字段名', '目标字段中文名', '目标字段类型']
+        df = pd.DataFrame(columns=cols)
+        parser._check_column_match(df, parser.ATTRIBUTE_COLUMN_MAP, '属性级',
+                                   optional=['remark', 'scene_group', 'source_column_cn'])
+        missing = [d for d in parser.diagnostics if d['type'] == 'column_missing']
+        assert missing, f"属性级缺 source_alias 应报: {parser.diagnostics}"
+        assert any('源表物理表别名' in d['message'] for d in missing), \
+            f"报错应提到 '源表物理表别名': {missing}"

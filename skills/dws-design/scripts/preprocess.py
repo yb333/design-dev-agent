@@ -168,7 +168,7 @@ class ExcelMappingParser:
         
         df = self._normalize_columns(self.entity_df, self.ENTITY_COLUMN_MAP)
         self._check_column_match(self.entity_df, self.ENTITY_COLUMN_MAP, '实体级mapping',
-                                 required=['source_schema', 'source_table', 'target_table', 'target_schema'])
+                                 optional=['remark', 'scene_group', 'join_condition'])
         
         for row_idx, (_, row) in enumerate(df.iterrows()):
             try:
@@ -208,7 +208,7 @@ class ExcelMappingParser:
         
         df = self._normalize_columns(self.attribute_df, self.ATTRIBUTE_COLUMN_MAP)
         self._check_column_match(self.attribute_df, self.ATTRIBUTE_COLUMN_MAP, '属性级mapping',
-                                 required=['target_column', 'mapping_rule'])
+                                 optional=['remark', 'scene_group', 'source_column_cn'])
         
         for row_idx, (_, row) in enumerate(df.iterrows()):
             try:
@@ -401,21 +401,34 @@ class ExcelMappingParser:
 
         return df.rename(columns=rename_dict)
     
-    def _check_column_match(self, df: pd.DataFrame, column_map: Dict[str, str], sheet_label: str, required: Optional[List[str]] = None):
+    def _check_column_match(self, df: pd.DataFrame, column_map: Dict[str, str], sheet_label: str,
+                            required: Optional[List[str]] = None, optional: Optional[List[str]] = None):
+        """校验 column_map 里的所有标准列是否都在 df 里匹配上了。
+
+        ★ 任一标准列没匹配上 → 报 column_missing（不再只查 required）。
+        optional 里的列（如备注/分组）缺失不报——它们是可选注释/条件性字段。
+        """
         actual_cols = set()
         for col in df.columns:
             col_clean = self._clean_column_name(col)
             if col_clean in column_map:
                 actual_cols.add(column_map[col_clean])
-        
-        if required:
-            for req_field in required:
-                if req_field not in actual_cols:
-                    self.diagnostics.append({
-                        'type': 'column_missing',
-                        'sheet': sheet_label,
-                        'message': f'{sheet_label}缺少必填列 "{req_field}", 请检查列名是否正确(当前列名: {list(df.columns)})',
-                    })
+
+        # 可选列（缺失不报）
+        optional_targets = set(optional or [])
+        # 查所有标准列：column_map 的所有 target 字段都该匹配上（除可选列）
+        # 构建反向映射（target → 期望的中文列名）用于报错信息
+        target_to_cnname = {v: k for k, v in column_map.items()}
+        for target_field, cn_name in target_to_cnname.items():
+            if target_field in optional_targets:
+                continue  # 可选列缺失不报
+            if target_field not in actual_cols:
+                self.diagnostics.append({
+                    'type': 'column_missing',
+                    'sheet': sheet_label,
+                    'message': f'{sheet_label}缺少必要列（期望列名 "{cn_name}" 未匹配上），'
+                               f'请检查列名拼写/是否多了空格（当前列名: {list(df.columns)}）',
+                })
     
     def _write_diagnostics(self, output_dir: str) -> bool:
         if not self.diagnostics:
@@ -572,6 +585,13 @@ def parse_mapping(xlsx_path: str) -> dict[str, Any]:
     if parser.diagnostics:
         for d in parser.diagnostics:
             print(f"  ⚠️ {d['type']}: {d['message']}")
+        # column_missing 是结构性问题（列名错了整列数据丢失），阻断退出
+        col_missing = [d for d in parser.diagnostics if d['type'] == 'column_missing']
+        if col_missing:
+            raise RuntimeError(
+                f"mapping.xlsx 列名校验失败（{len(col_missing)} 个必要列未匹配上），"
+                f"请修正列名后重跑。详见上方诊断信息。"
+            )
 
     return {
         "target_schema": target_schema,
