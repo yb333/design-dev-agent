@@ -929,3 +929,66 @@ class TestColumnMatch:
         assert missing, f"属性级缺 source_alias 应报: {parser.diagnostics}"
         assert any('源表别名' in d['message'] for d in missing), \
             f"报错应提到 '源表别名': {missing}"
+
+
+def _build_xlsx_with_assign_null(path, assign_expr='NULL'):
+    """构造最小 mapping xlsx（实体级 + 属性级，属性级含一行"赋值"字段）。
+
+    assign_expr 控制赋值行的映射表达式：默认 'NULL'（验证不被吞），
+    传 None 模拟真没填的空单元格（验证区分能力）。
+    """
+    import openpyxl
+    wb = openpyxl.Workbook()
+    # 实体级（完整列名，过 _check_column_match）
+    ws_e = wb.active
+    ws_e.title = "实体级"
+    ws_e.append(['源表schema', '源表物理表名', '源表中文名', '源表别名',
+                 '目标表逻辑schema', '目标表中文名', '目标表物理名称',
+                 '关联&限定条件', '备注', '分组'])
+    ws_e.append(['ods', 'ods_test_f', '测试源表', 't', 'dws', '测试表',
+                 'dwb_test_f', 'LEFT JOIN ON id', '', 'default'])
+    # 属性级（完整列名 + 一行赋值 NULL）
+    ws_a = wb.create_sheet("属性级")
+    ws_a.append(['源schema', '源表物理表名', '源表别名', '源表字段名',
+                 '源表字段中文名', '源表字段类型', '映射规则', '映射表达式',
+                 '目标字段名', '目标字段中文名', '目标字段类型', '备注', '分组'])
+    ws_a.append(['ods', 'ods_test_f', 't', 'id', 'ID', 'bigint',
+                 '直接复制', '-', 'id', 'ID', 'bigint', '主键', 'default'])
+    ws_a.append(['', '', '', '', '', '',
+                 '赋值', assign_expr, 'del_flag', '删除标识', 'NVARCHAR(1)', '', 'default'])
+    wb.save(path)
+
+
+class TestNullPreservation:
+    """赋值 NULL 场景：pandas.read_excel 不应把 NULL/NA 吞成 NaN。
+
+    回归背景：read_excel 默认 keep_default_na=True，把 "NULL"/"NA"/"N/A" 都读成 NaN。
+    _safe_str 再把 NaN 转 ''，导致"赋值 NULL"字段的映射表达式变空 → precheck 报
+    "赋值字段映射表达式为空"。修复：read_excel 加 keep_default_na=False，保留原文。
+    """
+
+    def test_assign_null_preserved_not_swallowed(self, tmp_path):
+        """赋值字段的映射表达式填 NULL → 保留原文 'NULL'，不被 pandas 吞成空。"""
+        from preprocess import parse_mapping
+        xlsx = tmp_path / "test_null.xlsx"
+        _build_xlsx_with_assign_null(xlsx)
+        result = parse_mapping(str(xlsx))
+        fms = result.get("field_mappings", [])
+        assign_fms = [fm for fm in fms
+                      if (fm.get("transform_rule") or fm.get("mapping_rule")) == "赋值"]
+        assert len(assign_fms) == 1, f"应解析出 1 个赋值字段，实际 {len(assign_fms)}"
+        expr = assign_fms[0].get("transform_detail") or assign_fms[0].get("mapping_expression")
+        # ★ NULL 必须保留原文，不是空（这是 bug 的核心断言）
+        assert expr == "NULL", f"赋值 NULL 应保留原文 'NULL'，实际被吞成: {repr(expr)}"
+
+    def test_empty_cell_still_empty(self, tmp_path):
+        """真没填的空单元格（赋值字段映射表达式空着）→ 仍是空串，和"填NULL"区分开。"""
+        from preprocess import parse_mapping
+        xlsx = tmp_path / "test_empty.xlsx"
+        _build_xlsx_with_assign_null(xlsx, assign_expr=None)  # None = 空单元格（真没填）
+        result = parse_mapping(str(xlsx))
+        fms = result.get("field_mappings", [])
+        assign_fms = [fm for fm in fms
+                      if (fm.get("transform_rule") or fm.get("mapping_rule")) == "赋值"]
+        expr = assign_fms[0].get("transform_detail") or assign_fms[0].get("mapping_expression")
+        assert expr == "", f"真没填应是空串，实际: {repr(expr)}"

@@ -121,22 +121,22 @@ class ExcelMappingParser:
             for sheet in sheet_names:
                 sheet_lower = sheet.lower()
                 if any(s in sheet_lower for s in ['实体级', 'entity']):
-                    self.entity_df = pd.read_excel(xlsx, sheet_name=sheet)
+                    self.entity_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
                     recognized_sheets.add(sheet)
                 elif any(s in sheet_lower for s in ['属性级', 'attribute']):
-                    self.attribute_df = pd.read_excel(xlsx, sheet_name=sheet)
+                    self.attribute_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
                     recognized_sheets.add(sheet)
                 elif any(s in sheet_lower for s in [sn.lower() for sn in self.SCHEDULE_SHEET_NAMES]):
-                    self.schedule_config_df = pd.read_excel(xlsx, sheet_name=sheet)
+                    self.schedule_config_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
                     recognized_sheets.add(sheet)
                 elif any(s in sheet_lower for s in [sn.lower() for sn in self.EXEC_PLATFORM_SHEET_NAMES]):
-                    self.exec_platform_config_df = pd.read_excel(xlsx, sheet_name=sheet)
+                    self.exec_platform_config_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
                     recognized_sheets.add(sheet)
                 elif any(s in sheet_lower for s in [sn.lower() for sn in self.DESIGN_CONFIG_SHEET_NAMES]):
-                    self.design_config_df = pd.read_excel(xlsx, sheet_name=sheet)
+                    self.design_config_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
                     recognized_sheets.add(sheet)
                 elif any(s in sheet_lower for s in [sn.lower() for sn in self.DATA_FLOW_SHEET_NAMES]):
-                    self.data_flow_df = pd.read_excel(xlsx, sheet_name=sheet)
+                    self.data_flow_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
                     recognized_sheets.add(sheet)
 
             # 多余的 sheet（不在标准名清单里的）静默跳过，不告警。
