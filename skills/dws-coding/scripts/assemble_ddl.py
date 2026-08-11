@@ -261,11 +261,10 @@ def generate_i_view(schema: str, f_table: str, cn: str, fields: list, audit_fiel
 def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
     """从 ts.json 生成所有 DDL + 回退脚本。
 
-    核心逻辑：
-    - 目标表名 _i 结尾 → 先建 F表（_i→_f），再建 I视图（列全部字段）
-    - 目标表名 _f 结尾 → 建 F表 + 自动配套 I视图
-    - 中间表（tmp）→ 只建表
-    - is_view_step=true → 按视图处理（但 _i 结尾的会被上面逻辑优先处理）
+    核心逻辑（不加戏——照 ts.json 做）：
+    - 最终目标 F 表（== meta.target.f_table.table）→ 建表 + 如果 meta.target.i_view 非空则建 I 视图
+    - 中间表/其他表 → 只建表，不建视图（即使 meta.target.i_view 非空）
+    - I 视图是否建，取决于 meta.target.i_view 在不在（ts.json 如实表达，assemble_ddl 不自动配套）
 
     返回 (ddl_dict, rollback_dict)。
     """
@@ -275,8 +274,12 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
     audit_fields = design.get("audit_fields", {})
     meta = ts.get("meta", {})
     target_meta = meta.get("target", {})
-    f_schema = target_meta.get("f_table", {}).get("schema", "")
-    f_cn = target_meta.get("f_table", {}).get("cn", "")
+    f_table_meta = target_meta.get("f_table", {})
+    i_view_meta = target_meta.get("i_view", {})
+    f_schema = f_table_meta.get("schema", "")
+    f_cn = f_table_meta.get("cn", "")
+    f_table_short = f_table_meta.get("table", "")  # 最终目标 F 表短名
+    i_view_short = i_view_meta.get("table", "")    # I 视图短名（空则不建视图）
 
     ddl_result = {}
     rollback_result = {}
@@ -288,49 +291,35 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
         if not schema:
             schema = f_schema
 
-        # 判断目标表名后缀
-        is_i_table = table.endswith("_i")
-        is_f_table = table.endswith("_f")
+        # 判断是否最终目标 F 表（按 meta.target.f_table，不按后缀猜）
+        # F 表短名必须以 _f 结尾（设计约定：目标表都是 _f）；_d/tmp 即使等于 f_table_short 也不是 F 表
+        is_final_f = bool(f_table_short) and table == f_table_short and f_table_short.endswith("_f")
 
-        if is_i_table:
-            # 目标是 I视图 → 先建 F表，再建 I视图
-            f_table = table[:-2] + "_f"
-
-            # 1. 建 F表（用同规则的字段，改 target_table 为 _f）
-            f_rule = {**rule, "target_table": f"{schema}.{f_table}"}
-            f_filename = f"create_table_{f_table}.sql"
-            ddl_result[f_filename] = generate_create_table(code, f_rule, design, meta, tables)
-            rollback_result[f"rollback_create_table_{f_table}.sql"] = generate_rollback(schema, f_table)
-
-            # 2. 建 I视图（列全部字段，不用 SELECT *）
-            if table not in generated_views:
-                generated_views.add(table)
-                i_filename = f"create_view_{table}.sql"
-                # 字段从 tables[f_table] 取，fallback rule
-                view_fields = tables.get(f_table, {}).get("fields", rule.get("fields", []))
-                ddl_result[i_filename] = generate_i_view(schema, f_table, f_cn or rule.get("rule_name", ""), view_fields, audit_fields)
-                rollback_result[f"rollback_create_view_{table}.sql"] = generate_rollback(schema, table, is_view=True)
-
-        elif is_f_table:
-            # 目标是 F表 → 建 F表 + 自动配套 I视图
-            filename = f"create_table_{table}.sql"
-            ddl_result[filename] = generate_create_table(code, rule, design, meta, tables)
-            rollback_result[f"rollback_create_table_{table}.sql"] = generate_rollback(schema, table)
-
-            # 配套 I视图
-            i_table = table[:-2] + "_i"
-            if i_table not in generated_views:
-                generated_views.add(i_table)
-                i_filename = f"create_view_{i_table}.sql"
-                view_fields = tables.get(table, {}).get("fields", rule.get("fields", []))
-                ddl_result[i_filename] = generate_i_view(schema, table, f_cn or rule.get("rule_name", ""), view_fields, audit_fields)
-                rollback_result[f"rollback_create_view_{i_table}.sql"] = generate_rollback(schema, i_table, is_view=True)
-
+        # 向后兼容：如果 target 还是 _i（assemble_ts 没转），转 _f 建表
+        if table.endswith("_i"):
+            f_table_from_i = table[:-2] + "_f"
+            f_rule = {**rule, "target_table": f"{schema}.{f_table_from_i}"}
+            filename = f"create_table_{f_table_from_i}.sql"
+            ddl_result[filename] = generate_create_table(code, f_rule, design, meta, tables)
+            rollback_result[f"rollback_create_table_{f_table_from_i}.sql"] = generate_rollback(schema, f_table_from_i)
+            # 字段用 tables[f_table_from_i]，fallback rule
+            view_fields_table_key = f_table_from_i
+            is_final_f = True
         else:
-            # 中间表或其他 → 只建表
             filename = f"create_table_{table}.sql"
             ddl_result[filename] = generate_create_table(code, rule, design, meta, tables)
             rollback_result[f"rollback_create_table_{table}.sql"] = generate_rollback(schema, table)
+            view_fields_table_key = table
+
+        # ★ I 视图：只有最终目标 F 表 + meta.target.i_view 非空才建（不加戏）
+        if is_final_f and i_view_short and i_view_short not in generated_views:
+            generated_views.add(i_view_short)
+            i_filename = f"create_view_{i_view_short}.sql"
+            view_fields = tables.get(view_fields_table_key, {}).get("fields", rule.get("fields", []))
+            ddl_result[i_filename] = generate_i_view(schema, view_fields_table_key,
+                                                     f_cn or rule.get("rule_name", ""),
+                                                     view_fields, audit_fields)
+            rollback_result[f"rollback_create_view_{i_view_short}.sql"] = generate_rollback(schema, i_view_short, is_view=True)
 
     return ddl_result, rollback_result
 

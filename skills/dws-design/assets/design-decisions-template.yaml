@@ -129,6 +129,7 @@ complexity_analysis:
                                          #   不影响分布键（分布键看主键/关联频率/离散度）。拿不到填"未知"，不阻断。
 
 # === 表物理属性（per-table）===
+# ★ target_table 填 F 表名（_f 后缀），不填 _i（I 视图由 assemble_ddl 按 meta.target.i_view 自动生成）。
 # 每张表各自定义分布键和分布方式。大部分情况下分布键跟业务主键一致，
 # 但中间表可能不同（如按 user_id 聚合的 tmp 表用 user_id 做分布键）。
 # distribution_key: 分布键字段列表
@@ -136,8 +137,11 @@ complexity_analysis:
 # build_mode: 产出模式（仅中间表需要关注）
 #   transform（默认）：单一规则一次性产出（同表字段不可重复声明，assemble_ts C9 严格校验）
 #   accumulate：多规则累积共建（去重累积/union累积，同表字段可重叠，需配 dedup_strategy）
+# fields: 中间表自建字段的类型声明（可选，仅中间表 designer 自建字段需要）
+#   大部分中间表字段跟目标表同名（类型自动取目标表 target_type，不用声明）。
+#   只有 rs_input 里没有的自建字段（如辅助计算中间产物）必须在此声明类型。
 # 其余属性不填走默认（列存 / 按 schema 推断逻辑集群）。
-# 字段定义由 assemble_ts.py 从 rs_input 自动搬入 tables.{表名}.fields，designer 不碰。
+# 字段定义由 assemble_ts.py 从 rs_input 自动搬入 tables.{表名}.fields，designer 不碰（除中间表自建字段类型）。
 tables:
   # 目标F表:
   # dwb_xxx_f:
@@ -155,6 +159,8 @@ tables:
   # dwb_xxx_tmp2:
   #   distribution_key: [id]
   #   build_mode: accumulate       # 多规则累积共建（配合规则级 dedup_strategy）
+  #   fields:                       # ★ 中间表自建字段类型（rs_input 没有的字段必须声明）
+  #     custom_calc: numeric(10,2)
 
 # === 业务主键（业务唯一字段组合，供 UT 主键唯一检查）===
 # 注意：≠ 分布键。分布键是数据分布最优选，业务主键是业务唯一性。
