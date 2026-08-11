@@ -158,6 +158,21 @@ description: >-
 
 > 简单全量单表资产：五层很快走完，第2层不拆中间表（走 full 单规则），第3层全量，只读 design-guide.md 就够。
 
+### DQ 规则（RS 驱动，designer 翻译）
+
+DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规则。**designer 是翻译者，不是搬运工，也不自主决定产不产**——类比 field_logics 写 design_logic：
+
+- **RS 有 DQ 需求**（`rs_input_view.json` 的 `dq.requirements` 非空）→ designer **翻译**成 coder 可执行的 DQ 规格写进 `dq_rules`
+  - `scope`/`check_type`/`rule_name` 跟 RS 保持一致（分类不变）
+  - `rule_desc` 是**翻译后的技术口径**（检查哪个字段、什么条件、阈值、告警级），不是 RS 原文复制
+  - 例：RS `rule_desc="订单金额不能为空"` → 翻译 `rule_desc="检查 dwb_order_f.order_amount IS NOT NULL，空值告警"`
+  - 翻译后条数可增加（一条模糊需求拆多条），但不应少于 RS（assemble_ts 会 warn）
+- **RS 无 DQ 需求**（`dq.requirements` 为空，标注"无 DQ"）→ `dq_rules` 留空，**不产任何 DQ**（coder 不调、无 DQ 调度任务）
+- designer **不自主决定产不产**（DQ 是业务决策归 RS），RS 有就翻译、没有就不干
+- 无"标准三项系统兜底"（主键唯一/审计非空/记录数不再无条件产）——UT 阶段 `ut_execute` 已查主键重复，上线后要不要持续监控是业务决策
+
+> assemble_ts 硬校验 N_DQ1：RS 有 DQ 但 `dq_rules` 空 → fail-loud（漏翻译根因）；N_DQ2/N_DQ3 是 warn（条数偏少/RS 无但自加）。
+
 ---
 
 ## 3. 数据流图
@@ -216,6 +231,10 @@ description: >-
 - [ ] schedule.schedule_type 合法（daily/hourly/realtime）
 - [ ] schedule.cron 是 Quartz 6 段表达式
 - [ ] 复杂度/分段决策写进 complexity_analysis.design_approach（进 ts 文档）
+
+**DQ（RS 驱动）**
+- [ ] `rs_input_view.dq.requirements` 有内容 → `dq_rules` 已翻译（条数 ≥ RS，rule_desc 是技术口径给 coder）
+- [ ] `rs_input_view.dq` 标注"无 DQ" → `dq_rules` 为空（不自主补）
 
 **组装**
 - [ ] 调 assemble_ts.py 成功产出 ts.json + ts.md（无校验错误；失败看报错的 `[第X层]` 定位）

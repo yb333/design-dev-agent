@@ -1205,6 +1205,23 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         compact["null_in_scene"] = sorted(set(null_fields))
     if incremental_tables:
         compact["incremental_tables"] = incremental_tables
+
+    # DQ 需求（来自 RS L06，告知 designer 该不该产 DQ + 需要翻译的需求内容）
+    # DQ 完全跟随 RS：有需求 designer 翻译产 dq_rules，无需求 dq_rules 留空
+    dq_reqs = rs_input.get("dq_requirements", [])
+    if dq_reqs:
+        compact["dq"] = {
+            "requirements": dq_reqs,
+            "说明": ("RS 有 DQ 需求，designer 必须翻译成 coder 可执行的 DQ 规格写进 dq_rules。"
+                     "scope/check_type/rule_name 跟 RS 保持一致（分类不变），"
+                     "rule_desc 写技术口径（检查字段/条件/阈值/告警级），给 coder 写 SQL 用。"
+                     "翻译后条数可增加（一条模糊需求可拆多条），但不应少于 RS。"),
+        }
+    else:
+        compact["dq"] = {
+            "requirements": [],
+            "说明": "RS 无 DQ 需求（dq_requirements 为空）→ dq_rules 留空，不产 DQ（coder 不调，无 DQ 调度任务）。",
+        }
     return compact
 
 

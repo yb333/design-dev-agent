@@ -129,6 +129,12 @@ UT 跑通后发现"业务主键重复 / 审计字段空值 / 行数异常"，**�
 
 **第4层 工程保障**——分布键 + 关联安全 + 调度
 
+**DQ 规则（RS 驱动，你翻译）**——DQ 完全跟随 RS，不在五层里但产出有明确规则：
+- `rs_input_view.dq.requirements` 有内容 → 你**翻译**成 coder 可执行的 DQ 规格写进 `dq_rules`：scope/check_type/rule_name 跟 RS 一致，rule_desc 写技术口径（检查字段/条件/阈值/告警级），不是 RS 原文复制
+- `rs_input_view.dq` 标注"无 DQ" → `dq_rules` 留空，**不产任何 DQ**
+- 你**不自主决定产不产**（DQ 是业务决策归 RS），RS 有就翻译、没有就不干。无"标准三项系统兜底"
+- assemble_ts 硬校验 N_DQ1：RS 有 DQ 但 `dq_rules` 空 → fail-loud（漏翻译根因）
+
 每层的闭合条件由 assemble_ts 校验兜底，没过会被 fail-loud 拦回——报错带 `[第X层]` 标识，按标识查对应 playbook 修正。**你必须讲清楚设计逻辑**——在 `design_approach` 里写出整体策略（第4.5层：design_approach 必填，进 ts 文档），不是只列阈值数字。
 
 具体的操作规则、领域知识（增量设计全集、复杂度阈值、物化决策、累积共建、命名规范）——**全部在 skill 的 SKILL.md 和三个 references（design-guide / incremental-playbook / complexity-playbook）里**。按 SKILL.md 的五层流程操作，按各 playbook 的领域知识做判断。
@@ -142,6 +148,7 @@ UT 跑通后发现"业务主键重复 / 审计字段空值 / 行数异常"，**�
   - `tables`：源表清单（哪些表、各自字段数、关联条件）→ 理解全貌、判断数据源缺口
   - `direct`：直取/赋值字段按源表分块（schema/alias 提块头，块体短 key）→ 批量搬运字段扫一眼过
   - `processed`：加工字段逐个平铺（含完整多步骤口径/多表来源合并）→ 逐个拆解加工链
+  - `dq`：RS 的 DQ 需求（有内容你要翻译产 dq_rules；标注"无 DQ"则 dq_rules 留空）
   - `null_in_scene`（如有）：标注哪些字段在部分场景被赋 NULL（这些字段不在 direct/processed 里展开）
 - **`rs_input.json`**——完整行对象列表（field_mappings），**脚本读这个**（assemble_ts/precheck）。你**一般不用读**，仅当需要某字段的精确细节（如完整 source_type 做类型核对、或某字段的全部来源行）时再查它。
 

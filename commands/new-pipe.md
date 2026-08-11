@@ -20,7 +20,7 @@ agent: build
     ├── ts.md                             ← 设计产出（人读）
     ├── etl/                              ← 编码产出（coder 产的 SELECT）
     │   └── R0001.sql
-    ├── dq/                               ← DQ 检查 SQL（脚本生成）
+    ├── dq/                               ← DQ 检查 SQL（coder 按 designer 翻译的 dq_rules 产出；RS 无 DQ 则目录为空或不建）
     ├── ut_report.md                      ← UT 报告（执行验证后生成）
     ├── ddl/                              ← 编码产出（脚本生成的 DDL）
     │   └── create_table_xxx.sql
@@ -210,21 +210,24 @@ coder 完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 > coder 内部会：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。
 > 如果 coder 报"静态对比不过"，记录失败规则，继续后面的规则（不阻塞）。
 
-**DQ 并行生成**（ETL 编码和 DQ 互不依赖，并行调）：
+**DQ 生成**（条件化：DQ 完全跟随 RS）：
+
+先读 `{deliver}/ts.json` 的 `dq_rules`：
+- **`dq_rules` 非空**（RS 有 DQ 需求，designer 已翻译）→ 调 coder 产 DQ（ETL 编码和 DQ 互不依赖，可并行）：
 
 ```
 Task(
   subagent_type="dws-coder",
   description="生成DQ检查SQL",
-  prompt="读取 {deliver}/ts.json 的 dq_rules，为每条 DQ 规则生成检查 SQL，
-          产出到 {deliver}/dq/ 目录。
-          标准 DQ（主键唯一/审计非空/行数）直接写；
-          业务 DQ 按 rule_desc 口径写。
+  prompt="读取 {deliver}/ts.json 的 dq_rules，按每条规则的 rule_desc 技术口径
+          生成检查 SQL，产出到 {deliver}/dq/ 目录。
           每个文件命名 dq_{检查类型}.sql。"
 )
 ```
 
-> DQ 不再由脚本生成（assemble_dq 已废弃），全部交给 coder 一次性产出。
+- **`dq_rules` 为空**（RS 无 DQ 需求）→ **跳过 DQ 步骤**：不调 coder，`dq/` 目录不建。无"标准三项系统兜底"（主键/审计/记录数不再无条件产）。
+
+> DQ 不再由脚本生成（assemble_dq.py 已废弃仅供 eval 复现），全部由 coder 按 designer 翻译的 dq_rules 产出。DQ 产出与否完全跟随 RS。
 
 ---
 

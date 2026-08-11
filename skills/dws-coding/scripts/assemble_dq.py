@@ -2,12 +2,21 @@
 """
 DQ 检查 SQL 生成器：从 ts.json 生成 DQ 检查 SQL 到 dq/
 
-⚠️ 生产流程（new-pipe command）已改由 coder 直接生成 DQ，不再调用本脚本。
-本脚本仅供 eval-suite/local_eval.py 使用（确定性脚本保证评测可复现）。
+⚠️⚠️ 本脚本与生产路径行为已不一致（DQ RS 驱动改造遗留）：
 
-核心逻辑：
-- RS（dq_rules）提供的 DQ → 按规则生成 SQL（RS 有就用 RS 的，不重复生成）
-- 标准检查只补 RS 没覆盖的（主键唯一/审计非空/记录数）
+生产路径（new-pipe command / coder）已执行"DQ 完全跟随 RS"：
+  - RS 有 DQ 需求（dq_requirements 非空）→ designer 翻译产 dq_rules → coder 产 DQ
+  - RS 无 DQ 需求 → dq_rules 空 → coder 不产任何 DQ（含主键/审计/记录数都不产）
+  - 取消了"标准三项系统兜底"（主键唯一/审计非空/记录数不再无条件产）
+
+本脚本仍保留"标准三项确定性生成"逻辑——仅供 eval-suite/local_eval.py 历史复现。
+eval 的通过标准依赖标准三项的确定性产出（见 EVAL_REPORT_20260803.md），
+贸然改 eval 的 DQ 路径会引入不稳定。eval 对齐生产是独立任务（见
+idle-regression-report-20260804.md）。
+
+核心逻辑（本脚本，与生产不一致）：
+- RS（dq_rules）提供的 DQ → 留 TODO 占位交给 coder（eval 里 coder 不跑 DQ）
+- 标准检查只补 RS 没覆盖的（主键唯一/审计非空/记录数）← 生产已取消，本脚本保留
 
 用法:
   python assemble_dq.py --ts ts.json --outdir dq/

@@ -422,6 +422,7 @@ class ValidationResult:
         ("L4", "第4层-工程保障"),
         ("LC", "横切"),
         ("LA", "累积共建"),
+        ("LD", "DQ"),
     ]
 
     def __init__(self):
@@ -943,6 +944,30 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
         if not has_dedup:
             vr.add_warn("LA", "N27", f"累积共建表 '{ts}' 有 {overlap_cnt} 个重叠字段但没声明 dedup_strategy（确认多来源是否有数据重叠需排重）")
 
+    # ============================================================
+    # DQ 一致性（N_DQ1-N_DQ3）—— DQ 完全跟随 RS
+    # designer 是翻译者：RS 有 DQ 需求 → 翻译产 dq_rules；RS 无 → dq_rules 留空
+    # ============================================================
+    rs_dq = rs_input.get("dq_requirements", []) or []
+    dec_dq = decisions.get("dq_rules", []) or []
+    n_rs = len(rs_dq)
+    n_dec = len(dec_dq)
+    if n_rs > 0 and n_dec == 0:
+        # N_DQ1（硬阻断）：RS 有 DQ 需求但 designer 没翻译产 dq_rules（漏翻译，"一次有一次没有"的根因）
+        vr.add_hard("LD", "N_DQ1",
+                    f"RS 有 {n_rs} 条 DQ 需求（dq_requirements），但 dq_rules 为空。"
+                    f"RS 有 DQ 时 designer 必须翻译产 dq_rules（scope/check_type/rule_name 跟 RS 一致，"
+                    f"rule_desc 写技术口径给 coder）")
+    elif 0 < n_dec < n_rs:
+        # N_DQ2（warn）：翻译后条数少于 RS，可能漏翻译
+        vr.add_warn("LD", "N_DQ2",
+                    f"RS 有 {n_rs} 条 DQ 需求，dq_rules 只翻译了 {n_dec} 条，核对是否漏翻译")
+    elif n_rs == 0 and n_dec > 0:
+        # N_DQ3（warn）：RS 无 DQ 需求但 designer 自行加了（DQ 是业务决策归 RS）
+        vr.add_warn("LD", "N_DQ3",
+                    f"RS 未提 DQ 需求（dq_requirements 为空），但 dq_rules 自行补充了 {n_dec} 条。"
+                    f"DQ 是业务决策归 RS，请确认")
+
     return vr
 
 
@@ -1418,15 +1443,17 @@ def build_meta(rs_input, decisions):
             "project_name": view_path["project_name"],
             "task_group": view_path["task_group"],
         }
-        dq_path = _resolve_task_path("dq")
-        tasks["dq"] = {
-            "task_name": f"task_{f_table_short}_dq",
-            "job_name": f"Pjob_{f_table_short}_dq",
-            "cron": cron,
-            "upstream": [{"table": i_view_short, "task": f"task_{i_view_short}", "dep_type": "宽依赖"}],
-            "project_name": dq_path["project_name"],
-            "task_group": dq_path["task_group"],
-        }
+        # DQ 调度任务：仅当 dq_rules 非空时才建（DQ 完全跟随 RS，无 DQ 不产调度任务）
+        if decisions.get("dq_rules"):
+            dq_path = _resolve_task_path("dq")
+            tasks["dq"] = {
+                "task_name": f"task_{f_table_short}_dq",
+                "job_name": f"Pjob_{f_table_short}_dq",
+                "cron": cron,
+                "upstream": [{"table": i_view_short, "task": f"task_{i_view_short}", "dep_type": "宽依赖"}],
+                "project_name": dq_path["project_name"],
+                "task_group": dq_path["task_group"],
+            }
 
     schedule = {
         "schedule_type": schedule_type,
@@ -1789,17 +1816,19 @@ def render_md(ts):
     lines.append("---")
     lines.append("")
 
-    # §7 DQ（从 RS L06 搬入，类型跟 RS 保持一致）
+    # §7 DQ（RS 驱动：RS L06 有需求 designer 翻译产，没有则不产）
     lines.append("## 7. 数据质量检查(DQ)")
     lines.append("")
     dq = ts.get("dq_rules", [])
     if dq:
-        lines.append("| 检查范围 | 检查类型 | 规则名称 | 规则描述 |")
+        lines.append(f"> DQ 由 RS L06 驱动，designer 翻译成技术口径，coder 按 dq_rules 产出（共 {len(dq)} 条）。")
+        lines.append("")
+        lines.append("| 检查范围 | 检查类型 | 规则名称 | 规则描述（技术口径） |")
         lines.append("|----------|----------|----------|----------|")
         for d in dq:
             lines.append(f"| {d.get('scope', '')} | {d.get('check_type', '')} | {d.get('rule_name', '')} | {d.get('rule_desc', '')} |")
     else:
-        lines.append("*(本表无 DQ 要求)*")
+        lines.append("*(RS 未提 DQ 需求，本资产不产 DQ：coder 不产 DQ SQL，无 DQ 调度任务)*")
     lines.append("")
 
     # §8 增量设计（条件出现：只有有增量规则的资产才显示）

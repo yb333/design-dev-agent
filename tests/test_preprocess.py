@@ -765,6 +765,29 @@ class TestBuildCompact:
         c = build_compact(rs)
         assert "incremental_tables" not in c
 
+    def test_compact_dq_section_with_requirements(self):
+        """RS 有 DQ 需求时 compact.dq 展示需求内容 + 翻译说明（designer 必须翻译产 dq_rules）。"""
+        from preprocess import build_compact
+        rs = _rs_input_with([_direct("id", "id")])
+        rs["dq_requirements"] = [
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "金额非空",
+             "rule_desc": "订单金额不能为空"},
+        ]
+        c = build_compact(rs)
+        assert "dq" in c
+        assert c["dq"]["requirements"] == rs["dq_requirements"]
+        assert "翻译" in c["dq"]["说明"], "应告知 designer 翻译职责"
+
+    def test_compact_dq_section_empty(self):
+        """RS 无 DQ 需求时 compact.dq 标注留空（designer 不产 DQ）。"""
+        from preprocess import build_compact
+        rs = _rs_input_with([_direct("id", "id")])
+        rs["dq_requirements"] = []
+        c = build_compact(rs)
+        assert "dq" in c
+        assert c["dq"]["requirements"] == []
+        assert "留空" in c["dq"]["说明"], "应明确告知 dq_rules 留空"
+
 
 class TestNoRsMode:
     """无RS模式：mapping 独立驱动，schedule 用默认值兜底。

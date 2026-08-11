@@ -214,11 +214,14 @@
   },
 
   // ============================================================================
-  // dq_rules —— DQ（从 RS L06 搬入，字段跟 RS 表头一致）
-  // designer 不改类型，只做设计判断。DQ SQL 由 assemble_dq/coder 生成
-  // 标准检查(主键唯一/非空/行数)由脚本自动套用，不在此重复
+  // dq_rules —— DQ（RS 驱动：RS L06 有需求 designer 翻译产入，RS 无则留空）
+  // designer 是翻译者（类比 field_logics）：scope/check_type/rule_name 跟 RS 一致，
+  // rule_desc 写技术口径（检查字段/条件/阈值/告警级）给 coder 写 SQL。
+  // DQ 完全跟随 RS，无"标准三项系统兜底"（主键/审计/记录数不再无条件产）。
+  // assemble_ts 硬校验 N_DQ1：RS 有 DQ 但 dq_rules 空 → fail-loud（漏翻译）。
   // ============================================================================
   "dq_rules": []
   // 示例：
-  // [{ "scope": "字段级", "check_type": "空值检查", "rule_name": "", "rule_desc": "" }]
+  // [{ "scope": "字段级", "check_type": "空值检查", "rule_name": "订单金额非空",
+  //    "rule_desc": "检查 dwb_order_f.order_amount IS NOT NULL，空值告警" }]
 }

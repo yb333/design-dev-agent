@@ -399,18 +399,21 @@ class TestBuildMetaTaskPath:
     """build_meta 给每个 task 填 project_name/task_group。"""
 
     def test_tasks_have_project_group(self, monkeypatch):
-        """有 schedule_config 时，tasks.f/view/dq 都有 project_name/task_group。"""
+        """有 schedule_config + dq_rules 非空时，tasks.f/view/dq 都有 project_name/task_group。"""
         sched_cfg = {
             "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
             "dq_override": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"},
         }
         monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: sched_cfg)
-        meta = build_meta(_rs_input_for_meta(), {"schedule": {"cron": "0 30 3 * * ?"}})
+        decisions = {"schedule": {"cron": "0 30 3 * * ?"},
+                     "dq_rules": [{"scope": "表级", "check_type": "重复数据检查",
+                                   "rule_name": "主键唯一", "rule_desc": "id 不重复"}]}
+        meta = build_meta(_rs_input_for_meta(), decisions)
         tasks = meta["schedule"]["tasks"]
         assert tasks["f"]["project_name"] == "SRP_DAILY"
         assert tasks["f"]["task_group"] == "GROUP_SPRD"
         assert tasks["view"]["project_name"] == "SRP_DAILY"
-        # dq 走 dq_override
+        # dq 走 dq_override（仅 dq_rules 非空时才建）
         assert tasks["dq"]["project_name"] == "SRP_DQ"
         assert tasks["dq"]["task_group"] == "GROUP_DQ"
 
@@ -431,7 +434,8 @@ class TestBuildMetaTaskPath:
             "task_project_override": {
                 "dq": {"project_name": "CUSTOM_DQ", "task_group": "CUSTOM_GDQ"},
             },
-        }}
+        }, "dq_rules": [{"scope": "表级", "check_type": "重复数据检查",
+                         "rule_name": "主键唯一", "rule_desc": "id 不重复"}]}
         meta = build_meta(_rs_input_for_meta(), decisions)
         tasks = meta["schedule"]["tasks"]
         assert tasks["dq"]["project_name"] == "CUSTOM_DQ"
@@ -457,7 +461,7 @@ class TestBuildMetaTaskPath:
 
 from conftest import (make_rs_input, make_design_decisions,
                       make_incremental_rs_input, make_incremental_decisions,
-                      make_accumulate_decisions)
+                      make_accumulate_decisions, make_dq_rs_input)
 
 
 def _run(decisions, rs_input=None):
@@ -471,6 +475,14 @@ def _run(decisions, rs_input=None):
 def _codes(vr, layer=None):
     """提取触发的校验 code 列表（可选按层过滤）。"""
     return [info["code"] for info in vr.items if layer is None or info["layer"] == layer]
+
+
+def _level_of(vr, code):
+    """返回某 code 的 level（hard/soft/warn），不存在返回 None。"""
+    for info in vr.items:
+        if info["code"] == code:
+            return info["level"]
+    return None
 
 
 class TestLayer0Anchor:
@@ -888,3 +900,89 @@ class TestErrorGrouping:
         # 可能有 warn 但没 hard
         report = vr.format_report()
         assert "阻断" not in report
+
+
+class TestDQDriven:
+    """DQ 完全跟随 RS（N_DQ1-N_DQ3）。designer 是翻译者，不是搬运工。
+
+    RS 有 DQ 需求 → designer 翻译产 dq_rules；RS 无 → dq_rules 留空。
+    """
+
+    def test_rs_has_dq_but_empty_blocks(self):
+        """N_DQ1 硬阻断：RS 有 DQ 需求但 designer 没翻译产 dq_rules（漏翻译根因）。"""
+        rs = make_dq_rs_input()  # 2 条 DQ 需求
+        dd = make_design_decisions()  # dq_rules 默认空
+        vr = _run(dd, rs)
+        assert "N_DQ1" in _codes(vr, "LD")
+        assert _level_of(vr, "N_DQ1") == "hard"
+
+    def test_rs_has_dq_translated_passes(self):
+        """RS 有 DQ + dq_rules 已翻译（条数 == RS）→ 通过，无 N_DQ1/2/3。"""
+        rs = make_dq_rs_input()  # 2 条
+        dd = make_design_decisions(dq_rules=[
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "订单金额非空",
+             "rule_desc": "检查 dwb_dqtest_f.order_amount IS NOT NULL，空值告警"},
+            {"scope": "表级", "check_type": "重复数据检查", "rule_name": "主键唯一",
+             "rule_desc": "检查 id 重复，GROUP BY id HAVING COUNT(*)>1"},
+        ])
+        vr = _run(dd, rs)
+        for code in ("N_DQ1", "N_DQ2", "N_DQ3"):
+            assert code not in _codes(vr, "LD"), f"{code} 不该触发"
+
+    def test_rs_has_dq_more_translated_passes(self):
+        """翻译后条数可增加（一条拆多条），≥ RS 通过（不触发 N_DQ2）。"""
+        rs = make_dq_rs_input(dq_needs=[
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "x"},
+        ])
+        dd = make_design_decisions(dq_rules=[
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "a"},
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "数量非空", "rule_desc": "b"},
+        ])
+        vr = _run(dd, rs)
+        assert "N_DQ2" not in _codes(vr, "LD")
+
+    def test_rs_has_dq_partial_warns(self):
+        """N_DQ2 warn：RS 有 DQ 但 dq_rules 条数少于 RS（可能漏翻译）。"""
+        rs = make_dq_rs_input()  # 2 条
+        dd = make_design_decisions(dq_rules=[
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "x"},
+        ])  # 只翻译 1 条
+        vr = _run(dd, rs)
+        assert "N_DQ2" in _codes(vr, "LD")
+        assert _level_of(vr, "N_DQ2") == "warn"
+
+    def test_no_rs_dq_empty_passes(self):
+        """RS 无 DQ + dq_rules 空 → 通过（不产 DQ，无 N_DQ1/2/3）。"""
+        rs = make_rs_input()  # 默认无 DQ
+        dd = make_design_decisions()  # dq_rules 空
+        vr = _run(dd, rs)
+        for code in ("N_DQ1", "N_DQ2", "N_DQ3"):
+            assert code not in _codes(vr, "LD")
+
+    def test_no_rs_dq_but_added_warns(self):
+        """N_DQ3 warn：RS 无 DQ 但 designer 自行加了（DQ 是业务决策归 RS）。"""
+        rs = make_rs_input()  # 无 DQ
+        dd = make_design_decisions(dq_rules=[
+            {"scope": "表级", "check_type": "重复数据检查", "rule_name": "主键唯一", "rule_desc": "x"},
+        ])
+        vr = _run(dd, rs)
+        assert "N_DQ3" in _codes(vr, "LD")
+        assert _level_of(vr, "N_DQ3") == "warn"
+
+    def test_dq_task_absent_when_empty(self):
+        """dq_rules 空 → build_meta 不建 tasks["dq"]（RS 无 DQ，无调度任务）。"""
+        rs = make_rs_input()
+        dd = make_design_decisions()  # dq_rules 空
+        meta = build_meta(rs, dd)
+        tasks = meta["schedule"]["tasks"]
+        assert "dq" not in tasks
+
+    def test_dq_task_present_when_nonempty(self):
+        """dq_rules 非空 → build_meta 建 tasks["dq"]（RS 有 DQ，有调度任务）。"""
+        rs = make_rs_input()
+        dd = make_design_decisions(dq_rules=[
+            {"scope": "表级", "check_type": "重复数据检查", "rule_name": "主键唯一", "rule_desc": "x"},
+        ])
+        meta = build_meta(rs, dd)
+        tasks = meta["schedule"]["tasks"]
+        assert "dq" in tasks

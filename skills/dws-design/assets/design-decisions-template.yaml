@@ -218,20 +218,20 @@ data_flow:
     - sequence: 1
       rules: ["R0001"]
 
-# === DQ（可选，不是每表必须）===
-# 只放设计意图，DQ SQL 由 coder 生成
+# === DQ（RS 驱动：RS L06 有需求就翻译产，没有就留空）===
+# designer 是翻译者（类比 field_logics 写 design_logic），不是搬运工，也不自主决定产不产。
+# RS 有 DQ（rs_input_view.dq.requirements 非空）→ 翻译产 dq_rules；RS 无 DQ → dq_rules 留空。
+# 无"标准三项系统兜底"（主键/审计/记录数不再无条件产）。
 dq_rules: []
-# DQ 规则从 RS L06 直接搬入（designer 不改类型，只做设计判断）
-# 字段跟 RS L06 表头一致（中文原值）：
-#   - scope: 检查范围（字段级 / 表级 / 跨表级）
-#   - check_type: 检查类型（空值检查 / 重复数据检查 / 跨表数量一致性检查 / 值域约束检查 / 时间拉链检查 / 维度扩散检查）
-#   - rule_name: 规则名称
-#   - rule_desc: 规则描述（检查口径/阈值/告警级等）
-  #   - rule_id: "DQ_001"
-  #     scope: "字段级"
-  #     check_type: "空值检查"
-  #     rule_name: ""
-  #     rule_desc: ""
+# 翻译规则（不是原样搬运 RS）：
+#   - scope / check_type / rule_name：跟 RS 保持一致（分类不变）
+#   - rule_desc：★ 翻译后的技术口径（检查字段/条件/阈值/告警级），给 coder 写 SQL 用，不是 RS 原文
+# 例：RS rule_desc="订单金额不能为空" → 翻译 rule_desc="检查 dwb_order_f.order_amount IS NOT NULL，空值告警"
+#   - rule_id: "DQ_001"
+#     scope: "字段级"                          # 跟 RS 一致
+#     check_type: "空值检查"                    # 跟 RS 一致
+#     rule_name: "订单金额非空"                 # 跟 RS 一致
+#     rule_desc: "检查 dwb_order_f.order_amount IS NOT NULL，空值告警"  # ★ 翻译后的技术口径
 
 # === 软阻断豁免（可选）===
 # 某些校验是"软阻断"（默认拦，但有合法通道可放行）。

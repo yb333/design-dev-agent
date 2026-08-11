@@ -83,7 +83,7 @@ ddlc_design_dev/
    - designer 可调 explore.py 试算 JOIN 键唯一性（第4层关联安全）。
 3. **闸口①**：gate_summary.py 出摘要，人确认设计方向（非交互模式跳过）
 4. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
-5. **编码**：逐规则调 dws-coder，slice_ts.py 切片单规则上下文，coder 产 SELECT + DQ
+5. **编码**：逐规则调 dws-coder，slice_ts.py 切片单规则上下文，coder 产 SELECT；**DQ 条件化**（ts.dq_rules 非空才调 coder 产 DQ，为空跳过——DQ 完全跟随 RS）
 6. **UT**（需数据库）：check_db.py 探活 → 6a ut_precheck（回退+DDL+SELECT预检，秒级）→ 6b ut_execute（INSERT+UT检查，分钟级）
 7. **执行回路**（★ 三类分流，见下）
 8. **闸口②**：人确认编码质量
@@ -92,7 +92,7 @@ ddlc_design_dev/
 
 rs_input.json 的信息来自两个输入，职责分明：
 
-**必须从 RS 来的**（mapping 没有）：目标表 schema.table（L1.1）、调度方案/频率/SLA（L07）、增量识别方式+驱动表+增量字段（L07增量表段）、初始化时间范围、湖表调度上游任务、DQ 规则（L06）、数据探索量级/空值率（L01）、粒度/owner。
+**必须从 RS 来的**（mapping 没有）：目标表 schema.table（L1.1）、调度方案/频率/SLA（L07）、增量识别方式+驱动表+增量字段（L07增量表段）、初始化时间范围、湖表调度上游任务、DQ 规则（L06，**完全跟随 RS**：有需求 designer 翻译产 dq_rules、没有不产，取消标准三项系统兜底）、数据探索量级/空值率（L01）、粒度/owner。
 
 **mapping 就够的**（RS 不需要）：源表清单（实体级）、字段映射全部（属性级：源/目标字段名+类型+中文名、映射规则、映射表达式、备注、场景分组）、目标表中文名。**占 rs_input 体积 90%+**。
 
@@ -187,3 +187,14 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 ### 本轮改造（设计思维重构 + TS 校验契约补强，2026-08）
 
 design-guide.md 已从 335 行大杂烩拆分为：design-guide（物理决策，70行）+ incremental-playbook（增量全集）+ complexity-playbook（复杂度/物化/step_type）。SKILL.md 的 9 步操作清单已重构为**五层决策骨架**。assemble_ts.py 新增 `run_all_validations`（~38 条校验，五层分组）+ `ValidationResult`（分层报错）+ 软阻断豁免机制。design_decisions 模板补 `build_mode`/`dedup_strategy`/`data_volume`/`exemptions`。preprocess.py 内嵌的死代码 precheck 副本已删除。测试 419→465。
+
+### DQ RS 驱动改造（2026-08）
+
+DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次有一次没有"的不稳定。核心：
+- **DQ 100% 跟随 RS**：`rs_input.dq_requirements` 非空 → designer 翻译产 `dq_rules`；为空 → `dq_rules` 留空。
+- **designer 是翻译者**（不是搬运工，类比 field_logics 写 design_logic）：scope/check_type/rule_name 跟 RS 一致，rule_desc 写技术口径给 coder。
+- **取消"标准三项"系统兜底**（主键唯一/审计非空/记录数不再无条件产）。
+- assemble_ts 新增 LD 层校验：N_DQ1（硬阻断，RS 有 DQ 但 dq_rules 空）/ N_DQ2（warn，条数偏少）/ N_DQ3（warn，RS 无但自加）。
+- DQ 调度任务条件化（dq_rules 空不建 tasks["dq"]）；coder 条件化调用（dq_rules 空不调）。
+- preprocess build_compact 加 `dq` 段（designer 读 view 就看到 RS 的 DQ 需求）。
+- assemble_dq.py（废弃脚本）不改逻辑仅供 eval 复现，文件头注释说明与生产路径不一致。

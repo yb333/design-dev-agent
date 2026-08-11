@@ -67,7 +67,7 @@ def tmp_deliver(tmp_path):
 # ============================================================
 
 def make_rs_input(schema="dws", table="dwb_test_i", cn="测试表",
-                  fields=None, sources=None, has_audit=True):
+                  fields=None, sources=None, has_audit=True, dq_requirements=None):
     """构造 rs_input.json 的 dict。
 
     Args:
@@ -77,6 +77,7 @@ def make_rs_input(schema="dws", table="dwb_test_i", cn="测试表",
         fields: 字段列表，None 用默认（1 个业务字段）。
         sources: 源表列表，None 用默认（单源表）。
         has_audit: 是否追加 4 个审计字段。
+        dq_requirements: RS L06 DQ 需求列表，None 用默认（空=无 DQ 需求）。
     """
     if sources is None:
         sources = [{"source_schema": "ods", "source_table": "ods_test_f", "source_table_cn": "测试源表",
@@ -124,7 +125,7 @@ def make_rs_input(schema="dws", table="dwb_test_i", cn="测试表",
         "source_tables": sources,
         "field_mappings": fields,
         "schedule": {"frequency": "T+1", "sla": "3:30", "strategy": "全量调度"},
-        "dq_requirements": [],
+        "dq_requirements": dq_requirements or [],
     }
 
 
@@ -354,3 +355,19 @@ def make_type_risk_rs_input(risky_fields=None):
             "source_alias": "t", "remark": "",
         })
     return make_rs_input(table="dwb_risk_i", fields=fields, has_audit=False)
+
+
+def make_dq_rs_input(dq_needs=None):
+    """构造带 RS L06 DQ 需求的 rs_input（用于 DQ 驱动校验测试）。
+
+    dq_needs: [{scope, check_type, rule_name, rule_desc}] 列表，默认造 2 条需求。
+    返回的 rs_input.dq_requirements 非空，触发 designer 必须翻译产 dq_rules。
+    """
+    if dq_needs is None:
+        dq_needs = [
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "订单金额非空",
+             "rule_desc": "订单金额不能为空"},
+            {"scope": "表级", "check_type": "重复数据检查", "rule_name": "主键唯一",
+             "rule_desc": "订单号不能重复"},
+        ]
+    return make_rs_input(table="dwb_dqtest_i", dq_requirements=dq_needs)
