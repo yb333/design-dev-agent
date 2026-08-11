@@ -119,7 +119,7 @@ def check_case(mapping_path: str, rs_path: str) -> list[str]:
     attr_headers = [str(c.value or "").rstrip("*").strip() for c in ws_attr[1]]
 
     idx_a_src_table = col_idx(attr_headers, "源表物理表名")
-    idx_a_src_alias = col_idx(attr_headers, "源表物理表别名")
+    idx_a_src_alias = col_idx(attr_headers, "源表别名")
     idx_a_target = col_idx(attr_headers, "目标字段名")
     idx_a_type = col_idx(attr_headers, "目标字段类型")
     idx_a_rule = col_idx(attr_headers, "映射规则")
