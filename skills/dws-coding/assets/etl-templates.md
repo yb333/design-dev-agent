@@ -257,25 +257,34 @@ CURRENT_TIMESTAMP AS dw_last_update_date
 
 所有可能为 NULL 的字段必须 COALESCE：
 ```sql
-COALESCE(t.amount, 0) AS amount          -- 金额默认0
-COALESCE(t.name, '') AS name             -- 字符串默认空
-COALESCE(inv_agg.total, 0) AS total      -- LEFT JOIN 结果默认0
+/* 金额默认0 */
+COALESCE(t.amount, 0) AS amount
+/* 字符串默认空 */
+COALESCE(t.name, '') AS name
+/* LEFT JOIN 结果默认0 */
+COALESCE(inv_agg.total, 0) AS total
 ```
 
 ### 字段别名
 
 每个输出字段必须用 `AS` 显式命名，且和切片的 target_field 一致：
 ```sql
-t.contract_no AS contract_no    -- ✅ 明确别名
-t.contract_no                   -- ❌ 隐式，check_sql 检查不到
+/* ✅ 明确别名 */
+t.contract_no AS contract_no
+/* ❌ 隐式，check_sql 检查不到 */
+t.contract_no
 ```
 
 ### 不能 SELECT *
 
 ```sql
-SELECT t.contract_no, t.amount    -- ✅ 列出字段
-SELECT t.*                         -- ❌ 禁止
+/* ✅ 列出字段 */
+SELECT t.contract_no, t.amount
+/* ❌ 禁止 */
+SELECT t.*
 ```
+
+> 注释一律用 `/* */` 块注释，禁止 `--` 行注释（详见编码规范 §7）。
 
 ## 8. 增量取数 SELECT（step_type=incremental_extract）
 

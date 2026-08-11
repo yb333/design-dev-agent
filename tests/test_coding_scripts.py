@@ -241,6 +241,49 @@ class TestCheckSql:
         # 应包含换行（折行显示）
         assert "\n" in missing_issue
 
+    # ---- 行注释检测（规范：一律用 /* */ 块注释，禁 --）----
+
+    def test_line_comment_detected(self):
+        """-- 行注释应被检测到"""
+        from check_sql import check_no_line_comment
+        sql = "SELECT t.id AS id -- 取ID\nFROM t"
+        ok, msg = check_no_line_comment(sql)
+        assert not ok
+        assert "行注释" in msg
+
+    def test_block_comment_ok(self):
+        """/* */ 块注释不应报错"""
+        from check_sql import check_no_line_comment
+        sql = "/* 取ID */ SELECT t.id AS id FROM t"
+        ok, msg = check_no_line_comment(sql)
+        assert ok
+
+    def test_date_literal_not_flagged(self):
+        """日期字面量里的 - 不应误判为行注释"""
+        from check_sql import check_no_line_comment
+        sql = "SELECT t.id AS id FROM t WHERE dt >= '${BIZ_DATE_START}'"
+        ok, msg = check_no_line_comment(sql)
+        assert ok, f"日期字面量误判: {msg}"
+
+    def test_string_with_dash_not_flagged(self):
+        """字符串字面量里的 dash 不应误判"""
+        from check_sql import check_no_line_comment
+        sql = "SELECT t.id AS id FROM t WHERE name = 'a-b-c'"
+        ok, msg = check_no_line_comment(sql)
+        assert ok, f"字符串 dash 误判: {msg}"
+
+    def test_check_sql_reports_line_comment(self, ts_data):
+        """check_sql 主函数应把 -- 行注释报为问题"""
+        from check_sql import check_sql
+        sql = """
+        SELECT t.contract_no AS contract_no,
+               'N' AS del_flag
+        FROM fin_dwl_cnb.dwl_con_pu_mtr_f t
+        -- 这是行注释
+        """
+        issues = check_sql(sql, ts_data, "R0001")
+        assert any("行注释" in i for i in issues)
+
     # ---- CTE（WITH ... AS (...)）相关：回归 012 大案例发现的误报 ----
 
     def test_split_cte_main_extracts_cte_names(self):

@@ -52,12 +52,12 @@ def gen_direct_line(field: dict) -> str:
     target = field.get("target_field", "")
     sf_list = field.get("source_fields", [])
     if not sf_list:
-        return f"-- TODO: {target} — 直取但 source_fields 为空"
+        return f"/* TODO: {target} — 直取但 source_fields 为空 */"
     sf = sf_list[0]
     alias = sf.get("alias", "").strip()
     src = sf.get("field", "").strip()
     if not alias or not src:
-        return f"-- TODO: {target} — 直取但源别名/源字段缺失"
+        return f"/* TODO: {target} — 直取但源别名/源字段缺失 */"
     return f"{alias}.{src} AS {target}"
 
 
@@ -100,21 +100,23 @@ def query_list(sliced: dict) -> str:
     processed = [f for f in fields
                  if f.get("transform_type") not in ("direct", "assign")]
 
-    lines = [f"-- {rule_code}: {rule_name}", ""]
+    lines = [f"/* {rule_code}: {rule_name} */", ""]
 
     if direct_by_alias:
-        lines.append("-- 直取字段（按源表分布，用 --alias <别名> 查具体行）:")
+        lines.append("/* 直取字段（按源表分布，用 --alias <别名> 查具体行）:")
         # 按字段数降序
         for alias in sorted(direct_by_alias, key=lambda a: -len(direct_by_alias[a])):
             display = alias_map.get(alias, alias)
             n = len(direct_by_alias[alias])
             lines.append(f"  {alias:10s} ({display}): {n} 个")
+        lines.append("*/")
         lines.append("")
 
     if processed:
-        lines.append(f"-- 加工字段 {len(processed)} 个（需按 design_logic 实现，用 --field <字段> 查详情）:")
+        lines.append(f"/* 加工字段 {len(processed)} 个（需按 design_logic 实现，用 --field <字段> 查详情）:")
         for f in processed:
             lines.append(f"  {f.get('target_field', ''):30s} {f.get('transform_type', '')}")
+        lines.append("*/")
         lines.append("")
 
     n_direct = sum(len(v) for v in direct_by_alias.values())
@@ -122,9 +124,9 @@ def query_list(sliced: dict) -> str:
                   if f.get("transform_type") == "assign"
                   and f.get("target_field") in ("del_flag", "crt_cycle_id",
                                                 "last_upd_cycle_id", "dw_last_update_date"))
-    lines.append(f"-- 汇总: 直取 {n_direct} / 加工 {len(processed)} / 审计字段 {n_audit}")
+    lines.append(f"/* 汇总: 直取 {n_direct} / 加工 {len(processed)} / 审计字段 {n_audit} */")
     if not direct_by_alias:
-        lines.append("-- （此规则无直取字段，纯聚合/加工规则）")
+        lines.append("/* 此规则无直取字段，纯聚合/加工规则 */")
 
     return "\n".join(lines)
 
@@ -151,12 +153,12 @@ def query_alias(sliced: dict, alias: str) -> str:
                           for f in fields if f.get("transform_type") == "direct"
                           for sf in f.get("source_fields", [])}
         if alias in all_aliases:
-            return f"-- {display} ({alias}) 存在但无直取字段（可能全是加工字段）"
-        return (f"-- 未找到 alias '{alias}'。\n"
-                f"-- 规则的 source_tables 别名: {sorted(all_aliases)}\n"
-                f"-- 有直取字段的别名: {sorted(direct_aliases)}")
+            return f"/* {display} ({alias}) 存在但无直取字段（可能全是加工字段） */"
+        return (f"/* 未找到 alias '{alias}'。*/\n"
+                f"/* 规则的 source_tables 别名: {sorted(all_aliases)} */\n"
+                f"/* 有直取字段的别名: {sorted(direct_aliases)} */")
 
-    lines = [f"-- {display} ({alias}) 直取字段 {len(matched)} 个:"]
+    lines = [f"/* {display} ({alias}) 直取字段 {len(matched)} 个 */"]
     for f in matched:
         lines.append("    " + gen_direct_line(f) + ",")
     return "\n".join(lines)
@@ -170,7 +172,7 @@ def query_field(sliced: dict, field_name: str) -> str:
     for f in fields:
         if f.get("target_field", "").lower() == field_name.lower():
             ttype = f.get("transform_type", "")
-            lines = [f"-- 字段: {f.get('target_field', '')}"]
+            lines = [f"[字段] {f.get('target_field', '')}"]
             lines.append(f"   类型: {f.get('field_type', '')}")
             lines.append(f"   注释: {f.get('field_comment', '')}")
             lines.append(f"   分类: {ttype}")
@@ -198,8 +200,8 @@ def query_field(sliced: dict, field_name: str) -> str:
     # 模糊匹配建议
     all_fields = [f.get("target_field", "") for f in fields]
     similar = [fn for fn in all_fields if field_name.lower() in fn.lower()]
-    hint = f"\n-- 字段名含 '{field_name}' 的: {similar}" if similar else ""
-    return f"-- 未找到字段 '{field_name}'。{hint}"
+    hint = f"\n[提示] 字段名含 '{field_name}' 的: {similar}" if similar else ""
+    return f"[未找到] 字段 '{field_name}'。{hint}"
 
 
 # ============================================================

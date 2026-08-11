@@ -14,28 +14,35 @@
 
 每个输出字段必须用 `AS` 显式命名，且和切片的 target_field 一致：
 ```sql
-t.contract_no AS contract_no    -- ✅ 明确别名（check_sql 靠 AS 识别字段覆盖）
-t.contract_no                   -- ❌ 隐式，check_sql 检查不到，可能漏判
+/* ✅ 明确别名（check_sql 靠 AS 识别字段覆盖） */
+t.contract_no AS contract_no
+/* ❌ 隐式，check_sql 检查不到，可能漏判 */
+t.contract_no
 ```
 
 ### 1.2 不能 SELECT *
 
 ```sql
-SELECT t.contract_no, t.amount    -- ✅ 列出字段
-SELECT t.*                         -- ❌ 禁止
+/* ✅ 列出字段 */
+SELECT t.contract_no, t.amount
+/* ❌ 禁止 */
+SELECT t.*
 ```
 
 ### 1.3 NULL 处理
 
 所有可能为 NULL 的字段必须 COALESCE：
 ```sql
-COALESCE(t.amount, 0) AS amount          -- 金额默认0
-COALESCE(t.name, '') AS name             -- 字符串默认空
-COALESCE(inv_agg.total, 0) AS total      -- LEFT JOIN 结果默认0
+/* 金额默认0 */
+COALESCE(t.amount, 0) AS amount
+/* 字符串默认空 */
+COALESCE(t.name, '') AS name
+/* LEFT JOIN 结果默认0 */
+COALESCE(inv_agg.total, 0) AS total
 ```
 
-> codegen_direct.py 会按 field_type 自动推断 COALESCE 默认值生成 direct 字段。
-> 你手写 aggregate/计算字段时，同样要遵守此规范。
+> ★ 该不该 COALESCE、用什么默认值是业务语义判断（金额 NULL→0 合理，
+> 主键/外键 NULL→0 会掩盖关联失败，状态字段 NULL 可能有含义），由你根据字段语义决定。
 
 ### 1.4 聚合字段规范
 
@@ -357,12 +364,27 @@ CONCAT(LEFT(id_card, 4), '**********', RIGHT(id_card, 4)) AS id_card_masked
 | 关键字 | FROM/JOIN/WHERE/GROUP BY/ORDER BY 独立成行 |
 | CASE WHEN | WHEN/THEN/ELSE/END 各占一行 |
 | CTE | CTE 之间空一行 |
-| 注释 | 复杂 SQL 必须有功能/逻辑注释 |
+| 注释 | 复杂 SQL 必须有功能/逻辑注释，**统一用 `/* */` 块注释**（见下） |
 
-### 字段注释要求
+### 注释规范（★ 强制）
 
-- 每个加工字段用 `-- 注释` 说明加工逻辑（直取字段不用，codegen 也不加）
-- CTE 用 `-- 用途说明` 标注
+**所有注释一律使用 `/* */` 块注释，禁止使用 `--` 行注释。** check_sql 会检测并报错。
+
+```sql
+/* ✅ 正确：块注释 */
+/* 文件头/CTE用途/字段说明/行内标注 都用 /* */ */
+COALESCE(t.amount, 0) AS amount   /* 金额默认0 */
+
+/* ❌ 错误：禁止行注释 */
+-- 金额默认0
+COALESCE(t.amount, 0) AS amount   -- 金额默认0
+```
+
+各场景的注释要求：
+- **文件头**：`/* ===== ... ===== */` 多行块注释（规则名/目标表/来源/写入方式/设计意图）
+- **CTE 用途**：每个 CTE 上方用 `/* CTE 名: 用途说明 */` 标注
+- **加工字段**：每个加工字段用 `/* 注释 */` 说明加工逻辑（直取字段不用注释）
+- **行内标注**：简短说明用 `/* xxx */` 行尾块注释
 
 ---
 

@@ -192,6 +192,25 @@ def check_no_select_star(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
+def check_no_line_comment(sql: str) -> tuple[bool, str]:
+    """检查没有 -- 行注释（规范要求一律用 /* */ 块注释）。
+
+    避免误判：跳过字符串字面量（'...' / "..."）里的 --。
+    日期字面量如 '2025-01-01' 是单破折号不会被匹配（需要两个连续 -）。
+    """
+    # 去掉字符串字面量后再检测，避免字符串里的 -- 被误判
+    stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", sql)
+    stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
+    # 匹配 -- 注释：两个连续 - 后跟非 - 字符（排除 -- 这种，避免 --- 等边界，但 SQL 行注释就是 --）
+    # 标准：-- 后面跟空格或直接是行尾，且不是 - 的一部分（如 ->, --）
+    # 简化：找 "-- " 或行末 "--"，排除 "--" 在块注释里的情况（块注释已被 read_sql 处理，但这里收原始文本）
+    # 先去掉块注释内容，再检测 --
+    no_block = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL)
+    if re.search(r'--[^\-]', no_block) or re.search(r'--$', no_block, re.MULTILINE):
+        return False, "发现 -- 行注释（禁止：注释一律用 /* */ 块注释，详见编码规范 §7）"
+    return True, ""
+
+
 def _format_field_list(fields, per_line: int = 5) -> str:
     """把字段列表格式化成多行显示（每行 per_line 个），避免超长单行被截断。
 
@@ -228,6 +247,11 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
 
     # 3. 没有 SELECT *
     ok, msg = check_no_select_star(sql_text)
+    if not ok:
+        issues.append(f"[规范] {msg}")
+
+    # 3.1 没有 -- 行注释（规范：一律用 /* */ 块注释）
+    ok, msg = check_no_line_comment(sql_text)
     if not ok:
         issues.append(f"[规范] {msg}")
 
