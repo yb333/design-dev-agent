@@ -91,9 +91,13 @@ description: >-
 
 ### 第2层 加工路径 — 组织成路网
 
-**想清楚**：把字段血缘组织成加工路径。路径的汇合点 = 中间表（CTE 内联或物化物理表）。
-- **物化 vs CTE 决策**：满足任一条件就物化——多次引用 / 估算偏差>10x / 数据量大（亿级倾向物化）/ 需要检查点 / 跨步骤传递。否则用 CTE 内联。
-  → 完整决策标准见 `references/complexity-playbook.md`
+**想清楚**：把字段血缘组织成加工路径。核心是两个决策：**要不要拆多步** + **拆了用什么承载（CTE/物化）**。
+
+- **拆分决策**：综合权衡正确性/性能/可维护性/扩展友好/存储，不套默认。倾向扩展友好的设计（不管未来变不变，扩展友好本身合理）。复杂度信号（异质聚合/JOIN>12/聚合后关联/关联链实质加工/CTE依赖链≥3）触发考虑拆。
+  → 完整拆分框架 + 案例分析见 `references/complexity-playbook.md` §一/§二/§四
+  → **在 `design_approach` 写清为什么这样拆/不拆**
+- **物化 vs CTE 决策**：决定拆了之后——满足任一条件就物化（多次引用 / 估算偏差>10x / 数据量大 / 需要检查点 / 跨步骤传递），否则用 CTE 内联。
+  → 完整决策标准见 `references/complexity-playbook.md` §三
 - **中间表产出模式**：单一规则一次性产出（`build_mode: transform`，默认）/ 多规则累积共建（`build_mode: accumulate`，去重或 union）。
   → 累积共建的排重策略见 `references/incremental-playbook.md` §三/§四
 - **数据量因子**：RS data_exploration 或 explore.py 估档位（万/百万/亿），拿不到标"未知"，只影响物化决策，不阻断
@@ -148,7 +152,7 @@ description: >-
 | 触发条件 | 读哪个 |
 |---------|--------|
 | RS 标了增量（L07 增量识别方式 ≠ "不涉及"）| `references/incremental-playbook.md` |
-| 第2层评估命中复杂度阈值 / 数据量大 / 要拆中间表 | `references/complexity-playbook.md` |
+| 第2层评估复杂度 / 要拆步骤 / 要建中间表 | `references/complexity-playbook.md` |
 | 累积共建场景（多规则写同一中间表）| `references/incremental-playbook.md` §三/§四 |
 | 分布键/分区/依赖类型 | `references/design-guide.md`（每次都薄，直接读）|
 
@@ -172,7 +176,7 @@ description: >-
 | `assets/design-decisions-template.yaml` | **design_decisions 产出骨架**（含填写规则注释） | 写产出时 |
 | `references/design-guide.md` | 物理设计决策（分布键/分区）+ 依赖类型 | 每次都读（薄） |
 | `references/incremental-playbook.md` | 增量设计全集（数据流/累积共建/排重/初始化） | RS 标了增量时 |
-| `references/complexity-playbook.md` | 复杂度评估 + CTE/物化决策 + step_type 决策树 | 拆中间表/复杂场景时 |
+| `references/complexity-playbook.md` | 拆分设计框架 + 复杂度信号 + CTE/物化决策 + step_type + 案例分析 | 拆步骤/复杂场景时 |
 | `references/rs-input-format.md` | RS 输入格式（理解输入） | 需要时查 |
 | `assets/ts-template.json` | TS 制品包 ts.json 结构定义 | 组装目标参照 |
 | `assets/ts-template.md` | ts.md 渲染骨架 | 渲染参照 |
@@ -196,7 +200,9 @@ description: >-
 - [ ] 如果 mapping 提供了审计字段（备注标"审计字段"），field_targets 要包含它们；审计字段不用写 field_logics（assemble 自动处理）
 
 **第2层 加工路径**
-- [ ] 每个规则有 step_type（full / aggregate / incremental_extract / merge，见 complexity-playbook §四）
+- [ ] 拆分决策：综合权衡（性能/可维护/扩展/存储），不套默认（见 complexity-playbook §一/§二）
+- [ ] **在 design_approach 写清为什么这样拆/不拆**（闸口①人要看）
+- [ ] 每个规则有 step_type（full / aggregate / incremental_extract / merge，见 complexity-playbook §五）
 - [ ] target_role 与 step_type 不矛盾（见 complexity-playbook）
 - [ ] 多步骤时声明依赖：中间表填 produces_for，装配/merge 填 reads
 - [ ] 累积共建表标了 `build_mode: accumulate`，排重场景填了 dedup_strategy
