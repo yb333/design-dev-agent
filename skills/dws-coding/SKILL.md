@@ -102,12 +102,14 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 | 刚拿到规则，想看全貌（哪些源表、各多少直取字段、有哪些加工字段） | `--list` |
 | 已搭好框架，开始写某个 `LEFT JOIN xxx 别名`，要这个表的直取字段 | `--alias 别名` |
 | 不确定某字段是直取还是加工，或想看它的 design_logic | `--field 字段名` |
+| 写加工字段前，确认 design_logic 引用的字段（如 user_id/create_time）在不在源表里 | `--table-fields 别名` |
 | 字段少（2-3个）或你很熟悉这张表 | 直接手写，不必走工具 |
 
 注意：
 - `--alias` 输出的字段行**带尾逗号**，最后一个字段贴进 SELECT 后记得去掉逗号
 - alias 打错了不报错，会列出所有合法别名；字段名打错了会给模糊匹配建议
 - 同表多别名场景（一张表按不同关联逻辑 JOIN 多次），每个别名单独查
+- `--table-fields` 读 `_internal/schema_cache.json`（precheck 连库时产出）；未连库时提示不阻断，凭 design_logic 写
 
 ### 步骤 4：套规范
 

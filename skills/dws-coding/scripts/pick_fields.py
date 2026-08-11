@@ -204,13 +204,81 @@ def query_field(sliced: dict, field_name: str) -> str:
     return f"[未找到] 字段 '{field_name}'。{hint}"
 
 
+def _resolve_source_table(sliced: dict, name: str) -> tuple[str, str] | None:
+    """把入参（别名/表名短名/全名）解析成 (schema, table)。
+
+    查找顺序：别名 → 表短名 → schema.table 全名。
+    返回 None 表示在 source_tables 里找不到。
+    """
+    sts = sliced.get("source_tables", [])
+    name_lower = name.lower().strip()
+    # 1. 当别名找
+    for st in sts:
+        if st.get("alias", "").lower() == name_lower:
+            return st.get("schema", ""), st.get("table", "")
+    # 2. 当表短名找
+    for st in sts:
+        if st.get("table", "").lower() == name_lower:
+            return st.get("schema", ""), st.get("table", "")
+    # 3. 当 schema.table 全名找
+    for st in sts:
+        full = f"{st.get('schema','')}.{st.get('table','')}".lower()
+        if full == name_lower:
+            return st.get("schema", ""), st.get("table", "")
+    return None
+
+
+def query_table_fields(sliced: dict, name: str, ts_path) -> str:
+    """查某张源表的完整字段清单（来自 schema_cache，连库时产出）。
+
+    coder 写加工字段时确认 design_logic 引用的字段在不在源表里。
+    schema_cache 不存在（未连库）→ 提示不阻断。
+    """
+    resolved = _resolve_source_table(sliced, name)
+    if not resolved:
+        all_sts = sliced.get("source_tables", [])
+        hints = [f"{st.get('alias','')}({st.get('table','')})" for st in all_sts]
+        return (f"[未找到] '{name}' 不在本规则的 source_tables 里。\n"
+                f"[提示] 本规则的源表: {', '.join(hints[:10])}"
+                + (" ..." if len(hints) > 10 else ""))
+
+    schema, table = resolved
+    # 定位 schema_cache.json：ts.json 同级的 _internal/
+    cache_path = Path(ts_path).parent / "_internal" / "schema_cache.json"
+    if not cache_path.exists():
+        return (f"[未连库] schema_cache.json 不存在（{cache_path}）。\n"
+                f"无法确认 {schema}.{table} 的字段存在性，凭 design_logic 写，标注待连库确认。")
+
+    try:
+        cache = __import__("json").loads(cache_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return f"[错误] schema_cache.json 读取失败: {e}"
+
+    tables_map = cache.get("tables", {})
+    cached_at = cache.get("cached_at", "")
+    # schema_cache 的 key 是 "schema.table" 小写
+    key = f"{schema}.{table}".lower()
+    cols = tables_map.get(key)
+    if not cols:
+        return (f"[未缓存] {schema}.{table} 不在 schema_cache 里（连库时可能没查这张表）。\n"
+                f"缓存的表: {sorted(tables_map.keys())[:10]}")
+
+    # 输出字段清单
+    lines = [f"/* {schema}.{table} 字段清单（来自 schema_cache，连库时间: {cached_at}）*/"]
+    for col, ctype in cols.items():
+        lines.append(f"  {col:30s} {ctype}")
+    lines.append("")
+    lines.append(f"/* 共 {len(cols)} 个字段 */")
+    return "\n".join(lines)
+
+
 # ============================================================
 # CLI
 # ============================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="字段查询器: coder 写 SQL 时随取随用（--list 总览 / --alias 按表查 / --field 查单字段）"
+        description="字段查询器: coder 写 SQL 时随取随用（--list/--alias/--field/--table-fields）"
     )
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
@@ -218,6 +286,8 @@ def main():
     group.add_argument("--list", action="store_true", help="规则总览：源表直取字段分布 + 加工字段清单")
     group.add_argument("--alias", help="查某表的直取字段行（别名，如 duf）")
     group.add_argument("--field", help="查单字段详情（字段名）")
+    group.add_argument("--table-fields", help="查源表完整字段清单（别名/表名，如 dub/dwd_user_behavior_f）",
+                       dest="table_fields")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -238,6 +308,8 @@ def main():
         print(query_alias(sliced, args.alias))
     elif args.field:
         print(query_field(sliced, args.field))
+    elif args.table_fields:
+        print(query_table_fields(sliced, args.table_fields, ts_path))
 
 
 if __name__ == "__main__":

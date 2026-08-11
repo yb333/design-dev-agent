@@ -21,7 +21,9 @@ from pick_fields import (
     query_list,
     query_alias,
     query_field,
+    query_table_fields,
     _alias_to_table_map,
+    _resolve_source_table,
 )
 from slice_ts import slice_rule
 
@@ -245,6 +247,97 @@ class TestQueryField:
         result = query_field(s, "order")
         assert "未找到" in result
         assert "order_id" in result  # 模糊建议
+
+
+# ============================================================
+# --table-fields 查询（源表完整字段清单，来自 schema_cache）
+# ============================================================
+
+class TestResolveSourceTable:
+    def test_resolve_by_alias(self):
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        assert _resolve_source_table(s, "t") == ("ods", "ods_test_f")
+
+    def test_resolve_by_table_short_name(self):
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        assert _resolve_source_table(s, "ods_test_f") == ("ods", "ods_test_f")
+
+    def test_resolve_by_full_name(self):
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        assert _resolve_source_table(s, "ods.ods_test_f") == ("ods", "ods_test_f")
+
+    def test_resolve_case_insensitive(self):
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        assert _resolve_source_table(s, "T") == ("ods", "ods_test_f")
+
+    def test_resolve_not_found(self):
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        assert _resolve_source_table(s, "xyz") is None
+
+
+class TestQueryTableFields:
+    def test_no_schema_cache_returns_hint(self, tmp_path):
+        """无 schema_cache（未连库）→ 提示不阻断"""
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        # ts_path 指向 tmp_path 下的假 ts.json（_internal/schema_cache.json 不存在）
+        fake_ts = tmp_path / "ts.json"
+        fake_ts.write_text("{}", encoding="utf-8")
+        result = query_table_fields(s, "t", fake_ts)
+        assert "未连库" in result or "schema_cache" in result
+
+    def test_unknown_table_gives_source_hint(self, tmp_path):
+        """查不在 source_tables 的表 → 给出本规则的源表清单"""
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        fake_ts = tmp_path / "ts.json"
+        fake_ts.write_text("{}", encoding="utf-8")
+        result = query_table_fields(s, "xyz", fake_ts)
+        assert "未找到" in result
+        assert "ods_test_f" in result  # 提示里有合法源表
+
+    def test_returns_field_list_from_cache(self, tmp_path):
+        """有 schema_cache → 输出字段清单"""
+        import json
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        # 造 ts.json + schema_cache.json
+        fake_ts = tmp_path / "ts.json"
+        fake_ts.write_text("{}", encoding="utf-8")
+        internal = tmp_path / "_internal"
+        internal.mkdir()
+        cache = {
+            "cached_at": "2026-08-04T10:00:00",
+            "tables": {"ods.ods_test_f": {"id": "bigint", "name": "varchar(50)"}},
+        }
+        (internal / "schema_cache.json").write_text(
+            json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        result = query_table_fields(s, "t", fake_ts)
+        assert "ods.ods_test_f" in result
+        assert "id" in result and "bigint" in result
+        assert "name" in result and "varchar(50)" in result
+        assert "2026-08-04" in result  # 连库时间
+
+    def test_table_in_source_but_not_in_cache(self, tmp_path):
+        """源表声明了但 schema_cache 里没这张表（连库时没查到）"""
+        import json
+        sts = [{"schema": "ods", "table": "ods_test_f", "alias": "t"}]
+        s = make_slice(source_tables=sts)
+        fake_ts = tmp_path / "ts.json"
+        fake_ts.write_text("{}", encoding="utf-8")
+        internal = tmp_path / "_internal"
+        internal.mkdir()
+        # 缓存里只有别的表
+        cache = {"cached_at": "2026-08-04", "tables": {"dim.other_f": {"x": "int"}}}
+        (internal / "schema_cache.json").write_text(
+            json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        result = query_table_fields(s, "t", fake_ts)
+        assert "未缓存" in result
 
 
 # ============================================================

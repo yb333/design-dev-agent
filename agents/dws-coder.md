@@ -55,7 +55,7 @@ python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 **SQL 框架由你决定**——你看加工字段的 design_logic 构思整体框架（需要哪些 CTE、怎么 JOIN、哪里 GROUP BY），搭好骨架。
 
 **写直取字段时，优先用 `pick_fields.py` 随写随查**（省去逐字段手写取值表达式的机械劳动；字段少时手写也行）。
-三个命令示例（与 SKILL.md §2 保持一致，改动要同步）：
+四个命令示例（与 SKILL.md §2 保持一致，改动要同步）：
 
 ```bash
 # 看这个规则有哪些源表、各表多少直取字段（建立全貌）
@@ -64,9 +64,13 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --list
 python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --alias duf
 # 查某个字段是直取还是加工（不确定时）
 python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --field order_status
+# 写加工字段时，确认 design_logic 引用的字段在不在源表里（别名或表名都行）
+python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule R0001 --table-fields duf
 ```
 
 `--alias` 返回的字段行是纯取值表达式（`别名.字段 AS 目标字段`），**不含 COALESCE**——该不该 COALESCE、用什么默认值，是业务语义判断（金额 NULL→0 合理，主键 NULL→0 会掩盖关联失败，状态字段 NULL 可能有含义），由你根据字段语义决定。FROM/JOIN/WHERE/CTE/del_flag 过滤等结构也完全由你决定。
+
+`--table-fields` 读取 `_internal/schema_cache.json`（precheck 连库时产出），**写加工字段前用它确认 design_logic 引用的字段在不在源表里**——加工字段的 source_fields 在 mapping 里常填不全（BA 填不准），design_logic 才是完整口径。未连库（无 schema_cache）时会提示，凭 design_logic 写并标注待确认。
 
 具体流程见 SKILL.md §2，场景→命令速查见 SKILL.md §2.4。
 
