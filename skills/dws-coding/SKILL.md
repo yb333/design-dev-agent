@@ -189,4 +189,5 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 - [ ] 不能 SELECT *
 - [ ] NULL 字段有 COALESCE
 - [ ] 字段名符合命名规范
+- [ ] **注释一律 `/* */` 块注释，无 `--` 行注释**（check_sql 会报错）
 - [ ] check_sql.py 静态对比通过
