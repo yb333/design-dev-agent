@@ -613,6 +613,119 @@ class TestRunUtCheck:
         assert null_check["status"] == "PASS"
         assert "samples" not in null_check
 
+    def test_check_entries_contain_sql(self):
+        """★ 每个 UT 检查 entry 含 sql 字段（供 ut_execute 落地 debug）"""
+        from run_ut import run_ut_check
+        exe = _FakeExecutor([
+            ("GROUP BY id", _FakeResult(rows=[])),
+            ("WHERE del_flag IS NULL", _FakeResult(rows=[{"cnt": 0}])),
+        ])
+        results = run_ut_check(exe, "schema.tbl", ["id"], {"del_flag": {}})
+        for entry in results:
+            assert "sql" in entry, f"检查 {entry.get('check')} 缺 sql 字段"
+            assert isinstance(entry["sql"], str)
+            assert len(entry["sql"]) > 0
+        # 行数检查的 SQL 含 COUNT
+        count_check = [c for c in results if "行数" in c["check"]][0]
+        assert "COUNT(*)" in count_check["sql"]
+        # 主键检查的 SQL 含 GROUP BY
+        pk_check = [c for c in results if "主键" in c["check"]][0]
+        assert "GROUP BY" in pk_check["sql"]
+
+
+# ============================================================
+# ut_execute._dump_rule_sql 测试（SQL 落地 debug 用）
+# ============================================================
+
+class TestDumpRuleSql:
+    def test_dump_creates_file(self, tmp_path):
+        """落地生成 _internal/ut_sql/{rule}.sql 文件"""
+        # 造 ts.json 路径（_dump_rule_sql 用 ts_path.parent 定位 _internal/）
+        ts_path = tmp_path / "ddlc_design_dev" / "ts.json"
+        ts_path.parent.mkdir(parents=True)
+        ts_path.write_text("{}", encoding="utf-8")
+
+        from ut_execute import _dump_rule_sql
+        _dump_rule_sql(
+            ts_path, "R0001", "dws.t",
+            select_sql="SELECT t.id AS id FROM src t",
+            insert_sql="INSERT INTO dws.t (id) SELECT t.id AS id FROM src t",
+            insert_result="执行成功: 5 行",
+            ut_checks=[
+                {"check": "行数合理", "status": "PASS", "detail": "5 行",
+                 "sql": "SELECT COUNT(*) AS cnt FROM dws.t"},
+            ],
+        )
+        out = ts_path.parent / "_internal" / "ut_sql" / "R0001.sql"
+        assert out.exists()
+
+    def test_dump_contains_all_sections(self, tmp_path):
+        """落地文件含三段：原始SELECT + 拼接INSERT + UT检查"""
+        ts_path = tmp_path / "ddlc_design_dev" / "ts.json"
+        ts_path.parent.mkdir(parents=True)
+        ts_path.write_text("{}", encoding="utf-8")
+
+        from ut_execute import _dump_rule_sql
+        _dump_rule_sql(
+            ts_path, "R0001", "dws.t",
+            select_sql="SELECT t.id AS id FROM src t",
+            insert_sql="INSERT INTO dws.t (id)\nSELECT t.id AS id FROM src t",
+            insert_result="执行成功: 5 行",
+            ut_checks=[
+                {"check": "行数合理", "status": "PASS", "detail": "5 行",
+                 "sql": "SELECT COUNT(*) AS cnt FROM dws.t"},
+            ],
+        )
+        out = ts_path.parent / "_internal" / "ut_sql" / "R0001.sql"
+        content = out.read_text(encoding="utf-8")
+        assert "原始 SELECT" in content
+        assert "SELECT t.id AS id FROM src t" in content
+        assert "拼接后 INSERT" in content
+        assert "INSERT INTO dws.t" in content
+        assert "UT 检查" in content
+        assert "SELECT COUNT(*) AS cnt FROM dws.t" in content
+
+    def test_dump_failure_result_recorded(self, tmp_path):
+        """INSERT 失败时落地文件记录失败结果"""
+        ts_path = tmp_path / "ddlc_design_dev" / "ts.json"
+        ts_path.parent.mkdir(parents=True)
+        ts_path.write_text("{}", encoding="utf-8")
+
+        from ut_execute import _dump_rule_sql
+        _dump_rule_sql(
+            ts_path, "R0001", "dws.t",
+            select_sql="SELECT t.id AS id FROM src t",
+            insert_sql="INSERT INTO dws.t (id) SELECT t.id AS id FROM src t",
+            insert_result="执行失败(SQL): column xxx does not exist",
+            ut_checks=[],  # 失败时没跑 UT 检查
+        )
+        out = ts_path.parent / "_internal" / "ut_sql" / "R0001.sql"
+        content = out.read_text(encoding="utf-8")
+        assert "执行失败" in content
+        assert "column xxx does not exist" in content
+
+    def test_dump_includes_samples_when_present(self, tmp_path):
+        """UT 检查有 samples 时落地文件带上样例数据"""
+        ts_path = tmp_path / "ddlc_design_dev" / "ts.json"
+        ts_path.parent.mkdir(parents=True)
+        ts_path.write_text("{}", encoding="utf-8")
+
+        from ut_execute import _dump_rule_sql
+        _dump_rule_sql(
+            ts_path, "R0001", "dws.t",
+            select_sql="SELECT t.id AS id FROM src t",
+            insert_sql="INSERT INTO dws.t (id) SELECT t.id AS id FROM src t",
+            insert_result="执行成功: 5 行",
+            ut_checks=[
+                {"check": "业务主键唯一", "status": "FAIL", "detail": "2 个重复键",
+                 "sql": "SELECT id, COUNT(*) FROM dws.t GROUP BY id HAVING COUNT(*) > 1",
+                 "samples": [{"id": 1, "cnt": 3}, {"id": 2, "cnt": 2}]},
+            ],
+        )
+        content = (ts_path.parent / "_internal" / "ut_sql" / "R0001.sql").read_text(encoding="utf-8")
+        assert "样例数据" in content
+        assert "id" in content  # sample 里有 id
+
 
 # ============================================================
 # dws_db.py 的配置解析测试（不连库）

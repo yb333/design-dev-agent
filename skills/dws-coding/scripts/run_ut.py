@@ -387,24 +387,30 @@ def _find_cte_section_end(sql: str) -> int | None:
 
 
 def run_ut_check(executor, target_table: str, business_key: list, audit_fields: dict) -> list[dict]:
-    """跑 UT 检查，返回检查结果列表"""
+    """跑 UT 检查，返回检查结果列表。
+
+    每个 entry 含 sql 字段（执行的 SQL），供 ut_execute 落地 debug 用。
+    """
 
     results = []
 
     # 检查1: 行数
-    r = executor.execute(f"SELECT COUNT(*) AS cnt FROM {target_table}")
+    sql = f"SELECT COUNT(*) AS cnt FROM {target_table}"
+    r = executor.execute(sql)
     if r.success and r.rows:
         count = r.rows[0]["cnt"]
         results.append({
             "check": "行数合理",
             "status": "PASS" if count > 0 else "WARN",
             "detail": f"{count} 行" + ("（为空，确认源表是否有数据）" if count == 0 else ""),
+            "sql": sql,
         })
     else:
         results.append({
             "check": "行数合理",
             "status": "FAIL",
             "detail": f"查询失败: {r.error}",
+            "sql": sql,
         })
 
     # 检查2: 业务主键唯一（重复时抓样例供 designer 归因，不抓一堆）
@@ -418,6 +424,7 @@ def run_ut_check(executor, target_table: str, business_key: list, audit_fields: 
                 "check": "业务主键唯一",
                 "status": "PASS" if dup_count == 0 else "FAIL",
                 "detail": f"{'无重复' if dup_count == 0 else f'{dup_count} 个重复键（最多展示5个）'}（键: {key_cols}）",
+                "sql": sql,
             }
             if dup_count > 0:
                 entry["samples"] = [dict(row) for row in r.rows]
@@ -427,6 +434,7 @@ def run_ut_check(executor, target_table: str, business_key: list, audit_fields: 
                 "check": "业务主键唯一",
                 "status": "FAIL",
                 "detail": f"查询失败: {r.error}",
+                "sql": sql,
             })
 
     # 检查3: 审计字段非空（有空值时抓样例）
@@ -439,6 +447,7 @@ def run_ut_check(executor, target_table: str, business_key: list, audit_fields: 
                 "check": f"审计字段非空({aname})",
                 "status": "PASS" if null_count == 0 else "FAIL",
                 "detail": f"{null_count} 行为空" if null_count > 0 else "无空值",
+                "sql": sql,
             }
             if null_count > 0:
                 # 抓3行空值样例，供 designer 判断是关联 LEFT JOIN 配错还是源数据问题

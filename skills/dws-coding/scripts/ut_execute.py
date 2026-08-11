@@ -28,6 +28,59 @@ from dws_db import create_executor
 from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks
 
 
+def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
+                   select_sql: str, insert_sql: str, insert_result: str,
+                   ut_checks: list) -> None:
+    """落地单规则的 UT 执行 SQL 到 _internal/ut_sql/{rule}.sql（debug 用）。
+
+    含三段：原始 SELECT、拼接 INSERT、UT 检查 SQL，每段注释带执行结果。
+    出错时凭此区分是 coder 的 SELECT 错，还是 ut 拼接/检查 SQL 错。
+
+    Args:
+        ts_path: ts.json 路径（定位 _internal/）。
+        rule_code: 规则号。
+        target_table: 目标表全名。
+        select_sql: coder 的原始 SELECT（参数已替换，tablesample 已注入）。
+        insert_sql: wrap_write 拼接后的 INSERT/MERGE。
+        insert_result: INSERT 执行结果摘要（成功带行数/失败带报错）。
+        ut_checks: run_ut_check 返回的检查列表（每个含 sql/status/detail）。
+    """
+    out_dir = ts_path.parent / "_internal" / "ut_sql"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{rule_code}.sql"
+
+    lines = [
+        f"/* =====================================================",
+        f"   {rule_code} UT 执行 SQL 落地（debug 用，可直接复制到库重跑）",
+        f"   目标表: {target_table}",
+        f"   落地时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"   ===================================================== */",
+        "",
+        f"/* ===== 原始 SELECT（coder 产出，参数已替换/tablesample已注入）===== */",
+        select_sql.strip().rstrip(";") + ";",
+        "",
+        f"/* ===== 拼接后 INSERT（wrap_write 产出）===== {insert_result} */",
+        insert_sql.strip().rstrip(";") + ";",
+        "",
+    ]
+
+    if ut_checks:
+        lines.append("/* ===== UT 检查 ===== */")
+        for c in ut_checks:
+            status = c.get("status", "?")
+            detail = c.get("detail", "")
+            symbol = "✅" if status == "PASS" else "❌" if status == "FAIL" else "⚠️"
+            lines.append(f"/* {c.get('check', '')} — {symbol} {status}: {detail} */")
+            sql = c.get("sql", "")
+            if sql:
+                lines.append(sql.strip().rstrip(";") + ";")
+            if c.get("samples"):
+                lines.append(f"/* 样例数据: {c['samples'][:3]} */")
+            lines.append("")
+
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description="UT 执行（INSERT+UT检查，慢操作）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
@@ -171,6 +224,9 @@ def main():
                 rule_result["error_type"] = error_type
                 rule_result["detail"] = f"INSERT失败: {error_msg}"
                 print(f"  ❌ INSERT失败({error_type}): {error_msg}")
+                # 落地 SQL（失败也要落，这是最需要 debug 的场景）
+                _dump_rule_sql(ts_path, rule_code, target, select_sql, insert_sql,
+                               f"执行失败({error_type}): {error_msg}", [])
                 all_results.append(rule_result)
                 prev_failed = True
                 continue
@@ -194,6 +250,9 @@ def main():
                     symbol = "✅" if c["status"] == "PASS" else "⚠️"
                     print(f"  {symbol} {c['check']}: {c['detail']}")
 
+            # 落地 SQL（成功场景：含 INSERT + UT 检查全部 SQL）
+            _dump_rule_sql(ts_path, rule_code, target, select_sql, insert_sql,
+                           f"执行成功: {r.summary()}", ut_checks)
             all_results.append(rule_result)
             print()
 

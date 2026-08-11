@@ -60,6 +60,7 @@ ddlc_design_dev/
     ├── design_decisions.yaml      # designer 的设计决策
     ├── ut_precheck_result.json    # UT 预检结果（步骤6a 写，6b 读）
     ├── ut_report.txt              # 执行器内部报告
+    ├── ut_sql/                    # UT 执行的实际 SQL 落地（每规则一个文件，debug 用）
     └── diagnose/                  # 数据质量诊断的临时产物
 ```
 
