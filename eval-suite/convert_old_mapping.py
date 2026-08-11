@@ -26,7 +26,7 @@ ENTITY_HEADER = [
 
 # 标准模板的属性级列顺序
 ATTR_HEADER = [
-    "序号", "分组", "源Schema", "源表物理表名", "源表物理表别名",
+    "序号", "分组", "源Schema", "源表物理表名", "源表别名",
     "源表字段中文名", "源表字段名", "源表字段类型",
     "映射规则*", "映射表达式", "目标字段名*", "目标字段中文名", "目标字段类型",
     "备注", "数据标准"
@@ -173,7 +173,7 @@ def convert(input_path: str, outdir: str):
             "default",          # 分组
             a["src_schema"],    # 源Schema
             a["src_table"],     # 源表物理表名
-            alias,              # 源表物理表别名
+            alias,              # 源表别名
             a["src_field"],     # 源表字段中文名
             a["src_field"],     # 源表字段名
             a["src_type"],      # 源表字段类型

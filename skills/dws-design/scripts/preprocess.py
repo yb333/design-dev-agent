@@ -84,10 +84,11 @@ class ExcelMappingParser:
     }
     
     # 属性级 mapping 列名映射（按 mapping模板.xlsx 权威列名，不做模糊匹配）
+    # ★ 实体级和属性级的来源表别名统一叫"源表别名"（不区分"物理"前缀，减少 BA 困惑）
     ATTRIBUTE_COLUMN_MAP = {
         '源schema': 'source_schema',
         '源表物理表名': 'source_table',
-        '源表物理表别名': 'source_alias',
+        '源表别名': 'source_alias',
         '源表字段名': 'source_column',
         '源表字段中文名': 'source_column_cn',
         '源表字段类型': 'source_type',

@@ -893,10 +893,10 @@ class TestColumnMatch:
         assert missing == [], f"列都齐不该报: {missing}"
 
     def test_attribute_missing_source_alias_reports(self):
-        """属性级缺 '源表物理表别名' → 报（用户遇到的根因场景）。"""
+        """属性级缺 '源表别名' → 报（用户遇到的根因场景）。"""
         import pandas as pd
         parser = self._make_parser()
-        # 属性级缺 '源表物理表别名'（BA 可能写成 '源表别名'）
+        # 属性级缺 '源表别名'（BA 可能写成 '源表别名'）
         cols = ['源schema', '源表物理表名', '源表字段名', '源表字段中文名', '源表字段类型',
                 '映射规则', '映射表达式', '目标字段名', '目标字段中文名', '目标字段类型']
         df = pd.DataFrame(columns=cols)
@@ -904,5 +904,5 @@ class TestColumnMatch:
                                    optional=['remark', 'scene_group', 'source_column_cn'])
         missing = [d for d in parser.diagnostics if d['type'] == 'column_missing']
         assert missing, f"属性级缺 source_alias 应报: {parser.diagnostics}"
-        assert any('源表物理表别名' in d['message'] for d in missing), \
-            f"报错应提到 '源表物理表别名': {missing}"
+        assert any('源表别名' in d['message'] for d in missing), \
+            f"报错应提到 '源表别名': {missing}"
