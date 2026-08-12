@@ -230,6 +230,24 @@ Task(
 
 > DQ 不再由脚本生成（assemble_dq.py 已废弃仅供 eval 复现），全部由 coder 按 designer 翻译的 dq_rules 产出。DQ 产出与否完全跟随 RS。
 
+**init 编码**（条件化：仅增量资产有 init 段时）：
+
+读 `{deliver}/ts.json` 的 `init`：
+- **`init.rules` 非空**（derive 或 explicit）→ **等步骤 5 全部增量规则编码完成后**，逐 init 规则调 coder：
+
+```
+Task(
+  subagent_type="dws-coder",
+  description="编码 {init_rule_code}",
+  prompt="ts.json 路径: {deliver}/ts.json，编码规则: {init_rule_code}，产出 SELECT 到 {deliver}/etl/。INIT_ 规则按 SKILL.md §2.5（derive 适配源 SQL 改 filter / explicit 从头写）。"
+)
+```
+
+- **无 init 段**（非增量资产）→ 跳过。
+
+> init 规则在 `ts.init.rules`（与 `ts.rules` 平行）。coder 的 slice_ts 会从 init 段找到 `INIT_` 规则。
+> ★ **硬约束：步骤 5 必须全部完成**（增量 .sql 落盘）才能跑 init 编码——derive 模式 init SQL = 增量 SQL 改 filter，源 .sql 得先在。
+
 ---
 
 ## 步骤 6：执行验证（UT，需要数据库）
@@ -272,6 +290,7 @@ python CODING_SCRIPTS/ut_execute.py \
 
 > ⚠️ `--precheck-result` 路径与 6a 的 `--result` 一致（都在 `_internal/` 下）。读不到直接退出（避免预检未通过误灌数据）。
 > **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms。数据库端 statement_timeout（默认600秒）会自动 cancel 超时查询，不留僵尸进程。
+> ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**——符合现实部署顺序（首次全量 → 日常增量）。无需分开调，脚本内部有序两阶段。init 挂了基线就废，后续增量自动跳过。
 
 ---
 

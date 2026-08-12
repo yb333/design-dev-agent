@@ -130,6 +130,74 @@ class TestSliceTs:
 
 
 # ============================================================
+# slice_ts.py 的 init 规则查找 + derive clone_source（Chunk 2）
+# ============================================================
+
+class TestSliceInit:
+    """slice_rule 对 ts.init.rules 的查找 + derive 切片的 clone_source。"""
+
+    def _ts_with_init(self, mode="derive"):
+        return {
+            "rules": {"R0001": {"target_table": "dws.t_f", "target_role": "target",
+                                "field_targets": ["id"], "load_mode": "merge_into"}},
+            "init": {"mode": mode, "group_mode": "inline",
+                     "rules": {"INIT_R0001": {"target_table": "dws.t_f", "target_role": "target",
+                                              "load_mode": "truncate_table", "field_targets": ["id"],
+                                              "core_from": "R0001",
+                                              "incremental": {"filter": "update_time >= '2024-01-01'",
+                                                              "init_filter": "1=1"}}}},
+            "design": {"audit_fields": {}, "business_key": ["id"], "distribution_key": ["id"]},
+            "tables": {},
+            "meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}}},
+        }
+
+    def test_slice_finds_init_rule(self):
+        """rule_code 在 ts.rules 找不到 → 去 ts.init.rules 找。"""
+        from slice_ts import slice_rule
+        result = slice_rule(self._ts_with_init(), "INIT_R0001")
+        assert result["rule_code"] == "INIT_R0001"
+        assert result["load_mode"] == "truncate_table"
+
+    def test_slice_available_lists_both(self):
+        """不存在的 rule_code 报错时，available 同时列 rules + init.rules。"""
+        from slice_ts import slice_rule
+        try:
+            slice_rule(self._ts_with_init(), "NOPE")
+            assert False, "应报错"
+        except ValueError as e:
+            assert "R0001" in str(e) and "INIT_R0001" in str(e)
+
+    def test_derive_init_slice_has_clone_source(self, tmp_path):
+        """derive 的 init 规则切片带 clone_source（源 SQL + filter/init_filter），etl_dir 给定时读源 .sql。"""
+        from slice_ts import slice_rule
+        etl_dir = tmp_path / "etl"
+        etl_dir.mkdir()
+        (etl_dir / "R0001.sql").write_text(
+            "SELECT id FROM t WHERE update_time >= '2024-01-01'", encoding="utf-8")
+        result = slice_rule(self._ts_with_init(mode="derive"), "INIT_R0001", etl_dir=etl_dir)
+        assert "clone_source" in result
+        cs = result["clone_source"]
+        assert cs["core_from"] == "R0001"
+        assert cs["filter"] == "update_time >= '2024-01-01'"
+        assert cs["init_filter"] == "1=1"
+        assert "update_time" in cs["source_sql"]
+
+    def test_derive_clone_source_missing_sql_notes(self, tmp_path):
+        """derive 切片时源 .sql 还没落盘 → source_sql 空 + note 提示。"""
+        from slice_ts import slice_rule
+        result = slice_rule(self._ts_with_init(mode="derive"), "INIT_R0001", etl_dir=tmp_path / "etl")
+        cs = result["clone_source"]
+        assert cs["source_sql"] == ""
+        assert "note" in cs
+
+    def test_explicit_init_slice_no_clone_source(self):
+        """explicit 的 init 规则切片不带 clone_source（coder 从头写，不克隆 SQL）。"""
+        from slice_ts import slice_rule
+        result = slice_rule(self._ts_with_init(mode="explicit"), "INIT_R0001")
+        assert "clone_source" not in result
+
+
+# ============================================================
 # check_sql.py 测试
 # ============================================================
 

@@ -132,17 +132,32 @@ def main():
     print(f"数据源: {executor.get_current_source()}（schema: {target_schema}）")
     print()
 
-    schedule_groups = data_flow.get("schedule_groups", [])
-    if not schedule_groups:
-        schedule_groups = [{"sequence": r.get("exec_sequence", 1), "rules": [code]}
-                           for code, r in rules.items()]
+    # init 阶段先（建基线），增量阶段后（在基线上 merge）——符合现实部署顺序（首次全量→日常增量）
+    init_section = ts.get("init") or {}
+    init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
+    all_rules = dict(rules)
+    all_rules.update(init_rules)  # init 规则也进查找表（loop 按 rule_code 取）
+
+    init_groups = []
+    if init_rules:
+        init_sorted = sorted(init_rules.items(), key=lambda kv: (kv[1].get("exec_sequence", 1), kv[0]))
+        init_codes = [c for c, _ in init_sorted]
+        init_groups = [{"sequence": 0, "rules": init_codes}]
+        print(f"▶ init 阶段（建基线，truncate+全量插）：{init_codes}")
+
+    inc_groups = data_flow.get("schedule_groups", [])
+    if not inc_groups:
+        inc_groups = [{"sequence": r.get("exec_sequence", 1), "rules": [code]}
+                       for code, r in rules.items()]
+    if init_rules:
+        print(f"▶ 增量阶段（在基线上 merge）")
 
     all_results = []
     prev_failed = False
 
-    for group in schedule_groups:
+    for group in (init_groups + inc_groups):
         for rule_code in group.get("rules", []):
-            rule = rules.get(rule_code)
+            rule = all_rules.get(rule_code)
             if not rule:
                 continue
 

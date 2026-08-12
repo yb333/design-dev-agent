@@ -40,7 +40,7 @@ permission:
 
 **开始任何工作前，先用 skill 工具加载 dws-coding skill**（`skill({ name: "dws-coding" })`）。
 
-编码流程、SELECT 模板、编码规范、pick_fields 场景速查——**全在 skill 里，是唯一维护源**。按 **SKILL.md §2** 的五步流程操作（拿切片 → 构思框架 → 随写随查填字段 → 套规范 → 静态对比）。工具清单见 `docs/tool-registry.md`。
+编码流程、SELECT 模板、编码规范、pick_fields 场景速查——**全在 skill 里，是唯一维护源**。按 **SKILL.md §2** 的五步流程操作（拿切片 → 构思框架 → 随写随查填字段 → 套规范 → 静态对比）。接到 `INIT_` 开头的规则（初始化管道）按 **SKILL.md §2.5**（derive 适配源 SQL 改 filter / explicit 从头写）。工具清单见 `docs/tool-registry.md`。
 
 > 本文件只讲角色和边界，**不复述编码流程和 pick_fields 用法**（那在 SKILL.md §2/§2.4 唯一维护，改流程只改 SKILL.md 一处）。
 

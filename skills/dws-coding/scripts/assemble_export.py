@@ -205,6 +205,14 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
     sub_cn = ""
     sub_en = ""
 
+    # init 管道规则（与增量 rules 合并发执行行；inline 靠 P_FLAG 选跑，separate 靠独立 init 任务）
+    init_section = ts.get("init") or {}
+    init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
+    init_group_mode = (init_section.get("group_mode") or "") if isinstance(init_section, dict) else ""
+    # 合并迭代：增量规则 + init 规则，标记 is_init
+    merged = [(c, r, False) for c, r in rules.items()]
+    merged += [(c, r, True) for c, r in init_rules.items()]
+
     rows = []
 
     # 公共列填充（每行都要填的项目）
@@ -225,7 +233,7 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
         # 规则编码留空（内网回填）
 
     # --- 取数规则（每条 ETL SQL 一行）---
-    for code, rule in rules.items():
+    for code, rule, is_init in merged:
         if rule.get("is_view_step"):
             continue
         # 读 ETL SQL 文件
@@ -241,6 +249,10 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
 
         row = [""] * len(RULE_COLUMNS)
         _fill_common(row)
+        # separate 模式：init 规则进独立规则组（_init 后缀），跟增量区分（init 任务跑这个组）
+        if is_init and init_group_mode == "separate":
+            row[_RULE_COL["规则组中文名称"]] = f"{target_short}_init"
+            row[_RULE_COL["规则组英文名称"]] = f"{target_short}_init"
         row[_RULE_COL["规则中文名称"]] = tbl or target
         row[_RULE_COL["规则英文名称"]] = tbl or target
         row[_RULE_COL["创建方式"]] = "2"
@@ -248,7 +260,11 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
         row[_RULE_COL["数据源"]] = data_source
         row[_RULE_COL["备注"]] = "简要描述"
         row[_RULE_COL["(生成的）查询语句1"]] = query_sql
-        row[_RULE_COL["运行条件"]] = "0"
+        # 运行条件：inline 靠 P_FLAG 选 init/增量管道；separate/无 init → "0"
+        if init_group_mode == "inline":
+            row[_RULE_COL["运行条件"]] = "${P_FLAG}='2'" if is_init else "${P_FLAG}='1'"
+        else:
+            row[_RULE_COL["运行条件"]] = "0"
         row[_RULE_COL["目标Schema"]] = sch
         row[_RULE_COL["目标表"]] = tbl
         # 删除模式 + 删除条件：从 ts.json 的 load_mode + write_condition 映射（不再硬编码"1"）
@@ -515,6 +531,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     f_info = tasks_sched.get("f", {})
     view_info = tasks_sched.get("view", {})
     dq_info = tasks_sched.get("dq", {})
+    init_info = tasks_sched.get("init", {})
 
     if f_info.get("task_name"):
         ws.append(_task_row(f_info))
@@ -522,6 +539,8 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         ws.append(_task_row(view_info))
     if dq_info.get("task_name"):
         ws.append(_task_row(dq_info))
+    if init_info.get("task_name"):
+        ws.append(_task_row(init_info))
 
     # --- Sheet 2: jobs（执行行 + 依赖行 + 虚拟依赖额外行）---
     ws = wb.create_sheet("jobs")
@@ -559,6 +578,14 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
             if dep_task:
                 ws.append(_dep_job_row(dq_info, dep_task))
 
+    # init 执行行（一次性任务，独立规则组；group_mode=separate 时才有 init 任务）
+    if init_info.get("task_name"):
+        ws.append(_exec_job_row(init_info))
+        for u in init_info.get("upstream", []):
+            dep_task = u.get("task", "")
+            if dep_task:
+                ws.append(_dep_job_row(init_info, dep_task))
+
     # --- Sheet 3: taskParams ---
     ws = wb.create_sheet("taskParams")
     ws.append(TASKPARAMS_COLUMNS)
@@ -567,7 +594,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     param_names = [p.get("lts_var", "") for p in lts_params] if lts_params else list(FIXED_PARAMS)
 
     all_tasks = []
-    for ti in [f_info, view_info, dq_info]:
+    for ti in [f_info, view_info, dq_info, init_info]:
         if ti.get("task_name"):
             all_tasks.append(ti)
     for ti in all_tasks:
@@ -590,13 +617,16 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
     i_view = meta.get("target", {}).get("i_view", {})
     sched = meta.get("schedule", {})
     rules = ts.get("rules", {})
+    init_section = ts.get("init") or {}
+    init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
 
     target_short = f_table.get("table", "")
     target_full = f"{f_table.get('schema', '')}.{target_short}" if f_table.get("schema") else target_short
     has_view = bool(i_view and i_view.get("table"))
 
-    # 需要的规则编码数 = 取数规则数 + 视图规则数 + 1(参数变量)
+    # 需要的规则编码数 = 取数规则数(增量+init) + 视图规则数 + 1(参数变量)
     etl_count = sum(1 for r in rules.values() if not r.get("is_view_step"))
+    etl_count += sum(1 for r in init_rules.values() if not r.get("is_view_step"))
     view_count = 1 if has_view else 0
     rule_codes_needed = etl_count + view_count + 1
 
@@ -605,6 +635,7 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
     f_info = tasks_sched.get("f", {})
     view_info = tasks_sched.get("view", {})
     dq_info = tasks_sched.get("dq", {})
+    init_info = tasks_sched.get("init", {})
     for u in f_info.get("upstream", []):
         upstream_tasks.append({
             "source_table": u.get("table", ""),
@@ -629,6 +660,8 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
         "view_job_name": view_info.get("job_name", ""),
         "dq_task_name": dq_info.get("task_name", ""),
         "dq_job_name": dq_info.get("job_name", ""),
+        "init_task_name": init_info.get("task_name", ""),
+        "init_job_name": init_info.get("job_name", ""),
         "cron_expr": sched.get("cron", ""),
         "project_name": project_name,
         "task_group": task_group,

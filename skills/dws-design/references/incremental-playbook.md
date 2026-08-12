@@ -246,7 +246,7 @@ init 是首次全量装载，**先删再插 universally 正确**：空表上 tru
 
 | mode | 增量管道特征 | init 怎么来 | designer 干什么 |
 |------|------------|-----------|---------------|
-| **derive**（模式一二） | 增量相对全量只多一个范围 WHERE（无 delta 机器） | 从增量管道派生：各 extract WHERE→init_filter，终态→truncate | 只声明 `mode=derive` + `group_mode`，**不写 init 规则** |
+| **derive**（模式一二） | 增量相对全量只多一个范围 WHERE（无 delta 机器） | 系统克隆增量规则物化 init.rules（extract 的 filter→init_filter、终态→truncate、core_from 指向源）；SQL 由 coder 适配源 .sql 改 filter | 只声明 `mode=derive` + `group_mode`，**不写 init 规则**（系统克隆） |
 | **explicit**（模式三） | 增量有 delta 机器（union 取并集 / 只重建受影响行 / tmp 存变化键） | 独立设计：剥掉 delta 机器，留核心加工全量跑 | 写 init 规则（core_from + joins），装配器补不变量 |
 
 **判据一句话**：增量管道相对全量，是"只多了范围过滤"（derive），还是"多了一整套识别/隔离变化数据的结构"（explicit）？前者 init 可派生，后者 init 必须独立设计。
@@ -307,7 +307,8 @@ init:
 init:
   mode: derive
   group_mode: inline
-  # rules 留空：init 从增量管道 + 各 extract 的 incremental.init_filter 派生（下游物化时生成）
+  # rules 留空：designer 不写 init 规则——build_init_section 克隆增量规则物化 init.rules
+  #   （filter→init_filter、终态→truncate、core_from 指向源）；SQL 由 coder 适配源 .sql 改 filter
 ```
 
 ### init 相关字段（增量规则的 incremental 段，derive 模式用）
@@ -319,7 +320,7 @@ init:
 | `incremental.init_time_range` | 初始化时间范围（RS L07） | ALL / 2024-01-01 |
 | `incremental.init_strategy` | 初始化策略描述 | 首次全量加载，后续增量 |
 
-> derive 模式下，下游物化（export）从增量管道派生 init 执行行：extract 的 WHERE 换成 init_filter，终态 load_mode 换成 truncate_table。designer 只在 incremental 段填 init_filter，不在 init 段写规则。
+> derive 模式下：**build_init_section 克隆增量规则物化 init.rules 元数据**（extract 的 filter 换成 init_filter、终态 load_mode→truncate_table、core_from 指向源规则、INIT_ 前缀）。init 的 SQL 由 **coder 适配**——slice_ts 切 derive init 规则时带 `clone_source`（core_from 的源 .sql + filter/init_filter），coder 把源 SQL 里的 filter 换成 init_filter，写 INIT.sql。designer 只在 incremental 段填 init_filter，不在 init 段写规则。export/UT 读 ts.init.rules 统一处理 derive/explicit 两模式。
 
 ### 校验（assemble_ts LI 层）
 

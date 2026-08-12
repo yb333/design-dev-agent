@@ -122,6 +122,25 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 调 check_sql.py 检查 SELECT 和 ts.json 切片是否一致（表/字段/JOIN）。
 不过则自己改后重对比，限3轮。
 
+### 2.5 init 规则编码（INIT_R000X，初始化管道）
+
+接到 `INIT_` 开头的规则时，它是初始化管道的规则（全量装载，`load_mode=truncate_table` 先删全插）。切片照常 `slice_ts --rule INIT_R0001`（slice_ts 会从 ts.init.rules 找到它）。两种工作流，看切片：
+
+**derive 模式（init = 增量去 filter）**——切片带 `clone_source`：
+- `clone_source.core_from`：指向源增量规则（如 R0001）
+- `clone_source.source_sql`：源规则的 SELECT（已落盘的 `{core_from}.sql` 内容）
+- `clone_source.filter`：源 SQL 里的增量 WHERE（要被换掉的）
+- `clone_source.init_filter`：init 用的 WHERE（换成的，通常是 `1=1` 或全量范围）
+- **你干的事**：把 `source_sql` 里的 `filter` 换成 `init_filter`（其余结构不动），写进 `INIT_R0001.sql`。就是"拿源 SQL 改 filter"。改完 check_sql 对比。
+- 若 `source_sql` 为空（note 提示"源 .sql 未找到"）→ 说明增量 coder 还没跑，回报调用方（init 编码必须在增量编码之后）。
+
+**explicit 模式（init 是独立设计，可能跟增量不像）**——切片没 `clone_source`，按常规流程走：
+- 看切片的 `joins`（designer 填的核心结构，剥掉了 delta 机器）+ `field_logics`（可能从 core_from 抄来）+ `fields`，从头写 SELECT。
+- 跟编码普通规则一样，只是 WHERE 用全量（无增量范围），`load_mode` 是 truncate。
+
+> 两种都：审计字段齐全、check_sql 对比、命名 `{INIT_编号}_{简称}_truncate_table.sql`。
+> init 规则不取增量范围（没有 `${BIZ_DATE_*}` 过滤），全量加工。
+
 ---
 
 ## 3. 字段加工逻辑翻译指南

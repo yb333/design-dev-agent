@@ -31,16 +31,29 @@ except ImportError:
     sys.exit(2)
 
 
-def slice_rule(ts: dict, rule_code: str) -> dict:
-    """从 ts.json 切出单个规则的信息 + 需要的全局信息。"""
+def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
+    """从 ts.json 切出单个规则的信息 + 需要的全局信息。
+
+    rule_code 先查 ts.rules（增量管道），找不到查 ts.init.rules（初始化管道）。
+    etl_dir 给定时，对 derive 的 init 规则额外带 core_from 的源 .sql + filter/init_filter
+    （coder 适配用：读源 SQL，把 filter 换成 init_filter）。pick_fields 不传 etl_dir，不触发此增强。
+    """
     rules = ts.get("rules", {})
-    if rule_code not in rules:
-        available = list(rules.keys())
+    init_section = ts.get("init") or {}
+    init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
+
+    in_init = False
+    if rule_code in rules:
+        rule = rules[rule_code]
+    elif rule_code in init_rules:
+        rule = init_rules[rule_code]
+        in_init = True
+    else:
+        available = list(rules.keys()) + list(init_rules.keys())
         raise ValueError(
             f"规则 '{rule_code}' 不存在。可用规则: {available}"
         )
 
-    rule = rules[rule_code]
     design = ts.get("design", {})
     tables = ts.get("tables", {})
 
@@ -71,7 +84,7 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
     dist_key = tbl_dist if tbl_dist else design.get("distribution_key", [])
 
     # 组装切片
-    return {
+    sliced = {
         # 规则基本信息
         "rule_code": rule_code,
         "rule_name": rule.get("rule_name", ""),
@@ -117,6 +130,27 @@ def slice_rule(ts: dict, rule_code: str) -> dict:
             "exec_params": ts.get("meta", {}).get("schedule", {}).get("exec_params", {}),
         },
     }
+
+    # derive 的 init 规则：带 core_from 的源 .sql + filter/init_filter，给 coder 适配
+    # （init = 增量去 filter；coder 读源 SQL，把 filter 换成 init_filter，写 INIT.sql）
+    if in_init and (init_section.get("mode") or "") == "derive":
+        core_from = rule.get("core_from") or ""
+        inc = rule.get("incremental") or {}
+        clone_source = {
+            "core_from": core_from,
+            "filter": inc.get("filter", ""),          # 源 SQL 里的增量 filter（要被换掉）
+            "init_filter": inc.get("init_filter", ""),  # init 用的 WHERE（换成的）
+        }
+        if core_from and etl_dir:
+            src_sql_path = Path(etl_dir) / f"{core_from}.sql"
+            if src_sql_path.exists():
+                clone_source["source_sql"] = src_sql_path.read_text(encoding="utf-8").strip()
+            else:
+                clone_source["source_sql"] = ""
+                clone_source["note"] = f"源 {core_from}.sql 未找到（等增量 coder 跑完再切片）"
+        sliced["clone_source"] = clone_source
+
+    return sliced
 
 
 def _compact_direct_field(f: dict) -> str:
@@ -188,9 +222,12 @@ def main():
         sys.exit(2)
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
+    # etl 目录（ts.json 同级 etl/）：给 derive init 规则切片时读源 .sql 用
+    etl_dir = ts_path.parent / "etl"
+
     # 切片
     try:
-        sliced = slice_rule(ts, args.rule)
+        sliced = slice_rule(ts, args.rule, etl_dir=etl_dir)
     except ValueError as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)

@@ -1092,15 +1092,30 @@ class TestInitAssembler:
         init_r = ts["init"]["rules"]["INIT_R0001"]
         assert init_r["field_logics"] == {"id": "init 专属口径（全量场景）"}
 
-    def test_derive_mode_records_only(self):
-        """derive：init.rules 留空，段只记 mode/group_mode（不物化克隆）。"""
+    def test_derive_mode_materializes(self):
+        """derive：克隆增量规则产 init.rules 元数据（INIT_ 前缀、core_from 指向源、终态 truncate）。"""
         rs = make_incremental_rs_input()
         dd = make_derive_init_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
         ts, _, _ = do_assemble(rs, dd)
         init = ts["init"]
         assert init["mode"] == "derive"
         assert init["group_mode"] == "inline"
-        assert init["rules"] == {}  # derive 不物化
+        # 克隆了增量规则（R0001 extract + R0002 merge → INIT_R0001 + INIT_R0002）
+        assert "INIT_R0001" in init["rules"]
+        assert "INIT_R0002" in init["rules"]
+        # extract 克隆：core_from 指向源、load_mode=truncate（init 全先删全插）、保留 incremental 段
+        init_extract = init["rules"]["INIT_R0001"]
+        assert init_extract["core_from"] == "R0001"
+        assert init_extract["load_mode"] == "truncate_table"
+        assert init_extract["incremental"]["filter"]  # 源的 delta filter（slice_ts 告诉 coder 改它）
+        assert init_extract["incremental"]["init_filter"] == "1=1"
+        # 终态克隆：load_mode=truncate（不是 merge_into）、write_condition 空
+        init_term = init["rules"]["INIT_R0002"]
+        assert init_term["core_from"] == "R0002"
+        assert init_term["load_mode"] == "truncate_table"
+        assert init_term["target_role"] == "target"
+        assert init_term["write_condition"] == ""
 
     def test_intermediate_init_rule_truncate(self):
         """explicit 中间 tmp 规则：load_mode 强制 truncate_table（全量重建）。"""
@@ -1116,6 +1131,51 @@ class TestInitAssembler:
         init_pre = ts["init"]["rules"]["INIT_PRE"]
         assert init_pre["load_mode"] == "truncate_table"
         assert init_pre["target_role"] == "intermediate"
+
+    def test_separate_mode_creates_init_task(self):
+        """group_mode=separate → build_meta 建 tasks['init']（独立一次性任务）。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        dd["init"]["group_mode"] = "separate"
+        ts, _, _ = do_assemble(rs, dd)
+        tasks = ts["meta"]["schedule"]["tasks"]
+        assert "init" in tasks
+        assert tasks["init"]["task_name"].endswith("_init")
+
+    def test_inline_mode_no_init_task(self):
+        """group_mode=inline → 不建独立 init 任务（init 规则进 f 任务，靠 P_FLAG 选跑）。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()  # 默认 inline
+        ts, _, _ = do_assemble(rs, dd)
+        tasks = ts["meta"]["schedule"]["tasks"]
+        assert "init" not in tasks
+
+    def test_inline_mode_injects_p_flag(self):
+        """group_mode=inline → exec_params 自动注 P_FLAG（designer 不用声明）。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()  # inline
+        ts, _, _ = do_assemble(rs, dd)
+        exec_params = ts["meta"]["schedule"]["exec_params"]
+        assert "P_FLAG" in exec_params
+
+    def test_separate_mode_no_p_flag(self):
+        """group_mode=separate → 不注 P_FLAG（独立任务，无需运行时选跑）。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        dd["init"]["group_mode"] = "separate"
+        ts, _, _ = do_assemble(rs, dd)
+        exec_params = ts["meta"]["schedule"]["exec_params"]
+        assert "P_FLAG" not in exec_params
+
+    def test_no_init_no_p_flag_no_task(self):
+        """无 init 段 → 既无 P_FLAG 也无 init 任务（向后兼容）。"""
+        rs = make_rs_input()
+        dd = make_design_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        assert "init" not in ts
+        exec_params = ts["meta"]["schedule"]["exec_params"]
+        assert "P_FLAG" not in exec_params
+        assert "init" not in ts["meta"]["schedule"]["tasks"]
 
 
 class TestInitValidation:

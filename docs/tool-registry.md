@@ -7,7 +7,7 @@
 > **关键区分**：脚本**住在哪个 skill 目录**（按"阶段"组织：设计阶段脚本放 dws-design、编码阶段放 dws-coding）
 > ≠ **谁实际调用它**。本表按**调用方**分组——这才是"谁会用它"的真相。
 >
-> 末列「读 ts[rules/init]」是 **init 下游物化（Chunk 2）进度表**：consumer 现在全读 `ts.rules`，每接通一个翻成 `both`。
+> 末列「读 ts[rules/init]」是 init 下游物化进度表。Chunk 2 已接通：slice_ts / pick_fields / assemble_export / ut_precheck / ut_execute 都读 ts.rules + ts.init.rules（标 **both**）。check_sql / run_ut.main 尚未接通（init 走 slice_ts 间接覆盖；run_ut.main 是 legacy 不走）。
 
 ---
 
@@ -27,15 +27,15 @@
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `assemble_ddl.py` | ts → DDL（CREATE TABLE/VIEW + COMMENT + 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables（init 复用 tmp 无新 DDL；Chunk 2 确认不重复建） |
-| `assemble_export.py` | ts + ETL + DDL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ + ddl/ → `export/*.xlsx` | **仅 ts.rules**（Chunk 2：发 init 执行行 + p_flag/独立任务） |
+| `assemble_export.py` | ts + ETL + DDL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ + ddl/ → `export/*.xlsx` | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；计数含 init） |
 | `assemble_dq.py` | DQ SQL（标准三项）| **已弃用**（DQ 改 RS 驱动后仅 eval-suite 历史复现用） | ts.json → dq/*.sql | ts.dq_rules |
 
 ### UT（需数据库，住 dws-coding）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
-| `ut_precheck.py` | 快速 UT 预检（回退 + DDL + SELECT 跑通，秒级，不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **仅 ts.rules** + schedule_groups（Chunk 2） |
-| `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **仅 ts.rules** + schedule_groups（Chunk 2） |
+| `ut_precheck.py` | 快速 UT 预检（回退 + DDL + SELECT 跑通，秒级，不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
+| `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **ts.rules + ts.init.rules**（init 先建基线→增量在基线上 merge；prev_failed 跨阶段级联） |
 | `run_ut.py` | **UT 函数库**（wrap_insert / wrap_write / run_ut_check / inject_tablesample / substitute_params 等，被 ut_precheck/ut_execute import）+ legacy `main()` 单执行器（new-pipe 不直接调，走 6a/6b） | 函数库：ut_precheck/ut_execute 用 | ts.json + etl/ + ddl/ → 报告 | **仅 ts.rules** + schedule_groups |
 
 ### legacy 校验
@@ -56,8 +56,8 @@
 
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
-| `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸） | coder 每规则起手 | ts.json + rule_code → YAML 切片 | **仅 ts.rules**（Chunk 2：slice_rule 加 init 查找分支，~3 行） |
-| `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **仅 ts.rules**（随 slice_ts 接通 init） |
+| `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸） | coder 每规则起手 | ts.json + rule_code → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter） |
+| `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **ts.rules + ts.init.rules**（随 slice_ts 接通 init） |
 | `check_sql.py` | coder 的 SELECT vs ts 切片静态对比（字段覆盖/FROM 表/括号引号/无 SELECT *） | coder 写完自检 | SELECT.sql + ts.json + rule_code → PASS/FAIL | **仅 ts.rules**（Chunk 2） |
 
 ---
@@ -72,18 +72,18 @@
 
 ---
 
-## init 下游物化进度（Chunk 2 待办）
+## init 下游物化进度（Chunk 2 已落地 2026-08）
 
-「读 ts[rules/init]」列里所有标 **「仅 ts.rules」** 的 consumer，都是 Chunk 2 要接通 init 的点：
+| consumer | 调用方 | 状态 |
+|----------|-------|------|
+| `slice_ts.slice_rule` | coder | ✅ 查 ts.rules + ts.init.rules；derive 切片带 clone_source（源 .sql + filter/init_filter） |
+| `pick_fields` | coder | ✅ 随 slice_ts 接通（import slice_rule） |
+| `assemble_export` | command | ✅ 合并 init 规则发执行行；inline→P_FLAG 运行条件 / separate→init 任务；计数含 init |
+| `ut_precheck` / `ut_execute` | command | ✅ init-阶段先（建基线）→增量-阶段后（在基线上 merge）；prev_failed 跨阶段级联 |
+| `assemble_ts` tasks | designer | ✅ separate 模式实例化 tasks["init"]；inline 注 P_FLAG；derive 物化 init.rules |
+| `new-pipe.md` 步骤 5b/6 | command | ✅ init coder 条件循环（5 后）；UT init-先说明 |
+| `assemble_ddl` | command | ✅ init 复用 tmp（build_tables 按表名去重，无新 DDL） |
+| `check_sql` | coder | ⚠️ 未直接改，但 init 切片经 slice_ts 解析，coder 自检流程不变 |
+| `run_ut.main` | — | ⚠️ legacy 单执行器未改（new-pipe 走 6a/6b 不用它） |
 
-| consumer | 调用方 | init 要做什么 | 备注 |
-|----------|-------|-------------|------|
-| `slice_ts.slice_rule` | coder | rule_code 查找加 init 分支（~3 行） | pick_fields 自动跟着通 |
-| `assemble_export` | command | 发 init execution 行（inline→p_flag / separate→独立任务） | load_mode→delete_mode 已映射 truncate→"1" |
-| `ut_precheck` / `ut_execute` | command | 跑 init 规则（truncate 路径） | **排序问题**：init truncate 同张 F 表会清增量数据，需单独轮/严格排序 |
-| `assemble_ddl` | command | init 复用 tmp，确保不重复建表 | build_tables 已按表名去重 |
-| `check_sql` | coder | init SELECT vs 切片对比 | 随 slice_ts 接通 |
-| `new-pipe.md` 步骤 5 | command | 加 init 规则的 coder 调用循环（仿 DQ 条件循环） | 仅 explicit 模式 |
-| `assemble_ts` tasks | command/designer | separate 模式实例化 schedule tasks["init"] | resolve_schedule_path 已认 task_kind='init'，只差实例化 |
-
-derive 模式的 init SQL 字面派生（incremental.filter → init_filter 替换）也是 Chunk 2，但属于"生成"而非"消费 ts.init"。
+derive 模式 init SQL：**不**用脚本字面派生——改由 coder 适配（slice_ts 带 clone_source，coder 读源 .sql 改 filter）。code 归 coder。

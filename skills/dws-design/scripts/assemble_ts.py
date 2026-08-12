@@ -79,6 +79,14 @@ def build_exec_params(decisions):
             "desc": p.get("desc", ""),
             "standard": False,
         }
+    # inline 模式：自动注入 P_FLAG（运行时选 init/增量管道）。designer 不用声明。
+    init_dec = decisions.get("init") or {}
+    if isinstance(init_dec, dict) and (init_dec.get("group_mode") or "") == "inline":
+        params["P_FLAG"] = {
+            "value_type": "string",
+            "desc": "初始化控制：1=日增量（默认），2=初始化",
+            "standard": True,
+        }
     return params
 
 
@@ -1523,6 +1531,22 @@ def build_meta(rs_input, decisions):
                 "task_group": dq_path["task_group"],
             }
 
+    # init 调度任务：仅当 init.group_mode == "separate" 时建（init 独立规则组 + 独立一次性任务）
+    # group_mode == "inline" 不建独立任务（init 规则进 f 任务，靠 P_FLAG 运行条件选跑）
+    init_dec = decisions.get("init") or {}
+    if (isinstance(init_dec, dict)
+            and (init_dec.get("group_mode") or "") == "separate"
+            and f_table_short):
+        init_path = _resolve_task_path("init")
+        tasks["init"] = {
+            "task_name": f"task_{f_table_short}_init",
+            "job_name": f"Pjob_{f_table_short}_init",
+            "cron": cron,
+            "upstream": [],  # 一次性任务，操作员触发；源数据依赖隐式
+            "project_name": init_path["project_name"],
+            "task_group": init_path["task_group"],
+        }
+
     schedule = {
         "schedule_type": schedule_type,
         "cron": cron,
@@ -1609,8 +1633,9 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
     幂等：不依赖校验通过，全程防御性取值（main 校验阶段也调 assemble_ts）。
 
     - 无 init 段（decisions.init 为空）→ 返回 None（ts.json 不含 init key）。
-    - derive（模式一二）：不物化 init 规则（下游从增量 + 各 extract 的 init_filter 派生），
-      只记 mode/group_mode，rules 留空。
+    - derive（模式一二）：克隆增量规则产 init.rules 元数据（filter→init_filter、终态 truncate、
+      core_from 指向源规则、INIT_ 前缀）。init 是独立规则（与增量同结构），元数据设计阶段物化；
+      SQL 由 coder 适配（读 core_from 源 .sql 改 filter），不在此产。
     - explicit（模式三）：按 7 不变量展开 designer 的 init.rules：
         终态(target) → target_table=增量F表 / load_mode=truncate_table / write_condition空 /
                        field_targets=增量终态全字段
@@ -1625,8 +1650,42 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
         return None
     group_mode = (init_dec.get("group_mode") or "").strip()
     section = {"mode": mode, "group_mode": group_mode, "rules": {}}
-    if mode != "explicit":
-        return section  # derive：rules 留空，下游物化时派生
+
+    if mode == "derive":
+        # derive（模式一二，无 delta 机器）：克隆增量规则产 init.rules 元数据。
+        # init 管道 = 增量管道同结构，只是 extract 的 WHERE 用 init_filter、终态 load_mode→truncate。
+        # SQL 不在此产——由 coder 适配（slice_ts 带 core_from 的源 .sql + filter/init_filter，coder 改 filter）。
+        def _init_code(c):
+            return c if str(c).startswith("INIT_") else f"INIT_{c}"
+        for code, r in rules.items():
+            if r.get("is_view_step"):
+                continue  # 视图步骤不属于数据管道
+            inc = r.get("incremental") or {}
+            cloned = {
+                "rule_name": (r.get("rule_name") or code) + "(初始化)",
+                "exec_sequence": r.get("exec_sequence", 1),
+                "target_table": r.get("target_table", ""),
+                "target_role": r.get("target_role", "target"),
+                "step_type": r.get("step_type", "full"),
+                "is_view_step": False,
+                # init 全是先删全插（中间 tmp 重建 / 终态全量装载）
+                "load_mode": "truncate_table",
+                "write_condition": "",
+                "produces_for": [_init_code(c) for c in (r.get("produces_for") or [])],
+                "reads": list(r.get("reads") or []),  # tmp 表名复用，不加前缀
+                "joins": list(r.get("joins") or []),
+                "field_targets": list(r.get("field_targets") or []),
+                "field_logics": dict(r.get("field_logics") or {}),
+                "core_from": code,  # 指向源增量规则，coder 适配时读它的 .sql
+                "design_intent": f"derive 派生：克隆自 {code}，SQL 由 coder 适配（filter→init_filter）",
+            }
+            # 保留 incremental 段（含 filter + init_filter），slice_ts 据此告诉 coder 改哪个 filter
+            if isinstance(inc, dict) and inc:
+                cloned["incremental"] = inc
+            section["rules"][_init_code(code)] = cloned
+        return section
+
+    # mode == "explicit"：按 7 不变量展开 designer 的 init.rules
 
     # 找增量终态（首个 target_role=target 规则）取 target_table + field_targets（不变量1/4）
     # 用增量终态规则的 target_table（带 schema，与 rules 完全一致），而非 meta.f_table（可能是短名）

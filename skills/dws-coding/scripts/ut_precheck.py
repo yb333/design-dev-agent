@@ -80,18 +80,28 @@ def main():
     ddl_dir = Path(args.ddl_dir)
     rb_dir = Path(args.rollback_dir) if args.rollback_dir else ddl_dir.parent / "ddl_rollback"
 
-    # 按 schedule_groups 顺序
-    schedule_groups = data_flow.get("schedule_groups", [])
-    if not schedule_groups:
-        schedule_groups = [{"sequence": r.get("exec_sequence", 1), "rules": [code]}
-                           for code, r in rules.items()]
+    # init 阶段先（建基线），增量阶段后——符合现实部署顺序
+    init_section = ts.get("init") or {}
+    init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
+    all_rules = dict(rules)
+    all_rules.update(init_rules)
+
+    init_groups = []
+    if init_rules:
+        init_sorted = sorted(init_rules.items(), key=lambda kv: (kv[1].get("exec_sequence", 1), kv[0]))
+        init_groups = [{"sequence": 0, "rules": [c for c, _ in init_sorted]}]
+
+    inc_groups = data_flow.get("schedule_groups", [])
+    if not inc_groups:
+        inc_groups = [{"sequence": r.get("exec_sequence", 1), "rules": [code]}
+                       for code, r in rules.items()]
 
     results = []
     prev_failed = False
 
-    for group in schedule_groups:
+    for group in (init_groups + inc_groups):
         for rule_code in group.get("rules", []):
-            rule = rules.get(rule_code)
+            rule = all_rules.get(rule_code)
             if not rule:
                 continue
 
