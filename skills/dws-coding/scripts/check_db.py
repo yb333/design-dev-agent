@@ -20,6 +20,9 @@ import os
 import argparse
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+from config_paths import db_sources_path
+
 
 def main():
     parser = argparse.ArgumentParser(description="数据库连接检查（按 target schema 选源）")
@@ -50,7 +53,7 @@ def main():
     # 定位 db-sources.json（和 dws_db.py 同样的查找逻辑）
     config_path = os.environ.get(
         "DB_CONFIG",
-        str(Path.home() / ".config" / "opencode" / "db-sources.json"),
+        str(db_sources_path()),
     )
 
     if not Path(config_path).exists():

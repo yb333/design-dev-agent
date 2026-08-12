@@ -28,6 +28,7 @@ except AttributeError:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor, load_test_params
+from config_paths import db_sources_path
 from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample, resolve_sample_blocks
 
 
@@ -55,7 +56,7 @@ def main():
         source = args.source
         if not source and target_schema:
             config_path = args.db_config or os.environ.get(
-                "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json"))
+                "DB_CONFIG", str(db_sources_path()))
             from dws_db import resolve_source_by_schema
             source = resolve_source_by_schema(config_path, target_schema)
         # 两个 role：admin 跑 DDL（建表删表），etl 跑 SELECT 预检（查数据）
@@ -67,7 +68,7 @@ def main():
 
     # 参数替换
     config_path = args.db_config or os.environ.get(
-        "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json"))
+        "DB_CONFIG", str(db_sources_path()))
     param_values = resolve_all_params(ts, config_path)
 
     print(f"数据源: {ddl_executor.get_current_source()}（schema: {target_schema}）")

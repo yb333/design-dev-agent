@@ -1,0 +1,11 @@
+{
+  "_comment": "schema↔appid 标准源（唯一）。deliver 目录层(10_project_deliver/{appid}/{schema}/{资产}/...) 和 export job 参数的 appid 都从这读。",
+  "_structure": "schema_mappings: schema → {appid}。未命中的 schema 用 default。这是 appid 的唯一来源——platform_config 已不再带 appid。",
+
+  "default": {"appid": "ETL_APP_001"},
+
+  "schema_mappings": {
+    "slprd": {"appid": "SLPRD_APP_001"},
+    "fin": {"appid": "FIN_APP_001"}
+  }
+}

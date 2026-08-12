@@ -429,13 +429,12 @@ class TestGenerateScheduleExcel:
         assert dep_rows[0][proj_idx] == "SRP_DAILY", \
             f"同项目应兜底用当前表project，实际={dep_rows[0][proj_idx]}"
 
-    def test_appid_injected_from_config(self, sample_ts, sample_config, tmp_path):
-        """appid 从 platform_config 的 lts.appid 注入到 job 参数。"""
-        # 给 sample_config 加 appid
-        cfg_with_appid = json.loads(json.dumps(sample_config))
-        cfg_with_appid["lts"]["appid"] = "MY_APP_123"
+    def test_appid_injected_from_config(self, sample_ts, sample_config, tmp_path, monkeypatch):
+        """appid 从 schema_apps.json（resolve_appid 按 schema 查）注入到 job 参数。"""
+        # appid 不再从 platform_config 的 lts.appid 读——改从 schema_apps（resolve_appid）
+        monkeypatch.setattr("assemble_export.resolve_appid", lambda schema, config_path="": "MY_APP_123")
         out = tmp_path / "schedule_tasks.xlsx"
-        generate_schedule_excel(sample_ts, cfg_with_appid, out)
+        generate_schedule_excel(sample_ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["jobs"]
         header = [c.value for c in ws[1]]

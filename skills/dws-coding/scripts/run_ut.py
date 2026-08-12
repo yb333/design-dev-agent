@@ -41,6 +41,7 @@ except AttributeError:
 # dws_db 在 design-dev-shared 公共库（与本 skill 平级）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from dws_db import create_executor, ExecuteResult, load_test_params
+from config_paths import db_sources_path
 from check_sql import extract_select_aliases
 
 
@@ -505,7 +506,7 @@ def main():
             import os
             config_path = args.db_config or os.environ.get(
                 "DB_CONFIG",
-                str(Path.home() / ".config" / "opencode" / "db-sources.json"),
+                str(db_sources_path()),
             )
             from dws_db import resolve_source_by_schema
             source = resolve_source_by_schema(config_path, target_schema)
@@ -518,7 +519,7 @@ def main():
 
     # 加载测试参数（模拟术加平台运行时参数注入；缺值即中止）
     config_path = args.db_config or os.environ.get(
-        "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json")
+        "DB_CONFIG", str(db_sources_path())
     )
     param_values = resolve_all_params(ts, config_path)
 

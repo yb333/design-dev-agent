@@ -11,10 +11,10 @@ agent: build
 
 ## 产出目录结构
 
-所有产出放在 `10_project_deliver/{资产名}/ddlc_design_dev/` 下：
+所有产出放在 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/` 下（appid/schema 两层按 schema 从 schema_apps.json 查）：
 
 ```
-10_project_deliver/{资产名}/              ← 可能由别的 agent 创建，不存在则你建
+10_project_deliver/{appid}/{schema}/{资产名}/    ← appid/schema 层按 schema 查；不存在则你建
 └── ddlc_design_dev/                      ← 你建（标识产出范围）
     ├── ts.json                           ← 设计产出（对外）
     ├── ts.md                             ← 设计产出（人读）
@@ -37,8 +37,8 @@ agent: build
         └── diagnose/                     ← 数据质量诊断的临时产物（步骤7b 产）
 ```
 
-> 下文用 `{deliver}` 代指 `10_project_deliver/{资产名}/ddlc_design_dev`。
-> **资产名**从 RS 资产信息或 mapping 目标表推导。
+> 下文用 `{deliver}` 代指 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev`。
+> **资产名**从 RS 资产信息或 mapping 目标表推导；**schema** 从 rs_input 的 meta.target.f_table.schema 取；**appid** 按 schema 用 resolve_appid 查（步骤 1 预处理后能拿到 schema）。
 
 ### 脚本路径定位
 
@@ -53,8 +53,20 @@ python -c "from pathlib import Path; p=Path.home()/'.config'/'opencode'/'skills'
 
 > 如果全局目录不存在（项目级安装），用当前项目下的 `skills/dws-design/scripts`。
 
-下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录。
+下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录，`SHARED_SCRIPTS` 代指公共脚本目录（design-dev-shared/scripts，resolve_appid 在这）。
 调用时把变量替换为实际路径，例如：`python <DESIGN_SCRIPTS>/preprocess.py ...`
+
+### 确定 {deliver}（先查 appid）
+
+{deliver} 含 appid/schema 两层，**步骤 1 之前**先确定：
+1. **schema + 资产名**：从用户输入（mapping 目标表 / RS L1.1）识别目标表的 schema 和资产名（表名）。
+2. **appid**：按 schema 查（schema_apps.json 标准源）：
+
+```bash
+python SHARED_SCRIPTS/resolve_appid.py --schema {schema}
+```
+
+3. **{deliver}** = `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev`。appid 查不到时层为空（warn 不阻断），但建议先填 schema_apps.json。
 
 ---
 

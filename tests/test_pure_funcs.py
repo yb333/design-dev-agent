@@ -210,3 +210,33 @@ class TestResolveSourceBySchema:
         }), encoding="utf-8")  # 无 default
         with pytest.raises(ValueError, match="未指定数据源"):
             PsycopgExecutor(str(cfg))  # 不传 source_name
+
+
+# ============================================================
+# config_paths.resolve_appid（schema→appid 标准源）
+# ============================================================
+
+class TestResolveAppid:
+    def test_resolve_by_schema(self, tmp_path):
+        from config_paths import resolve_appid
+        cfg = tmp_path / "schema_apps.json"
+        cfg.write_text(json.dumps({
+            "default": {"appid": "DEFAULT_APP"},
+            "schema_mappings": {"slprd": {"appid": "SLPRD_APP"}},
+        }), encoding="utf-8")
+        assert resolve_appid("slprd", str(cfg)) == "SLPRD_APP"
+
+    def test_fallback_default(self, tmp_path):
+        """schema 未命中 → default.appid。"""
+        from config_paths import resolve_appid
+        cfg = tmp_path / "schema_apps.json"
+        cfg.write_text(json.dumps({
+            "default": {"appid": "DEFAULT_APP"},
+            "schema_mappings": {"fin": {"appid": "FIN_APP"}},
+        }), encoding="utf-8")
+        assert resolve_appid("unknown_schema", str(cfg)) == "DEFAULT_APP"
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        """文件不存在 → 空串（不阻断，调用方决定）。"""
+        from config_paths import resolve_appid
+        assert resolve_appid("slprd", str(tmp_path / "nope.json")) == ""

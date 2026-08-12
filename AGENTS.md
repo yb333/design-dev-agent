@@ -20,7 +20,7 @@ skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
 │   ├── scripts/         # preprocess.py assemble_ts.py precheck.py gate_summary.py explore.py
 │   │                    #   fill_type_risk_decision.py type_compat.py
-│   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json
+│   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json schema_apps.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
 │   ├── scripts/         # run_ut.py(UT函数库) ut_precheck.py ut_execute.py check_db.py check_sql.py
@@ -29,7 +29,7 @@ skills/
 │   │   └── lib/         # dws_preprocessor.py
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 └── design-dev-shared/   # ★ 公共代码库（无 SKILL.md，install 单独拷）
-    └── scripts/dws_db.py # 连库能力（DBExecutor 抽象 + PsycopgExecutor 实现）
+    └── scripts/         # dws_db.py(连库) config_paths.py(★config路径集中) resolve_appid.py(查appid)
 agents/                  # dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
 commands/new-pipe.md     # ★ 唯一编排剧本（设计→闸口①→编码→UT→闸口② 全流程）
 install.py               # 装 skill/agent/command 到 ~/.config/opencode/
@@ -56,7 +56,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 
 ## 产出目录约定（★ 关键，常被搞错）
 
-所有产出在 `10_project_deliver/{资产名}/ddlc_design_dev/` 下。**对外产出 vs 过程产物严格分开放**：
+所有产出在 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/` 下（appid/schema 两层按 schema 从 schema_apps.json 查；resolve_appid.py 查 appid）。**对外产出 vs 过程产物严格分开放**：
 
 ```
 ddlc_design_dev/
@@ -141,7 +141,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 
 `skills/design-dev-shared/scripts/dws_db.py`——设计开发 agent 各 skill 共享。
 
-- **配置**：`~/.config/opencode/db-sources.json`（install 不覆盖已有的；从 `skills/dws-coding/assets/db-sources.example.json` 拷）
+- **配置**：`~/.config/opencode/_references/rules/dws-design-dev/db-sources.json`（config 统一放 rules/dws-design-dev/，与其他项目隔离；install 不覆盖已有的；从 `skills/dws-coding/assets/db-sources.example.json` 拷）。所有 config 路径集中由 `design-dev-shared/scripts/config_paths.py` 解析（`config_dir()` + `db_sources_path()` 等）——改基址只动这一处。
 - **账号分 role**：`admin`（DDL 建表删表）/ `etl`（SELECT/INSERT 数据读写）。每数据源必配这两个 role。
 - **按 schema 选源**：`schema_mapping` 映射 schema→数据源名，找不到回退 default。
 - **高层入口**：`create_executor_for_schema(schema, role="etl", config_path="")`——调用方只传 schema+role，不碰配置。低层用 `create_executor(config_path, source, role)`。

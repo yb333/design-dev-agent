@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from config_paths import db_sources_path
+
 try:
     import psycopg2
     import psycopg2.extras
@@ -436,7 +438,7 @@ def create_executor(config_path: str = "", source_name: str = "", role: str = "e
     if not config_path:
         config_path = os.environ.get(
             "DB_CONFIG",
-            str(Path.home() / ".config" / "opencode" / "db-sources.json"),
+            str(db_sources_path()),
         )
     return PsycopgExecutor(config_path, source_name, role)
 
@@ -453,7 +455,7 @@ def resolve_config_path(config_path: str = "") -> str:
         return config_path
     return os.environ.get(
         "DB_CONFIG",
-        str(Path.home() / ".config" / "opencode" / "db-sources.json"),
+        str(db_sources_path()),
     )
 
 

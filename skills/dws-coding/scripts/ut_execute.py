@@ -25,6 +25,7 @@ except AttributeError:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dws_db import create_executor
+from config_paths import db_sources_path
 from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks
 
 
@@ -116,7 +117,7 @@ def main():
         source = args.source
         if not source and target_schema:
             config_path = args.db_config or os.environ.get(
-                "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json"))
+                "DB_CONFIG", str(db_sources_path()))
             from dws_db import resolve_source_by_schema
             source = resolve_source_by_schema(config_path, target_schema)
         # 本脚本只做数据读写（TRUNCATE/INSERT/UT检查），用 etl 账号；DDL 在 ut_precheck 阶段用 admin 已建好
@@ -126,7 +127,7 @@ def main():
         sys.exit(2)
 
     config_path = args.db_config or os.environ.get(
-        "DB_CONFIG", str(Path.home() / ".config" / "opencode" / "db-sources.json"))
+        "DB_CONFIG", str(db_sources_path()))
     param_values = resolve_all_params(ts, config_path)
 
     print(f"数据源: {executor.get_current_source()}（schema: {target_schema}）")

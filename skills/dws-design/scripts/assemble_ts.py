@@ -27,6 +27,9 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+from config_paths import schedule_config_path
+
 try:
     import yaml
 except ImportError:
@@ -1353,7 +1356,7 @@ def load_schedule_config(config_path: str = "") -> dict:
            dq_override: {project_name, task_group}（可选）}
     """
     if not config_path:
-        config_path = str(Path.home() / ".config" / "opencode" / "schedule_config.json")
+        config_path = str(schedule_config_path())
     p = Path(config_path)
     if not p.exists():
         return {}

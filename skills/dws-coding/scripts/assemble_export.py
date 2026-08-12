@@ -27,6 +27,9 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+from config_paths import platform_config_path, resolve_appid
+
 try:
     import openpyxl
 except ImportError:
@@ -132,7 +135,7 @@ def load_platform_config(config_path: str = "") -> dict:
     if not config_path:
         config_path = os.environ.get(
             "PLATFORM_CONFIG",
-            str(Path.home() / ".config" / "opencode" / "platform_config.json"),
+            str(platform_config_path()),
         )
     p = Path(config_path)
     if not p.exists():
@@ -465,7 +468,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     # 兜底默认值（platform_config 的 lts 段，给旧 ts.json 没有 project/task_group 时用）
     fallback_project = _cfg(lts, "project_name")
     fallback_group = _cfg(lts, "task_group")
-    appid = _cfg(lts, "appid", "")
+    # appid 从 schema_apps.json 读（schema↔appid 标准源，不再从 platform_config 读）
+    target_schema = meta.get("target", {}).get("f_table", {}).get("schema", "")
+    appid = resolve_appid(target_schema)
     owner = _cfg(config.get("shujia", {}), "business_owner", "")
 
     def _resolve_path(task_info):
@@ -476,7 +481,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
 
     project_name, task_group = _resolve_path(tasks_sched.get("f", {}))
 
-    # job 参数模板（appid 从 platform_config 注入）
+    # job 参数模板（appid 从 schema_apps.json 注入）
     job_params = DEFAULT_JOB_PARAMS.replace('"appid":""', f'"appid":"{appid}"') if appid else DEFAULT_JOB_PARAMS
 
     wb = openpyxl.Workbook()

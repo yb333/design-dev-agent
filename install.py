@@ -17,6 +17,10 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+# 配置文件统一放 _references/rules/dws-design-dev/（与其他项目隔离）
+sys.path.insert(0, str(SCRIPT_DIR / "skills" / "design-dev-shared" / "scripts"))
+from config_paths import config_dir as rules_config_dir
+
 
 def find_python() -> str:
     """找到 Python 3.10+ 解释器"""
@@ -269,8 +273,10 @@ def run():
         print(f"  ✓ command: {c}")
     print()
 
-    # ── 6. 数据库配置初始化 ──
-    db_config = config_dir / "db-sources.json"
+    # ── 6. 数据库配置初始化 ──（config 统一放 _references/rules/dws-design-dev/，与其他项目隔离）
+    rules_dir = rules_config_dir()
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    db_config = rules_dir / "db-sources.json"
     db_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "db-sources.example.json"
     if not db_config.exists() and db_example.exists():
         shutil.copy2(str(db_example), str(db_config))
@@ -286,7 +292,7 @@ def run():
         print()
 
     # ── 7. 平台配置初始化（exporter 用）──
-    pf_config = config_dir / "platform_config.json"
+    pf_config = rules_dir / "platform_config.json"
     pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "platform_config.example.json"
     if not pf_config.exists() and pf_example.exists():
         shutil.copy2(str(pf_example), str(pf_config))
@@ -302,19 +308,35 @@ def run():
         print()
 
     # ── 8. 调度任务路径配置初始化（assemble_ts 用，设计阶段确定 project/task_group）──
-    sc_config = config_dir / "schedule_config.json"
+    sc_config = rules_dir / "schedule_config.json"
     sc_example = SCRIPT_DIR / "skills" / "dws-design" / "assets" / "schedule_config.example.json"
     if not sc_config.exists() and sc_example.exists():
         shutil.copy2(str(sc_example), str(sc_config))
-        print("[8/8] 调度任务路径配置初始化...")
+        print("[8/9] 调度任务路径配置初始化...")
         print(f"  ✓ 已创建 {sc_config}")
         print(f"  ⚠️  请编辑此文件，填入各 schema 的默认 project_name/task_group")
         print()
     elif sc_config.exists():
-        print("[8/8] 调度任务路径配置已存在，跳过（不覆盖）")
+        print("[8/9] 调度任务路径配置已存在，跳过（不覆盖）")
         print()
     else:
-        print("[8/8] 调度任务路径配置 example 未找到，跳过")
+        print("[8/9] 调度任务路径配置 example 未找到，跳过")
+        print()
+
+    # ── 9. schema↔appid 映射初始化（deliver 目录层 + export job 参数的标准源）──
+    sa_config = rules_dir / "schema_apps.json"
+    sa_example = SCRIPT_DIR / "skills" / "dws-design" / "assets" / "schema_apps.example.json"
+    if not sa_config.exists() and sa_example.exists():
+        shutil.copy2(str(sa_example), str(sa_config))
+        print("[9/9] schema↔appid 映射初始化...")
+        print(f"  ✓ 已创建 {sa_config}")
+        print(f"  ⚠️  请编辑此文件，填入各 schema 对应的 appid（deliver 目录 + 平台 appid 都从这读）")
+        print()
+    elif sa_config.exists():
+        print("[9/9] schema↔appid 映射已存在，跳过（不覆盖）")
+        print()
+    else:
+        print("[9/9] schema↔appid example 未找到，跳过")
         print()
 
     # ── 完成 ──
