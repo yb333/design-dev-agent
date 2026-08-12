@@ -38,7 +38,7 @@ except ImportError:
 # direct 字段行生成
 # ============================================================
 
-def gen_direct_line(field: dict) -> str:
+def gen_direct_line(field: dict, alias_map: dict = None) -> str:
     """生成 direct 字段的取值行（别名.字段 AS 目标字段）。
 
     ★ 不自动加 COALESCE——该不该 COALESCE、用什么默认值，是业务语义判断：
@@ -46,6 +46,10 @@ def gen_direct_line(field: dict) -> str:
       - 主键/外键 NULL→0 会掩盖 LEFT JOIN 关联失败，不该加
       - 状态字段 NULL 可能有业务含义，不该盲目转空串
     这些由 coder 根据字段语义决定，工具只负责机械填充取值表达式。
+
+    alias_map（可选）: {table: alias} 唯一映射。当 source_fields.alias 为空
+    但 table 有时，从这里反查补全 alias（BA 常漏填 source_alias）。
+    同表多别名（一对多）不进 map，留 TODO 让 coder 判断来自哪个关联。
 
     不带缩进、不带尾逗号——调用方决定格式。
     """
@@ -56,8 +60,15 @@ def gen_direct_line(field: dict) -> str:
     sf = sf_list[0]
     alias = sf.get("alias", "").strip()
     src = sf.get("field", "").strip()
+    table = sf.get("table", "").strip()
+
+    # alias 为空时，从 alias_map 反查（table → alias）
+    if not alias and table and alias_map:
+        alias = alias_map.get(table, "")
+
     if not alias or not src:
-        return f"/* TODO: {target} — 直取但源别名/源字段缺失 */"
+        hint = "源别名缺失" if not alias else "源字段缺失"
+        return f"/* TODO: {target} — 直取但{hint} */"
     return f"{alias}.{src} AS {target}"
 
 
@@ -74,6 +85,24 @@ def _alias_to_table_map(sliced: dict) -> dict[str, str]:
         t = st.get("table", "")
         if a:
             m[a] = f"{s}.{t}" if s and t else t
+    return m
+
+
+def _build_table_alias_map(sliced: dict) -> dict[str, str]:
+    """table → alias 的唯一映射（用于反查补全 source_fields 里漏填的 alias）。
+
+    只含"一个 table 只对应一个 alias"的映射。
+    同表多别名（如 dub/dub7/dub10 都是 dim_user_base_d）不进 map——
+    这时 coder 要判断字段来自哪个关联，工具不能瞎猜。
+    """
+    from collections import defaultdict
+    t2aliases = defaultdict(list)
+    for st in sliced.get("source_tables", []):
+        t = st.get("table", "").strip()
+        a = st.get("alias", "").strip()
+        if t and a:
+            t2aliases[t].append(a)
+    return {t: aliases[0] for t, aliases in t2aliases.items() if len(set(aliases)) == 1}
     return m
 
 
@@ -135,6 +164,7 @@ def query_alias(sliced: dict, alias: str) -> str:
     """查某表的直取字段行（可粘贴进 SELECT）。"""
     fields = sliced.get("fields", [])
     alias_map = _alias_to_table_map(sliced)
+    table_alias_map = _build_table_alias_map(sliced)
     display = alias_map.get(alias, alias)
 
     matched = []
@@ -143,7 +173,12 @@ def query_alias(sliced: dict, alias: str) -> str:
             continue
         sf_list = f.get("source_fields", [])
         f_alias = sf_list[0].get("alias", "") if sf_list else ""
+        f_table = sf_list[0].get("table", "") if sf_list else ""
+        # 匹配：alias 直接匹配，或 alias 空但 table 反查到这个 alias
+        # （BA 常漏填 source_alias，但填了 source_table，可反查补全）
         if f_alias == alias:
+            matched.append(f)
+        elif not f_alias and f_table and table_alias_map.get(f_table) == alias:
             matched.append(f)
 
     if not matched:
@@ -160,7 +195,7 @@ def query_alias(sliced: dict, alias: str) -> str:
 
     lines = [f"/* {display} ({alias}) 直取字段 {len(matched)} 个 */"]
     for f in matched:
-        lines.append("    " + gen_direct_line(f) + ",")
+        lines.append("    " + gen_direct_line(f, table_alias_map) + ",")
     return "\n".join(lines)
 
 
@@ -190,10 +225,11 @@ def query_field(sliced: dict, field_name: str) -> str:
             if logic:
                 lines.append(f"   口径: {logic}")
 
-            # 如果是 direct，额外给出生成行
+            # 如果是 direct，额外给出生成行（带 alias_map 反查补全）
             if ttype == "direct":
+                table_alias_map = _build_table_alias_map(sliced)
                 lines.append("")
-                lines.append(f"   生成行: {gen_direct_line(f)}")
+                lines.append(f"   生成行: {gen_direct_line(f, table_alias_map)}")
 
             return "\n".join(lines)
 

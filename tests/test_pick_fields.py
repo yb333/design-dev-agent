@@ -23,6 +23,7 @@ from pick_fields import (
     query_field,
     query_table_fields,
     _alias_to_table_map,
+    _build_table_alias_map,
     _resolve_source_table,
 )
 from slice_ts import slice_rule
@@ -98,6 +99,46 @@ class TestGenDirectLine:
         line = gen_direct_line(f)
         assert not line.startswith(" ")  # 不带缩进
         assert not line.endswith(",")    # 不带尾逗号
+
+    def test_alias_empty_resolved_from_alias_map(self):
+        """★ source_fields.alias 为空时，从 alias_map 反查补全（BA 常漏填 source_alias）"""
+        # source_fields 里有 table 没 alias
+        f = {
+            "target_field": "user_id", "field_type": "bigint",
+            "transform_type": "direct",
+            "source_fields": [{"table": "dim_user_f", "field": "user_id", "alias": ""}],
+        }
+        # alias_map: dim_user_f → duf（唯一映射）
+        alias_map = {"dim_user_f": "duf"}
+        line = gen_direct_line(f, alias_map)
+        assert "duf.user_id AS user_id" == line
+
+    def test_alias_empty_no_alias_map_returns_todo(self):
+        """alias 空 + 没传 alias_map → TODO（不猜）"""
+        f = {
+            "target_field": "x", "field_type": "int", "transform_type": "direct",
+            "source_fields": [{"table": "dim_user_f", "field": "x", "alias": ""}],
+        }
+        line = gen_direct_line(f)  # 不传 alias_map
+        assert "TODO" in line
+
+    def test_alias_empty_multi_alias_table_returns_todo(self):
+        """alias 空 + table 对应多个别名 → TODO（coder 要判断来自哪个关联）"""
+        f = {
+            "target_field": "x", "field_type": "int", "transform_type": "direct",
+            "source_fields": [{"table": "dim_user_base_d", "field": "x", "alias": ""}],
+        }
+        # 注意：_build_table_alias_map 只含唯一映射，多别名的不进 map
+        # 所以 alias_map 里根本没有 dim_user_base_d
+        alias_map = {"other_table": "ot"}
+        line = gen_direct_line(f, alias_map)
+        assert "TODO" in line
+
+    def test_alias_present_ignores_alias_map(self):
+        """alias 不为空时，直接用，不看 alias_map"""
+        f = make_field("id", "int", alias="my_alias")
+        line = gen_direct_line(f, {"ods_test_f": "wrong"})
+        assert "my_alias.id AS id" == line
 
 
 # ============================================================
@@ -247,6 +288,67 @@ class TestQueryField:
         result = query_field(s, "order")
         assert "未找到" in result
         assert "order_id" in result  # 模糊建议
+
+
+# ============================================================
+# alias 反查补全（BA 常漏填 source_alias，从 source_tables 反查）
+# ============================================================
+
+class TestBuildTableAliasMap:
+    def test_unique_mapping(self):
+        """一个 table 一个 alias → 进 map"""
+        sts = [{"schema": "dim", "table": "dim_user_f", "alias": "duf"},
+               {"schema": "ods", "table": "ods_order_f", "alias": "dof"}]
+        s = make_slice(source_tables=sts)
+        m = _build_table_alias_map(s)
+        assert m == {"dim_user_f": "duf", "ods_order_f": "dof"}
+
+    def test_multi_alias_table_excluded(self):
+        """同表多别名（如 dub/dub7 都是 dim_user_base_d）→ 不进 map"""
+        sts = [{"schema": "dim", "table": "dim_user_base_d", "alias": "dub"},
+               {"schema": "dim", "table": "dim_user_base_d", "alias": "dub7"},
+               {"schema": "ods", "table": "ods_order_f", "alias": "dof"}]
+        s = make_slice(source_tables=sts)
+        m = _build_table_alias_map(s)
+        assert "dim_user_base_d" not in m  # 多别名不进
+        assert m.get("ods_order_f") == "dof"  # 唯一的还在
+
+    def test_empty_alias_excluded(self):
+        """source_tables 里 alias 为空的 → 不进 map"""
+        sts = [{"schema": "dim", "table": "dim_user_f", "alias": ""}]
+        s = make_slice(source_tables=sts)
+        m = _build_table_alias_map(s)
+        assert m == {}
+
+
+class TestQueryAliasReverseLookup:
+    def test_alias_empty_matched_via_table(self):
+        """★ source_fields.alias 空 + table 反查到 alias → 能匹配出来"""
+        # source_tables 里 dim_user_f → duf
+        sts = [{"schema": "dim", "table": "dim_user_f", "alias": "duf"}]
+        # 字段的 source_fields.alias 为空（BA 漏填），table 有
+        fields = [{
+            "target_field": "user_id", "field_type": "bigint",
+            "transform_type": "direct",
+            "source_fields": [{"table": "dim_user_f", "field": "user_id", "alias": ""}],
+        }]
+        s = make_slice(fields=fields, source_tables=sts)
+        result = query_alias(s, "duf")
+        assert "duf.user_id AS user_id" in result  # 反查补全了
+        assert "TODO" not in result
+
+    def test_alias_empty_multi_alias_not_matched(self):
+        """alias 空 + table 对应多别名 → 不匹配（coder 要指定具体 alias）"""
+        sts = [{"schema": "dim", "table": "dim_user_base_d", "alias": "dub"},
+               {"schema": "dim", "table": "dim_user_base_d", "alias": "dub7"}]
+        fields = [{
+            "target_field": "x", "field_type": "int", "transform_type": "direct",
+            "source_fields": [{"table": "dim_user_base_d", "field": "x", "alias": ""}],
+        }]
+        s = make_slice(fields=fields, source_tables=sts)
+        result = query_alias(s, "dub")
+        # 多别名时不自动匹配，留 TODO
+        assert "未找到" in result or "无直取字段" in result
 
 
 # ============================================================
