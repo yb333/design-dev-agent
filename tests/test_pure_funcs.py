@@ -213,26 +213,31 @@ class TestResolveSourceBySchema:
 
 
 # ============================================================
-# config_paths.resolve_appid（schema→appid 标准源）
+# config_paths.resolve_appid（appid 下多 schema，按 schema 反查所属 appid）
 # ============================================================
 
 class TestResolveAppid:
     def test_resolve_by_schema(self, tmp_path):
+        """一个 appid 下多个 schema，按 schema 反查到所属 appid。"""
         from config_paths import resolve_appid
         cfg = tmp_path / "schema_apps.json"
         cfg.write_text(json.dumps({
-            "default": {"appid": "DEFAULT_APP"},
-            "schema_mappings": {"slprd": {"appid": "SLPRD_APP"}},
+            "default_appid": "DEFAULT_APP",
+            "apps": {
+                "SLPRD_APP": {"schemas": ["slprd", "slp", "md"]},
+                "FIN_APP": {"schemas": ["fin", "fin_dim"]},
+            },
         }), encoding="utf-8")
         assert resolve_appid("slprd", str(cfg)) == "SLPRD_APP"
+        assert resolve_appid("fin_dim", str(cfg)) == "FIN_APP"  # 同 app 下另一个 schema
 
     def test_fallback_default(self, tmp_path):
-        """schema 未命中 → default.appid。"""
+        """schema 不属于任何 app → default_appid。"""
         from config_paths import resolve_appid
         cfg = tmp_path / "schema_apps.json"
         cfg.write_text(json.dumps({
-            "default": {"appid": "DEFAULT_APP"},
-            "schema_mappings": {"fin": {"appid": "FIN_APP"}},
+            "default_appid": "DEFAULT_APP",
+            "apps": {"FIN_APP": {"schemas": ["fin"]}},
         }), encoding="utf-8")
         assert resolve_appid("unknown_schema", str(cfg)) == "DEFAULT_APP"
 

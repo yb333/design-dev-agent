@@ -37,9 +37,10 @@ def schema_apps_path() -> Path:
 
 
 def resolve_appid(schema: str, config_path: str = "") -> str:
-    """按 schema 查 appid（schema_apps.json 的标准源）。
+    """按 schema 反查所属 appid（schema_apps.json 标准源）。
 
-    查找优先级：schema_mappings[schema].appid → default.appid → 空串。
+    schema_apps.json 以 appid 打头：apps: appid → {schemas:[...]}（一个 appid 下多个 schema）。
+    本函数扫描 apps，找到 schema 所属的 appid；找不到用 default_appid；都没有返回空串。
     config_path 不传则用 schema_apps_path()。文件不存在返回空串（不阻断，调用方决定）。
     """
     import json
@@ -51,10 +52,9 @@ def resolve_appid(schema: str, config_path: str = "") -> str:
     except Exception:
         return ""
     schema = (schema or "").strip()
-    mappings = data.get("schema_mappings", {}) or {}
-    if schema in mappings and isinstance(mappings[schema], dict):
-        aid = (mappings[schema].get("appid") or "").strip()
-        if aid:
-            return aid
-    default = data.get("default", {}) or {}
-    return (default.get("appid") or "").strip()
+    apps = data.get("apps", {}) or {}
+    for appid, info in apps.items():
+        schemas = ((info or {}).get("schemas")) or []
+        if schema in schemas:
+            return appid
+    return (data.get("default_appid") or "").strip()

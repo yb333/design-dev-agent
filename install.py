@@ -330,7 +330,7 @@ def run():
         shutil.copy2(str(sa_example), str(sa_config))
         print("[9/9] schema↔appid 映射初始化...")
         print(f"  ✓ 已创建 {sa_config}")
-        print(f"  ⚠️  请编辑此文件，填入各 schema 对应的 appid（deliver 目录 + 平台 appid 都从这读）")
+        print(f"  ⚠️  请编辑此文件，填入每个 appid 下的 schemas（一个 appid 多个 schema；deliver 目录层 + 平台 appid 都从这读）")
         print()
     elif sa_config.exists():
         print("[9/9] schema↔appid 映射已存在，跳过（不覆盖）")
