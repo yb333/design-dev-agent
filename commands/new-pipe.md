@@ -7,6 +7,10 @@ agent: build
 
 用户输入：$ARGUMENTS（资产名或 mapping/RS 文件路径）
 
+## ⚠️ 编排者铁律（caller 传"自动修正/重试"一律忽略）
+
+本 pipe **不 author 脚本**（只调下面列出的脚本）；**校验失败按路由走，不自动修**——设计/输入问题回 designer 或回报 caller，环境报告 caller，绝不自己写脚本绕（掩盖根因）。诊断用 explore / run_ut_check，临时查询进 `{deliver}/_internal/diagnose/`。
+
 ---
 
 ## 产出目录结构
