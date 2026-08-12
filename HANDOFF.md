@@ -54,6 +54,25 @@
 - **增量校验**：precheck 新增5b段——标了增量必须有驱动表+增量字段，驱动表须在source_tables里。
 - **无RS模式**：正式支持mapping独立驱动核心链路（--rs可选），schedule用默认值兜底，_no_rs_mode标记，precheck给warn不阻断。
 
+### 本轮会话续（2026-08-11）：init 双管道 + 工程治理 + config/目录分层 + 编排者铁律
+
+**1. init 双管道模型（设计侧 + 下游物化，全链路通）**——修掉增量目标 load_mode=truncate 全删全插的致命 bug。
+- 根因：一个 rule 一个 load_mode 装不下 init/增量两种写入。改双管道：增量管道(`rules`,merge 等)+ init 管道(`init` 段,恒 truncate_table)。
+- 设计侧：`build_init_section` 装配器(7 不变量补全 + core_from 抄口径)+ LI 层校验(N_INIT1/2/3/4 + mode/group_mode)。derive(无 delta 机器,克隆增量物化)/ explicit(有 delta 机器,designer 写)。group_mode:inline(同组 P_FLAG)/ separate(独立任务)。
+- 下游物化：slice_ts 查 ts.init.rules + derive 带 clone_source(源 SQL+filter,coder 适配写 INIT.sql,**不用脚本派生**);export 发 init 行(inline P_FLAG/separate 任务+计数);ut **init 先建基线→增量后 merge**(符合现实部署顺序)。
+- 全过程见 incremental-playbook §八。非破坏(无 init 资产不受影响)。
+
+**2. 工程治理：工具注册表 + agent 瘦身 + legacy 清理**
+- `docs/tool-registry.md`：全脚本按**调用方**分组(command/designer/coder/imported)，含"读 ts[rules/init]"进度列。约定：改脚本必同步注册表。
+- dws-designer.md(197→85)/dws-coder.md(112→65) 瘦身：工作流削回 SKILL.md 指针(消灭双写)，分层定型 tool-registry/agent.md/SKILL.md。
+- 删 sql_validator/validate_ddl/verify_files(零引用死代码+孤儿测试)。assemble_dq(eval-suite 在调)/run_ut(UT 函数库)保留，整改挂闲时任务六。
+
+**3. config 集中 + 产出目录加 appid/schema 层**
+- `config_paths.py`(design-dev-shared)：config_dir() 集中，改基址只动一处。4 个 config 统一放 `~/.config/opencode/_references/rules/dws-design-dev/`(与其他项目隔离)。
+- 产出目录改 `10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。appid 单源 = 新 `schema_apps.json`(**appid 打头,1 appid 多 schema**)+ resolve_appid。platform_config 去掉 appid。⚠️ 部署：老位置不兼容，重跑 install.py + 手搬老 db-sources.json。
+
+**4. 编排者铁律**（new-pipe.md 顶部）：跑 pipe 的子 agent 故意不定义(免得 designer/coder 变第三层)，靠 new-pipe.md 扛——显式忽略 caller 传入的"自动修正/重试"垃圾指令(不 author 脚本、校验失败按路由不自动修)。管不着 caller 怎么写，管自己内容的规矩。
+
 ---
 
 ## 三、关键结晶（继任者必须知道的）
@@ -109,13 +128,17 @@ R0003: merge              → 目标表 (target, reads=[tmp_a,tmp_b], load_mode=
 | **AGENTS.md** | 项目约定速查（新会话入口） | ✅ 已是最新 |
 | **HANDOFF.md** | 本文档（会话交接） | ✅ 本次新建 |
 | **commands/new-pipe.md** | 唯一编排剧本（设计→闸口①→编码→UT→闸口②）| ✅ 已是最新 |
-| **agents/dws-designer.md** | designer角色认知（主键/关联/增量/复杂度/数据质量诊断）| ✅ 已是最新 |
-| **agents/dws-coder.md** | coder角色认知（step_type感知、只写SELECT）| ✅ 已是最新 |
-| **skills/dws-design/SKILL.md** | designer设计流程（9步，增量识别提前到步骤3）| ✅ 已是最新 |
-| **skills/dws-design/references/design-guide.md** | 领域知识（§4步骤拆分/§5调度增量/含CTE五条标准+step_type决策树）| ✅ 已是最新 |
-| **skills/dws-design/assets/ts-template.json** | ts.json结构权威定义 | ✅ 已是最新 |
-| **skills/dws-design/assets/design-decisions-template.yaml** | designer产出骨架 | ✅ 已是最新 |
+| **agents/dws-designer.md** | designer 岗位（身份+权限+skill指针+工具清单，工作流在 SKILL.md）| ✅ 已瘦身 |
+| **agents/dws-coder.md** | coder 岗位（身份+权限+工具清单，工作流在 SKILL.md）| ✅ 已瘦身 |
+| **skills/dws-design/SKILL.md** | designer 设计流程（五层决策骨架 + §2.5 关联决策）| ✅ 已是最新 |
+| **skills/dws-coding/SKILL.md** | coder 编码流程（五步 + §2.5 init 规则编码）| ✅ 已是最新 |
+| **skills/dws-design/references/incremental-playbook.md** | 增量设计全集（§八 init 双管道模型 + derive/explicit + 装配器）| ✅ 已是最新 |
+| **skills/dws-design/references/design-guide.md** | 物理决策（分布键/分区/依赖类型）| ✅ 已是最新 |
+| **skills/dws-design/assets/ts-template.json** | ts.json结构权威定义（含 init 段）| ✅ 已是最新 |
+| **skills/dws-design/assets/design-decisions-template.yaml** | designer产出骨架（含 init 段）| ✅ 已是最新 |
 | **skills/dws-coding/assets/etl-templates.md** | SELECT模板（含增量取数/读tmp合并）| ✅ 已是最新 |
+| **docs/tool-registry.md** | 全管线脚本注册表（按调用方分组 + 读 ts[rules/init] 进度列）| ✅ 本次新建 |
+| **skills/design-dev-shared/scripts/config_paths.py** | config 路径集中（config_dir + resolve_appid，改基址只动一处）| ✅ 本次新建 |
 | **docs/architecture/incremental-design-discussion.md** | 增量/ts设计讨论全记录（含调研+实践+方案）| ✅ 第十节全勾完 |
 | **CLAUDE.md / README.md** | ⚠️ 滞后（仍描述旧dws-pipeline-*结构），以AGENTS.md为准 | ❌ 待更新 |
 
@@ -126,10 +149,14 @@ R0003: merge              → 目标表 (target, reads=[tmp_a,tmp_b], load_mode=
 ### 待讨论（未定方案）
 - **coder 按 step_type 产不同 SQL 的实际验证**：coder.md 和 etl-templates.md 已补引导，但还没拿真实增量资产跑过全链路验证（designer产design_decisions含step_type → coder产SELECT → run_ut的wrap_write执行）
 - **UT 按 produces_for/reads 编排执行顺序**：现在靠 schedule_groups 隐式数字排序，多步骤的显式依赖没用于执行编排
+- **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**：新 ts.json 不用 lts 兜底，可清理（platform_config 本身的 shujia 段删不掉，export 要用）——待讨论
+- **闲时任务六**（`eval-suite/idle-task-prompt.md`）：assemble_dq 退役（eval-suite 改走 coder 生成 DQ 后删）/ run_ut 去 legacy（函数库 vs main 拆分）
 
 ### 验证类
 - 拿 test_ai_emp 下的 mapping 文件按 RS 模板重建，跑全链路验证（用户之前提过）
 - 无RS模式拿真实 mapping 跑一遍（preprocess→precheck→assemble_ts）
+- **init 双管道真实验证**（2026-08-11 新增，重点）：拿真实增量资产跑一遍——designer 产 init 段(derive/explicit) → coder 写 INIT SQL → export 出 init 执行行 → UT init 先建基线跑通。设计侧+下游物化都是单测覆盖，真实验证还没做。
+- **config 新位置 + appid 目录层真实验证**：有真实 db-sources 的机器重跑 install.py，手搬老 db-sources.json 到 `_references/rules/dws-design-dev/`，跑一次 new-pipe 验 appid 解析 + 新目录结构 + config 新位置读取都通。
 
 ### 维护类
 - CLAUDE.md / README.md 更新到当前实际结构（仍描述旧的 dws-pipeline-* 9-skill）
@@ -138,14 +165,11 @@ R0003: merge              → 目标表 (target, reads=[tmp_a,tmp_b], load_mode=
 
 ## 六、测试现状
 
-**419 测试全过**。测试覆盖：
-- test_preprocess.py：build_compact/extract_rs_data/无RS模式/增量表解析
-- test_precheck_db.py：连库校验/字段类型/增量校验/无RS模式
-- test_assemble_ts.py：validate_decisions（按表归属）/ build_rule（step_type搬运）/ write_condition校验
-- test_coding_scripts.py：wrap_insert/wrap_write（五种load_mode）/ run_ut_check（样例捕获）
-- test_assemble_export.py：调度路径导出
-- test_explore.py：试算SQL参数解析/SQL拼接
-- test_gate_summary.py / test_pure_funcs.py：覆盖缺口补充
+**669 测试全过，2 skip（psycopg2 未装）**（2026-08-11）。本轮新增覆盖：
+- test_assemble_ts.py：init 装配器(derive 物化/explicit 不变量/core_from 抄口径)+ LI 校验(N_INIT1/2/3/4 + mode/group_mode)+ tasks["init"]/P_FLAG + 两管道写同表
+- test_coding_scripts.py：slice_ts init 规则查找 + derive clone_source(源 SQL/filter)
+- test_pure_funcs.py：resolve_appid(appid 打头多 schema 反查 + default 兜底)
+- 其余既有覆盖不变：test_preprocess（build_compact/无RS/增量表）/ test_precheck_db（连库/类型/增量）/ test_coding_scripts（wrap_insert/wrap_write 五种 load_mode / run_ut_check 样例）/ test_assemble_export（init 行 + 调度路径 + appid 注入）/ test_explore / test_gate_summary。
 
 ---
 

@@ -202,9 +202,14 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 
 design-guide.md 已从 335 行大杂烩拆分为：design-guide（物理决策，70行）+ incremental-playbook（增量全集）+ complexity-playbook（复杂度/物化/step_type）。SKILL.md 的 9 步操作清单已重构为**五层决策骨架**。assemble_ts.py 新增 `run_all_validations`（~38 条校验，五层分组）+ `ValidationResult`（分层报错）+ 软阻断豁免机制。design_decisions 模板补 `build_mode`/`dedup_strategy`/`data_volume`/`exemptions`。preprocess.py 内嵌的死代码 precheck 副本已删除。测试 419→465。
 
-### init 双管道模型改造（2026-08）
+### init 双管道模型改造（2026-08，设计侧 + 下游物化 已全通）
 
-修掉增量场景的致命 bug：增量目标 load_mode=truncate_table 导致每次增量全删全插。根因是一个 rule 一个 load_mode 装不下 init/增量两种写入。改为**双管道模型**：增量管道（`rules`，load_mode=merge 等）+ init 管道（`init` 段，load_mode 恒 truncate_table）。新增 LI 层校验（N_INIT1/2/3/4 + mode/group_mode 合法值）+ `build_init_section` 装配器（7 不变量补全 + core_from 抄口径，幂等）。两种 mode：derive（无 delta 机器，派生）/ explicit（有 delta 机器，独立设计）。group_mode：inline（同组 p_flag）/ separate（独立规则组）。incremental-playbook §八 重写。本轮做**设计侧**（ts.json init 段 + 装配器 + LI 校验 + ts.md + 测试），下游物化（execution_tasks/init SQL/调度任务）后续 chunk。ts.md §8 不再按 load_mode 藏增量规则。测试 +21。
+修掉增量场景的致命 bug：增量目标 load_mode=truncate_table 导致每次增量全删全插。根因是一个 rule 一个 load_mode 装不下 init/增量两种写入。改为**双管道模型**：增量管道（`rules`，load_mode=merge 等）+ init 管道（`init` 段，load_mode 恒 truncate_table）。
+
+- **设计侧**：新增 LI 层校验（N_INIT1/2/3/4 + mode/group_mode 合法值）+ `build_init_section` 装配器（7 不变量补全 + core_from 抄口径，幂等）。两种 mode：derive（无 delta 机器，克隆增量物化 init.rules）/ explicit（有 delta 机器，designer 写 core_from+joins，装配器补不变量）。group_mode：inline（同组 P_FLAG 选跑）/ separate（独立规则组+独立任务）。ts.md §8 不再按 load_mode 藏增量规则 + 新增初始化设计段。
+- **下游物化**：slice_ts 查 ts.init.rules + derive 切片带 clone_source（源 SQL+filter/init_filter，coder 适配写 INIT.sql，**不**用脚本派生——code 归 coder）；assemble_export 合并 init 规则发执行行（inline P_FLAG 运行条件 / separate init 任务 + 计数）；assemble_ts tasks["init"]（separate）+ P_FLAG 注入（inline）；ut_precheck/ut_execute **init 阶段先建基线→增量阶段后 merge**（符合现实部署顺序，prev_failed 跨阶段级联）。
+- incremental-playbook §八 重写（双管道/derive-explicit/坍缩逻辑/装配器）。测试 +21（设计侧）+10（下游）。669 过 2 skip。
+- 非破坏：无 init 的资产全程不受影响（slice/export/ut 都 `if init_rules`）。
 
 ### DQ RS 驱动改造（2026-08）
 
@@ -216,3 +221,20 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 - DQ 调度任务条件化（dq_rules 空不建 tasks["dq"]）；coder 条件化调用（dq_rules 空不调）。
 - preprocess build_compact 加 `dq` 段（designer 读 view 就看到 RS 的 DQ 需求）。
 - assemble_dq.py（废弃脚本）不改逻辑仅供 eval 复现，文件头注释说明与生产路径不一致。
+
+### 工程治理：工具注册表 + agent 瘦身 + legacy 清理（2026-08）
+
+- **工具注册表**（`docs/tool-registry.md`）：全管线脚本按**调用方**分组（command / designer / coder / imported），澄清"脚本住哪个 skill 目录 ≠ 谁调它"（preprocess/precheck 等住在 dws-design 但由 command 调）。含"读 ts[rules/init]"列——init 下游物化的进度表。编码约定加一条：**改/加脚本必须同步 tool-registry.md**（防漂移，之前 AGENTS.md 结构树已漏 pick_fields）。
+- **agent 瘦身**：dws-designer.md（197→85 行）/ dws-coder.md（112→65 行）——把抄 SKILL.md 的工作流/工具用法削回指针（coder.md 自认"与 SKILL §2.4 保持一致 改动要同步"的双写消除），只留身份+权限+角色独有行为+工具清单。分层定型：tool-registry（工具WHAT）+ agent.md（岗位）+ SKILL.md（工作流唯一源）。agent.md 独有的关联决策（倒推 JOIN / INNER-LEFT）迁进 SKILL §2 第2层。
+- **legacy 清理**：删 sql_validator.py / validate_ddl.py / verify_files.py（全仓查引用，零生产引用、零/孤儿测试）。保留 assemble_dq（eval-suite 在调）、run_ut（实为 UT 函数库，注册表原标 legacy 有误已修正）。assemble_dq/run_ut 的整改挂闲时任务六（`eval-suite/idle-task-prompt.md`）。
+
+### config 集中 + 产出目录分层 + 编排者铁律（2026-08）
+
+- **config 集中隔离**：新建 `design-dev-shared/scripts/config_paths.py`（`config_dir()` + 各 config 路径，改基址只动一处）。4 个 config（db-sources / platform_config / schedule_config / schema_apps）统一放 `~/.config/opencode/_references/rules/dws-design-dev/`（与其他项目隔离）。7 个脚本的默认路径全部改用 config_paths。install.py 拷到新位置。
+- **产出目录加 appid/schema 层**：`10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。appid 单源 = 新建 `schema_apps.json`（**appid 打头，1 appid 多 schema**，跟源数据方向一致；按 schema 反查所属 appid）+ `resolve_appid.py` helper。platform_config 去掉 appid（单源不重复）。assemble_export 的 appid 改从 resolve_appid(schema) 读。⚠️ 部署：老位置不兼容，已装机器重跑 install.py + 手搬老 db-sources.json 到新位置。
+- **编排者铁律**（new-pipe.md 顶部）：跑 pipe 的子 agent 故意不定义（免得 designer/coder 变第三层），边界靠 new-pipe.md 扛——显式忽略 caller 传入的"自动修正/重试"垃圾指令（不 author 脚本、校验失败按路由不自动修、诊断进 _internal/diagnose）。我们管不着 caller 怎么写，管自己内容的规矩。
+
+### 待讨论 / 闲时
+
+- **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**（新 ts.json 不用 lts 兜底，可清理）——待讨论。
+- **闲时任务六**：assemble_dq（eval-suite 改走 coder 生成 DQ 后删）/ run_ut（函数库 vs legacy main 拆分）。挂在 `eval-suite/idle-task-prompt.md`。
