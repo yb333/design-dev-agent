@@ -67,16 +67,22 @@ def _audit_field(target_column="del_flag"):
     }
 
 
-def _make_mock_executor(table_columns: dict):
+def _make_mock_executor(table_columns: dict, conn_status=None):
     """构造 mock executor。
 
     table_columns 支持两种格式：
       {(schema, table): [col1, col2]} —— 只给列名，类型默认 "varchar"
       {(schema, table): {col1: type1, col2: type2}} —— 列名+类型
+    conn_status: 连接诊断结果（dws_db.ConnectionStatus），默认 None=连接正常。
+                 测密码错/连不上时传 ConnectionStatus(ok=False, category=...)。
     适配 UNION ALL 批量查询：返回带 nsp/rel/col/col_type 的行。
     """
+    from dws_db import ConnectionStatus
+    if conn_status is None:
+        conn_status = ConnectionStatus(ok=True)
     executor = MagicMock()
-    executor.test_connection.return_value = True
+    executor.diagnose_connection.return_value = conn_status
+    executor.test_connection.return_value = conn_status.ok  # 向后兼容
 
     def fake_execute(sql):
         result = MagicMock()
@@ -108,8 +114,8 @@ def _make_mock_executor(table_columns: dict):
 class TestCheckDbSchema:
     """DB 校验逻辑测试。"""
 
-    def test_no_db_skips_silently(self, monkeypatch):
-        """连不上库（create_executor_for_schema 抛异常）→ 静默跳过，不阻断。"""
+    def test_no_db_driver_warns(self, monkeypatch):
+        """数据库驱动缺失（psycopg2 未装，ImportError）= 环境问题 → warn 跳过，不阻断。"""
         def boom(schema, config_path=""):
             raise ImportError("psycopg2 未安装")
         monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
@@ -117,22 +123,80 @@ class TestCheckDbSchema:
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs)
 
-        # 不应有 DB 校验相关的 error
-        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
-        assert db_errors == [], f"连不上库不应报 DB error: {db_errors}"
+        # ImportError 是环境问题 → warn，不是 error（不阻断）
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e or "DB配置错误" in e)]
+        assert db_errors == [], f"驱动缺失不应报 DB error: {db_errors}"
+        # 应有 warn 告知（不静默）
+        assert any("驱动缺失" in w or "DB校验跳过" in w for w in result.warnings), \
+            f"驱动缺失应 warn 告知: {result.warnings}"
 
-    def test_connection_fails_skips_silently(self, monkeypatch):
-        """test_connection 返回 False → 静默跳过。"""
-        executor = MagicMock()
-        executor.test_connection.return_value = False
+    def test_server_unreachable_warns(self, monkeypatch):
+        """服务器连不上（server_unreachable）= 环境不可用 → warn 跳过，不阻断。"""
+        from dws_db import ConnectionStatus
+        executor = _make_mock_executor(
+            {},
+            conn_status=ConnectionStatus(ok=False, category="server_unreachable",
+                                         reason="could not connect to server: Connection refused"),
+        )
         monkeypatch.setattr("dws_db.create_executor_for_schema",
                             lambda schema, config_path="": executor)
 
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs)
 
-        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
-        assert db_errors == [], f"连接失败不应报 DB error: {db_errors}"
+        # 环境不可用 → warn，不报 error（不阻断）
+        db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e or "DB" in e)]
+        assert db_errors == [], f"服务器连不上不应报 error: {db_errors}"
+        assert any("DB校验跳过" in w or "连不上" in w for w in result.warnings), \
+            f"服务器连不上应 warn 告知原因: {result.warnings}"
+
+    def test_auth_failed_blocks(self, monkeypatch):
+        """密码错（auth_failed）= 配置错误 → error 阻断（不掩盖）。"""
+        from dws_db import ConnectionStatus
+        executor = _make_mock_executor(
+            {},
+            conn_status=ConnectionStatus(ok=False, category="auth_failed",
+                                         reason='password authentication failed for user "etl"'),
+        )
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)
+
+        # 密码错 = 配置错误 → error 阻断
+        auth_errors = [e for e in result.errors if "DB连接失败" in e and "配置错误" in e]
+        assert auth_errors, f"密码错应报 [DB连接失败·配置错误] error: {result.errors}"
+        assert "password authentication" in auth_errors[0] or "密码" in auth_errors[0]
+
+    def test_db_not_found_blocks(self, monkeypatch):
+        """库名错（db_not_found）= 配置错误 → error 阻断。"""
+        from dws_db import ConnectionStatus
+        executor = _make_mock_executor(
+            {},
+            conn_status=ConnectionStatus(ok=False, category="db_not_found",
+                                         reason='FATAL: database "xxx" does not exist'),
+        )
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)
+
+        db_errs = [e for e in result.errors if "DB连接失败" in e and "配置错误" in e]
+        assert db_errs, f"库名错应报 error: {result.errors}"
+
+    def test_schema_mapping_missing_blocks(self, monkeypatch):
+        """schema 没配 schema_mapping = 配置错误 → error 阻断（不再静默回退 default）。"""
+        def boom(schema, config_path=""):
+            raise ValueError(f"schema '{schema}' 不在 schema_mapping 配置里")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)
+
+        cfg_errors = [e for e in result.errors if "DB配置错误" in e and "schema_mapping" in e]
+        assert cfg_errors, f"schema_mapping 缺应报 [DB配置错误]: {result.errors}"
 
     def test_table_not_exists_blocks(self, monkeypatch):
         """表在库里不存在 → 它的字段全部查不到，报字段不存在（阻断）。

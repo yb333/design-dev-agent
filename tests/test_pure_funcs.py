@@ -228,18 +228,53 @@ class TestResolveSourceBySchema:
         }), encoding="utf-8")
         assert resolve_source_by_schema(str(cfg), "fin") == "fin_src"
 
-    def test_schema_miss_uses_default(self, tmp_path):
+    def test_schema_miss_raises(self, tmp_path):
+        """schema 没配 mapping → raise ValueError（强制配全，不静默回退 default 掩盖）。"""
         cfg = tmp_path / "db-sources.json"
         cfg.write_text(json.dumps({
             "schema_mapping": {"fin": "fin_src"},
             "default": "default_src",
         }), encoding="utf-8")
-        assert resolve_source_by_schema(str(cfg), "unknown") == "default_src"
+        with pytest.raises(ValueError, match="schema_mapping"):
+            resolve_source_by_schema(str(cfg), "unknown")
 
-    def test_missing_file_returns_empty(self):
-        assert resolve_source_by_schema("/nonexistent/db.json", "fin") == ""
+    def test_missing_file_raises(self):
+        """配置文件不存在 → raise FileNotFoundError（不静默返回空掩盖）。"""
+        with pytest.raises(FileNotFoundError):
+            resolve_source_by_schema("/nonexistent/db.json", "fin")
 
-    def test_no_default_returns_empty(self, tmp_path):
+    def test_schema_miss_no_default_raises(self, tmp_path):
+        """schema 没配 mapping（即使配置里没 default）→ raise ValueError。"""
         cfg = tmp_path / "db-sources.json"
         cfg.write_text(json.dumps({"schema_mapping": {"fin": "fin_src"}}), encoding="utf-8")
-        assert resolve_source_by_schema(str(cfg), "unknown") == ""
+        with pytest.raises(ValueError):
+            resolve_source_by_schema(str(cfg), "unknown")
+
+    def test_source_not_exist_raises(self, tmp_path):
+        """指定的 source 不在配置里 → raise（不静默换第一个数据源掩盖）。"""
+        try:
+            import psycopg2  # noqa: F401
+        except ImportError:
+            pytest.skip("psycopg2 未安装，跳过 PsycopgExecutor 测试")
+        from dws_db import PsycopgExecutor
+        cfg = tmp_path / "db-sources.json"
+        cfg.write_text(json.dumps({
+            "sources": {"src1": {"host": "h", "roles": {"etl": {"user": "u", "password": "p"}}}},
+            "default": "src1",
+        }), encoding="utf-8")
+        with pytest.raises(ValueError, match="不在配置里"):
+            PsycopgExecutor(str(cfg), source_name="nonexistent")
+
+    def test_no_source_no_default_raises(self, tmp_path):
+        """既没传 source 也没配 default → raise（不静默用第一个）。"""
+        try:
+            import psycopg2  # noqa: F401
+        except ImportError:
+            pytest.skip("psycopg2 未安装，跳过 PsycopgExecutor 测试")
+        from dws_db import PsycopgExecutor
+        cfg = tmp_path / "db-sources.json"
+        cfg.write_text(json.dumps({
+            "sources": {"src1": {"host": "h", "roles": {"etl": {"user": "u", "password": "p"}}}},
+        }), encoding="utf-8")  # 无 default
+        with pytest.raises(ValueError, match="未指定数据源"):
+            PsycopgExecutor(str(cfg))  # 不传 source_name

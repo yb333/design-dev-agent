@@ -707,17 +707,41 @@ def _check_db_schema(
     if not cache_used:
         target = rs_input.get("meta", {}).get("target", {})
         target_schema = target.get("f_table", {}).get("schema", "") or target.get("schema", "")
-        try:
-            sys.path.insert(
-                0,
-                str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"),
-            )
-            from dws_db import create_executor_for_schema
+        sys.path.insert(
+            0,
+            str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"),
+        )
+        from dws_db import create_executor_for_schema
 
+        # create_executor 失败：区分环境问题（ImportError 驱动缺失→warn）vs 配置错误（→error 阻断）
+        try:
             executor = create_executor_for_schema(target_schema)
-            if not executor.test_connection():
-                return  # 连不上库，静默跳过
-            # UNION ALL 一条 SQL 查全部表
+        except ImportError as e:
+            # 依赖缺失（psycopg2 未安装）= 环境问题 → warn 跳过
+            result.add_warn(f"[DB校验跳过] 数据库驱动缺失: {e}")
+            return
+        except Exception as e:
+            # 配置错误（schema_mapping 缺/source 名错/role 缺）→ error 阻断
+            result.add_error(f"[DB配置错误] {e}")
+            return
+
+        # 连接诊断：配置错误（密码错/库名错）→ error 阻断；环境不可用（连不上）→ warn 跳过
+        # 不再静默 return——至少把原因报出来（不掩盖配置错误）
+        status = executor.diagnose_connection()
+        if not status.ok:
+            if status.category in ("auth_failed", "db_not_found"):
+                result.add_error(
+                    f"[DB连接失败·配置错误] 数据源 '{executor.get_current_source()}': {status.reason}"
+                )
+            else:
+                result.add_warn(
+                    f"[DB校验跳过] 数据源 '{executor.get_current_source()}' 连不上: {status.reason}"
+                )
+            executor.close()
+            return
+
+        # 连接正常 → 连库捞表结构
+        try:
             fetched = _fetch_tables_schema_batch(executor, all_tables)
             executor.close()
             found = fetched
@@ -727,8 +751,10 @@ def _check_db_schema(
                 for (sch, tbl), cols in fetched.items():
                     cache_new["tables"][f"{sch}.{tbl}"] = cols  # 已是 {col: type}
                 _save_schema_cache(cache_path, cache_new)
-        except Exception:
-            return  # 连不上库，静默跳过
+        except Exception as e:
+            result.add_warn(f"[DB校验异常] {e}")
+            executor.close()
+            return
 
     # ── 比对（纯本地）──
     result.add_pass(

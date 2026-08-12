@@ -50,6 +50,22 @@ class ExecuteResult:
         return f"失败: {self.error}"
 
 
+@dataclass
+class ConnectionStatus:
+    """连接诊断结果（区分配置错误 vs 环境不可用）。
+
+    category 决定调用方（precheck）怎么处理：
+    - ok：连接正常
+    - auth_failed：密码错/认证失败（配置错误，应阻断）
+    - db_not_found：库不存在（配置错误，应阻断）
+    - server_unreachable：服务器连不上/超时（环境不可用，可跳过）
+    - unknown：其他（保守 warn 跳过，不阻断）
+    """
+    ok: bool
+    category: str = "ok"
+    reason: str = ""
+
+
 # ============================================================
 # 配置
 # ============================================================
@@ -140,14 +156,24 @@ def load_db_sources(config_path: str) -> tuple[dict[str, DataSource], str, Secur
 def resolve_source_by_schema(config_path: str, schema: str) -> str:
     """按 schema 从 schema_mapping 查找对应的数据源名。
 
-    找不到就用 default。
+    schema 没配 mapping → raise（强制配全，不静默回退 default 掩盖）。
+    回退 default 会连到错误的库还静默通过，掩盖配置缺失。
     """
     p = Path(config_path)
     if not p.exists():
-        return ""
+        raise FileNotFoundError(
+            f"数据库配置文件不存在: {config_path}\n"
+            f"请复制 db-sources.example.json 为 db-sources.json 并配置连接信息"
+        )
     raw = json.loads(p.read_text(encoding="utf-8"))
     schema_mapping = raw.get("schema_mapping", {})
-    return schema_mapping.get(schema, raw.get("default", ""))
+    if schema in schema_mapping:
+        return schema_mapping[schema]
+    raise ValueError(
+        f"schema '{schema}' 不在 schema_mapping 配置里，请在 db-sources.json 的 "
+        f"schema_mapping 段显式映射该 schema 到数据源。"
+        f"已配置: {list(schema_mapping.keys()) or '(空)'}"
+    )
 
 
 def load_test_params(config_path: str) -> dict:
@@ -226,11 +252,18 @@ class PsycopgExecutor(DBExecutor):
         if not self._sources:
             raise ValueError(f"db-sources.json 里没有配置任何数据源: {config_path}")
 
-        # 选择初始数据源
+        # 选择初始数据源（配置错误必须 fail loud，不静默换一个——掩盖根因）
         self._current = source_name or self._default
+        if not self._current:
+            raise ValueError(
+                "未指定数据源且 db-sources.json 未配 default。"
+                "请配置 sources.default 或显式传 source_name"
+            )
         if self._current not in self._sources:
-            # 如果指定的不存在，用第一个
-            self._current = next(iter(self._sources))
+            raise ValueError(
+                f"数据源 '{self._current}' 不在配置里。"
+                f"可用: {list(self._sources.keys())}"
+            )
 
         # 操作角色：admin（DDL 建表删表）| etl（SELECT/INSERT 数据读写）
         self._role = role
@@ -340,12 +373,33 @@ class PsycopgExecutor(DBExecutor):
         return results
 
     def test_connection(self) -> bool:
-        """测试连接"""
+        """测试连接（向后兼容，返回 bool）。新代码用 diagnose_connection 拿原因和分类。"""
+        return self.diagnose_connection().ok
+
+    def diagnose_connection(self) -> ConnectionStatus:
+        """诊断连接：区分配置错误（密码错/库名错）vs 环境不可用（服务器连不上）。
+
+        调用方（precheck）据此决定：配置错误→error 阻断；环境不可用→warn 跳过。
+        不再静默掩盖——至少把原因返回给调用方。
+        """
         try:
-            r = self.execute("SELECT 1")
-            return r.success
-        except Exception:
-            return False
+            conn = self._get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+            return ConnectionStatus(ok=True)
+        except Exception as e:
+            msg = str(e).lower()
+            # 认证失败 = 配置错误（密码错）
+            if any(k in msg for k in ("authentication", "password", "invalid authorization", "登录失败")):
+                return ConnectionStatus(ok=False, category="auth_failed", reason=str(e))
+            # 库不存在 = 配置错误（库名错）
+            if "does not exist" in msg and "database" in msg:
+                return ConnectionStatus(ok=False, category="db_not_found", reason=str(e))
+            # 连不上服务器 = 环境不可用
+            if any(k in msg for k in ("could not connect", "connection refused", "timeout", "timed out", "not known", "name or service not known")):
+                return ConnectionStatus(ok=False, category="server_unreachable", reason=str(e))
+            return ConnectionStatus(ok=False, category="unknown", reason=str(e))
 
     def switch_source(self, source_name: str):
         """切换数据源"""
