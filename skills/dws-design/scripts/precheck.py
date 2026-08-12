@@ -777,9 +777,9 @@ def _normalize_type(raw: str) -> str:
     - int2(16) / smallint 都归一 "smallint"（16bit=2字节）
     - 有 (n) 时 n（bit 数）决定精度；无 (n) 时 base name 决定
 
-    其他类型：varchar/varchar2/character varying 归一（保留长度后缀）；
+    其他类型：varchar/character varying 归一（PG 官方别名，确定同义，都字符语义）；
     char/character、numeric/decimal、bool/boolean 同理。
-    nvarchar/nvarchar2 不归一（字节语义不同，独立保留）。
+    varchar2/nvarchar2 不归一（字节/字符语义不同，归一会漏判长度超长）。
 
     与 type_compat.is_type_compatible 不同：那个判"兼容"（源能否被目标兜底），
     这个判"同名"（mapping 标的 source_type 和库 actual_type 该是同一类型）。
@@ -818,9 +818,11 @@ def _normalize_type(raw: str) -> str:
         return INT_BASE_TO_NAME[base]  # 无 (n) 或 n 非标准位宽 → base name 决定
 
     # 其他类型：归一别名 + 保留长度/精度后缀
+    # 注意：varchar2/nvarchar2 不归一到 varchar——长度语义不同（varchar2 按字节，
+    # varchar 在 PG 模式按字符；nvarchar2 按字符但是国家字符集），归一会漏判长度超长
     rest = "(" + t.split("(", 1)[1] if "(" in t else ""
     aliases = {
-        "varchar": "charactervarying", "varchar2": "charactervarying",
+        "varchar": "charactervarying",
         "char": "character",
         "string": "text",
         "bool": "boolean",

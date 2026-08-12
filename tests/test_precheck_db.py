@@ -879,23 +879,23 @@ class TestTypeCheck:
         type_errors = [e for e in result.errors if "类型不符" in e]
         assert type_errors == [], f"int(32)==integer 应通过: {type_errors}"
 
-    def test_varchar2_normalized(self, monkeypatch):
-        """Oracle 方言 varchar2 归一：varchar2(100) 与 character varying(100) 互通。"""
+    def test_varchar2_not_normalized_reports(self, monkeypatch):
+        """varchar2 不归一 varchar（字节语义不同）：mapping varchar2 vs 库 character varying → 报[类型不符]。"""
         executor = _make_mock_executor({
-            ("ods", "ods_test_f"): {"name": "character varying(100)"}
+            ("ods", "ods_test_f"): {"name": "character varying(100)"}  # 库 varchar 系
         })
         monkeypatch.setattr("dws_db.create_executor_for_schema",
                             lambda schema, config_path="": executor)
         rs = _make_rs_input([{
             "source_schema": "ods", "source_table": "ods_test_f",
-            "source_column": "name", "source_type": "varchar2(100)",
+            "source_column": "name", "source_type": "varchar2(100)",  # varchar2 字节语义，不归一
             "transform_rule": "直接复制", "transform_detail": "-",
             "target_column": "name", "target_column_cn": "name",
             "target_type": "varchar2(100)", "source_alias": "t", "remark": "",
         }])
         result = precheck(rs)
         type_errors = [e for e in result.errors if "类型不符" in e]
-        assert type_errors == [], f"varchar2 应归一匹配: {type_errors}"
+        assert type_errors, f"varchar2 vs varchar 字节语义不同应报不符: {result.errors}"
 
     def test_nvarchar2_not_normalized_reports(self, monkeypatch):
         """nvarchar2 不归一 varchar（字节语义不同）：mapping nvarchar2 vs 库 varchar → 报[类型不符]。"""
@@ -1112,11 +1112,12 @@ class TestNormalizeType:
         assert self._n("int(64)") != self._n("int(32)")
 
     def test_varchar_aliases_with_length(self):
-        """字符类别名归一 + 保留长度后缀（nvarchar2 不归一，字节语义不同）。"""
+        """字符类别名归一 + 保留长度后缀。varchar2/nvarchar2 都不归一（字节/字符语义不同）。"""
         assert self._n("varchar(100)") == self._n("character varying(100)") == "charactervarying(100)"
-        assert self._n("varchar2(100)") == self._n("varchar(100)")
         assert self._n("char(10)") == self._n("character(10)") == "character(10)"
-        # nvarchar2 不归一到 varchar（字节不同，独立保留）
+        # varchar2/nvarchar2 都不归一到 varchar（字节/字符语义不同，归一会漏判长度超长）
+        assert self._n("varchar2(100)") == "varchar2(100)"
+        assert self._n("varchar2(100)") != self._n("varchar(100)")
         assert self._n("nvarchar2(100)") == "nvarchar2(100)"
         assert self._n("nvarchar2(100)") != self._n("varchar(100)")
 
