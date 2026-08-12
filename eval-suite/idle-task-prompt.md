@@ -1,4 +1,4 @@
-# 闲时任务提示词：preprocess 解析增量表 + assemble_ts 组装新字段 + designer 试算 SQL + 调度路径进 ts.json + 单元测试补缺
+# 闲时任务提示词：preprocess 解析增量表 + assemble_ts 组装新字段 + designer 试算 SQL + 调度路径进 ts.json + 单元测试补缺 + legacy 脚本整改
 
 > 用于空闲时段执行。复制下面的提示词给 agent，在项目目录下执行。
 > 五件事**有顺序依赖，按编号顺序做**（后面的改动覆盖前面的产出物）：
@@ -363,15 +363,10 @@ explore.py/assemble_export），本任务补测试要覆盖到这些新代码。
 
 **中优先级（内部使用，但逻辑复杂）**：
 
-12. `skills/dws-coding/scripts/sql_validator.py`：
-    - `extract_aliases` / `check_bracket_balance` / `check_quote_balance`
-      / `check_keyword_spelling` / `check_insert_field_match` / `check_case_when_else` — 逐个检查
-
-13. `skills/dws-coding/scripts/validate_ddl.py`：
-    - `normalize_type` / `parse_ddl` / `parse_design_mappings` / `match_ddl_to_design` — 逐个检查
-
-14. `skills/dws-design/scripts/explore.py`（任务三新建）：
+12. `skills/dws-design/scripts/explore.py`（任务三新建）：
     - 参数解析 / SQL 拼接 / 输出格式 — 补测试
+
+> 注：`sql_validator.py` / `validate_ddl.py` / `verify_files.py` 已于 2026-08 清理删除（零生产引用、零/孤儿测试），从本任务排查清单移除。`run_ut.py` / `assemble_dq.py` 的整改见任务六。
 
 **做法**：
 - 对每个函数，先 grep 测试文件确认有没有被测过
@@ -389,6 +384,31 @@ explore.py/assemble_export），本任务补测试要覆盖到这些新代码。
 **验证**：
 - `python3 -m pytest tests/ -q` 全套通过
 - 汇报：补了哪些函数的测试、之前缺测的有哪些、有没有发现新的 bug
+
+---
+
+### 任务六：遗产脚本整改（assemble_dq / run_ut 并入现行体系）
+
+**背景**：2026-08 清理死代码时，保留了两个"看着 legacy 实则有依赖"的脚本。它们不该长期以 legacy 状态存在——本任务把它们整进现行体系，消除遗产。
+
+#### 子任务 A：assemble_dq.py 退役（eval-suite 对齐生产）
+
+- **现状**：生产 new-pipe 早已改 **coder 生成 DQ**（assemble_dq 标记废弃），但 **`eval-suite/local_eval.py` 仍调 assemble_dq.py**（`step_assemble_dq`，line 244/486）。两路 DQ 产出路径不一致是长期隐患（见 idle-regression-report-20260804）。
+- **整改**：让 eval-suite 改走 coder 生成 DQ（复用生产的 `dq/` 产出，或 local_eval 在编码步骤并行调 coder 产 DQ），对齐后删 `assemble_dq.py` + `tests/test_assemble_dq.py` + new-pipe.md / tool-registry.md 里的废弃说明。
+- **顾虑**：回归报告记过"多一次 AI 调用可能引入不稳定"——整改时务必验证 eval 结果不退化（DQ 产出条数/内容与改前一致）。
+- **验收**：grep 全仓无 `assemble_dq` 引用；eval-suite 跑通且 DQ 产出与改前一致。
+
+#### 子任务 B：run_ut.py 去 legacy 化
+
+- **现状**：`run_ut.py` 实为 **UT 函数库**（`wrap_insert` / `wrap_write` / `run_ut_check` / `inject_tablesample` / `substitute_params` / `resolve_all_params` 等，被 `ut_precheck.py` / `ut_execute.py` import），但文件名 + 残留的 `main()` 单执行器让它"看着 legacy"（tool-registry 之前标错过）。
+- **整改（二选一，权衡可维护性）**：
+  - **方案 1（轻）**：保留 `run_ut.py`，清除或显式标注 legacy `main()`，文件头注释明确"UT 函数库（ut_precheck/ut_execute import），main() 为已弃用单执行器，new-pipe 走 6a/6b"。
+  - **方案 2（重）**：拆为 `ut_lib.py`（纯函数库）+ 删 `main()`，`ut_precheck` / `ut_execute` 改 import `ut_lib`。彻底消除 legacy 名义，但改动面大。
+- **验收**：`ut_precheck` / `ut_execute` import 不破；全量 pytest 过；`run_ut` 不再在任何文档里被标 legacy。
+
+**做法 / 约束**：同前——只改这些脚本 + 它们的引用点；改完跑 `python3 -m pytest tests/ -q` 全套通过；同步更新 `docs/tool-registry.md`（assemble_dq 删条目 / run_ut 去legacy标注）。
+
+**验证**：`python3 -m pytest tests/ -q` 全套通过 + 汇报：A/B 各选了哪个方案、改了哪些文件、是否彻底消除 legacy。
 
 ---
 
