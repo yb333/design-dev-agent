@@ -37,7 +37,7 @@ def _run_python(script: str, args: list[str], timeout: int = 60) -> tuple[int, s
     """运行 Python 脚本，返回 (退出码, 合并输出)。"""
     try:
         r = subprocess.run(
-            ["python3", script] + args,
+            [sys.executable, script] + args,
             capture_output=True,
             text=True,
             timeout=timeout,

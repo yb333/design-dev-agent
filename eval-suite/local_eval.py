@@ -99,7 +99,7 @@ def run_cmd(cmd: list[str], timeout: int = 600) -> tuple[int, str, str]:
 
 def run_python(script: str, args: list[str], timeout: int = 60) -> tuple[int, str]:
     """运行 Python 脚本"""
-    code, out, err = run_cmd(["python3", script] + args, timeout)
+    code, out, err = run_cmd([sys.executable, script] + args, timeout)
     combined = out + ("\n" + err if err.strip() else "")
     return code, combined
 
