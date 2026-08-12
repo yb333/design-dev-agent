@@ -2,7 +2,6 @@
 
 覆盖之前没有直接单测的纯逻辑函数：
 - check_sql.py: read_sql / extract_from_tables / check_bracket_balance / check_no_select_star
-- validate_ddl.py: normalize_type / parse_ddl / match_ddl_to_design
 - assemble_ddl.py: split_table_ref / type_or_empty / generate_rollback
 - dws_db.py: resolve_source_by_schema
 
@@ -16,7 +15,6 @@ import pytest
 from check_sql import (
     read_sql, extract_from_tables, check_bracket_balance, check_no_select_star,
 )
-from validate_ddl import normalize_type, parse_ddl, match_ddl_to_design
 from assemble_ddl import split_table_ref, type_or_empty, generate_rollback
 from dws_db import resolve_source_by_schema
 
@@ -106,72 +104,6 @@ class TestCheckNoSelectStar:
         ok, msg = check_no_select_star("SELECT id, name FROM t")
         assert ok is True
         assert msg == ""
-
-
-# ============================================================
-# validate_ddl.py
-# ============================================================
-
-class TestNormalizeType:
-    def test_strips_whitespace(self):
-        assert normalize_type("VARCHAR(100)") == "VARCHAR(100)"
-
-    def test_uppercases(self):
-        assert normalize_type("varchar(100)") == "VARCHAR(100)"
-
-    def test_removes_inner_space(self):
-        assert normalize_type("timestamp without time zone") == "TIMESTAMPWITHOUTTIMEZONE"
-
-
-class TestParseDdl:
-    def test_parses_table_and_fields(self):
-        ddl = """CREATE TABLE dws.dwb_test_f (
-            id BIGINT,
-            name VARCHAR(100),
-            amt DECIMAL(18,2),
-            PRIMARY KEY (id)
-        )"""
-        result = parse_ddl(ddl)
-        assert result is not None
-        table, fields = result
-        assert table == "dws.dwb_test_f"
-        names = [f[0] for f in fields]
-        assert "id" in names
-        assert "name" in names
-        assert "amt" in names
-
-    def test_skips_constraint_lines(self):
-        """PRIMARY KEY/CONSTRAINT 等约束行不入字段列表。"""
-        ddl = """CREATE TABLE t (
-            id BIGINT,
-            CONSTRAINT pk PRIMARY KEY (id)
-        )"""
-        _, fields = parse_ddl(ddl)
-        names = [f[0] for f in fields]
-        assert "id" in names
-        assert "pk" not in names  # 约束名不是字段
-
-    def test_no_create_returns_none(self):
-        assert parse_ddl("SELECT 1") is None
-
-
-class TestMatchDdlToDesign:
-    def test_matches_by_name(self):
-        mappings = [
-            {"output_table": "dwb_test_f", "fields": {"id": "BIGINT"}},
-            {"output_table": "dwb_other_f", "fields": {}},
-        ]
-        m = match_ddl_to_design("dwb_test_f", mappings)
-        assert m is not None
-        assert m["output_table"] == "dwb_test_f"
-
-    def test_case_insensitive(self):
-        mappings = [{"output_table": "DWB_TEST_F", "fields": {}}]
-        assert match_ddl_to_design("dwb_test_f", mappings) is not None
-
-    def test_no_match_returns_none(self):
-        mappings = [{"output_table": "dwb_other_f", "fields": {}}]
-        assert match_ddl_to_design("dwb_test_f", mappings) is None
 
 
 # ============================================================

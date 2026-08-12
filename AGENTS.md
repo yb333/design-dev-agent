@@ -23,9 +23,9 @@ skills/
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
-│   ├── scripts/         # run_ut.py ut_precheck.py ut_execute.py check_db.py check_sql.py
-│   │                    #   assemble_ddl.py assemble_dq.py assemble_export.py slice_ts.py pick_fields.py
-│   │                    #   sql_validator.py validate_ddl.py verify_files.py
+│   ├── scripts/         # run_ut.py(UT函数库) ut_precheck.py ut_execute.py check_db.py check_sql.py
+│   │                    #   assemble_ddl.py assemble_export.py slice_ts.py pick_fields.py
+│   │                    #   assemble_dq.py(已弃用,仅 eval-suite 复现)
 │   │   └── lib/         # dws_preprocessor.py
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 └── design-dev-shared/   # ★ 公共代码库（无 SKILL.md，install 单独拷）

@@ -1,6 +1,7 @@
 # 工具注册表（Tool Registry）
 
 > 全管线脚本的**唯一目录**。每个工具一行，高信号列。
+> 已清理死代码（sql_validator / validate_ddl / verify_files 已删，零生产引用零测试）。
 > **维护约定**：加/改/删脚本时**同步这张表**（写进 AGENTS.md 编码约定）。漂移从这里一眼看出。
 >
 > **关键区分**：脚本**住在哪个 skill 目录**（按"阶段"组织：设计阶段脚本放 dws-design、编码阶段放 dws-coding）
@@ -35,14 +36,10 @@
 | `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
 | `ut_precheck.py` | 快速 UT 预检（回退 + DDL + SELECT 跑通，秒级，不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **仅 ts.rules** + schedule_groups（Chunk 2） |
 | `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **仅 ts.rules** + schedule_groups（Chunk 2） |
-| `run_ut.py` | UT 执行器（legacy 单执行器，ut_precheck/ut_execute 现包装它） | 步骤 6（legacy） | ts.json + etl/ + ddl/ → 报告 | **仅 ts.rules** + schedule_groups |
+| `run_ut.py` | **UT 函数库**（wrap_insert / wrap_write / run_ut_check / inject_tablesample / substitute_params 等，被 ut_precheck/ut_execute import）+ legacy `main()` 单执行器（new-pipe 不直接调，走 6a/6b） | 函数库：ut_precheck/ut_execute 用 | ts.json + etl/ + ddl/ → 报告 | **仅 ts.rules** + schedule_groups |
 
-### legacy 校验（住 dws-coding，部分仍用）
-| 工具 | 干啥 | 状态 | 输入 → 输出 |
-|------|------|------|------------|
-| `sql_validator.py` | DWS SQL 语法校验（括号引号/关键字/INSERT 字段数/DDL-ETL 一致） | legacy 仍用 | ddl/ + etl/ → test_report.md |
-| `validate_ddl.py` | DDL vs design.md 校验（design.md 时代，早于 ts.json） | legacy 基本停用 | ddl/ + design.md → report.json |
-| `verify_files.py` | 管线文件完整性检查 | legacy | ddl/ + etl/ → pass/fail |
+### legacy 校验
+> 已删除（2026-08 清理）：`sql_validator.py` / `validate_ddl.py` / `verify_files.py` —— 零生产引用、零测试（validate_ddl 的孤儿测试一并清掉）。`CLAUDE.md` / `eval-suite/idle-task-prompt.md` 里还有提及，那两份是已知滞后文档，不再同步。
 
 ---
 
