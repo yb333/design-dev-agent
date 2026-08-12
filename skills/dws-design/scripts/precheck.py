@@ -767,37 +767,65 @@ def _check_db_schema(
 
 
 def _normalize_type(raw: str) -> str:
-    """类型名归一化（便于严格比较）。
+    """类型名归一化（识别同义异名，用于严格对比）。
 
-    处理常见的同义异名：
-    - varchar → character varying
-    - int → integer（PG 标准名）
-    - 去多余空白、括号内空白
+    目的：把"同一类型的不同写法"归一到相同名字，避免方言/别名差异导致误报。
+
+    整数类型（(n) 位宽优先）：
+    - int8(64) / bigint / int(64) 都归一 "bigint"（64bit=8字节）
+    - int4(32) / integer / int / int(32) 都归一 "integer"（32bit=4字节）
+    - int2(16) / smallint 都归一 "smallint"（16bit=2字节）
+    - 有 (n) 时 n（bit 数）决定精度；无 (n) 时 base name 决定
+
+    其他类型：varchar/varchar2/character varying 归一（保留长度后缀）；
+    char/character、numeric/decimal、bool/boolean 同理。
+    nvarchar/nvarchar2 不归一（字节语义不同，独立保留）。
+
+    与 type_compat.is_type_compatible 不同：那个判"兼容"（源能否被目标兜底），
+    这个判"同名"（mapping 标的 source_type 和库 actual_type 该是同一类型）。
 
     时间类型家族（with/without time zone 底层存储不同，分开归一）：
     - timestamp / timestamp(n) / without time zone → 统一 ts_notz（忽略精度）
     - timestamptz / timestamp(n) with time zone     → 统一 ts_tz（忽略精度）
-    with 和 without 不互通（底层不同：一个带时区偏移一个不带）。
     """
+    import re
     t = raw.strip().lower().replace(" ", "")
+    if not t:
+        return ""
 
     # 时间类型族：先判 with/without time zone（底层不同，不归一），再忽略精度
     if "timestamp" in t:
         is_tz = "withtimezone" in t or t.startswith("timestamptz")
         return "ts_tz" if is_tz else "ts_notz"
 
+    base = t.split("(")[0]
+    # 提取 (n) 第一个数字（整数类是 bit 数，字符/数值类是长度/精度）
+    m = re.search(r"\((\d+)", t)
+    n_first = int(m.group(1)) if m else None
+
+    # 整数类：(n) bit 数优先决定精度等级，其次 base name
+    # int8/int4/int2 是 PG 内部名（pg_type），bigint/integer/smallint 是 SQL 标准名，二者等价
+    INT_BASE_TO_NAME = {
+        "bigint": "bigint", "int8": "bigint", "bigserial": "bigint",
+        "integer": "integer", "int": "integer", "int4": "integer", "serial": "integer",
+        "smallint": "smallint", "int2": "smallint", "smallserial": "smallint",
+        "tinyint": "tinyint", "int1": "tinyint",
+    }
+    INT_BIT_TO_NAME = {64: "bigint", 32: "integer", 16: "smallint", 8: "tinyint"}
+    if base in INT_BASE_TO_NAME:
+        if n_first is not None and n_first in INT_BIT_TO_NAME:
+            return INT_BIT_TO_NAME[n_first]  # (n) 位宽优先
+        return INT_BASE_TO_NAME[base]  # 无 (n) 或 n 非标准位宽 → base name 决定
+
+    # 其他类型：归一别名 + 保留长度/精度后缀
+    rest = "(" + t.split("(", 1)[1] if "(" in t else ""
     aliases = {
-        "varchar": "charactervarying",
-        "int": "integer",
-        "int4": "integer",
-        "int8": "bigint",
-        "int2": "smallint",
+        "varchar": "charactervarying", "varchar2": "charactervarying",
+        "char": "character",
+        "string": "text",
         "bool": "boolean",
         "decimal": "numeric",
     }
-    # 只替换类型前缀部分（保留长度，如 charactervarying(64)）
-    base = t.split("(")[0]
-    rest = "(" + t.split("(", 1)[1] if "(" in t else ""
     return aliases.get(base, base) + rest
 
 

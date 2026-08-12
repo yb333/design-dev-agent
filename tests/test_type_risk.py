@@ -33,8 +33,17 @@ class TestAssessTypeRisk:
         # 整数家族互转
         assert assess_type_risk("int", "bigint") is None
         assert assess_type_risk("smallint", "integer") is None
+        # PG 内部名 int8/int4 和 SQL 标准名 bigint/integer 等价，互通无风险
+        assert assess_type_risk("int8(64)", "bigint") is None
+        assert assess_type_risk("int4", "integer") is None
+        assert assess_type_risk("int8", "int4") is None
         # 整数→数值 安全跨类
         assert assess_type_risk("bigint", "numeric(20,2)") is None
+
+    def test_int_cross_category_incompatible(self):
+        """整数类型跨大类（→varchar/date）仍报不兼容。"""
+        assert assess_type_risk("int8", "varchar(20)") == "type_incompatible"
+        assert assess_type_risk("int4", "date") == "type_incompatible"
 
     def test_length_overflow(self):
         assert assess_type_risk("varchar(200)", "varchar(50)") == "length_overflow"

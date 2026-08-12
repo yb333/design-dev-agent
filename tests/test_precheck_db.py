@@ -842,6 +842,97 @@ class TestTypeCheck:
         type_errors = [e for e in result.errors if "类型不符" in e]
         assert type_errors == [], f"varchar/character varying 应归一化匹配: {type_errors}"
 
+    def test_int_alias_normalized(self, monkeypatch):
+        """整数同义归一：int8(64)/int8/bigint/int(64) 都归一 bigint（PG 内部名 int8==SQL bigint；(64)位宽=8字节）。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"id": "bigint"}  # 库返回 bigint
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        for source_type in ["int8(64)", "int8", "bigint", "int(64)"]:
+            rs = _make_rs_input([{
+                "source_schema": "ods", "source_table": "ods_test_f",
+                "source_column": "id", "source_type": source_type,
+                "transform_rule": "直接复制", "transform_detail": "-",
+                "target_column": "id", "target_column_cn": "ID",
+                "target_type": "bigint", "source_alias": "t", "remark": "",
+            }])
+            result = precheck(rs)
+            type_errors = [e for e in result.errors if "类型不符" in e]
+            assert type_errors == [], \
+                f"source_type={source_type!r} vs 库 bigint 应归一匹配: {type_errors}"
+
+    def test_int_bit_width_decides_precision(self, monkeypatch):
+        """int(32) 位宽决定精度→integer（不是 bigint）。库是 integer 时 int(32) 通过，int(64) 报不符。"""
+        # 库是 integer，mapping 标 int(32) → 都归一 integer，通过
+        executor = _make_mock_executor({("ods", "ods_test_f"): {"id": "integer"}})
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "id", "source_type": "int(32)",
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "id", "target_column_cn": "ID",
+            "target_type": "integer", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"int(32)==integer 应通过: {type_errors}"
+
+    def test_varchar2_normalized(self, monkeypatch):
+        """Oracle 方言 varchar2 归一：varchar2(100) 与 character varying(100) 互通。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"name": "character varying(100)"}
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "name", "source_type": "varchar2(100)",
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "name", "target_column_cn": "name",
+            "target_type": "varchar2(100)", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors == [], f"varchar2 应归一匹配: {type_errors}"
+
+    def test_nvarchar2_not_normalized_reports(self, monkeypatch):
+        """nvarchar2 不归一 varchar（字节语义不同）：mapping nvarchar2 vs 库 varchar → 报[类型不符]。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"name": "character varying(100)"}  # 库是 varchar 系
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "name", "source_type": "nvarchar2(100)",  # nvarchar2 不归一
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "name", "target_column_cn": "name",
+            "target_type": "nvarchar2(100)", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors, f"nvarchar2 vs varchar 字节不同应报不符: {result.errors}"
+
+    def test_int_precision_distinct_reports(self, monkeypatch):
+        """精度不同的整数类型应报（bigint vs integer 不是同一类型）。"""
+        executor = _make_mock_executor({
+            ("ods", "ods_test_f"): {"id": "integer"}  # 库是 4 字节 integer
+        })
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "id", "source_type": "bigint",  # mapping 标 8 字节 bigint
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "id", "target_column_cn": "ID",
+            "target_type": "bigint", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        type_errors = [e for e in result.errors if "类型不符" in e]
+        assert type_errors, f"bigint vs integer 精度不同应报: {result.errors}"
+
     def test_no_source_type_skips_type_check(self, monkeypatch):
         """mapping 没写 source_type（空）→ 不查类型（只查存在性）。"""
         executor = _make_mock_executor({
@@ -976,3 +1067,75 @@ class TestTypeCheck:
         result = precheck(rs)
         type_errors = [e for e in result.errors if "类型不符" in e]
         assert type_errors, f"with/without 时区底层不同应报不符: {result.errors}"
+
+
+class TestNormalizeType:
+    """_normalize_type 单元测试：类型同义异名归一（纯函数，不连库）。
+
+    与 TestTypeCheck（集成，跑完整 precheck）互补：这里精确锁住归一逻辑。
+    """
+
+    def _n(self, t):
+        from precheck import _normalize_type
+        return _normalize_type(t)
+
+    def test_int_aliases_same_precision(self):
+        """同精度整数别名归一：8字节族/4字节族/2字节族内部互通。"""
+        # 8 字节（PG 内部名 int8 == SQL 标准名 bigint）
+        for t in ["bigint", "int8", "bigserial"]:
+            assert self._n(t) == "bigint", f"{t!r} 应归一 bigint，实际 {self._n(t)!r}"
+        # 4 字节
+        for t in ["integer", "int", "int4", "serial"]:
+            assert self._n(t) == "integer", f"{t!r} 应归一 integer，实际 {self._n(t)!r}"
+        # 2 字节
+        for t in ["smallint", "int2", "smallserial"]:
+            assert self._n(t) == "smallint", f"{t!r} 应归一 smallint，实际 {self._n(t)!r}"
+
+    def test_int_bit_width_decides_precision(self):
+        """(n) 位宽优先决定整数精度：int8(64)/int(64)→bigint，int(32)/int4(32)→integer，int2(16)→smallint。"""
+        # 64bit → bigint
+        assert self._n("int8(64)") == "bigint"
+        assert self._n("int(64)") == "bigint"
+        # 32bit → integer
+        assert self._n("int(32)") == "integer"
+        assert self._n("int4(32)") == "integer"
+        # 16bit → smallint
+        assert self._n("int2(16)") == "smallint"
+        # 非标准位宽（如 20）→ fallback 到 base name
+        assert self._n("int(20)") == "integer"  # base int → integer
+
+    def test_int_different_precision_not_equal(self):
+        """不同精度的整数类型不归一（bigint != integer != smallint）。"""
+        assert self._n("bigint") != self._n("integer")
+        assert self._n("integer") != self._n("smallint")
+        # int(64) 是 bigint，int(32) 是 integer，位宽不同精度不同
+        assert self._n("int(64)") != self._n("int(32)")
+
+    def test_varchar_aliases_with_length(self):
+        """字符类别名归一 + 保留长度后缀（nvarchar2 不归一，字节语义不同）。"""
+        assert self._n("varchar(100)") == self._n("character varying(100)") == "charactervarying(100)"
+        assert self._n("varchar2(100)") == self._n("varchar(100)")
+        assert self._n("char(10)") == self._n("character(10)") == "character(10)"
+        # nvarchar2 不归一到 varchar（字节不同，独立保留）
+        assert self._n("nvarchar2(100)") == "nvarchar2(100)"
+        assert self._n("nvarchar2(100)") != self._n("varchar(100)")
+
+    def test_numeric_aliases_with_precision(self):
+        """数值类别名归一 + 保留精度后缀。"""
+        assert self._n("decimal(18,2)") == self._n("numeric(18,2)") == "numeric(18,2)"
+
+    def test_numeric_different_precision_not_equal(self):
+        """numeric 精度不同不归一（长度后缀要保留参与对比）。"""
+        assert self._n("numeric(18,2)") != self._n("numeric(15,2)")
+        assert self._n("varchar(100)") != self._n("varchar(50)")
+
+    def test_timestamp_tz_split(self):
+        """timestamp 的 with/without time zone 底层不同，分开归一。"""
+        assert self._n("timestamp") == self._n("timestamp(0)") == "ts_notz"
+        assert self._n("timestamptz") == self._n("timestamp with time zone") == "ts_tz"
+        assert self._n("timestamp") != self._n("timestamptz")
+
+    def test_other_aliases(self):
+        """其他常见别名归一。"""
+        assert self._n("bool") == self._n("boolean") == "boolean"
+        assert self._n("string") == self._n("text") == "text"

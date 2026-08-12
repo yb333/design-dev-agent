@@ -17,8 +17,8 @@
 # 类型大类归一化映射（6 大类）
 _TYPE_FAMILY_MAP = {
     "int": "integer", "integer": "integer", "bigint": "integer",
-    "smallint": "integer", "tinyint": "integer", "int2": "integer",
-    "int4": "integer", "int8": "integer", "serial": "integer",
+    "smallint": "integer", "tinyint": "integer", "int1": "integer",
+    "int2": "integer", "int4": "integer", "int8": "integer", "serial": "integer",
     "varchar": "varchar", "character": "varchar", "char": "varchar",
     "text": "varchar", "string": "varchar", "nvarchar": "varchar",
     "nvarchar2": "varchar", "varchar2": "varchar",
@@ -46,8 +46,10 @@ def same_int_family(type1: str, type2: str) -> bool:
     """两个类型是否都是整数家族（int/bigint/smallint/tinyint 等）。
 
     sqlglot 解析时会把 bigint 标准化成 int，整数互转不丢数据，不该报。
+    int2/int4/int8 是 PG 内部名（pg_type），smallint/integer/bigint 是 SQL 标准名，等价。
     """
-    INT_TYPES = {"int", "integer", "bigint", "smallint", "tinyint"}
+    INT_TYPES = {"int", "integer", "bigint", "smallint", "tinyint", "int1",
+                 "int2", "int4", "int8", "serial", "bigserial", "smallserial"}
     base1 = type1.split("(")[0]
     base2 = type2.split("(")[0]
     return base1 in INT_TYPES and base2 in INT_TYPES
