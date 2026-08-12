@@ -214,6 +214,25 @@
   },
 
   // ============================================================================
+  // init —— ★ 初始化管道（与增量管道 rules 平行，写同一目标 F 表）
+  // 增量资产才填。init 和增量是"同一目标表的两个写入管道"：
+  //   - 增量管道(rules)日常跑，目标 load_mode = merge_into/no_delete/...(增量写入方式)
+  //   - init 管道首次全量装载，目标 load_mode 恒 = truncate_table(先删全插)
+  // load_mode 装不下两者（一个 rule 一个 load_mode），故 init 单独成段。
+  //
+  // mode: derive(模式一二,从增量派生,rules留空) | explicit(模式三,独立设计,rules由装配器展开)
+  // group_mode: inline(同组p_flag) | separate(独立规则组独立调度)
+  // rules: explicit 时是装配器展开后的完整 init 规则；derive 时为空(下游物化派生)
+  //        装配器按 7 不变量补全：终态 target=增量F表 / load_mode=truncate_table /
+  //        write_condition空 / field_targets=目标全字段 / tmp复用 / 无 incremental.filter
+  // ============================================================================
+  "init": {
+    "mode": "",                          // explicit | derive（非增量资产留空）
+    "group_mode": "",                    // inline | separate
+    "rules": {}                          // explicit: {INIT_R0001: {...}}；derive: {}
+  },
+
+  // ============================================================================
   // dq_rules —— DQ（RS 驱动：RS L06 有需求 designer 翻译产入，RS 无则留空）
   // designer 是翻译者（类比 field_logics）：scope/check_type/rule_name 跟 RS 一致，
   // rule_desc 写技术口径（检查字段/条件/阈值/告警级）给 coder 写 SQL。

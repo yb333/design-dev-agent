@@ -100,6 +100,11 @@ description: >-
   → 完整决策标准见 `references/complexity-playbook.md` §三
 - **中间表产出模式**：单一规则一次性产出（`build_mode: transform`，默认）/ 多规则累积共建（`build_mode: accumulate`，去重或 union）。
   → 累积共建的排重策略见 `references/incremental-playbook.md` §三/§四
+- **关联决策**（从字段倒推 JOIN 结构）：
+  - **从字段列表倒推**——哪些目标字段需要 JOIN 哪张维表？每个 JOIN 需要什么条件？不要只搬 RS 的关联定义。
+  - **多字段引用同一维表 → 多次 JOIN**（各自别名），不能用一个关联覆盖所有字段。
+  - **关联类型**：主表之间（mapping 实体级有多张主表）用 INNER JOIN（两张主表数据都要存在）；主表关联维表用 LEFT JOIN（保留主表数据）。不要默认全部 LEFT JOIN。
+  - JOIN 键唯一性验证（关联安全）见第4层（调 explore.py）。
 - **数据量因子**：RS data_exploration 或 explore.py 估档位（万/百万/亿），拿不到标"未知"，只影响物化决策，不阻断
 
 **产出**：每个规则 `step_type` + `target_role` + 依赖声明（`produces_for` / `reads`）

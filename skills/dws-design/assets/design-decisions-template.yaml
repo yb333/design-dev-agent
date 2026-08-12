@@ -40,7 +40,10 @@ rules:
     target_table: ""                    # 产出表名（中间表/目标F表/视图I表）
     is_view_step: false                 # 是否视图步骤
     design_intent: ""                   # 该规则的设计意图（自然语言，一句话说清为什么这样拆）
-    load_mode: "truncate_table"         # 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区清空) | merge_into(upsert)
+    load_mode: "truncate_table"         # ★ 写入方式（增量管道的写入方式，≠ init 的写入方式）:
+                                        #   truncate_table(全量覆盖/中间tmp重建) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区清空) | merge_into(upsert)
+                                        #   增量目标规则不能用 truncate_table（全删全插 与增量矛盾，N_INIT2 拦）；
+                                        #   init 的先删全插由下面的 init 段承担，不占这里的 load_mode。
     # write_condition: 写入条件（对应平台delete_condition）。非全量load_mode时必填：
     #   merge_into/update → ON条件如 "T.id=T1.id"（T=目标表别名，T1=源SELECT别名）
     #   truncate_partition → 分区名如 "P_1001"
@@ -116,6 +119,43 @@ rules:
       key: []                          # 用什么键判断重复（如 ["order_id"]）
       priority: ""                     # 来源优先级（如 "R0001 > R0002"，冲突时保留谁）
       reason: ""                       # 策略理由（如"A来源优先，因为A是主数据"）
+
+# === 初始化设计（资产级；增量资产才填）===
+# init 和增量是"同一目标表的两个写入管道"：增量管道(rules)日常跑，init 管道首次全量装载。
+# 两个管道的 load_mode 必然不同：增量目标用 merge_into/no_delete 等，init 目标恒用 truncate_table(先删全插)。
+# 这就是为什么 load_mode 装不下两者——init 单独成段。
+#
+# 两种 mode（判据：增量管道有没有 delta 机器）：
+#   derive（模式一二：增量管道只多一个范围 WHERE，无 delta 机器）
+#     → init 从增量管道派生：各 extract 的 WHERE 换成 init_filter（增量规则里已填），终态换 truncate。
+#       designer 这里只声明 mode=derive + group_mode，不写 init 规则。
+#   explicit（模式三：增量管道有 delta 机器——union 取并集/只重建受影响行等）
+#     → init 是独立设计：剥掉 delta 机器、留下核心加工全量跑。designer 在 rules 里写 init 规则。
+#       装配器按 7 不变量补全终态(target/load_mode/field_targets/write_condition)，designer 只写判断部分(core_from/joins)。
+#
+# group_mode（init 怎么组织）：
+#   inline（同组 p_flag）：init 规则和增量规则同规则组，运行时 p_flag 选跑哪条。适合 init 简单。
+#   separate（独立规则组）：init 独立规则组 + 独立 LTS 任务(一次性)。适合 init 复杂/想彻底分开。
+init: null
+# 示例（explicit，模式三）：
+# init:
+#   mode: explicit
+#   group_mode: inline                # inline=同组p_flag | separate=独立规则组
+#   rules:
+#     - rule_code: INIT_R0001
+#       core_from: R0002              # 可选：field_logics 抄自哪条增量规则（口径相同时省得重写）
+#       joins:                        # ★ 核心结构（剥掉 delta 机器后的 FROM/JOIN）—— designer 判断，唯一必写项
+#         - {alias: a, type: main}
+#         - {alias: b, type: "LEFT JOIN", condition: "a.id=b.a_id"}
+#       field_logics: {}              # 可选：不写则从 core_from 抄；写了覆盖
+#       # target_table / load_mode / write_condition / field_targets 不填 → 装配器按不变量补
+#       # （init 终态 = 增量终态 F 表 / load_mode=truncate_table / write_condition 空 / field_targets=目标全字段）
+#
+# 示例（derive，模式一二）：
+# init:
+#   mode: derive
+#   group_mode: inline
+#   # rules 留空：init 从增量管道 + 各 extract 的 incremental.init_filter 派生（下游物化时生成）
 
 # === 设计思路（自然语言，含设计考虑的指标 + 整体策略）===
 # 写清楚你的设计思路：为什么这样拆分、整体加工策略是什么。

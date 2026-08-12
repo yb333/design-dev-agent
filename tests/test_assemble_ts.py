@@ -461,7 +461,9 @@ class TestBuildMetaTaskPath:
 
 from conftest import (make_rs_input, make_design_decisions,
                       make_incremental_rs_input, make_incremental_decisions,
-                      make_accumulate_decisions, make_dq_rs_input)
+                      make_accumulate_decisions, make_dq_rs_input,
+                      make_derive_init_decisions, make_explicit_init_decisions)
+from assemble_ts import assemble_ts as do_assemble, render_md
 
 
 def _run(decisions, rs_input=None):
@@ -986,3 +988,245 @@ class TestDQDriven:
         meta = build_meta(rs, dd)
         tasks = meta["schedule"]["tasks"]
         assert "dq" in tasks
+
+
+# ============================================================
+# 初始化管道（init）—— 双管道模型 + load_mode 语义 + 装配器 + LI 校验
+# ============================================================
+
+class TestLoadModeHardBlock:
+    """N_INIT2：增量目标规则 load_mode 不能是 truncate_table（全删全插 与增量矛盾）。"""
+
+    def test_merge_terminal_truncate_reports(self):
+        """merge 终态规则 + truncate_table → N_INIT2 hard（这次的 bug 配置）。"""
+        rs = make_incremental_rs_input()
+        dd = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
+        # 把 merge 终态的 load_mode 改成 truncate_table（bug 配置）
+        dd["rules"][-1]["load_mode"] = "truncate_table"
+        dd["rules"][-1]["write_condition"] = ""
+        vr = _run(dd, rs)
+        assert "N_INIT2" in _codes(vr, "L3")
+        assert _level_of(vr, "N_INIT2") == "hard"
+
+    def test_single_rule_incremental_with_filter_truncate_reports(self):
+        """单规则增量（有 incremental.filter + target）+ truncate → N_INIT2。"""
+        rs = make_incremental_rs_input()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "增量直灌", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target", "load_mode": "truncate_table",
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+            "incremental": {"key": "update_time",
+                            "filter": "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'",
+                            "init_filter": "1=1"},
+        }])
+        dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
+        vr = _run(dd, rs)
+        assert "N_INIT2" in _codes(vr, "L3")
+
+    def test_intermediate_tmp_truncate_ok(self):
+        """中间 tmp（intermediate）的 truncate_table 合法 → 不触发 N_INIT2。"""
+        rs = make_incremental_rs_input()
+        dd = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
+        # extract 规则是 intermediate + truncate_table（tmp 重建）→ 不该触发
+        vr = _run(dd, rs)
+        assert "N_INIT2" not in _codes(vr, "L3")
+
+    def test_non_incremental_full_truncate_ok(self):
+        """非增量 full 规则 + target + truncate → 不触发 N_INIT2（全量表本来就该 truncate）。"""
+        rs = make_rs_input()
+        dd = make_design_decisions()  # 默认单规则 full+target，无 incremental 段
+        vr = _run(dd, rs)
+        assert "N_INIT2" not in _codes(vr, "L3")
+
+
+class TestInitAssembler:
+    """build_init_section：explicit 展开（7 不变量 + core_from）/ derive 记录。"""
+
+    def test_no_init_section_no_init_key(self):
+        """无 init 段 → ts.json 不含 init key。"""
+        rs = make_rs_input()
+        dd = make_design_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        assert "init" not in ts
+
+    def test_explicit_terminal_invariants(self):
+        """explicit 终态：target=增量F表 / load_mode=truncate_table / write_condition空 / field_targets=目标全字段。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        init = ts["init"]
+        assert init["mode"] == "explicit"
+        assert init["group_mode"] == "inline"
+        init_r = init["rules"]["INIT_R0001"]
+        # 7 不变量
+        assert init_r["target_table"] == "dws.dwb_test_f"  # = 增量终态 F 表
+        assert init_r["load_mode"] == "truncate_table"
+        assert init_r["write_condition"] == ""
+        assert init_r["target_role"] == "target"
+        # field_targets = 增量终态全字段
+        inc_terminal_targets = ts["rules"]["R0003"]["field_targets"]
+        assert init_r["field_targets"] == inc_terminal_targets
+        # joins 保留 designer 写的核心结构
+        assert len(init_r["joins"]) == 2
+
+    def test_explicit_core_from_copies_field_logics(self):
+        """explicit：designer 没写 field_logics + 有 core_from → 从 core_from 抄。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        init_r = ts["init"]["rules"]["INIT_R0001"]
+        # core_from=R0002，R0002 的 field_logics={"id":"核心加工口径：已确认状态取值"}
+        assert init_r["field_logics"] == {"id": "核心加工口径：已确认状态取值"}
+        assert init_r["core_from"] == "R0002"
+
+    def test_explicit_designer_field_logics_overrides_core_from(self):
+        """explicit：designer 自己写了 field_logics → 覆盖 core_from（不抄）。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        dd["init"]["rules"][0]["field_logics"] = {"id": "init 专属口径（全量场景）"}
+        ts, _, _ = do_assemble(rs, dd)
+        init_r = ts["init"]["rules"]["INIT_R0001"]
+        assert init_r["field_logics"] == {"id": "init 专属口径（全量场景）"}
+
+    def test_derive_mode_records_only(self):
+        """derive：init.rules 留空，段只记 mode/group_mode（不物化克隆）。"""
+        rs = make_incremental_rs_input()
+        dd = make_derive_init_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        ts, _, _ = do_assemble(rs, dd)
+        init = ts["init"]
+        assert init["mode"] == "derive"
+        assert init["group_mode"] == "inline"
+        assert init["rules"] == {}  # derive 不物化
+
+    def test_intermediate_init_rule_truncate(self):
+        """explicit 中间 tmp 规则：load_mode 强制 truncate_table（全量重建）。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        # 加一条中间 init 规则（复用增量 tmp）
+        dd["init"]["rules"].append({
+            "rule_code": "INIT_PRE", "target_role": "intermediate",
+            "target_table": "dws.tmp_rebuilt", "reads": ["dws.tmp_delta"],
+            "field_targets": ["id"],
+        })
+        ts, _, _ = do_assemble(rs, dd)
+        init_pre = ts["init"]["rules"]["INIT_PRE"]
+        assert init_pre["load_mode"] == "truncate_table"
+        assert init_pre["target_role"] == "intermediate"
+
+
+class TestInitValidation:
+    """LI 层 init 校验。"""
+
+    def test_valid_explicit_no_li_hard(self):
+        """合法 explicit init → LI 层无 hard。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        vr = _run(dd, rs)
+        assert _codes(vr, "LI") == [], f"LI 不该有报错: {_codes(vr, 'LI')}"
+
+    def test_n_init1_explicit_load_mode_hard(self):
+        """explicit init 规则显式声明非 truncate 的 load_mode → N_INIT1 hard。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        dd["init"]["rules"][0]["load_mode"] = "merge_into"  # 误填
+        vr = _run(dd, rs)
+        assert "N_INIT1" in _codes(vr, "LI")
+        assert _level_of(vr, "N_INIT1") == "hard"
+
+    def test_n_init3_delta_tmp_warn(self):
+        """explicit init 规则读取 delta 机器 tmp → N_INIT3 warn。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        # INIT_R0001 读取 tmp_delta（R0001 incremental_extract 产出的 delta 机器 tmp）
+        dd["init"]["rules"][0]["reads"] = ["dws.tmp_delta"]
+        vr = _run(dd, rs)
+        assert "N_INIT3" in _codes(vr, "LI")
+        assert _level_of(vr, "N_INIT3") == "warn"
+
+    def test_n_init4_empty_logics_warn(self):
+        """explicit init 规则既无 core_from 又无 field_logics → N_INIT4 warn。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        dd["init"]["rules"][0]["core_from"] = ""  # 清掉 core_from → 无口径来源
+        vr = _run(dd, rs)
+        assert "N_INIT4" in _codes(vr, "LI")
+        assert _level_of(vr, "N_INIT4") == "warn"
+
+    def test_bad_mode_hard(self):
+        """init.mode 非法值 → N_INIT_MODE hard。"""
+        rs = make_incremental_rs_input()
+        dd = make_derive_init_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        dd["init"]["mode"] = "auto"
+        vr = _run(dd, rs)
+        assert "N_INIT_MODE" in _codes(vr, "LI")
+        assert _level_of(vr, "N_INIT_MODE") == "hard"
+
+    def test_bad_group_mode_hard(self):
+        """init.group_mode 非法值 → N_INIT_GROUP hard。"""
+        rs = make_incremental_rs_input()
+        dd = make_derive_init_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        dd["init"]["group_mode"] = "mixed"
+        vr = _run(dd, rs)
+        assert "N_INIT_GROUP" in _codes(vr, "LI")
+        assert _level_of(vr, "N_INIT_GROUP") == "hard"
+
+
+class TestInitMdRendering:
+    """ts.md 渲染 init 段。"""
+
+    def test_explicit_init_renders(self):
+        """explicit init → ts.md 含初始化设计段 + init 规则。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        md = render_md(ts)
+        assert "初始化设计" in md
+        assert "INIT_R0001" in md
+        assert "explicit" in md
+        assert "truncate_table" in md
+
+    def test_derive_init_renders(self):
+        """derive init → ts.md 含初始化设计段 + 派生说明 + init_filter。"""
+        rs = make_incremental_rs_input()
+        dd = make_derive_init_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        ts, _, _ = do_assemble(rs, dd)
+        md = render_md(ts)
+        assert "初始化设计" in md
+        assert "derive" in md
+        assert "init_filter" in md or "1=1" in md  # 列出 extract 的 init_filter
+
+    def test_no_init_no_section(self):
+        """无 init 段 → ts.md 不含初始化设计段。"""
+        rs = make_rs_input()
+        dd = make_design_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        md = render_md(ts)
+        assert "初始化设计" not in md
+
+
+class TestTwoPipelinesSameTable:
+    """增量终态 + init 终态同写 F 表：不冲突，字段集一致。"""
+
+    def test_init_terminal_same_target_as_incremental(self):
+        """init 终态 target_table == 增量终态 F 表；tables 里该表只建一次。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        inc_terminal = ts["rules"]["R0003"]["target_table"]
+        init_terminal = ts["init"]["rules"]["INIT_R0001"]["target_table"]
+        assert inc_terminal == init_terminal == "dws.dwb_test_f"
+        # tables 里 dwb_test_f 只有一份（build_tables 按 tbl_short 去重）
+        assert "dwb_test_f" in ts["tables"]
+
+    def test_init_terminal_field_targets_match_target_schema(self):
+        """init 终态 field_targets = 增量终态全字段（同一张表同一份 schema）。"""
+        rs = make_incremental_rs_input()
+        dd = make_explicit_init_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        inc_ft = ts["rules"]["R0003"]["field_targets"]
+        init_ft = ts["init"]["rules"]["INIT_R0001"]["field_targets"]
+        assert set(inc_ft) == set(init_ft)

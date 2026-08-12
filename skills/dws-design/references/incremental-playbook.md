@@ -226,31 +226,108 @@ assemble_ts 会校验：增量 filter/init_filter 里 `${PARAM}` 引用的参数
 
 ---
 
-## 八、初始化设计
+## 八、初始化设计（双管道模型）
 
-初始化和增量是**同一套数据流、WHERE 不同**：
+> ★ 核心认知：init 和增量是**同一目标表的两个写入管道**，load_mode 必然不同：
+> - 增量管道（`rules`）日常跑，目标 load_mode = merge_into / no_delete / delete / truncate_partition
+> - init 管道（`init` 段）首次全量装载，目标 load_mode **恒为 truncate_table**（先删全插）
+>
+> 一个 rule 只有一个 load_mode，装不下两者——所以 init 单独成段，不占增量规则的 load_mode。
+> **增量目标规则绝不能用 truncate_table**（全删全插，每次增量清空历史，assemble_ts N_INIT2 硬阻断）。
+
+### init 恒为先删全插（不是误区）
+
+init 是首次全量装载，**先删再插 universally 正确**：空表上 truncate 是 noop，有残留也安全。
+- init 用 merge → 大数据量初始化 MERGE 探测开销巨大，性能差
+- init 用 no_delete → 追加语义，重跑/键重叠直接数据重复
+- 所以 init 就是 truncate_table + 全量插，没有第二种写法。designer 不用选 init 的 load_mode（装配器统一补）。
+
+### 两种 mode（判据：增量管道有没有 delta 机器）
+
+| mode | 增量管道特征 | init 怎么来 | designer 干什么 |
+|------|------------|-----------|---------------|
+| **derive**（模式一二） | 增量相对全量只多一个范围 WHERE（无 delta 机器） | 从增量管道派生：各 extract WHERE→init_filter，终态→truncate | 只声明 `mode=derive` + `group_mode`，**不写 init 规则** |
+| **explicit**（模式三） | 增量有 delta 机器（union 取并集 / 只重建受影响行 / tmp 存变化键） | 独立设计：剥掉 delta 机器，留核心加工全量跑 | 写 init 规则（core_from + joins），装配器补不变量 |
+
+**判据一句话**：增量管道相对全量，是"只多了范围过滤"（derive），还是"多了一整套识别/隔离变化数据的结构"（explicit）？前者 init 可派生，后者 init 必须独立设计。
+
+> 为什么 explicit 不能派生：delta 机器（如 `A增量 UNION B增量 → tmp1`、`JOIN 限定在 tmp1 范围`）在全量场景毫无意义——init 不用算"谁变了"，直接全量加工。剥掉这些机器剩下的"核心加工"可能跟某条增量规则像、也可能完全不像，是设计判断，不是机械替换。
+
+### group_mode（init 怎么组织，两种都支持）
+
+| group_mode | 术加结构 | 适合 |
+|-----------|---------|------|
+| **inline** | 同规则组，p_flag 选跑哪条管道 | init 简单（1-2 规则），跟增量共享调度入口 |
+| **separate** | 独立规则组 + 独立 LTS 任务（一次性） | init 复杂（多规则），或想跟日增量彻底分开 |
+
+### explicit 的坍缩逻辑（单规则/多规则统一）
+
+多规则增量管道，init 只动两头，中间加工理论上一致：
+
+| 增量管道位置 | init 里变成什么 |
+|------------|---------------|
+| 第一步（delta 抽取/范围构建） | **剥掉**（init 不算谁变了） |
+| 中间加工规则 | **核心加工一致**（core_from 抄口径，可靠） |
+| 最后一步（merge 写入） | load_mode 换成 truncate_table |
+
+单规则是这套的特例（坍缩成 1 条直灌目标）。极端特殊场景（中间加工也本质不同）兜底：core_from 不抄、joins 从零写。
+
+### 装配器（7 不变量 + designer 最小声明）
+
+explicit 模式 designer 只写**判断部分**（没法固化的），装配器按 **7 不变量**（跨场景恒成立）补全机械部分：
+
+**designer 写**（每条 init 规则）：
+- `core_from`（可选）：field_logics 抄自哪条增量规则（口径相同时省得重写）
+- `joins`（必写）：剥掉 delta 机器后的核心 FROM/JOIN 结构
+- `field_logics`（可选）：不写则从 core_from 抄；写了覆盖
+
+**装配器补**（7 不变量，designer 不写）：
+1. init 终态 target_table = 增量终态 F 表
+2. init 终态 load_mode = truncate_table
+3. init 终态 write_condition = ""
+4. init 终态 field_targets = 目标全字段（= 增量终态）
+5. business_key = 同（资产级）
+6. tmp 表复用（不新建，init/增量不并发，tmp 可清空重刷）
+7. 无 incremental.filter（init 不取范围）
+
+```yaml
+# explicit 示例（模式三）
+init:
+  mode: explicit
+  group_mode: inline
+  rules:
+    - rule_code: INIT_R0001
+      core_from: R0002              # 口径抄自 R0002
+      joins:                        # ★ 唯一必写：剥掉 delta 机器后的核心结构
+        - {alias: a, type: main}
+        - {alias: b, type: "LEFT JOIN", condition: "a.id=b.a_id"}
+      # target_table / load_mode / write_condition / field_targets 不填 → 装配器补
+
+# derive 示例（模式一二）
+init:
+  mode: derive
+  group_mode: inline
+  # rules 留空：init 从增量管道 + 各 extract 的 incremental.init_filter 派生（下游物化时生成）
+```
+
+### init 相关字段（增量规则的 incremental 段，derive 模式用）
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
 | `incremental.filter` | 增量 WHERE | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` |
-| `incremental.init_filter` | 初始化 WHERE | `1=1`（全量）或 `dt >= '2024-01-01'`（限定范围） |
+| `incremental.init_filter` | 初始化 WHERE（derive 模式各 extract 用它替换 filter） | `1=1`（全量）或 `dt >= '2024-01-01'`（限定范围） |
 | `incremental.init_time_range` | 初始化时间范围（RS L07） | ALL / 2024-01-01 |
 | `incremental.init_strategy` | 初始化策略描述 | 首次全量加载，后续增量 |
 
-初始化时，extract 步骤的 WHERE 换成 init_filter（全量或初始范围），merge 步骤的 load_mode 从 merge_into 换成 truncate_table（初始化是全量覆盖）。
+> derive 模式下，下游物化（export）从增量管道派生 init 执行行：extract 的 WHERE 换成 init_filter，终态 load_mode 换成 truncate_table。designer 只在 incremental 段填 init_filter，不在 init 段写规则。
 
-### init_mode（designer 必须决策）
+### 校验（assemble_ts LI 层）
 
-初始化在术加平台怎么落地，**是设计决策，不是部署细节**。
-
-**核心判断标准：初始化和增量的差异是不是只在 WHERE？**
-- **只在 WHERE 不同** → 参数控制（同一套规则组，WHERE 用条件分支）
-- **差异超出 WHERE**（FROM/JOIN/字段处理不同）→ 独立规则组（两套规则各自简洁）
-
-| init_mode | 怎么做 | 什么时候选 |
-|-----------|--------|-----------|
-| **参数控制** | 同一规则组，传 ALL 或日期参数。SQL 里 WHERE 用条件分支 | 初始化和增量的差异只在 WHERE |
-| **独立规则组** | 另建一个规则组，专门跑初始化 | 初始化的加工逻辑跟增量有本质差异 |
+- **N_INIT2**（L3，hard）：增量目标规则（target + 有 filter 或 step_type=merge）load_mode=truncate_table → 阻断（这次的 bug 兜底）。
+- **N_INIT1**（LI，hard）：explicit init 规则显式声明非 truncate 的 load_mode → 阻断（init load_mode 由装配器补，designer 不手填）。
+- **N_INIT3**（LI，warn）：explicit init 规则读取 delta 机器 tmp → 提示确认机器剥净。
+- **N_INIT4**（LI，warn）：explicit init 规则既无 core_from 又无 field_logics → 口径为空提示。
+- **N_INIT_MODE / N_INIT_GROUP**（LI，hard）：mode/group_mode 非法值。
 
 ---
 

@@ -1,0 +1,92 @@
+# 工具注册表（Tool Registry）
+
+> 全管线脚本的**唯一目录**。每个工具一行，高信号列。
+> **维护约定**：加/改/删脚本时**同步这张表**（写进 AGENTS.md 编码约定）。漂移从这里一眼看出。
+>
+> **关键区分**：脚本**住在哪个 skill 目录**（按"阶段"组织：设计阶段脚本放 dws-design、编码阶段放 dws-coding）
+> ≠ **谁实际调用它**。本表按**调用方**分组——这才是"谁会用它"的真相。
+>
+> 末列「读 ts[rules/init]」是 **init 下游物化（Chunk 2）进度表**：consumer 现在全读 `ts.rules`，每接通一个翻成 `both`。
+
+---
+
+## ① command 调用（new-pipe.md 编排，主线管线脚本）
+
+> 这些脚本虽住在 dws-design / dws-coding 下（按阶段归类），但**调用方是编排 command**，不是 agent。
+
+### 预处理 / 输入校验（设计阶段前端，住 dws-design）
+| 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
+|------|------|--------------|------------|-------------------|
+| `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本）+ rs_input_view.json（compact，给 designer） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
+| `precheck.py` | 输入完整性 + **连库类型检查**（pg_catalog 批量查，72h schema 缓存）+ 类型风险决策骨架 | 步骤 1 | rs_input.json → precheck_report.md / `_internal/schema_cache.json` / `_internal/type_risk_decision.yaml` | 不读 ts |
+| `fill_type_risk_decision.py` | 把人的类型风险决策填进 precheck 的骨架（免手写嵌套 YAML） | 步骤 1 | 决策参数 → 改 type_risk_decision.yaml | 不读 ts |
+| `gate_summary.py` | 闸口①设计摘要（表/规则数/场景/字段统计，确定性） | 闸口① | ts.json → 摘要 | ts.rules / ts.tables / ts.meta |
+
+### 制品生成（编码阶段后端，住 dws-coding）
+| 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
+|------|------|--------------|------------|-------------------|
+| `assemble_ddl.py` | ts → DDL（CREATE TABLE/VIEW + COMMENT + 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables（init 复用 tmp 无新 DDL；Chunk 2 确认不重复建） |
+| `assemble_export.py` | ts + ETL + DDL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ + ddl/ → `export/*.xlsx` | **仅 ts.rules**（Chunk 2：发 init 执行行 + p_flag/独立任务） |
+| `assemble_dq.py` | DQ SQL（标准三项）| **已弃用**（DQ 改 RS 驱动后仅 eval-suite 历史复现用） | ts.json → dq/*.sql | ts.dq_rules |
+
+### UT（需数据库，住 dws-coding）
+| 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
+|------|------|--------------|------------|-------------------|
+| `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
+| `ut_precheck.py` | 快速 UT 预检（回退 + DDL + SELECT 跑通，秒级，不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **仅 ts.rules** + schedule_groups（Chunk 2） |
+| `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **仅 ts.rules** + schedule_groups（Chunk 2） |
+| `run_ut.py` | UT 执行器（legacy 单执行器，ut_precheck/ut_execute 现包装它） | 步骤 6（legacy） | ts.json + etl/ + ddl/ → 报告 | **仅 ts.rules** + schedule_groups |
+
+### legacy 校验（住 dws-coding，部分仍用）
+| 工具 | 干啥 | 状态 | 输入 → 输出 |
+|------|------|------|------------|
+| `sql_validator.py` | DWS SQL 语法校验（括号引号/关键字/INSERT 字段数/DDL-ETL 一致） | legacy 仍用 | ddl/ + etl/ → test_report.md |
+| `validate_ddl.py` | DDL vs design.md 校验（design.md 时代，早于 ts.json） | legacy 基本停用 | ddl/ + design.md → report.json |
+| `verify_files.py` | 管线文件完整性检查 | legacy | ddl/ + etl/ → pass/fail |
+
+---
+
+## ② designer agent 调用（设计子 agent 内部，住 dws-design）
+
+| 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
+|------|------|--------|------------|-------------------|
+| `assemble_ts.py` | rs_input + design_decisions → ts.json + ts.md；跑 ~40 条校验（五层+LI） | designer 写完 decisions 后组装 | rs_input.json + design_decisions.yaml → ts.json / ts.md | 读 decisions.rules **+ decisions.init**（Chunk 1 已接通 init 段） |
+| `explore.py` | JOIN 键唯一性探查（count vs count distinct，只读单表，不 JOIN） | designer 第4层关联安全 | ts.json + 表/键 → 结论 | ts.rules / ts.tables |
+
+---
+
+## ③ coder agent 调用（编码子 agent 内部，住 dws-coding）
+
+| 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
+|------|------|--------|------------|-------------------|
+| `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸） | coder 每规则起手 | ts.json + rule_code → YAML 切片 | **仅 ts.rules**（Chunk 2：slice_rule 加 init 查找分支，~3 行） |
+| `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **仅 ts.rules**（随 slice_ts 接通 init） |
+| `check_sql.py` | coder 的 SELECT vs ts 切片静态对比（字段覆盖/FROM 表/括号引号/无 SELECT *） | coder 写完自检 | SELECT.sql + ts.json + rule_code → PASS/FAIL | **仅 ts.rules**（Chunk 2） |
+
+---
+
+## ④ imported（非直接调用，被上述脚本 import）
+
+| 模块 | 干啥 | 被谁 import | 所在 |
+|------|------|------------|------|
+| `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
+| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN） | precheck | dws-design/scripts |
+| `lib/dws_preprocessor.py` | 预处理辅助 | coding scripts | dws-coding/scripts/lib |
+
+---
+
+## init 下游物化进度（Chunk 2 待办）
+
+「读 ts[rules/init]」列里所有标 **「仅 ts.rules」** 的 consumer，都是 Chunk 2 要接通 init 的点：
+
+| consumer | 调用方 | init 要做什么 | 备注 |
+|----------|-------|-------------|------|
+| `slice_ts.slice_rule` | coder | rule_code 查找加 init 分支（~3 行） | pick_fields 自动跟着通 |
+| `assemble_export` | command | 发 init execution 行（inline→p_flag / separate→独立任务） | load_mode→delete_mode 已映射 truncate→"1" |
+| `ut_precheck` / `ut_execute` | command | 跑 init 规则（truncate 路径） | **排序问题**：init truncate 同张 F 表会清增量数据，需单独轮/严格排序 |
+| `assemble_ddl` | command | init 复用 tmp，确保不重复建表 | build_tables 已按表名去重 |
+| `check_sql` | coder | init SELECT vs 切片对比 | 随 slice_ts 接通 |
+| `new-pipe.md` 步骤 5 | command | 加 init 规则的 coder 调用循环（仿 DQ 条件循环） | 仅 explicit 模式 |
+| `assemble_ts` tasks | command/designer | separate 模式实例化 schedule tasks["init"] | resolve_schedule_path 已认 task_kind='init'，只差实例化 |
+
+derive 模式的 init SQL 字面派生（incremental.filter → init_filter 替换）也是 Chunk 2，但属于"生成"而非"消费 ts.init"。

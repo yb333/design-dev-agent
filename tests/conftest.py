@@ -239,6 +239,73 @@ def make_incremental_decisions(drivers_config):
     return make_design_decisions(rules=rules)
 
 
+def make_derive_init_decisions(drivers_config=None):
+    """模式一二增量 + derive init（增量只多范围 WHERE，无 delta 机器）。
+
+    init 从增量管道派生：各 extract 的 WHERE 换成 init_filter，终态换 truncate。
+    designer 只声明 init.mode=derive + group_mode，不写 init 规则。
+    """
+    if drivers_config is None:
+        drivers_config = [{"key": "update_time", "table": "ods_test_f"}]
+    dd = make_incremental_decisions(drivers_config)
+    dd["init"] = {"mode": "derive", "group_mode": "inline"}
+    return dd
+
+
+def make_explicit_init_decisions():
+    """模式三增量 + explicit init（增量有 delta 机器，init 独立设计）。
+
+    增量管道（有 delta 机器）：
+      R0001 incremental_extract → tmp_delta（delta 机器：取变化并集）
+      R0002 full(reads tmp_delta) → tmp_rebuilt（重建受影响行；核心加工 + delta 限定）
+      R0003 merge → dwb_test_f（增量终态 merge_into）
+    init 管道（独立设计，剥掉 delta 机器）：
+      INIT_R0001 core_from=R0002 + joins(a main, b left) → 直灌 dwb_test_f
+      load_mode/write_condition/field_targets 由装配器按不变量补。
+    """
+    rules = [
+        {
+            "rule_code": "R0001", "rule_name": "增量取并集", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.tmp_delta", "is_view_step": False,
+            "step_type": "incremental_extract", "target_role": "intermediate",
+            "produces_for": ["R0002"], "reads": [],
+            "field_targets": ["id"], "field_logics": {},
+            "incremental": {"key": "update_time",
+                            "filter": "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'",
+                            "init_filter": "1=1", "init_time_range": "ALL"},
+        },
+        {
+            "rule_code": "R0002", "rule_name": "重建受影响行", "scenario": "default",
+            "exec_sequence": 2, "target_table": "dws.tmp_rebuilt", "is_view_step": False,
+            "step_type": "full", "target_role": "intermediate",
+            "produces_for": ["R0003"], "reads": ["dws.tmp_delta"],
+            "field_targets": ["id"], "field_logics": {"id": "核心加工口径：已确认状态取值"},
+        },
+        {
+            "rule_code": "R0003", "rule_name": "合并目标", "scenario": "default",
+            "exec_sequence": 3, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+            "write_condition": "T.id=T1.id",
+            "produces_for": [], "reads": ["dws.tmp_rebuilt"],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        },
+    ]
+    dd = make_design_decisions(rules=rules)
+    dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
+    dd["init"] = {
+        "mode": "explicit",
+        "group_mode": "inline",
+        "rules": [
+            {"rule_code": "INIT_R0001", "core_from": "R0002", "target_role": "target",
+             "joins": [{"alias": "a", "type": "main"},
+                       {"alias": "b", "type": "LEFT JOIN", "condition": "a.id=b.a_id"}]},
+        ],
+    }
+    return dd
+
+
 def make_accumulate_decisions(overlap_fields=("b", "c"), extra_a=("a",), extra_b=("d", "e")):
     """构造累积共建场景的 design_decisions（两规则写同一中间表，字段重叠）。
 

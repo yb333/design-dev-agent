@@ -19,24 +19,36 @@
 skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
 │   ├── scripts/         # preprocess.py assemble_ts.py precheck.py gate_summary.py explore.py
+│   │                    #   fill_type_risk_decision.py type_compat.py
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
 │   ├── scripts/         # run_ut.py ut_precheck.py ut_execute.py check_db.py check_sql.py
-│   │                    #   assemble_ddl.py assemble_dq.py assemble_export.py slice_ts.py
+│   │                    #   assemble_ddl.py assemble_dq.py assemble_export.py slice_ts.py pick_fields.py
 │   │                    #   sql_validator.py validate_ddl.py verify_files.py
 │   │   └── lib/         # dws_preprocessor.py
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 └── design-dev-shared/   # ★ 公共代码库（无 SKILL.md，install 单独拷）
     └── scripts/dws_db.py # 连库能力（DBExecutor 抽象 + PsycopgExecutor 实现）
-agents/                  # dws-designer.md dws-coder.md（subagent 定义，含 permission 白名单）
+agents/                  # dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
 commands/new-pipe.md     # ★ 唯一编排剧本（设计→闸口①→编码→UT→闸口② 全流程）
 install.py               # 装 skill/agent/command 到 ~/.config/opencode/
 eval-suite/              # 评测套件（v1 + v2，独立工程）
 tests/                   # pytest（conftest.py 把三个 scripts 目录加进 sys.path）
 10_project_deliver/      # 运行时产出（gitignore，本地重跑覆盖）
-docs/                    # architecture/specs/templates/output 示例
+docs/                    # architecture/specs/templates/output 示例 + tool-registry.md(★ 工具注册表)
 ```
+
+### agent 索引
+
+> agent 定义 = 岗位（身份+权限+skill 指针+工具清单）；工作流权威在各自的 SKILL.md，工具详情在 `docs/tool-registry.md`。agent.md 不复述工作流（避免双写漂移）。
+
+| agent | 职责 | skill | 能调的工具（详见 tool-registry.md） | 能写 |
+|-------|------|-------|----------------------------------|------|
+| **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design | assemble_ts（组装）/ explore（JOIN键唯一性） | `_internal/design_decisions.yaml` |
+| **dws-coder** | 单规则 design_logic → SELECT | dws-coding | slice_ts / pick_fields / check_sql | `etl/*.sql`、`dq/*.sql` |
+
+> ★ 其余管线脚本（preprocess / precheck / gate_summary / assemble_ddl / assemble_export / run_ut / ut_* / check_db 等）**调用方都是 command（new-pipe.md 编排）**，不是 agent——它们按"阶段"住在 skill 目录下，但由编排 command 调。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
 
 > 注：`dws-run.py` 在根目录但已不是核心入口，编排走 `commands/new-pipe.md`。
 
@@ -145,6 +157,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 
 ## 编码约定
 
+- **改工具同步注册表**：加/改/删任何脚本（skills/*/scripts 下的 .py），必须同步更新 `docs/tool-registry.md`（含"读 ts[rules/init]"列——init 下游物化的进度表）。agent 行为/工作流改动同步各自 SKILL.md（唯一源），agent.md 只管角色+权限+指针，不复述工作流（防双写漂移）。
 - **禁止 glob 通配匹配文件**（CLAUDE.md 红线）：文件名由生成脚本命名规则确定，查找用确定的文件名拼接（如 `f"create_table_{table}.sql"`）。命名约定变了就改查找代码，不靠通配兜底。
 - **测试不连库**：用 Python dict/fake executor 构造数据，`tests/conftest.py` 把三个 scripts 目录加进 sys.path。数据工厂：`make_rs_input`/`make_design_decisions`/`make_ts_json`（基础）+ `make_incremental_rs_input`/`make_incremental_decisions`/`make_accumulate_decisions`（增量/累积共建场景）。`make_design_decisions` 默认产出能通过全部新校验的合法 decisions，测试通过传参注入坏值。
 - **Python snake_case**，提交规范 `feat/fix/refactor/docs: 描述`。
@@ -152,8 +165,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 - **rs_input 双文件**：`rs_input.json`（field_mappings 行对象列表，assemble_ts/precheck 脚本读）+ `rs_input_view.json`（compact 分块紧凑视图，designer 读）。同一次 preprocess 产出（view 是 build_compact 从 input 派生），天然一致。designer 用 Read 读 view（23KB）而非 input 全文（120KB）。
 - **ts 多步骤数据流模型**：rule 有 step_type（full 单规则直灌/装配/非聚合中间加工 / aggregate 聚合产出 / incremental_extract 增量取数到 tmp / merge 合并 tmp 到目标）+ target_role（intermediate/target）。中间表和目标表可有同名字段（按 (表,字段) 查重，不按全局）。多步骤依赖用 produces_for/reads 声明（与 data_flow.dependencies 互补），assemble_ts 校验依赖闭合（N9-N12：produces_for 非空、reads 非空、双向对账 N10b、依赖顺序 N10c、循环检测 N10d）。简单全量走 full 老路不受影响。**中间表≠聚合**，step_type 决策权威是 complexity-playbook §四。
 - **累积共建模式**（多来源写同一中间表，常见于去重/union 场景）：中间表标 `tables.{表}.build_mode: accumulate`，同表字段可重叠（C9 在 accumulate 模式放行）。排重策略由 designer 定（rule 级 `dedup_strategy`：key/priority/reason），coder 翻译成 SQL。详见 incremental-playbook §三/§四。
-- **TS 校验契约分级**（assemble_ts.py）：硬阻断（N1-N4 锚点 / N5 加工字段必写 logic / N6-N12 路径 / N14-N15 增量 / N18-N21 工程 / N22 参数 / N25 design_approach）/ 软阻断（N16-N17 增量合并，填 exemptions 放行）/ warn（N23-N24/N27）。完整契约见 assemble_ts.py 的 `run_all_validations` + `ValidationResult`。
+- **TS 校验契约分级**（assemble_ts.py）：硬阻断（N1-N4 锚点 / N5 加工字段必写 logic / N6-N12 路径 / N14-N15 增量 / N18-N21 工程 / N22 参数 / N25 design_approach / N_INIT2 增量目标禁 truncate / N_INIT1 init 规则禁手填 load_mode / N_INIT_MODE·N_INIT_GROUP 合法值）/ 软阻断（N16-N17 增量合并，填 exemptions 放行）/ warn（N23-N24/N27/N_INIT3 delta机器残留/N_INIT4 init口径空）。分层：L0-L4/LC/LA/LD/**LI(初始化设计)**。完整契约见 assemble_ts.py 的 `run_all_validations` + `ValidationResult`。
 - **写入配置（load_mode + write_condition）**：coder 只写 SELECT，写入动作（INSERT/MERGE/PARTITION/DELETE）由平台配置 + run_ut 拼接。rule 有 write_condition（对应平台 delete_condition）：merge_into/update 填 ON 条件如 `T.id=T1.id`（T=目标表别名 T1=源）；truncate_partition 填分区名如 `P_1001`；delete 填删除 WHERE；truncate_table/no_delete 留空。**统一 designer 填不做推导**（assemble_ts 校验非空+非中文）。run_ut 的 wrap_write 按 load_mode 拼：非 merge 走 INSERT，merge_into/update 拼 MERGE INTO...USING...ON...WHEN MATCHED/NOT MATCHED。assemble_export 的删除模式从 load_mode 映射（不再硬编码"1"）。
+- **init 双管道模型**（★ 增量资产的核心结构）：init 和增量是**同一目标表的两个写入管道**——增量管道（`rules`）日常跑（load_mode=merge_into/no_delete/...），init 管道（`init` 段）首次全量装载（load_mode 恒为 truncate_table 先删全插）。一个 rule 一个 load_mode 装不下两者，故 init 单独成段。**增量目标规则禁用 truncate_table**（N_INIT2 硬阻断，全删全插会清空历史）。两种 mode：**derive**（增量无 delta 机器，init 从增量+init_filter 派生，designer 不写 init 规则）/ **explicit**（增量有 delta 机器，init 独立设计，designer 写 core_from+joins，装配器按 7 不变量补 target/load_mode/field_targets）。group_mode：inline（同组 p_flag）/ separate（独立规则组）。装配器 `build_init_section` 幂等（main 校验阶段也调）。详见 incremental-playbook §八。本轮做设计侧（ts.json init 段 + 装配器 + LI 校验 + ts.md），下游物化（execution_tasks/SQL/调度）后续 chunk。
 
 ## 开发命令
 
@@ -187,6 +201,10 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 ### 本轮改造（设计思维重构 + TS 校验契约补强，2026-08）
 
 design-guide.md 已从 335 行大杂烩拆分为：design-guide（物理决策，70行）+ incremental-playbook（增量全集）+ complexity-playbook（复杂度/物化/step_type）。SKILL.md 的 9 步操作清单已重构为**五层决策骨架**。assemble_ts.py 新增 `run_all_validations`（~38 条校验，五层分组）+ `ValidationResult`（分层报错）+ 软阻断豁免机制。design_decisions 模板补 `build_mode`/`dedup_strategy`/`data_volume`/`exemptions`。preprocess.py 内嵌的死代码 precheck 副本已删除。测试 419→465。
+
+### init 双管道模型改造（2026-08）
+
+修掉增量场景的致命 bug：增量目标 load_mode=truncate_table 导致每次增量全删全插。根因是一个 rule 一个 load_mode 装不下 init/增量两种写入。改为**双管道模型**：增量管道（`rules`，load_mode=merge 等）+ init 管道（`init` 段，load_mode 恒 truncate_table）。新增 LI 层校验（N_INIT1/2/3/4 + mode/group_mode 合法值）+ `build_init_section` 装配器（7 不变量补全 + core_from 抄口径，幂等）。两种 mode：derive（无 delta 机器，派生）/ explicit（有 delta 机器，独立设计）。group_mode：inline（同组 p_flag）/ separate（独立规则组）。incremental-playbook §八 重写。本轮做**设计侧**（ts.json init 段 + 装配器 + LI 校验 + ts.md + 测试），下游物化（execution_tasks/init SQL/调度任务）后续 chunk。ts.md §8 不再按 load_mode 藏增量规则。测试 +21。
 
 ### DQ RS 驱动改造（2026-08）
 

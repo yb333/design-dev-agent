@@ -423,6 +423,7 @@ class ValidationResult:
         ("LC", "横切"),
         ("LA", "累积共建"),
         ("LD", "DQ"),
+        ("LI", "初始化设计"),
     ]
 
     def __init__(self):
@@ -821,6 +822,26 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
             if drv_key and drv_key not in all_inc_keys:
                 vr.add_warn("L3", "N16", f"驱动表 '{drv_table}' 的增量字段 '{drv_key}' 未在任何规则的 incremental.key 中出现——确认该表的变化已被增量范围覆盖（并集场景检查 OR 条件是否覆盖每张驱动表）")
 
+    # N_INIT2（hard）：增量目标规则 load_mode 不能是 truncate_table（全删全插 与增量矛盾）。
+    # init/增量双管道模型的兜底：load_mode 是"增量写入方式"，init 的先删全插由 init 管道承担。
+    # 触发：target_role=target 且（有 incremental.filter 或 step_type=merge）且 load_mode=truncate_table。
+    # 不误伤：中间 tmp（intermediate）的 truncate 合法；非增量 full 规则的 truncate 合法；
+    #        init.rules 不在 rules 里（独立 init 段），不触发。
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        if rule.get("target_role") != "target":
+            continue
+        inc = rule.get("incremental") or {}
+        has_inc_filter = isinstance(inc, dict) and bool((inc.get("filter") or "").strip())
+        is_merge = rule.get("step_type") == "merge"
+        if (has_inc_filter or is_merge) and rule.get("load_mode", "truncate_table") == "truncate_table":
+            why = "incremental.filter" if has_inc_filter else "step_type=merge"
+            vr.add_hard("L3", "N_INIT2",
+                f"规则 {code} 是增量目标（target_role=target + {why}）但 load_mode=truncate_table"
+                f"（全删全插），与增量语义矛盾：每次增量会清空历史。load_mode 应为增量写入方式"
+                f"（merge_into/no_delete/delete/truncate_partition）；init 的先删全插由 init 管道承担"
+                f"（见 incremental-playbook §八）")
+
     # ============================================================
     # 第4层 工程（N18-N21）
     # ============================================================
@@ -967,6 +988,53 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
         vr.add_warn("LD", "N_DQ3",
                     f"RS 未提 DQ 需求（dq_requirements 为空），但 dq_rules 自行补充了 {n_dec} 条。"
                     f"DQ 是业务决策归 RS，请确认")
+
+    # ============================================================
+    # 初始化设计（LI 层）—— init 管道（与增量管道 rules 平行）
+    # load_mode 装不下 init/增量两种写入 → init 单独成段。
+    # 校验 designer 的 init 声明（装配器 build_init_section 按不变量补全输出）。
+    # ============================================================
+    init_dec = decisions.get("init")
+    if init_dec and isinstance(init_dec, dict) and (init_dec.get("mode") or "").strip():
+        i_mode = (init_dec.get("mode") or "").strip()
+        i_group = (init_dec.get("group_mode") or "").strip()
+        # mode / group_mode 合法值（hard）
+        if i_mode not in ("explicit", "derive"):
+            vr.add_hard("LI", "N_INIT_MODE",
+                        f"init.mode='{i_mode}' 不合法（应为 explicit 或 derive）")
+        if i_group not in ("inline", "separate"):
+            vr.add_hard("LI", "N_INIT_GROUP",
+                        f"init.group_mode='{i_group}' 不合法（应为 inline 同组p_flag 或 separate 独立规则组）")
+
+        if i_mode == "explicit":
+            # 增量管道里的 delta 机器 tmp（incremental_extract 产出的 intermediate 表）
+            delta_tmp_tables = set()
+            for r in rules:
+                if r.get("step_type") == "incremental_extract":
+                    tt = r.get("target_table", "")
+                    if tt:
+                        delta_tmp_tables.add(_table_short(tt).lower())
+            for ir in (init_dec.get("rules") or []):
+                icode = ir.get("rule_code") or "?"
+                # N_INIT1（hard）：init 规则不应显式声明非 truncate 的 load_mode
+                # （init 全是先删全插，load_mode 由装配器统一补 truncate_table，designer 不手填）
+                ilm = (ir.get("load_mode") or "").strip()
+                if ilm and ilm != "truncate_table":
+                    vr.add_hard("LI", "N_INIT1",
+                                f"init 规则 {icode} 显式声明 load_mode='{ilm}'，"
+                                f"init 规则的 load_mode 由装配器统一补为 truncate_table（先删全插），不要手填")
+                # N_INIT3（warn）：init 规则引用 delta 机器 tmp → 提示确认剥净
+                for rd in (ir.get("reads") or []):
+                    rd_short = _table_short(rd).lower() if isinstance(rd, str) else ""
+                    if rd_short and rd_short in delta_tmp_tables:
+                        vr.add_warn("LI", "N_INIT3",
+                                    f"init 规则 {icode} 读取 '{rd}'（增量 delta 机器产出的 tmp）——"
+                                    f"确认 delta 机器已剥净，init 是全量加工不需要增量隔离")
+                # N_INIT4（warn）：既无 core_from 又无 field_logics → 口径为空
+                if not (ir.get("core_from") or "").strip() and not (ir.get("field_logics") or {}):
+                    vr.add_warn("LI", "N_INIT4",
+                                f"init 规则 {icode} 既无 core_from 又无 field_logics——"
+                                f"核心加工口径为空（field_logics 空时 coder 无口径可参考），确认是否需要")
 
     return vr
 
@@ -1535,6 +1603,91 @@ def build_design(decisions, rs_input):
     }
 
 
+def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dict:
+    """组装 init 段（初始化管道，与增量管道 rules 平行）。
+
+    幂等：不依赖校验通过，全程防御性取值（main 校验阶段也调 assemble_ts）。
+
+    - 无 init 段（decisions.init 为空）→ 返回 None（ts.json 不含 init key）。
+    - derive（模式一二）：不物化 init 规则（下游从增量 + 各 extract 的 init_filter 派生），
+      只记 mode/group_mode，rules 留空。
+    - explicit（模式三）：按 7 不变量展开 designer 的 init.rules：
+        终态(target) → target_table=增量F表 / load_mode=truncate_table / write_condition空 /
+                       field_targets=增量终态全字段
+        中间(intermediate) → load_mode=truncate_table（tmp 重建），其余 designer 声明
+      field_logics 没写则从 core_from 抄（口径相同时省得重写）。
+    """
+    init_dec = decisions.get("init")
+    if not init_dec or not isinstance(init_dec, dict):
+        return None
+    mode = (init_dec.get("mode") or "").strip()
+    if not mode:
+        return None
+    group_mode = (init_dec.get("group_mode") or "").strip()
+    section = {"mode": mode, "group_mode": group_mode, "rules": {}}
+    if mode != "explicit":
+        return section  # derive：rules 留空，下游物化时派生
+
+    # 找增量终态（首个 target_role=target 规则）取 target_table + field_targets（不变量1/4）
+    # 用增量终态规则的 target_table（带 schema，与 rules 完全一致），而非 meta.f_table（可能是短名）
+    inc_terminal = None
+    for r in rules.values():
+        if r.get("target_role") == "target":
+            inc_terminal = r
+            break
+    inc_terminal_targets = list((inc_terminal or {}).get("field_targets") or [])
+    inc_terminal_table = (inc_terminal or {}).get("target_table") or target_f_table
+
+    for r in (init_dec.get("rules") or []):
+        code = r.get("rule_code") or ""
+        target_role = r.get("target_role") or "target"
+        core_from = r.get("core_from") or ""
+        # field_logics：designer 没写 + 有 core_from → 从 core_from 抄
+        field_logics = r.get("field_logics")
+        if field_logics is None and core_from and core_from in rules:
+            field_logics = rules[core_from].get("field_logics") or {}
+        if field_logics is None:
+            field_logics = {}
+
+        if target_role == "target":
+            # 终态：7 不变量补全
+            built = {
+                "rule_name": r.get("rule_name") or f"初始化-{code}",
+                "exec_sequence": r.get("exec_sequence", 1),
+                "target_table": inc_terminal_table or r.get("target_table", ""),
+                "target_role": "target",
+                "step_type": r.get("step_type") or "full",
+                "load_mode": "truncate_table",
+                "write_condition": "",
+                "joins": r.get("joins") or [],
+                "field_targets": list(inc_terminal_targets) if inc_terminal_targets else list(r.get("field_targets") or []),
+                "field_logics": field_logics,
+                "core_from": core_from,
+                "design_intent": r.get("design_intent") or "初始化（全量），装配器按不变量补全",
+            }
+        else:
+            # 中间 tmp 规则：designer 声明 target_table/reads/field_targets，load_mode 强制 truncate_table
+            # （init tmp 全量重建也是先删全插；复用增量 tmp，不新建）
+            built = {
+                "rule_name": r.get("rule_name") or f"初始化-{code}",
+                "exec_sequence": r.get("exec_sequence", 1),
+                "target_table": r.get("target_table", ""),
+                "target_role": target_role,
+                "step_type": r.get("step_type") or "full",
+                "load_mode": "truncate_table",
+                "write_condition": "",
+                "reads": r.get("reads") or [],
+                "produces_for": r.get("produces_for") or [],
+                "joins": r.get("joins") or [],
+                "field_targets": list(r.get("field_targets") or []),
+                "field_logics": field_logics,
+                "core_from": core_from,
+                "design_intent": r.get("design_intent") or "初始化中间加工（全量）",
+            }
+        section["rules"][code] = built
+    return section
+
+
 def assemble_ts(rs_input, decisions):
     """组装完整 ts.json dict。"""
     # 建 field_map: target_column -> field_mapping 记录
@@ -1560,6 +1713,9 @@ def assemble_ts(rs_input, decisions):
     f_table_full = meta.get("target", {}).get("f_table", {}).get("table", "")
     tables = build_tables(rules, decisions, field_map, rs_input, f_table_full)
 
+    # 组装 init 段（初始化管道，与 rules 平行；无 init 段返回 None → 不含 init key）
+    init_section = build_init_section(decisions, rules, f_table_full)
+
     ts = {
         "version": "1.0.0",
         "spec_type": "ts",
@@ -1572,6 +1728,8 @@ def assemble_ts(rs_input, decisions):
         "data_flow": decisions.get("data_flow", {}),
         "dq_rules": decisions.get("dq_rules", []),
     }
+    if init_section is not None:
+        ts["init"] = init_section
     return ts, all_missing_logic, field_map
 
 
@@ -1832,9 +1990,11 @@ def render_md(ts):
     lines.append("")
 
     # §8 增量设计（条件出现：只有有增量规则的资产才显示）
+    # 不再按 load_mode 过滤——否则增量目标若误设 truncate_table 反而被藏起来，
+    # 闸口①看不见矛盾。N_INIT2 会拦这种配置，这里让它可见。
     incremental_rules = {
         code: r for code, r in rules.items()
-        if r.get("load_mode", "truncate_table") != "truncate_table" and r.get("incremental")
+        if r.get("incremental")
     }
     if incremental_rules:
         lines.append("---")
@@ -1863,6 +2023,54 @@ def render_md(ts):
             if inc.get("init_mode"):
                 lines.append(f"| 初始化方式 | **{inc['init_mode']}** |")
             lines.append("")
+
+    # 初始化设计（条件出现：ts.json 含 init 段时）
+    # init 和增量是同一目标表的两个写入管道：增量日常跑，init 首次全量装载（先删全插）。
+    init_section = ts.get("init")
+    if init_section and init_section.get("mode"):
+        lines.append("---")
+        lines.append("")
+        lines.append("## 初始化设计（init 管道）")
+        lines.append("")
+        i_mode = init_section.get("mode", "")
+        i_group = init_section.get("group_mode", "")
+        lines.append(f"- **模式**: `{i_mode}`（{'显式独立设计（模式三：增量有 delta 机器）' if i_mode == 'explicit' else '从增量管道派生（模式一二：增量只多范围 WHERE）'}）")
+        lines.append(f"- **组织**: `{i_group}`（{'同规则组 p_flag 选跑' if i_group == 'inline' else '独立规则组独立调度'}）")
+        lines.append("")
+        if i_mode == "derive":
+            lines.append("> init 从增量管道派生：各 extract 的 WHERE 换成 incremental.init_filter，终态 load_mode 换成 truncate_table。下游物化时生成 init 执行行。")
+            listed = False
+            for code, r in incremental_rules.items():
+                inc = r.get("incremental", {})
+                if inc.get("init_filter"):
+                    lines.append(f"  - {code}: init_filter = `{inc['init_filter']}`")
+                    listed = True
+            if not listed:
+                lines.append("  *(无 extract 规则带 init_filter)*")
+            lines.append("")
+        elif i_mode == "explicit":
+            init_rules = init_section.get("rules") or {}
+            if init_rules:
+                lines.append("> init 规则由装配器按不变量补全（终态 load_mode=truncate_table / write_condition 空 / field_targets=目标全字段 / tmp 复用）。designer 只声明 core_from + joins（核心结构，剥掉 delta 机器）。")
+                lines.append("")
+                for code, r in init_rules.items():
+                    lines.append(f"### {code} - {r.get('rule_name', '')}")
+                    lines.append("")
+                    lines.append("| 项目 | 内容 |")
+                    lines.append("|------|------|")
+                    lines.append(f"| 目标表 | {r.get('target_table', '-')} |")
+                    lines.append(f"| 角色 | {r.get('target_role', '-')} |")
+                    lines.append(f"| 写入方式 | {r.get('load_mode', '-')} |")
+                    if r.get("core_from"):
+                        lines.append(f"| 口径抄自 | `{r.get('core_from')}` |")
+                    joins = r.get("joins") or []
+                    if joins:
+                        jsum = "; ".join(f"{j.get('alias', '')}({j.get('type', '')})" for j in joins)
+                        lines.append(f"| 核心结构 | {jsum} |")
+                    lines.append("")
+            else:
+                lines.append("*(explicit 模式但无 init 规则)*")
+                lines.append("")
 
     # §9 分区设计（条件出现：只有有分区的表才显示）
     partition_tables = {
