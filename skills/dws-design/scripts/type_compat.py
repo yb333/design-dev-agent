@@ -129,9 +129,10 @@ def is_type_compatible(source_type: str, target_type: str) -> bool:
         # 目标无长度（如 text）→ 不限制
         if tgt["length"] is None:
             return True
-        # 源无长度 → 无法判，保守兼容
+        # 源无长度（无参 numeric/text/varchar，值可能任意大）+ 目标有限制 → 不兼容
+        # 这才是"保守"：值可能超 target，报风险让 designer 加兜底（CAST/截取），而不是放行
         if src["length"] is None:
-            return True
+            return False
         # varchar 比长度
         if src["family"] == "varchar":
             return tgt["length"] >= src["length"]

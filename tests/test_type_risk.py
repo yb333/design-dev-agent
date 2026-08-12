@@ -54,6 +54,24 @@ class TestAssessTypeRisk:
         # 标度收窄也是精度问题
         assert assess_type_risk("numeric(10,4)", "numeric(10,2)") == "precision_loss"
 
+    def test_source_unlimited_target_limited_reports_risk(self):
+        """source 无参（值可能任意大）+ target 有限制 → 报风险（designer 需加兜底）。
+
+        这是 type_compat 的修正点：之前 source 无参误判"兼容"放行，
+        现在正确判"有风险"——source 值可能超 target，必须报出来让 designer 加 CAST/截取。
+        """
+        # numeric 无参 → numeric(18,2)：值可能超 18 位，precision_loss
+        assert assess_type_risk("numeric", "numeric(18,2)") == "precision_loss"
+        # text → varchar(100)：值可能超 100 字符，length_overflow
+        assert assess_type_risk("text", "varchar(100)") == "length_overflow"
+
+    def test_target_unlimited_no_risk(self):
+        """target 无限制（numeric 无参/text）能容纳任何 source → 无风险。"""
+        assert assess_type_risk("numeric(38,10)", "numeric") is None
+        assert assess_type_risk("varchar(100)", "text") is None
+        # 都无限制
+        assert assess_type_risk("numeric", "numeric") is None
+
     def test_type_incompatible(self):
         assert assess_type_risk("varchar(20)", "date") == "type_incompatible"
         assert assess_type_risk("int", "date") == "type_incompatible"
