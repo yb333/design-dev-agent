@@ -205,13 +205,17 @@ def main():
                 all_results.append(rule_result)
                 continue
             select_sql = substitute_params(select_sql, param_values)
-            # 采样：CLI参数优先，不传则从 db-sources.json 的 security.sample_blocks 读默认
+            # 采样语义（防"加速导致数据错误"）：采样只当【快速失败闸门】，不做最终审视——
+            # SELECT 跑通 ≠ INSERT 全量跑通（目标列类型转换靠行数据触发，采样会漏检脏行）。
+            # 流程：truncate_table 模式且采样开启 → 采样试跑 INSERT → 失败秒级快速报 /
+            # 通过 → TRUNCATE 清试跑数据 → 全量 INSERT（终审按全量）。
+            # ★ 其他 load_mode 不试跑：no_delete/merge 的表混有前序规则成果，试跑数据
+            #   无法辨清（TRUNCATE 会伤前序），全量失败由报错直接暴露。
             sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
-            select_sql = inject_tablesample(select_sql, sample_n)
-
-            # load_mode 预处理（模拟平台写入前的清空动作）
             load_mode = rule.get("load_mode", "truncate_table")
             write_condition = rule.get("write_condition", "")
+
+            # load_mode 预处理（模拟平台写入前的清空动作）
             if load_mode == "truncate_table":
                 executor.execute(f"TRUNCATE TABLE {target}")
                 print(f"  🔄 TRUNCATE")
@@ -224,14 +228,38 @@ def main():
                 print(f"  🔄 DELETE WHERE {write_condition}")
             # merge_into/update 不预处理（MERGE 语句自带 upsert 语义）
 
-            # 写入语句（按 load_mode 拼 INSERT 或 MERGE）
+            # 写入语句构造（试跑/全量共用同一套 wrap）
             target_short = target.rsplit(".", 1)[-1] if "." in target else target
             tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
             if not tbl_fields:
                 tbl_fields = rule.get("fields", [])
+
+            # ── 采样试跑（快速失败闸门，仅 truncate_table 模式）──
+            trial_used = False
+            if sample_n > 0 and load_mode == "truncate_table":
+                trial_select = inject_tablesample(select_sql, sample_n)
+                trial_insert = wrap_write(trial_select, target, tbl_fields, load_mode, write_condition)
+                print(f"  🧪 采样试跑(TABLESAMPLE {sample_n}%)...")
+                r_trial = executor.execute(trial_insert)
+                if not r_trial.success:
+                    error_msg = r_trial.error[:200] if r_trial.error else "未知错误"
+                    error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
+                    rule_result["status"] = "FAIL"
+                    rule_result["error_type"] = error_type
+                    rule_result["detail"] = f"试跑(采样{sample_n}%)失败: {error_msg}"
+                    print(f"  ❌ 试跑失败({error_type}): {error_msg}")
+                    _dump_rule_sql(ts_path, rule_code, target, trial_select, trial_insert,
+                                   f"试跑(采样{sample_n}%)失败({error_type}): {error_msg}", [])
+                    all_results.append(rule_result)
+                    prev_failed = True
+                    continue
+                print(f"  ✅ 试跑通过 → TRUNCATE 清试跑数据，全量执行（终审按全量）")
+                executor.execute(f"TRUNCATE TABLE {target}")
+                trial_used = True
+
             insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition)
 
-            print(f"  ⏳ INSERT 执行中...")
+            print(f"  ⏳ INSERT 执行中..." + ("（试跑已过，全量）" if trial_used else ""))
             r = executor.execute(insert_sql)
             if not r.success:
                 error_msg = r.error[:200] if r.error else "未知错误"
@@ -280,6 +308,11 @@ def main():
     report_lines = []
     report_lines.append("# UT 报告")
     report_lines.append(f"> 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    # 采样语义标注：试跑只是快速失败闸门，最终审视按全量（防"采样通过"被误读为"全量没问题"）
+    _eff_sample = resolve_sample_blocks(config_path, args.sample_blocks)
+    if _eff_sample > 0:
+        report_lines.append(f"> ⚠️ 采样模式：试跑 TABLESAMPLE({_eff_sample}%) 作快速失败闸门，"
+                            f"试跑通过后清表全量执行——**最终审视按全量结果**（仅 truncate_table 规则试跑）")
     report_lines.append("")
     report_lines.append(f"**汇总**: ✅{passed} 通过  ❌{failed} 失败  ⏭️{skipped} 跳过")
     report_lines.append("")

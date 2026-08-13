@@ -3,7 +3,7 @@
 > 用于空闲时段执行。复制下面**待办任务**的提示词给 agent，在项目目录下执行。
 > **任务一已完成**（command 脚本定位改 skill 注入，已落地，保留作历史记录，跳过）。
 > 待办按编号顺序（后者覆盖前者产出物）：
-> 任务二（legacy 整改）→ 任务三（precheck 校验增强）→ 任务四（脚本按调用方归位）→ 任务五（测试补缺 + 回归，最后做）
+> 任务二（legacy 整改）→ 任务三（校验分级与容错）→ 任务四（脚本按调用方归位）→ 任务五（UT 报错自动诊断）→ 任务六（测试补缺 + 回归，最后做）
 
 ---
 
@@ -134,12 +134,14 @@
 
 ---
 
-### 任务三：precheck 校验增强（源表级 alias 升 error + error 加修复指引）
+### 任务三：校验分级与容错（precheck 增强 + RS 解析容错 + 大小写）
 
-**背景**：precheck 阶段校验有几个可强化点（不阻断核心流程，属严谨性/体验优化）：
+**背景**：校验链路有几个可强化点（不阻断核心流程，属严谨性/容错性优化）：
 1. **源表级 source_alias 空**（precheck.py:96）现在是 warn，建议升 error——源表没别名，字段级 source_alias 无从引用（虽字段级校验间接拦，但源头拦更清晰）
 2. **error 消息缺修复指引**：现在只报问题（如"字段 X 缺少来源字段"），没说怎么改。建议加修复指引，让用户/BA 知道改哪个源文件、哪一列
 3. **数据加工 source_column 空**（precheck.py:132-133）维持 warn（纯派生如 COUNT(*) 合法），只确认消息够清晰
+4. **RS 解析不容错**：L1.1 段缺失/格式乱（RS 生成不稳定是常态）时 preprocess 直接 exit(1)——应改为**解析兼容**（mapping 目标表兜底 + warning 标记，继续产 rs_input），质量判断留给 precheck 提示
+5. **目标表校验大小写敏感**：validate_target_table 比对 `rs_schema != mapping_schema` 大小写敏感，仅大小写差异（Ods.ODS_B vs ods.ods_b）误报"不一致"——比对改 lower，仅大小写差异视为一致（warning 提示规范化即可）
 
 **先读这些理解上下文**：
 - `skills/dws-design/scripts/precheck.py` 的字段/别名校验段（line 90-235，含 3b 交叉校验 + 6 别名一致性）
@@ -166,6 +168,7 @@
 - 只改 precheck.py 的校验级别（warn→error）+ 消息文案，不动校验逻辑结构
 - 修复指引统一指向源文件（mapping.xlsx / RS.md），不指向 rs_input.json
 - 数据加工 source_column 空维持 warn（纯派生合法）
+- RS 容错（第 4 点）：preprocess 的降级只针对"段缺失/解析失败"这类输入不稳（用 mapping/默认值兜底 + warning）；结构性错误（mapping 本身烂）仍阻断。改 preprocess.py 的 L1.1 报错路径（现在进 errors → main exit(1)）+ 大小写在 validate_target_table
 
 **验证**：
 - `python3 -m pytest tests/ -q` 全套通过
@@ -205,11 +208,38 @@
 
 ---
 
-### 任务五：排查单元测试覆盖缺口并补充
+### 任务五：UT 报错自动诊断（ut_diagnose + INSERT 失败钩子）
+
+**背景**：UT 报错信息不透明——数据库只说"字符转数值转换失败"，不说哪个字段、哪步；designer/coder 不能直连库排查，拿模糊报错只能瞎猜。
+**方案定论**（已讨论定）：**诊断 = 脚本自动**（报错现场连着库、上下文最全：知道哪条规则/什么报错；确定性探测无语义判断，不新建 agent——agent 是岗位，设岗位要有业务判断需求）；**分析 = designer/coder**（拿诊断材料做根因判断：源脏 / 设计缺 cast / 业务一对多）；**路由 = pipe 不变**（三类分流，材料更充分而已）。先例：run_ut_check 主键重复时 LIMIT 5 捕获重复键样例——同一模式扩展到 INSERT 报错。
+**关键资产**：schema_cache 里有全部字段的源/目标类型——"这条规则哪些字段跨类型"在设计数据里已知，圈嫌疑字段不用猜。
+
+**要做的**：
+
+1. **新建 `skills/dws-coding/scripts/ut_diagnose.py`**（函数库 + CLI，agent 可复用）：
+   - 核心 `diagnose_type_error(executor, rule, ts, cache_path)`：
+     读该规则字段 + schema_cache → 用 type_compat 的 `parse_type_info`（family 大类）圈出跨类型字段（源 varchar→目标 numeric 等）→ 逐个对**源表**定向探测：`SELECT count(*) WHERE 字段 NOT SIMILAR TO 数字模式`（日期类同理）+ `LIMIT 3` 抓样例值
+   - 输出："字段 X 有 128 行脏数据，样例：'N/A'、'-'、'1,000'"（designer/coder 拿到直接可判断根因）
+   - CLI：`python ut_diagnose.py --ts ts.json --rule R0001`（designer/coder 回退分析时可自行复跑，服务型）
+2. **ut_execute INSERT 失败钩子**：报错含 `invalid input syntax` / 类型转换类关键字 → 自动调诊断 → 结果附进 UT 报告（该规则的 FAIL detail 下加"诊断"段）；识别不了的错误诚实输出"无法自动定位，附原始报错"——**诊断是增益不是依赖**
+3. **边界**：只覆盖类型转换类高价值错误（先做字符→数值、字符→日期），其他报错原样透传
+
+**约束**：
+- 探测只读源表（etl 账号），单表 count/LIMIT 不会发散
+- 诊断逻辑独立成模块不塞 ut_execute 主体（钩子一行调用）；schema_cache 不存在时跳过诊断（提示"未连库无缓存"）
+- run_ut_check 的样例捕获模式保持一致（风格统一）
+
+**验证**：
+1. `python3 -m pytest tests/ -q` 全套通过（ut_diagnose 用 mock executor 构造脏行测试：探测 SQL 拼接 / 样例捕获 / 跨类型圈定）
+2. 汇报：诊断覆盖的报错类型、输出的诊断样例格式
+
+---
+
+### 任务六：排查单元测试覆盖缺口并补充
 
 **背景**：之前 `resolve_all_params` 函数被 Edit 操作撕裂（函数体截断无 return），导致 UT 执行脚本报错。但没有测试挡住——因为这个函数没有直接单元测试，只被 UT 脚本间接调用（而测试环境连不了库，走不到间接路径）。要排查所有类似缺口。
 
-**这是最后一个任务的原因**：前面的任务（二、三、四）都改了代码，本任务补测试 + 回归要覆盖到所有新代码（尤其任务二的 legacy 整改 + 任务三的 precheck 校验增强 + 任务四的脚本归位）。**必须最后做（二 → 三 → 四 → 五）**。
+**这是最后一个任务的原因**：前面的任务（二、三、四、五）都改了代码，本任务补测试 + 回归要覆盖到所有新代码（尤其任务二的 legacy 整改 + 任务三的校验分级与容错 + 任务四的脚本归位 + 任务五的 ut_diagnose）。**必须最后做（二 → 三 → 四 → 五 → 六）**。
 
 **排查方法**：
 
@@ -290,7 +320,7 @@
 - 只补**纯逻辑函数**的测试（不连库、不读真实文件、不依赖外部环境）
 - 需要连库/读 xlsx 的函数用 mock 测核心逻辑（参数解析、SQL 拼接、返回值格式）
 - 不要为了凑覆盖率写无意义的测试——每个测试要验证一个明确的行为
-- **覆盖任务二（legacy 整改）+ 任务三（precheck 校验增强）+ 任务四（脚本归位）的新代码**
+- **覆盖任务二（legacy 整改）+ 任务三（校验分级与容错）+ 任务四（脚本归位）+ 任务五（ut_diagnose）的新代码**
 - 补完跑 `python3 -m pytest tests/ -q` 确认全套通过
 
 **验证**：

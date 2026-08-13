@@ -129,6 +129,7 @@ description: >-
 - **分布键**：按业务主键 / 关联使用频率（减少重分布）/ 离散程度选，与数据量无关。多表 JOIN 时各表分布键必须一致。
   → 详见 `references/design-guide.md` §1.1
 - **关联安全**：每个被关联表，JOIN 键在限定条件下是否唯一。不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行）。
+- **关联字段类型可比性**：JOIN 两边字段类型大类不匹配（如 a 数值 = b 字符）数据库靠运行时隐式转换，**遇到脏行才炸**（设计/静态检查都难发现，UT 才暴露）。不确定两边类型时，用 `schema_query` 查（`--column` 返回类型，两边各查一次对比）；大类不匹配的处理写进设计（design_logic 标注 cast，或调整关联字段）。
   不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散）：
   ```
   python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \

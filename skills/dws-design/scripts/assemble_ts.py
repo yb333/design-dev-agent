@@ -49,7 +49,7 @@ TRANSFORM_MAP = {
 
 # 标准审计字段模板（4个固定字段，用于补充缺失的审计字段）
 STANDARD_AUDIT_TEMPLATE = {
-    "del_flag":            {"type": "nvarchar(1)",                    "default": "'N'"},
+    "del_flag":            {"type": "nvarchar2(1)",                   "default": "'N'"},  # 源端标准写法；DDL 侧 assemble_ddl.normalize_type 转 varchar(1)
     "crt_cycle_id":        {"type": "bigint",                         "default": "'${P_CYCLE_ID}'"},
     "last_upd_cycle_id":   {"type": "bigint",                         "default": "'${P_CYCLE_ID}'"},
     "dw_last_update_date": {"type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP"},

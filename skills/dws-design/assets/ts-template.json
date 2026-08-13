@@ -103,7 +103,7 @@
     // source 字段标记来源："mapping"=来自RS/mapping, "supplemented"=自动补充
     // audit_supplemented 记录哪些是自动补充的（ts.md 里会标注）
     "audit_fields": {
-      "del_flag":            { "type": "nvarchar(1)",                    "default": "'N'",            "source": "mapping|supplemented" },
+      "del_flag":            { "type": "nvarchar2(1)",                    "default": "'N'",            "source": "mapping|supplemented" },
       "crt_cycle_id":        { "type": "bigint",                         "default": "'${P_CYCLE_ID}'", "source": "mapping|supplemented" },
       "last_upd_cycle_id":   { "type": "bigint",                         "default": "'${P_CYCLE_ID}'", "source": "mapping|supplemented" },
       "dw_last_update_date": { "type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP", "source": "mapping|supplemented" }

@@ -383,7 +383,7 @@ def make_ts_json(schema="dws", table="dwb_test_i", cn="测试表",
         }}
 
     audit_fields = {
-        "del_flag": {"type": "NVARCHAR(1)", "default": "'N'"},
+        "del_flag": {"type": "nvarchar2(1)", "default": "'N'"},
         "crt_cycle_id": {"type": "BIGINT", "default": "'${P_CYCLE_ID}'"},
         "last_upd_cycle_id": {"type": "BIGINT", "default": "'${P_CYCLE_ID}'"},
         "dw_last_update_date": {"type": "TIMESTAMP(0)", "default": "CURRENT_TIMESTAMP"},

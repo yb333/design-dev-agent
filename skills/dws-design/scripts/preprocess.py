@@ -268,7 +268,7 @@ class ExcelMappingParser:
             source_schema='', source_table='', source_column='',
             source_type='', mapping_rule='赋值', mapping_expression="'N'",
             target_column='del_flag', target_column_cn='删除标识',
-            target_type='NVARCHAR(1)', source_alias=''
+            target_type='nvarchar2(1)', source_alias=''
         ),
         AttributeMapping(
             source_schema='', source_table='', source_column='',
