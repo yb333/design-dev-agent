@@ -942,6 +942,17 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
     # ============================================================
     # 横切（N22-N25）
     # ============================================================
+    # N_AUDIT_TYPE 审计字段类型与标准不一致 → warn（组装时已强制标准类型，此为透明提示）
+    for fm in (rs_input.get("field_mappings") or []):
+        col = (fm.get("target_column") or "").lower()
+        if col in STANDARD_AUDIT_TEMPLATE:
+            mt = (STANDARD_AUDIT_TEMPLATE[col]["type"] or "").lower().replace(" ", "")
+            it = (fm.get("target_type") or "").lower().replace(" ", "")
+            if it and it != mt:
+                vr.add_warn("LC", "N_AUDIT_TYPE",
+                            f"审计字段 {col} 的 mapping 类型 '{fm.get('target_type')}' 与标准 "
+                            f"'{STANDARD_AUDIT_TEMPLATE[col]['type']}' 不一致，已按标准覆盖（建议修正 mapping）")
+
     # 参数校验：业务参数 default_value 必填 + 不重复声明标准参数
     standard_names = {sp["name"].upper() for sp in STANDARD_PARAMS}
     for p in (decisions.get("params") or []):
@@ -1178,9 +1189,18 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
             {"table": source_table, "field": source_column, "alias": alias}
         ] if source_column else []
 
+    # ★ 审计字段类型强制标准（平台契约，不因 mapping 输入漂移）：
+    # mapping 提供的审计字段 target_type 与标准不一致时按 STANDARD_AUDIT_TEMPLATE 覆盖
+    #（不一致本身由 precheck/校验 warn 提示，这里保证产出正确）
+    fname = (field_rec.get("target_column") or "").lower()
+    if fname in STANDARD_AUDIT_TEMPLATE:
+        field_type = STANDARD_AUDIT_TEMPLATE[fname]["type"]
+    else:
+        field_type = field_rec.get("target_type", "")
+
     return {
         "target_field": field_rec.get("target_column", ""),
-        "field_type": field_rec.get("target_type", ""),
+        "field_type": field_type,
         "field_comment": field_rec.get("target_column_cn", ""),
         "transform_type": transform_type,
         "source_fields": source_fields_list,

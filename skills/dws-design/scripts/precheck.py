@@ -614,6 +614,20 @@ def _check_audit_fields(field_mappings: list, result: PrecheckResult):
                     f"标准审计字段应是赋值（固定值），请确认"
                 )
 
+        # 类型与标准比对（审计是平台契约，不因 mapping 漂移；不一致 assemble_ts 强制标准，此处源头提示）
+        try:
+            from assemble_ts import STANDARD_AUDIT_TEMPLATE as _AUDIT_STD
+        except ImportError:
+            _AUDIT_STD = {}
+        std = _AUDIT_STD.get(target_lower)
+        if std:
+            mt = (std["type"] or "").lower().replace(" ", "")
+            if target_type and target_type.replace(" ", "") != mt:
+                result.add_warn(
+                    f"审计字段 {target} 类型 '{target_type}' 与标准 '{std['type']}' 不一致"
+                    f"（assemble_ts 将按标准覆盖，建议修正 mapping）"
+                )
+
 
 def _load_schema_cache(cache_path: Path) -> dict:
     """读表结构缓存。返回 {cached_at, tables: {schema.table: {col: type}}}。"""

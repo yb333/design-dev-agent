@@ -99,13 +99,13 @@ def make_rs_input(schema="dws", table="dwb_test_i", cn="测试表",
     if has_audit:
         audit = [
             {"transform_rule": "赋值", "transform_detail": "'N'", "target_column": "del_flag",
-             "target_column_cn": "删除标识", "target_type": "NVARCHAR(1)", "remark": "审计字段"},
+             "target_column_cn": "删除标识", "target_type": "nvarchar2(1)", "remark": "审计字段"},
             {"transform_rule": "赋值", "transform_detail": "'${P_CYCLE_ID}'", "target_column": "crt_cycle_id",
-             "target_column_cn": "创建批次", "target_type": "BIGINT", "remark": "审计字段"},
+             "target_column_cn": "创建批次", "target_type": "bigint", "remark": "审计字段"},
             {"transform_rule": "赋值", "transform_detail": "'${P_CYCLE_ID}'", "target_column": "last_upd_cycle_id",
-             "target_column_cn": "更新批次", "target_type": "BIGINT", "remark": "审计字段"},
+             "target_column_cn": "更新批次", "target_type": "bigint", "remark": "审计字段"},
             {"transform_rule": "赋值", "transform_detail": "CURRENT_TIMESTAMP", "target_column": "dw_last_update_date",
-             "target_column_cn": "更新时间", "target_type": "TIMESTAMP(0)", "remark": "审计字段"},
+             "target_column_cn": "更新时间", "target_type": "timestamp(0) without time zone", "remark": "审计字段"},
         ]
         fields = fields + audit
 

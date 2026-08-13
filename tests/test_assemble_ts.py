@@ -892,6 +892,36 @@ class TestLayer4Engineering:
         n21 = [i["msg"] for i in vr.items if i["code"] == "N21"]
         assert n21 and "不在该表字段中" in n21[0] and "不带 schema 前缀" in n21[0]
 
+    def test_audit_type_forced_to_standard(self):
+        """mapping 审计字段类型偏离标准（如 numeric）→ ts 强制标准类型 + N_AUDIT_TYPE warn。"""
+        from conftest import make_rs_input
+        fields = [
+            {"source_table": "ods_test_f", "source_column": "id", "source_type": "bigint",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "id", "target_column_cn": "ID", "target_type": "bigint",
+             "source_alias": "t", "remark": "主键"},
+            {"transform_rule": "赋值", "transform_detail": "'N'", "target_column": "del_flag",
+             "target_column_cn": "删除标识", "target_type": "nvarchar2(1)", "remark": "审计字段"},
+            {"transform_rule": "赋值", "transform_detail": "'${P_CYCLE_ID}'", "target_column": "crt_cycle_id",
+             "target_column_cn": "创建批次", "target_type": "numeric", "remark": "审计字段"},  # ★ 偏离标准
+            {"transform_rule": "赋值", "transform_detail": "'${P_CYCLE_ID}'", "target_column": "last_upd_cycle_id",
+             "target_column_cn": "更新批次", "target_type": "bigint", "remark": "审计字段"},
+            {"transform_rule": "赋值", "transform_detail": "CURRENT_TIMESTAMP", "target_column": "dw_last_update_date",
+             "target_column_cn": "更新时间", "target_type": "timestamp(0) without time zone", "remark": "审计字段"},
+        ]
+        rs = make_rs_input(has_audit=False, fields=fields)
+        dd = make_design_decisions()
+        # 校验 warn（覆盖透明）
+        vr = _run(dd, rs)
+        assert "N_AUDIT_TYPE" in _codes(vr, "LC")
+        # 组装强制标准类型（numeric → bigint）
+        ts, _, _ = do_assemble(rs, dd)
+        all_fields = []
+        for tbl in ts.get("tables", {}).values():
+            all_fields.extend(tbl.get("fields", []))
+        crt = next(f for f in all_fields if f.get("target_field") == "crt_cycle_id")
+        assert crt["field_type"] == "bigint"
+
 
 class TestQuartzCron:
     """Quartz cron 校验函数单测。"""
