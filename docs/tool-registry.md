@@ -19,9 +19,14 @@
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本）+ rs_input_view.json（compact，给 designer） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
-| `precheck.py` | 输入完整性 + **连库类型检查**（pg_catalog 批量查，72h schema 缓存）+ 类型风险决策骨架 | 步骤 1 | rs_input.json → precheck_report.md / `_internal/schema_cache.json` / `_internal/type_risk_decision.yaml` | 不读 ts |
+| `precheck.py` | 输入完整性 + **连库类型检查**（pg_catalog 批量查，24h schema 缓存）+ 类型风险决策骨架 | 步骤 1 | rs_input.json → precheck_report.md / `_internal/schema_cache.json` / `_internal/type_risk_decision.yaml` | 不读 ts |
 | `fill_type_risk_decision.py` | 把人的类型风险决策填进 precheck 的骨架（免手写嵌套 YAML） | 步骤 1 | 决策参数 → 改 type_risk_decision.yaml | 不读 ts |
 | `gate_summary.py` | 闸口①设计摘要（表/规则数/场景/字段统计，确定性） | 闸口① | ts.json → 摘要 | ts.rules / ts.tables / ts.meta |
+
+### 执行计划（编码前，住 design-dev-shared）
+| 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
+|------|------|--------------|------------|-------------------|
+| `dispatch_plan.py` | 读 ts.json 输出编码段执行计划（ddl/dq/etl_rules/init_rules/groups），pipe 一次拿全并行发起，不手工解析判断 | 步骤 4-0 | ts.json → 执行计划 JSON（stdout） | **ts.rules + ts.init.rules** + ts.dq_rules + ts.data_flow |
 
 ### 制品生成（编码阶段后端，住 dws-coding）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
@@ -49,6 +54,7 @@
 |------|------|--------|------------|-------------------|
 | `assemble_ts.py` | rs_input + design_decisions → ts.json + ts.md；跑 ~40 条校验（五层+LI） | designer 写完 decisions 后组装 | rs_input.json + design_decisions.yaml → ts.json / ts.md | 读 decisions.rules **+ decisions.init**（Chunk 1 已接通 init 段） |
 | `explore.py` | JOIN 键唯一性探查（count vs count distinct，只读单表，不 JOIN） | designer 第4层关联安全 | ts.json + 表/键 → 结论 | ts.rules / ts.tables |
+| `schema_query.py`（住 design-dev-shared，**designer/coder 公共**） | 查 schema_cache 字段存在性（--column 单查/列全表；只读缓存不连库，与 explore 连库互补） | designer 写 design_logic 引用 mapping 外字段前（设计时验证一次，coder 信任 design_logic；coder 不确定时兜底直调） | ts.json + schema.table → 存在性/字段清单 | 不读 ts（读 `_internal/schema_cache.json`） |
 
 ---
 
@@ -57,7 +63,7 @@
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
 | `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸） | coder 每规则起手 | ts.json + rule_code → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter） |
-| `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **ts.rules + ts.init.rules**（随 slice_ts 接通 init） |
+| `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule；`--table-fields` 的查缓存能力来自 shared/schema_query 库 | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **ts.rules + ts.init.rules**（随 slice_ts 接通 init） |
 | `check_sql.py` | coder 的 SELECT vs ts 切片静态对比（字段覆盖/FROM 表/括号引号/无 SELECT *） | coder 写完自检 | SELECT.sql + ts.json + rule_code → PASS/FAIL | **仅 ts.rules**（Chunk 2） |
 
 ---
