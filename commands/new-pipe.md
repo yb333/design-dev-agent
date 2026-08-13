@@ -36,9 +36,9 @@ agent: build
         ├── rs_input.json                 ← 预处理产出（完整，给脚本读）
         ├── rs_input_view.json            ← 预处理产出（compact 紧凑视图，给 designer 读，省70%）
         ├── design_decisions.yaml         ← 设计决策
-        ├── ut_precheck_result.json       ← UT 预检结果（步骤6a 产，6b 读）
+        ├── ut_precheck_result.json       ← UT 预检结果（步骤5a 产，5b 读）
         ├── ut_report.txt                 ← UT 执行报告（如有数据库）
-        └── diagnose/                     ← 数据质量诊断的临时产物（步骤7b 产）
+        └── diagnose/                     ← 数据质量诊断的临时产物（步骤6b 产）
 ```
 
 > 下文用 `{deliver}` 代指 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev`。
@@ -109,45 +109,23 @@ python DESIGN_SCRIPTS/precheck.py \
 
 ### 类型风险决策流程（stdout 含 TYPE_RISK_PENDING 时）
 
-precheck 检测到"直接复制"字段有源→目标类型转换风险时，会阻断并输出 `TYPE_RISK_PENDING {JSON}` 摘要行。
-解析这行 JSON 拿到风险清单后，**用 question 问用户决策**（不要让用户去手填 YAML）：
+precheck 检测到"直接复制"字段有源→目标类型转换风险时阻断，输出 `TYPE_RISK_PENDING {JSON}` 摘要行（含 batch 常规风险字段 + individual 跨大类风险字段 + decision_file 路径）。
 
-1. **解析 TYPE_RISK_PENDING**：从 precheck 的 stdout 抓 `TYPE_RISK_PENDING` 开头那行，解析后面的 JSON。结构：
-   ```
-   {batch: [常规风险字段], individual: [跨大类风险字段], decision_file: ".../type_risk_decision.yaml"}
-   ```
+**用 question 收集决策**（不让用户手填 YAML），两类分别问：
+- **batch（常规风险：长度超长/精度收窄）**：是否批量加安全处理？选项 `加安全处理`（程序截取/转换保不出错）/ `不加`（接受风险，数据问题以报错暴露）。
+- **individual（跨大类不兼容，逐字段问）**：怎么处理？选项 `转换`（加 TO_DATE/TO_CHAR/CAST）/ `不加`（接受风险）/ `返源端`（源端改类型更合适，追问原因）。
 
-2. **批量决策**（如果有 batch 风险字段）——用 question 问用户：
-   ```
-   question("检测到 {len(batch)} 个常规类型风险（长度超长/精度收窄），是否批量加安全处理？",
-            options=["加安全处理", "不加"])
-   ```
-   - 加安全处理 = 程序里对超长截取、精度收窄做转换，保证不出错
-   - 不加 = 接受风险，数据问题以报错暴露
+**调脚本填值**（不手写 yaml，避免中文 key/枚举值写错）：
 
-3. **逐个决策**（对每个 individual 跨大类风险字段）——用 question 问用户：
-   ```
-   question("字段 {target_column}（{source_type}→{target_type}，跨大类不兼容），怎么处理？",
-            options=["转换", "不加", "返源端"])
-   ```
-   - 转换 = 加转换函数（TO_DATE/TO_CHAR/CAST 等）
-   - 不加 = 接受风险
-   - 返源端 = 源端改类型更合适（选这个追问原因，用 question 收集 reason）
+```bash
+python DESIGN_SCRIPTS/fill_type_risk_decision.py \
+  --decision {deliver}/_internal/type_risk_decision.yaml \
+  --batch-strategy "加安全处理" \
+  --field-decisions 'biz_date:转换,amount_str:返源端' \
+  --reasons 'amount_str:源端建议改decimal类型'
+```
 
-4. **填决策文件**（★ 不要手写 yaml，调脚本填值，避免中文 key/枚举值写错）：
-   ```bash
-   python DESIGN_SCRIPTS/fill_type_risk_decision.py \
-     --decision {deliver}/_internal/type_risk_decision.yaml \
-     --batch-strategy "加安全处理" \
-     --field-decisions 'biz_date:转换,amount_str:返源端' \
-     --reasons 'amount_str:源端建议改decimal类型'
-   ```
-   - `--batch-strategy`：`加安全处理` 或 `不加`（无 batch 风险字段时省略）
-   - `--field-decisions`：`字段:处置` 逗号分隔（处置：`转换`/`不加`/`返源端`）
-   - `--reasons`：选 `返源端` 的字段必填原因（`字段:原因`）
-   - 脚本校验枚举值和字段名，错了当场报（exit 1），不会把错误写进文件
-
-5. **重跑步骤 1b**：这次 precheck 读到决策文件已填全 → 放行（exit 0）→ 继续。
+参数细节见 `fill_type_risk_decision.py --help`（脚本校验枚举值和字段名，错了 exit 1）。填完**重跑步骤 1b** → 放行继续。
 
 ---
 
@@ -191,25 +169,25 @@ python DESIGN_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
 
 # ════════ 编码段 ════════
 
-## 步骤 4：生成 DDL
+## 步骤 4：编码（闸口①后并行发起）
 
-调脚本从 ts.json 自动生成 DDL：
+闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。
+
+> 并行编排是本步核心：DDL/规则 coder/DQ 各自只依赖 ts.json（闸口①前已就绪），互不读对方产出，可同时发起。coder 按规则组编排，init 因依赖增量 SQL 需等。
+
+### 4a：生成 DDL（脚本）
 
 ```bash
 python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}
 ```
 
-> **I 视图自动推导**：mapping 目标表写 `_i` 后缀（如 `dwb_xxx_i`），
-> 脚本自动推导出 F 表（`dwb_xxx_f`）并先建 F 表、再建 I 视图。
-> 不需要 designer/coder 单独处理 F 表，`_i` 就是完整目标。
+> **I 视图自动推导**：mapping 目标表写 `_i` 后缀（如 `dwb_xxx_i`），脚本自动推导 F 表并先建 F 表再建 I 视图。
 
----
+### 4b：规则 coder（按 schedule_groups 组内并行）
 
-## 步骤 5：逐规则调 coder 产 SELECT + DQ
+读 ts.json 的 `rules` 和 `data_flow.schedule_groups`。**按组编排：组内规则的 coder 在同一消息并行发起（一个消息多个 Task），组间串行（上一组完成再发下一组）**。
 
-读 ts.json 的 rules，按 `data_flow.schedule_groups` 顺序逐规则调 coder。
-
-**对每个规则**（ETL 编码）：
+**对每个规则**：
 ```
 Task(
   subagent_type="dws-coder",
@@ -218,17 +196,15 @@ Task(
 )
 ```
 
-**记住每个 coder 调用返回的 task_id**（规则→会话映射，执行回路要用）。
+**记住每个 coder 的 task_id**（规则→会话映射，步骤 6 执行回路要用）。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
-coder 完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
+> coder 内部：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。静态对比不过记为失败规则，不阻塞同组其他规则。
+> 组内并行安全：每个 coder 写自己的 `{rule_code}.sql`（文件名不冲突），切片独立互不读对方产出。
 
-> coder 内部会：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。
-> 如果 coder 报"静态对比不过"，记录失败规则，继续后面的规则（不阻塞）。
+### 4c：DQ coder（条件化，与 4a/4b 并行）
 
-**DQ 生成**（条件化：DQ 完全跟随 RS）：
-
-先读 `{deliver}/ts.json` 的 `dq_rules`：
-- **`dq_rules` 非空**（RS 有 DQ 需求，designer 已翻译）→ 调 coder 产 DQ（ETL 编码和 DQ 互不依赖，可并行）：
+读 `{deliver}/ts.json` 的 `dq_rules`：
+- **非空**（RS 有 DQ 需求，designer 已翻译）→ 调 coder 产 DQ（与 4a/4b 同消息并行）：
 
 ```
 Task(
@@ -240,14 +216,13 @@ Task(
 )
 ```
 
-- **`dq_rules` 为空**（RS 无 DQ 需求）→ **跳过 DQ 步骤**：不调 coder，`dq/` 目录不建。无"标准三项系统兜底"（主键/审计/记录数不再无条件产）。
+- **为空**（RS 无 DQ 需求）→ **跳过**：不调 coder，`dq/` 目录不建。无"标准三项系统兜底"。
 
-> DQ 不再由脚本生成（assemble_dq.py 已废弃仅供 eval 复现），全部由 coder 按 designer 翻译的 dq_rules 产出。DQ 产出与否完全跟随 RS。
+> DQ 只依赖 dq_rules（不依赖 DDL/coder 的 SELECT），故可与 4a/4b 并行。DQ 执行（UT 阶段）才依赖目标表存在。assemble_dq.py 已废弃，DQ 全部由 coder 按 dq_rules 产出。
 
-**init 编码**（条件化：仅增量资产有 init 段时）：
+### 4d：init coder（等 4b 增量规则完成，条件化）
 
-读 `{deliver}/ts.json` 的 `init`：
-- **`init.rules` 非空**（derive 或 explicit）→ **等步骤 5 全部增量规则编码完成后**，逐 init 规则调 coder：
+仅当 ts.json 有 `init` 段且 `init.rules` 非空：**4b 所有增量规则 .sql 落盘后**，逐 init 规则调 coder：
 
 ```
 Task(
@@ -260,11 +235,13 @@ Task(
 - **无 init 段**（非增量资产）→ 跳过。
 
 > init 规则在 `ts.init.rules`（与 `ts.rules` 平行）。coder 的 slice_ts 会从 init 段找到 `INIT_` 规则。
-> ★ **硬约束：步骤 5 必须全部完成**（增量 .sql 落盘）才能跑 init 编码——derive 模式 init SQL = 增量 SQL 改 filter，源 .sql 得先在。
+> ★ **硬约束：4d 必须等 4b 增量规则完成**——derive 模式 init SQL = 增量 SQL 改 filter，源 .sql 得先在。4d 不等 4a/4c（init 不依赖 DDL/DQ）。
+
+**4a/4b/4c/4d 全部完成 → 步骤 5 UT。**
 
 ---
 
-## 步骤 6：执行验证（UT，需要数据库）
+## 步骤 5：执行验证（UT，需要数据库）
 
 **不要自己判断有没有数据源**——调脚本检查：
 
@@ -275,7 +252,7 @@ python CODING_SCRIPTS/check_db.py --ts {deliver}/ts.json
 - 如果输出 `DB_OK` → 有数据源，继续跑 UT
 - 如果输出 `NO_DB_SOURCE` → 无数据源，跳过 UT，直接到闸口②（告知用户"UT 未执行，需配置 db-sources.json"）
 
-### 步骤 6a：UT 预检（快，秒级）
+### 步骤 5a：UT 预检（快，秒级）
 
 回退 + DDL + SELECT 预检。不写数据，只验证建表和查询能跑通。
 
@@ -287,9 +264,9 @@ python CODING_SCRIPTS/ut_precheck.py \
   --result {deliver}/_internal/ut_precheck_result.json
 ```
 
-**读预检结果**：全通过 → 继续 6b；有失败 → 走步骤7 分流（SQL 问题回 coder / 环境问题报告人）。
+**读预检结果**：全通过 → 继续 5b；有失败 → 走步骤6 分流（SQL 问题回 coder / 环境问题报告人）。
 
-### 步骤 6b：UT 执行（慢，分钟级）
+### 步骤 5b：UT 执行（慢，分钟级）
 
 按 load_mode 预处理 + INSERT 灌数据 + UT 检查 + 出报告。
 
@@ -302,28 +279,28 @@ python CODING_SCRIPTS/ut_execute.py \
   --report {deliver}/ut_report.md
 ```
 
-> ⚠️ `--precheck-result` 路径与 6a 的 `--result` 一致（都在 `_internal/` 下）。读不到直接退出（避免预检未通过误灌数据）。
+> ⚠️ `--precheck-result` 路径与 5a 的 `--result` 一致（都在 `_internal/` 下）。读不到直接退出（避免预检未通过误灌数据）。
 > **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms。数据库端 statement_timeout（默认600秒）会自动 cancel 超时查询，不留僵尸进程。
-> ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**——符合现实部署顺序（首次全量 → 日常增量）。无需分开调，脚本内部有序两阶段。init 挂了基线就废，后续增量自动跳过。
+> ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**——符合现实部署顺序。无需分开调，脚本内部有序两阶段。init 挂了基线就废，后续增量自动跳过。
 
 ---
 
-## 步骤 7：执行回路（如有失败）
+## 步骤 6：执行回路（如有失败）
 
 读 UT 报告，**按失败项类型分流**：
 
 > ⚠️ 数据质量类失败（主键重复/空值/行数异常）一律**不回 coder**——coder 会用 ROW_NUMBER 去"消除症状"掩盖根因（关联发散）。这类根因在设计层，退回 designer。
 
-**7a. SQL 问题 → coder**（INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST，或预检 FAIL）。
-恢复该规则 coder 旧会话（task_id 在步骤5记的映射里）：
+**6a. SQL 问题 → coder**（INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST，或预检 FAIL）。
+恢复该规则 coder 旧会话（task_id 在步骤4b 记的映射里）：
 ```
 Task(subagent_type="dws-coder", task_id="{该规则 task_id}",
      description="修复 {rule_code} SQL 报错",
      prompt="{rule_code} 执行报错：{报错信息}。请修正 SELECT。")
 ```
-改完重跑步骤6。**每规则限 3 轮**。
+改完重跑步骤5。**每规则限 3 轮**。
 
-**7b. 数据质量问题 → 人确认根因 → （要改设计才回 designer）→ coder**。
+**6b. 数据质量问题 → 人确认根因 → （要改设计才回 designer）→ coder**。
 INSERT 成功但 UT 检查 FAIL（主键重复/空值/行数异常，报告带样例数据）。
 
 > ★ **不回退 designer 诊断给方案**。designer 基于自己的设计立场会给偏向性结论（如"改 join_safety 加 GROUP BY / 改 business_key"），这俩方案往往站不住脚——前者掩盖 JOIN 发散丢数据，后者是凑假主键。根因判断（设计问题 / 环境数据脏 / 业务一对多）需要业务认知，是人的领域。
@@ -341,8 +318,8 @@ question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，�
 > 人看重复样例往往一眼就能判断根因（比 designer 猜快得多）。开发环境数据量/质量与生产不一致，不能仅凭 UT 结果下结论。
 
 ② **按人定的根因分流**：
-- **源表数据问题** → 不改设计，闸口②报告给人（环境问题归 7c）
-- **coder 实现不符** → 恢复 coder 旧会话，指出 SELECT 哪里没按 join_safety 写，改完重跑步骤6
+- **源表数据问题** → 不改设计，闸口②报告给人（环境问题归 6c）
+- **coder 实现不符** → 恢复 coder 旧会话，指出 SELECT 哪里没按 join_safety 写，改完重跑步骤5
 - **关联设计问题 / 业务粒度问题** → 人定具体怎么改（如"JOIN dim_xxx 要加 is_current=1 限定""business_key 补 line_no"），**这时才回 designer 执行修改**：
   ```
   Task(subagent_type="dws-designer", task_id="{designer 的 task_id}",
@@ -352,17 +329,17 @@ question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，�
   ```
   designer 改完后**必须回闸口①**（question 展示改了什么 + 人当初定的方案，确认一致）——**不能跳过直接让 coder 改**。
 
-③ 闸口①确认后，恢复该规则 coder 旧会话按新设计改 SELECT，改完重跑步骤6。每规则限 3 轮。
+③ 闸口①确认后，恢复该规则 coder 旧会话按新设计改 SELECT，改完重跑步骤5。每规则限 3 轮。
 
 > designer/coder 产出的临时分析脚本统一放 `{deliver}/_internal/diagnose/`。
 
-**7c. 环境问题 → 人**（连接/权限/源表不存在/超时）。闸口②报告给人，不回调 agent。
+**6c. 环境问题 → 人**（连接/权限/源表不存在/超时）。闸口②报告给人，不回调 agent。
 
 ---
 
-## 步骤 7.5：生成平台制品包（UT 通过后必跑）
+## 步骤 7：生成平台制品包（UT 通过后必跑）
 
-> **前提**：步骤6的 UT 全部通过（SQL 验证稳定后才生成制品包，避免反复改）。
+> **前提**：步骤5的 UT 全部通过（SQL 验证稳定后才生成制品包，避免反复改）。
 > UT 未执行（无数据库）时，闸口②人工确认通过后再生成。
 
 调 assemble_export.py 生成平台消费的 Excel：
@@ -400,5 +377,6 @@ python CODING_SCRIPTS/assemble_export.py \
 # 硬性规则
 
 - 闸口①确认后**自动进编码段**（设计→编码是一连贯流程，中间不交接）
-- 记住每个 coder 的 task_id（步骤7 执行回路靠 task_id 恢复会话，不新开）
+- **步骤4 编码段并行发起**：4a/4b/4c 同消息并行（互不依赖），4d 等 4b 增量规则完成
+- 记住每个 coder 的 task_id（步骤6 执行回路靠 task_id 恢复会话，不新开）
 - **未经用户确认不结束流程**；全程中文
