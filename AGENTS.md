@@ -158,6 +158,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 ## 编码约定
 
 - **改工具同步注册表**：加/改/删任何脚本（skills/*/scripts 下的 .py），必须同步更新 `docs/tool-registry.md`（含"读 ts[rules/init]"列——init 下游物化的进度表）。agent 行为/工作流改动同步各自 SKILL.md（唯一源），agent.md 只管角色+权限+指针，不复述工作流（防双写漂移）。
+- **★ 工具是服务，不是枷锁**：agent 的辅助工具（explore / schema_query / pick_fields 等）是"遇到不确定时拿来用"的服务——SKILL 引导一律写"不确定 X 时可调 Y 确认"，**不写成"做 X 前必须先 Y"的强制前置步骤**（枷锁式引导会让 agent 每次机械跑一遍工具，丢掉自己的判断）。区分两类：command 调的管线脚本（preprocess / assemble_ts / ut_* 等）是**流程节点**，按步骤必跑；agent 内的辅助工具是**按需服务**，agent 自己判断要不要用。
 - **禁止 glob 通配匹配文件**（CLAUDE.md 红线）：文件名由生成脚本命名规则确定，查找用确定的文件名拼接（如 `f"create_table_{table}.sql"`）。命名约定变了就改查找代码，不靠通配兜底。
 - **测试不连库**：用 Python dict/fake executor 构造数据，`tests/conftest.py` 把三个 scripts 目录加进 sys.path。数据工厂：`make_rs_input`/`make_design_decisions`/`make_ts_json`（基础）+ `make_incremental_rs_input`/`make_incremental_decisions`/`make_accumulate_decisions`（增量/累积共建场景）。`make_design_decisions` 默认产出能通过全部新校验的合法 decisions，测试通过传参注入坏值。
 - **Python snake_case**，提交规范 `feat/fix/refactor/docs: 描述`。
