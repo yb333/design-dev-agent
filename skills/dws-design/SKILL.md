@@ -145,6 +145,7 @@ description: >-
 
 - **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic（自然语言口径，不含 SQL）
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"
+- **★ 类型转换字段是加工字段**：precheck 类型风险决策通过后，会回写 rs_input 把转换字段改"数据加工"（transform_detail 标注如"类型转换：varchar→date"）。读到这类字段照常写 field_logic（转换口径），coder 翻译成 CAST/TO_DATE。**改 ETL 不改 DDL（目标类型不变）**
 - 加工字段没写 design_logic 会被硬校验拦住（不允许占位继续跑）
 
 ### 产出 + 组装

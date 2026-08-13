@@ -224,6 +224,9 @@ _TYPE_NORMALIZE = [
     (re.compile(r"^number\((\d+),\s*(\d+)\)$", re.I), r"numeric(\1,\2)"),  # number(10,2) → numeric(10,2)
     (re.compile(r"^number\((\d+)\)$", re.I), r"numeric(\1)"),
     (re.compile(r"^datetime$", re.I), "timestamp"),
+    (re.compile(r"^nvarchar2?\((\d+)\)$", re.I), r"varchar(\1)"),   # nvarchar(N)/nvarchar2(N) → varchar(N)
+    (re.compile(r"^varchar2\((\d+)\)$", re.I), r"varchar(\1)"),     # Oracle varchar2 → varchar
+    (re.compile(r"^tinyint$", re.I), "smallint"),
     # varchar(N) / numeric(N,M) / decimal / char(N) / text / date 等保留
 ]
 

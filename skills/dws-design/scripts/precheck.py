@@ -64,6 +64,7 @@ def precheck(
     cache_path: Path | None = None,
     refresh_schema: bool = False,
     decision_path: Path | None = None,
+    rs_input_path: Path | None = None,
 ) -> PrecheckResult:
     """预检 rs_input.json 完整性。
 
@@ -72,6 +73,8 @@ def precheck(
         cache_path: 表结构缓存路径（schema_cache.json），None 则不缓存。
         refresh_schema: 强制连库刷新缓存（忽略过期判断）。
         decision_path: 类型风险决策文件路径（type_risk_decision.yaml），None 则不做类型风险检测。
+        rs_input_path: rs_input.json 文件路径。决策通过后回写它（转换字段改"数据加工"，
+            让类型决策流进主链路 designer→coder），并同步 rs_input_view.json。None 则只校验不回写。
     """
     result = PrecheckResult()
 
@@ -283,7 +286,7 @@ def precheck(
     # 10. 类型转换风险检测（仅"直接复制"字段，DB 校验之后）
     # ★ 短路：有 error 就不检测类型风险（先解决前面的错）
     if not result.errors and decision_path is not None:
-        _check_type_risk(rs_input, result, decision_path)
+        _check_type_risk(rs_input, result, decision_path, rs_input_path)
 
     return result
 
@@ -349,7 +352,7 @@ def _generate_type_risk_skeleton(decision_path: Path, batch: list, individual: l
             "# === 批量决策（常规风险：长度超长/精度收窄，性质一致，批量定一个策略）===",
             "# 这些字段风险相同，填一个处置策略即可全部适用。",
             '批量处置策略: ""    # ★ 填：加安全处理 | 不加',
-            "                  # 加安全处理 = 程序里对超长截取、精度收窄做转换，保证不出错",
+            "                  # 加安全处理 = ETL SELECT 里对超长截取、精度收窄做转换（改 ETL，DDL 目标类型不变）",
             "                  # 不加 = 接受风险，数据问题以报错暴露（人签字接受）",
             "常规风险字段:",
         ]
@@ -373,6 +376,7 @@ def _generate_type_risk_skeleton(decision_path: Path, batch: list, individual: l
             lines.append(f'    目标类型: "{item["target_type"]}"')
             lines.append(f'    风险: "{item["risk_cn"]}"')
             lines.append('    处置: ""          # ★ 填：转换 | 不加 | 返源端')
+            lines.append('                      # 转换 = ETL SELECT 加转换函数 CAST/TO_DATE（改 ETL，DDL 目标类型不变）')
             lines.append('    原因: ""          # 选"返源端"时必填')
         lines.append("")
     else:
@@ -458,20 +462,85 @@ def _validate_type_risk_decision(
     return ok
 
 
-def _check_type_risk(rs_input: dict, result: PrecheckResult, decision_path: Path):
-    """检测直接复制字段的类型风险，阻断式交互（生成骨架→人/agent填→重跑放行）。"""
+def _apply_type_decision(rs_input: dict, decision_path: Path) -> int:
+    """按类型决策把转换字段改"数据加工"（嵌入主链路）。
+
+    类型决策原本只在 precheck 放行（外挂），designer/coder 看不到——字段仍是"直接复制"，
+    coder 按直取写 SELECT 漏转换。回写后这些字段走正常加工流程：
+    designer 读到加工字段写 field_logic → ts.json → coder 按 logic 加 CAST/TO_DATE。
+
+    注意：所有处置都是改 ETL（SELECT 加转换），DDL 目标类型一律不变。
+    返回改写字段数。只处理"直接复制"字段（风险只检它们），已加工的跳过（幂等）。
+    """
+    import yaml
+    try:
+        dec = yaml.safe_load(decision_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if not isinstance(dec, dict):
+        return 0
+
+    batch_on = (dec.get("批量处置策略") or "").strip() == "加安全处理"
+    batch_cols = {item.get("目标字段", "") for item in (dec.get("常规风险字段") or []) if isinstance(item, dict)}
+    ind_action = {
+        item.get("目标字段", ""): (item.get("处置") or "").strip()
+        for item in (dec.get("跨大类风险字段") or []) if isinstance(item, dict)
+    }
+
+    changed = 0
+    for fm in rs_input.get("field_mappings", []):
+        col = fm.get("target_column", "")
+        if (fm.get("transform_rule") or "").strip() != "直接复制":
+            continue
+        st, tt = fm.get("source_type", ""), fm.get("target_type", "")
+        if col in batch_cols and batch_on:
+            fm["transform_rule"] = "数据加工"
+            fm["transform_detail"] = f"类型安全处理：{st}→{tt}（长度截取/精度舍入；改 ETL 不改 DDL）"
+            changed += 1
+        elif ind_action.get(col) == "转换":
+            fm["transform_rule"] = "数据加工"
+            fm["transform_detail"] = f"类型转换：{st}→{tt}（跨大类；改 ETL 不改 DDL）"
+            changed += 1
+    return changed
+
+
+def _sync_compact_view(rs_input: dict, rs_input_path: Path):
+    """回写 rs_input 后同步 compact 视图（designer 读 rs_input_view.json，保持一致）。"""
+    try:
+        import json
+        from preprocess import build_compact
+        view_path = rs_input_path.parent / "rs_input_view.json"
+        view_path.write_text(
+            json.dumps(build_compact(rs_input), ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # view 同步失败不阻断（designer 还可读完整 rs_input）
+
+
+def _check_type_risk(rs_input: dict, result: PrecheckResult, decision_path: Path,
+                     rs_input_path: Path | None = None):
+    """检测直接复制字段的类型风险，阻断式交互（生成骨架→人/agent填→重跑放行+回写）。"""
     import json
 
     batch, individual = _detect_type_risks(rs_input)
 
-    # 无风险 → 不生成文件、不阻断
+    # 无风险 → 不生成文件、不阻断（含回写后重跑：转换字段已是"数据加工"，不再检测 → 天然幂等）
     if not batch and not individual:
         return
 
     # 有风险 → 看决策文件是否已填全
     if decision_path.exists():
         if _validate_type_risk_decision(decision_path, batch, individual, result):
-            return  # 决策已填全，放行
+            # 决策已填全，放行 + ★回写 rs_input（转换字段改"数据加工"，决策流进主链路）
+            if rs_input_path is not None:
+                changed = _apply_type_decision(rs_input, decision_path)
+                if changed:
+                    rs_input_path.write_text(
+                        json.dumps(rs_input, ensure_ascii=False, indent=2), encoding="utf-8")
+                    _sync_compact_view(rs_input, rs_input_path)
+                    result.add_pass(
+                        f"类型决策已回写 rs_input：{changed} 个字段改'数据加工'"
+                        "（designer 写转换 field_logic，coder 加 CAST——改 ETL 不改 DDL）")
+            return
         # 决策没填全或不一致 → 重新生成骨架（覆盖），下面阻断
         result.add_error("类型风险决策文件未填全或字段不一致，已重新生成骨架，请填后重跑")
     else:
@@ -896,7 +965,7 @@ def main():
             # 检测是否有风险，有则启用（生成在默认路径）
             decision_path = default_decision
 
-    result = precheck(rs_input, cache_path, args.refresh_schema, decision_path)
+    result = precheck(rs_input, cache_path, args.refresh_schema, decision_path, input_path)
     print(result.summary())
     sys.exit(result.return_code)
 

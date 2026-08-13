@@ -165,6 +165,18 @@ class TestNormalizeType:
         from assemble_ddl import normalize_type
         assert normalize_type("") == ""
 
+    def test_nvarchar_to_varchar(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("nvarchar(50)") == "varchar(50)"
+
+    def test_varchar2_to_varchar(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("varchar2(100)") == "varchar(100)"
+
+    def test_tinyint_to_smallint(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("tinyint") == "smallint"
+
 
 class TestGenerateRollback:
     def test_table_rollback(self):

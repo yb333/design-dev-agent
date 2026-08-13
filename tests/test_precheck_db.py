@@ -1204,3 +1204,81 @@ class TestNormalizeType:
         """其他常见别名归一。"""
         assert self._n("bool") == self._n("boolean") == "boolean"
         assert self._n("string") == self._n("text") == "text"
+
+
+# ============================================================
+# 类型决策回写 rs_input（precheck._apply_type_decision）
+# ============================================================
+
+class TestApplyTypeDecision:
+    """决策通过后回写 rs_input：转换/加安全处理字段改"数据加工"（嵌入主链路）。"""
+
+    @staticmethod
+    def _write_decision(tmp_path, batch_strategy="", batch_cols=(), ind_actions=None):
+        import yaml
+        dec = {
+            "批量处置策略": batch_strategy,
+            "常规风险字段": [
+                {"目标字段": c, "源类型": "varchar(200)", "目标类型": "varchar(50)", "风险": "长度超长"}
+                for c in batch_cols
+            ],
+            "跨大类风险字段": [
+                {"目标字段": c, "源类型": "varchar(20)", "目标类型": "date", "风险": "跨大类", "处置": a, "原因": ""}
+                for c, a in (ind_actions or {}).items()
+            ],
+        }
+        p = tmp_path / "type_risk_decision.yaml"
+        p.write_text(yaml.dump(dec, allow_unicode=True), encoding="utf-8")
+        return p
+
+    @staticmethod
+    def _fm(rs, col):
+        return next(f for f in rs["field_mappings"] if f["target_column"] == col)
+
+    def test_batch_safe_processing_rewrites(self, tmp_path):
+        """批量'加安全处理' → 字段改数据加工 + 标注安全处理。"""
+        from precheck import _apply_type_decision
+        from conftest import make_type_risk_rs_input
+        rs = make_type_risk_rs_input([{"target_column": "remark", "source_type": "varchar(200)", "target_type": "varchar(50)"}])
+        dp = self._write_decision(tmp_path, batch_strategy="加安全处理", batch_cols=("remark",))
+        assert _apply_type_decision(rs, dp) == 1
+        fm = self._fm(rs, "remark")
+        assert fm["transform_rule"] == "数据加工"
+        assert "类型安全处理" in fm["transform_detail"]
+
+    def test_individual_convert_rewrites(self, tmp_path):
+        """跨大类'转换' → 字段改数据加工 + 标注类型转换。"""
+        from precheck import _apply_type_decision
+        from conftest import make_type_risk_rs_input
+        rs = make_type_risk_rs_input([{"target_column": "biz_date", "source_type": "varchar(20)", "target_type": "date"}])
+        dp = self._write_decision(tmp_path, ind_actions={"biz_date": "转换"})
+        assert _apply_type_decision(rs, dp) == 1
+        fm = self._fm(rs, "biz_date")
+        assert fm["transform_rule"] == "数据加工"
+        assert "类型转换" in fm["transform_detail"]
+        assert "改 ETL 不改 DDL" in fm["transform_detail"]
+
+    def test_no_action_not_rewritten(self, tmp_path):
+        """决策'不加'/未启用批量 → 字段保持直接复制。"""
+        from precheck import _apply_type_decision
+        from conftest import make_type_risk_rs_input
+        rs = make_type_risk_rs_input()
+        dp = self._write_decision(tmp_path, batch_strategy="不加")
+        assert _apply_type_decision(rs, dp) == 0
+        # 全是审计+直取字段，无风险字段命中
+
+    def test_idempotent_already_processed(self, tmp_path):
+        """幂等：已是数据加工的字段不再改（回写后重跑不重复）。"""
+        from precheck import _apply_type_decision
+        from conftest import make_type_risk_rs_input
+        rs = make_type_risk_rs_input([{"target_column": "remark", "source_type": "varchar(200)", "target_type": "varchar(50)"}])
+        dp = self._write_decision(tmp_path, batch_strategy="加安全处理", batch_cols=("remark",))
+        assert _apply_type_decision(rs, dp) == 1
+        assert _apply_type_decision(rs, dp) == 0  # 第二次：已是数据加工，跳过
+
+    def test_missing_decision_file_returns_zero(self, tmp_path):
+        """决策文件不存在 → 0（不抛异常）。"""
+        from precheck import _apply_type_decision
+        from conftest import make_type_risk_rs_input
+        rs = make_type_risk_rs_input()
+        assert _apply_type_decision(rs, tmp_path / "nope.yaml") == 0

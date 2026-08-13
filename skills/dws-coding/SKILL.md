@@ -151,6 +151,12 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 | pivot | "rpt_code='fbt_0001' 对应金额，按合同+pu汇总" | `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)` |
 | aggregate | "对金额求和，排除非洲发票" | `COALESCE(SUM(inv_amt), 0)` + NOT EXISTS 过滤 |
 | assign | "审计字段，固定 'N'" | `'N'` |
+| process（类型转换） | "源 update_time varchar 转 date" | `CAST(t.update_time AS date)` / `TO_DATE(t.update_time,'YYYYMMDD')` |
+| process（长度/精度） | "长度超长截取到50" / "精度收窄到2位" | `LEFT(t.col, 50)` / `ROUND(t.col, 2)` |
+
+> **类型转换字段**（precheck 类型决策回写的"数据加工"字段，design_logic 标"类型转换：X→Y"）：
+> 在 SELECT 里加转换函数（CAST/TO_DATE/LEFT/ROUND），**改 ETL 不改 DDL（目标类型不变）**。
+> 转大类（varchar→date）用 CAST/TO_DATE；长度超长用 LEFT；精度收窄用 ROUND。
 
 **翻译原则**：
 - design_logic 描述"算什么口径"，SQL 实现"怎么算"
