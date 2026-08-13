@@ -146,6 +146,9 @@ description: >-
 - **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic（自然语言口径，不含 SQL）
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"
 - **★ 类型转换字段是加工字段**：precheck 类型风险决策通过后，会回写 rs_input 把转换字段改"数据加工"（transform_detail 标注如"类型转换：varchar→date"）。读到这类字段照常写 field_logic（转换口径），coder 翻译成 CAST/TO_DATE。**改 ETL 不改 DDL（目标类型不变）**
+- **design_logic 引用 mapping 未列的同表字段前，先查存在性**：调 design-dev-shared 的 `schema_query.py`（在本 skill 上三级同目录的 design-dev-shared/scripts/ 下，读 precheck 产的 schema_cache，不连库）：
+  `python .../schema_query.py --ts {deliver}/ts.json --table ods.ods_b --column col2`
+  —— **设计时验证一次，coder 信任 design_logic**。要引用 rs_input 完全未声明的全新表时不要用工具绕，正路是补 mapping（闸口①确认）
 - 加工字段没写 design_logic 会被硬校验拦住（不允许占位继续跑）
 
 ### 产出 + 组装

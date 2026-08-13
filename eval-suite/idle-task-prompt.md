@@ -193,7 +193,8 @@
 4. **install.py**：不用改（scan_skills 按目录整体拷）
 
 **约束**：
-- designer 调的（assemble_ts/explore/fill_type_risk_decision）留 dws-design；coder 调的（slice_ts/check_sql/pick_fields）留 dws-coding
+- designer 调的（assemble_ts/explore/fill_type_risk_decision）留 dws-design；coder 调的（slice_ts/check_sql/**pick_fields——含 coder 专属的 --alias/--field 入口，留 coding 不拆**）留 dws-coding
+- 查缓存字段的公共能力已在 shared/schema_query.py（designer/coder 共用），归位时不要重复建
 - dws_db/config_paths 本来就在 shared，不动
 - 挪完全链路 import 不能断
 

@@ -112,6 +112,13 @@ JOIN chg ON A.id = chg.id
 
 ## 三、中间表的两种产出模式（★ 累积共建）
 
+**先选型（唯一判断轴）：这张表由几条规则写？**
+
+- **1 条**（内部再复杂都算：UNION ALL 多源、规则内 ROW_NUMBER 去重、多 CTE）→ **transform**（默认），load_mode 自由（一般 truncate_table 全量重建），去重是规则内加工口径（design_logic 写清楚），不用 dedup_strategy
+- **多条**（分源/分波写同一张表）→ **accumulate**。选多规则不是复杂度问题，是**节奏问题**（各源上游完成时间不同要各自跑任务、独立增量）——同节奏一次能跑完的，单规则 UNION ALL 永远更简单
+  - load_mode：no_delete 追加；或各写各分区 → truncate_partition 自己的分区（物理隔离互不干扰，dedup 也可免）
+  - 跨规则同键会冲突才配 dedup_strategy（§四）；拼源前缀保唯一 / 分区隔离的，可不配（N27 warn 时说明原因即可）
+
 中间表（target_role=intermediate）有两种产出方式，靠 `tables.{表}.build_mode` 显式声明：
 
 ### 模式一：transform（单一规则一次性产出，默认）

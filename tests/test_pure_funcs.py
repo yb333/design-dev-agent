@@ -356,3 +356,52 @@ class TestDispatchPlan:
         assert plan["dq"] is False
         assert plan["init_rules"] == []
         assert "无 DQ" in plan["summary"]
+
+
+# ============================================================
+# schema_query.query_fields（查缓存字段：designer/coder 公共能力）
+# ============================================================
+
+class TestSchemaQuery:
+    @staticmethod
+    def _make_cache(tmp_path, tables=None):
+        import json as _json
+        internal = tmp_path / "_internal"
+        internal.mkdir(exist_ok=True)
+        cache = {"tables": tables or {}, "cached_at": "2026-08-13T00:00:00"}
+        (internal / "schema_cache.json").write_text(_json.dumps(cache), encoding="utf-8")
+        return tmp_path / "ts.json"  # query_fields 只用 parent 定位 cache
+
+    def test_no_cache_hints(self, tmp_path):
+        """cache 不存在 → [未连库] 提示（不阻断）。"""
+        from schema_query import query_fields
+        out = query_fields(tmp_path / "ts.json", "ods", "ods_b")
+        assert "未连库" in out
+
+    def test_table_not_cached_lists_cached(self, tmp_path):
+        """表不在缓存 → [未缓存] + 已缓存表清单。"""
+        from schema_query import query_fields
+        ts = self._make_cache(tmp_path, {"ods.ods_a": {"id": "bigint"}})
+        out = query_fields(ts, "ods", "ods_b")
+        assert "未缓存" in out and "ods.ods_a" in out
+
+    def test_column_exists(self, tmp_path):
+        """指定字段存在 → ✓ + 类型。"""
+        from schema_query import query_fields
+        ts = self._make_cache(tmp_path, {"ods.ods_b": {"col2": "varchar(50)", "id": "bigint"}})
+        out = query_fields(ts, "ods", "ods_b", "col2")
+        assert "存在" in out and "varchar(50)" in out
+
+    def test_column_missing_lists_fields(self, tmp_path):
+        """指定字段不存在 → ✗ + 全表字段帮对照。"""
+        from schema_query import query_fields
+        ts = self._make_cache(tmp_path, {"ods.ods_b": {"id": "bigint", "amt": "numeric"}})
+        out = query_fields(ts, "ods", "ods_b", "nope")
+        assert "不存在" in out and "amt" in out
+
+    def test_list_all_fields(self, tmp_path):
+        """不指定字段 → 全表字段清单。"""
+        from schema_query import query_fields
+        ts = self._make_cache(tmp_path, {"ods.ods_b": {"id": "bigint"}})
+        out = query_fields(ts, "ods", "ods_b")
+        assert "字段清单" in out and "id" in out

@@ -33,6 +33,10 @@ except ImportError:
         sys.path.insert(0, str(_here))
     from slice_ts import slice_rule
 
+# 查缓存字段的能力下沉在 design-dev-shared（designer/coder 公共），--table-fields 复用
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+from schema_query import query_fields
+
 
 # ============================================================
 # direct 字段行生成
@@ -279,33 +283,8 @@ def query_table_fields(sliced: dict, name: str, ts_path) -> str:
                 + (" ..." if len(hints) > 10 else ""))
 
     schema, table = resolved
-    # 定位 schema_cache.json：ts.json 同级的 _internal/
-    cache_path = Path(ts_path).parent / "_internal" / "schema_cache.json"
-    if not cache_path.exists():
-        return (f"[未连库] schema_cache.json 不存在（{cache_path}）。\n"
-                f"无法确认 {schema}.{table} 的字段存在性，凭 design_logic 写，标注待连库确认。")
-
-    try:
-        cache = __import__("json").loads(cache_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        return f"[错误] schema_cache.json 读取失败: {e}"
-
-    tables_map = cache.get("tables", {})
-    cached_at = cache.get("cached_at", "")
-    # schema_cache 的 key 是 "schema.table" 小写
-    key = f"{schema}.{table}".lower()
-    cols = tables_map.get(key)
-    if not cols:
-        return (f"[未缓存] {schema}.{table} 不在 schema_cache 里（连库时可能没查这张表）。\n"
-                f"缓存的表: {sorted(tables_map.keys())[:10]}")
-
-    # 输出字段清单
-    lines = [f"/* {schema}.{table} 字段清单（来自 schema_cache，连库时间: {cached_at}）*/"]
-    for col, ctype in cols.items():
-        lines.append(f"  {col:30s} {ctype}")
-    lines.append("")
-    lines.append(f"/* 共 {len(cols)} 个字段 */")
-    return "\n".join(lines)
+    # 查缓存的核心能力在 shared/schema_query（designer/coder 公共），这里只做"别名→表"定位
+    return query_fields(ts_path, schema, table)
 
 
 # ============================================================
