@@ -120,6 +120,7 @@ description: >-
 → 增量设计的完整决策（三种模式/load_mode/初始化/累积共建排重）见 `references/incremental-playbook.md`
 
 **产出**：增量规则的 `incremental` 段（key/filter/init_*）；merge 规则的 `load_mode`
+**增量参数**：filter 用标准参数 `${P_START_DATE}` / `${P_END_DATE}`（脚本对增量资产自动注入，designer 不声明，详见 incremental-playbook §七）
 **闭合条件**（assemble_ts 校验）：标了增量但不能完全没增量处理（硬阻断）；extract 的 incremental 填全；每张驱动表的增量字段是否在增量范围里（warn，语义判断由 designer + 闸口①保证）
 
 ### 第4层 工程保障 — 分布键 + 关联安全 + 调度

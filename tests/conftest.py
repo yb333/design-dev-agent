@@ -222,7 +222,7 @@ def make_incremental_decisions(drivers_config):
             "field_targets": ["id"], "field_logics": {},
             "incremental": {
                 "key": dc["key"],
-                "filter": f"{dc['key']} >= '${{BIZ_DATE_START}}' AND {dc['key']} < '${{BIZ_DATE_END}}'",
+                "filter": f"{dc['key']} >= '${{P_START_DATE}}' AND {dc['key']} < '${{P_END_DATE}}'",
                 "init_filter": "1=1", "init_time_range": "ALL",
             },
         })
@@ -278,7 +278,7 @@ def make_explicit_init_decisions():
             "produces_for": ["R0002"], "reads": [],
             "field_targets": ["id"], "field_logics": {},
             "incremental": {"key": "update_time",
-                            "filter": "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'",
+                            "filter": "update_time >= '${P_START_DATE}' AND update_time < '${P_END_DATE}'",
                             "init_filter": "1=1", "init_time_range": "ALL"},
         },
         {
@@ -300,7 +300,7 @@ def make_explicit_init_decisions():
         },
     ]
     dd = make_design_decisions(rules=rules)
-    dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
+    # P_START_DATE/P_END_DATE 是标准参数（incremental 资产自动注入），不必声明
     dd["init"] = {
         "mode": "explicit",
         "group_mode": "inline",

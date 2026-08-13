@@ -275,12 +275,16 @@ class TestBuildGroupVariables:
         var_names = [r[1] for r in rows]
         assert "P_CYCLE_ID" in var_names
 
-    def test_p_cycle_id_default(self, sample_ts):
-        """P_CYCLE_ID 默认值"""
-        rows = build_group_variables(sample_ts)
-        for row in rows:
-            if row[1] == "P_CYCLE_ID":
-                assert row[5] == "19000101000000"
+    def test_default_value_from_ts(self):
+        """参数默认值从 ts.default_value 读：static 给值，dynamic 留空（平台注入）。"""
+        ts = {"meta": {"schedule": {"exec_params": {
+            "P_CYCLE_ID": {"default_value": {"type": "dynamic", "expr": "today_ymdhms"}},
+            "BIZ_CODE": {"default_value": "STATIC1"},
+        }}}}
+        rows = build_group_variables(ts)
+        vals = {row[1]: row[5] for row in rows}
+        assert vals["P_CYCLE_ID"] == ""       # dynamic → 空，平台运行时注入
+        assert vals["BIZ_CODE"] == "STATIC1"  # static 裸串 → 给值
 
     def test_rule_code_empty(self, sample_ts):
         """规则编码留空"""

@@ -20,15 +20,17 @@ type_risk_handling: null
 # decision_file: "_internal/type_risk_decision.yaml"   # 决策文件路径（存在时读它）
 
 # === 参数声明（资产级统一声明）===
-# P_CYCLE_ID(批次号) 由脚本自动注入，无需在此声明。
-# 仅声明业务参数——特定设计场景才需要（如增量起止时间、会计期）。
+# 标准参数（脚本按条件自动注入 + 自带 default_value，不要在此声明）：
+#   P_CYCLE_ID   string  批次号（所有资产）→ 审计字段 crt/last_upd_cycle_id 自动用
+#   P_FLAG       string  init 控制（inline 模式）：1=增量/2=初始化
+#   P_START_DATE date    增量范围起点（增量资产）→ incremental.filter 用
+#   P_END_DATE   date    增量范围终点（增量资产）→ incremental.filter 用
+# 仅声明业务参数（不在标准清单的），default_value 必填（UT 兜底 + export 制品默认值都需要）。
 params: []
-#   - name: "BIZ_DATE"              # 参数名（大写+下划线）
+#   - name: "ACCT_PERIOD"           # 参数名（大写+下划线，不要跟标准参数重名）
 #     value_type: "string"          # string | date | datetime | number
-#     desc: "增量起始业务日期"
-#   - name: "ACCT_PERIOD"
-#     value_type: "string"
 #     desc: "会计期间"
+#     default_value: "202608"       # ★ 必填：UT 兜底 + export 默认值（运行时平台会覆盖）
 
 # === 规则拆分（核心判断）===
 # 一个规则 = 一条 INSERT = 产出一个表（中间表/目标F表/视图I表）
@@ -59,7 +61,7 @@ rules:
     # 增量设计（step_type=incremental_extract 时填，详见 design-guide §5.2）
     # incremental:
     #   key: "update_time"              # 增量识别字段（从 RS 增量表读）
-    #   filter: "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'"  # 增量过滤
+    #   filter: "update_time >= '${P_START_DATE}' AND update_time < '${P_END_DATE}'"  # 增量过滤（标准参数，脚本自动注入）
     #   init_filter: "1=1"              # 初始化过滤（全量用 1=1，或限定范围）
     #   init_time_range: "ALL"          # 初始化时间范围（来自 RS L07）
     #   init_strategy: "首次全量加载，后续按 update_time 增量"  # 初始化策略

@@ -11,8 +11,8 @@ RS L07 的"增量表及增量字段"段给出**驱动表 + 增量字段**。一�
 
 | 识别方式 | 说明 | 示例 |
 |---------|------|------|
-| **水位线（时间戳）** | 源表有 update_time，按时间范围过滤 | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` |
-| **分区字段** | 源表有日期分区，按分区读取 | `dt >= '${BIZ_DATE_START}' AND dt < '${BIZ_DATE_END}'` |
+| **水位线（时间戳）** | 源表有 update_time，按时间范围过滤 | `update_time >= '${P_START_DATE}' AND update_time < '${P_END_DATE}'` |
+| **分区字段** | 源表有日期分区，按分区读取 | `dt >= '${P_START_DATE}' AND dt < '${P_END_DATE}'` |
 
 **核心认知**：增量是"每条数据路径的属性"，不是"整张表的属性"。多张驱动表 = 多条独立的数据路径，各自有增量范围。
 
@@ -42,7 +42,7 @@ RS L07 的"增量表及增量字段"段给出**驱动表 + 增量字段**。一�
 
 ```
 驱动表A（按 update_time 取增量）→ 目标表  [一个 incremental 规则]
-WHERE A.update_time >= ${BIZ_DATE_START} AND A.update_time < ${BIZ_DATE_END}
+WHERE A.update_time >= ${P_START_DATE} AND A.update_time < ${P_END_DATE}
 ```
 
 适用：只一张表的变化要抓。
@@ -74,14 +74,14 @@ tmp_a + tmp_b → MERGE 合并 → 目标表       [merge]
 ```sql
 -- 写法1：增量条件用 OR 连接（并集体现在 WHERE）
 SELECT A.*, B.amount FROM A JOIN B ON A.id = B.a_id
-WHERE A.update_time >= ${BIZ_DATE_START}
-   OR B.update_time >= ${BIZ_DATE_START}
+WHERE A.update_time >= ${P_START_DATE}
+   OR B.update_time >= ${P_START_DATE}
 
 -- 写法2：先各取 delta 求 union，再用影响集 JOIN 重建
 WITH chg AS (
-  SELECT id FROM A WHERE A.update_time >= ${BIZ_DATE_START}
+  SELECT id FROM A WHERE A.update_time >= ${P_START_DATE}
   UNION
-  SELECT a_id FROM B WHERE B.update_time >= ${BIZ_DATE_START}
+  SELECT a_id FROM B WHERE B.update_time >= ${P_START_DATE}
 )
 SELECT A.*, B.amount FROM A JOIN B ON A.id = B.a_id
 JOIN chg ON A.id = chg.id
@@ -214,15 +214,34 @@ merge 步骤的 load_mode 取决于目标表的数据修正需求：
 
 ---
 
-## 七、增量参数
+## 七、增量参数（标准参数 + 范围语义）
 
-增量过滤用**起止双参数**：
-- `BIZ_DATE_START`：增量起始日期
-- `BIZ_DATE_END`：增量结束日期
+增量范围用**两个标准参数**（脚本对增量资产自动注入，designer 不用声明）：
+- `P_START_DATE`（date）：增量范围起点
+- `P_END_DATE`（date）：增量范围终点
 
-在 `params` 段声明，在 `lts_params` 段配置 LTS 侧变量赋值（如 `V_BIZ_DATE_START → BIZ_DATE_START`）。
+filter 写法（左闭右开）：
+```
+update_time >= '${P_START_DATE}' AND update_time < '${P_END_DATE}'
+```
 
-assemble_ts 会校验：增量 filter/init_filter 里 `${PARAM}` 引用的参数必须在 params 声明过（防用未声明参数）。
+### 范围语义：[上次调度, 当前]，重叠防遗漏
+
+- **P_START_DATE** = 本任务的上一次调度时间；**P_END_DATE** = 当前时间
+- 目的：覆盖两次调度之间的所有数据变化，不遗漏
+- **冗余处理**（关键）：能取到的是「自己的调度时间」，要卡的是「来源表的更新时间」，两者有 gap。所以范围要**往前多卡一点**（重叠窗口），靠目标表主键 MERGE 去重——重跑或重叠不产生重复，靠主键 merge 幂等
+
+### 取值：运行时 vs UT
+
+| 场景 | P_START_DATE / P_END_DATE 来源 |
+|------|-------------------------------|
+| 运行时（术加平台） | 调度平台注入（上次调度 / 当前时间），覆盖 ts.default_value |
+| UT（默认） | ts.default_value 兜底：P_START_DATE=昨天、P_END_DATE=今天 |
+| UT（精确验证） | db-sources.json 的 test_params 段覆盖（最高优先级） |
+
+> 这两个是标准参数（incremental 资产自动注入 + 自带 default_value），designer 不在 params 声明、不配 test_params 也能跑 UT。只在要精确数据验证时才在 test_params 覆盖。
+
+assemble_ts 校验：filter/init_filter 里 `${PARAM}` 引用必须在 params 声明过（标准参数 P_START_DATE/P_END_DATE/P_CYCLE_ID/P_FLAG 自动算已声明）。
 
 ---
 
@@ -315,7 +334,7 @@ init:
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
-| `incremental.filter` | 增量 WHERE | `update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'` |
+| `incremental.filter` | 增量 WHERE | `update_time >= '${P_START_DATE}' AND update_time < '${P_END_DATE}'` |
 | `incremental.init_filter` | 初始化 WHERE（derive 模式各 extract 用它替换 filter） | `1=1`（全量）或 `dt >= '2024-01-01'`（限定范围） |
 | `incremental.init_time_range` | 初始化时间范围（RS L07） | ALL / 2024-01-01 |
 | `incremental.init_strategy` | 初始化策略描述 | 首次全量加载，后续增量 |
@@ -379,7 +398,7 @@ rules:
     reads: []
     incremental:
       key: "update_time"
-      filter: "update_time >= '${BIZ_DATE_START}' AND update_time < '${BIZ_DATE_END}'"
+      filter: "update_time >= '${P_START_DATE}' AND update_time < '${P_END_DATE}'"
       init_filter: "1=1"
       init_time_range: "ALL"
       init_strategy: "首次全量加载，后续按 update_time 增量"
@@ -401,7 +420,7 @@ rules:
     reads: []
     incremental:
       key: "dt"
-      filter: "dt >= '${BIZ_DATE_START}' AND dt < '${BIZ_DATE_END}'"
+      filter: "dt >= '${P_START_DATE}' AND dt < '${P_END_DATE}'"
       init_filter: "1=1"
       init_time_range: "ALL"
       init_strategy: "首次全量加载，后续按 dt 增量"
@@ -427,9 +446,7 @@ rules:
     field_logics: {}                            # ★ 留空：字段从前序步骤搬过来，默认直取
     grain: {input: "一行=一个订单", output: "一行=一个订单", change: "无变化"}
 
-params:
-  - {name: "BIZ_DATE_START", value_type: "date", desc: "增量起始业务日期"}
-  - {name: "BIZ_DATE_END", value_type: "date", desc: "增量结束业务日期"}
+params: []  # 标准参数（P_START_DATE/P_END_DATE/P_CYCLE_ID）脚本自动注入，不声明；这里只放业务参数
 
 business_key: [order_id]
 business_key_design:

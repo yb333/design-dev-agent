@@ -783,13 +783,47 @@ class TestLayer3Incremental:
         assert not any(c == "N16" for _, c, _ in hard), "N16 不该是硬阻断（已降 warn）"
 
     def test_n22_undeclared_param_reports(self):
-        """增量 filter 引用未声明参数 → N22。"""
+        """增量 filter 引用未声明的业务参数（非标准参数）→ N22。
+
+        P_START_DATE/P_END_DATE 是标准参数（incremental 资产自动注入，N22 算已声明），
+        故 filter 引用它们合法；这里改 filter 引用一个真正未声明的业务参数触发 N22。
+        """
         rs = make_incremental_rs_input()
         dd = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f"}])
-        # 不声明 BIZ_DATE_START/BIZ_DATE_END
+        dd["rules"][0]["incremental"]["filter"] = "update_time >= '${UNDECLARED_PARAM}'"
         dd["params"] = []
         vr = _run(dd, rs)
         assert "N22" in _codes(vr, "LC")
+
+    def test_incremental_injects_standard_date_params(self):
+        """增量资产自动注入 P_START_DATE/P_END_DATE（带 default_value）。"""
+        from assemble_ts import build_exec_params
+        dd = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        params = build_exec_params(dd)
+        assert "P_CYCLE_ID" in params                              # 所有资产都有
+        assert "P_START_DATE" in params and "P_END_DATE" in params  # 增量资产注入
+        assert params["P_START_DATE"]["default_value"] == {"type": "dynamic", "expr": "yesterday_ymd"}
+        assert params["P_CYCLE_ID"]["standard"] is True
+
+    def test_full_asset_no_date_params(self):
+        """全量资产只注入 P_CYCLE_ID，不注入 P_START_DATE/P_END_DATE。"""
+        from assemble_ts import build_exec_params
+        params = build_exec_params(make_design_decisions())
+        assert "P_CYCLE_ID" in params
+        assert "P_START_DATE" not in params
+        assert "P_END_DATE" not in params
+
+    def test_business_param_default_required(self):
+        """业务参数缺 default_value → N_PARAM_DEFAULT hard。"""
+        dd = make_design_decisions()
+        dd["params"] = [{"name": "ACCT_PERIOD", "value_type": "string"}]  # 无 default_value
+        assert "N_PARAM_DEFAULT" in _codes(_run(dd), "LC")
+
+    def test_standard_param_dup_warn(self):
+        """重复声明标准参数 → N_PARAM_DUP warn（不阻断）。"""
+        dd = make_design_decisions()
+        dd["params"] = [{"name": "P_CYCLE_ID", "value_type": "string", "default_value": "X"}]
+        assert "N_PARAM_DUP" in _codes(_run(dd), "LC")
 
 
 class TestLayer4Engineering:

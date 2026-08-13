@@ -30,7 +30,7 @@ import json
 import re
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 行缓冲 stdout——子进程模式下主控能实时看到 DDL/SELECT/INSERT 各节点进度
 try:
@@ -51,8 +51,9 @@ from check_sql import extract_select_aliases
 
 # 动态表达式注册表：当天日期类参数在 UT 时按规则算出值
 DYNAMIC_EXPRS = {
-    "today_ymdhms": lambda: datetime.now().strftime("%Y%m%d") + "000000",  # 批次号
-    "today_ymd":    lambda: datetime.now().strftime("%Y%m%d"),             # 业务日期
+    "today_ymdhms":  lambda: datetime.now().strftime("%Y%m%d") + "000000",            # 批次号
+    "today_ymd":     lambda: datetime.now().strftime("%Y%m%d"),                       # 业务日期
+    "yesterday_ymd": lambda: (datetime.now() - timedelta(days=1)).strftime("%Y%m%d"),  # 增量起点（T+1）
 }
 
 
@@ -88,27 +89,63 @@ def substitute_params(sql: str, param_values: dict) -> str:
 
 
 def resolve_all_params(ts: dict, config_path: str) -> dict:
-    """从 ts.json 的 exec_params 声明 + db-sources.json 的 test_params 配置，
-    算出全部参数的实际值。缺值则 fail loud（退出码 2）。"""
+    """算出全部参数的实际值（UT 执行前替换 ${PARAM}）。
+
+    三层兜底链（都不缺值，不 exit）：
+      1. test_params 配置（db-sources.json，精确/动态，最高优先级）
+      2. ts.exec_params.{name}.default_value（标准参数内置 / designer 给的业务参数默认值）
+      3. 类型兜底（按 value_type 推：date→今天，number→0，string→空）
+    第 2/3 层 warn 提示（UT 验证 SQL 结构不受影响），不阻断。
+    """
     declared = ts.get("meta", {}).get("schedule", {}).get("exec_params", {})
     if not declared:
         return {}
     test_cfg = load_test_params(config_path)
     values = {}
-    missing = []
-    for pname in declared:
+    defaulted = []
+    for pname, pdecl in declared.items():
+        # 1. test_params 配置（最高优先级）
         val = resolve_test_value(pname, test_cfg.get(pname))
         if val is None or val == "":
-            missing.append(pname)
-        else:
-            values[pname] = val
-    if missing:
+            # 2. ts.default_value（标准参数内置 / designer 给）
+            dv = (pdecl or {}).get("default_value")
+            if dv is not None and dv != "" and dv != {}:
+                val = _resolve_default_value(pname, dv)
+                defaulted.append(pname)
+            else:
+                # 3. 类型兜底（最后退路）
+                val = _type_fallback(pdecl)
+                defaulted.append(pname)
+        values[pname] = val
+    if defaulted:
         print(
-            f"❌ 以下参数声明了但 db-sources.json 没配测试值: {', '.join(missing)}",
+            f"⚠️ 以下参数未在 test_params 配置，用 default_value/类型兜底: {', '.join(defaulted)}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        print(
+            "   UT 验证 SQL 结构不受影响；如需精确数据请在 test_params 段配真实值",
+            file=sys.stderr,
+        )
     return values
+
+
+def _resolve_default_value(pname: str, dv) -> str:
+    """解析 ts.default_value：支持裸串（=static）或 {type, expr/value}（=static/dynamic）。"""
+    if isinstance(dv, dict):
+        return resolve_test_value(pname, dv) or ""
+    return str(dv)
+
+
+def _type_fallback(pdecl: dict) -> str:
+    """参数既无 test_params 也无 default_value 时的最后兜底（按 value_type 推）。"""
+    vt = (pdecl or {}).get("value_type", "string")
+    if vt == "date":
+        return datetime.now().strftime("%Y%m%d")
+    if vt == "datetime":
+        return datetime.now().strftime("%Y%m%d%H%M%S")
+    if vt == "number":
+        return "0"
+    return ""
 
 
 def resolve_sample_blocks(config_path: str, cli_value: int = 0) -> int:

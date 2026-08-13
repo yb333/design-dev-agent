@@ -852,8 +852,8 @@ class TestResolveAllParams:
         result = resolve_all_params(ts, str(cfg_path))
         assert result == {}, f"无 exec_params 应返回空 dict: {result}"
 
-    def test_exits_when_missing_test_param(self, tmp_path):
-        """有 exec_params + 缺 test_params → sys.exit(2)。"""
+    def test_fallback_when_missing_test_param(self, tmp_path):
+        """有 exec_params + 缺 test_params → 不 exit，用 default_value/类型兜底（三层链）。"""
         import json
         from run_ut import resolve_all_params
 
@@ -865,9 +865,35 @@ class TestResolveAllParams:
         cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
         ts = {"meta": {"schedule": {"exec_params": {"P_CYCLE_ID": {"desc": "批次号"}}}}}
-        with pytest.raises(SystemExit) as exc_info:
-            resolve_all_params(ts, str(cfg_path))
-        assert exc_info.value.code == 2
+        # 不 exit：P_CYCLE_ID 无 default_value → 类型兜底（string→""），返回值含它
+        values = resolve_all_params(ts, str(cfg_path))
+        assert "P_CYCLE_ID" in values
+
+    def test_test_params_overrides_default(self, tmp_path):
+        """三层链：test_params 配置优先于 ts.default_value。"""
+        import json
+        from run_ut import resolve_all_params
+        cfg = {"test_params": {"P_CYCLE_ID": {"type": "static", "value": "20260101000000"}}, "sources": {}}
+        cfg_path = tmp_path / "db.json"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        ts = {"meta": {"schedule": {"exec_params": {
+            "P_CYCLE_ID": {"default_value": {"type": "dynamic", "expr": "today_ymdhms"}},
+        }}}}
+        values = resolve_all_params(ts, str(cfg_path))
+        assert values["P_CYCLE_ID"] == "20260101000000"  # test_params 覆盖 default_value
+
+    def test_default_value_used_when_no_test_params(self, tmp_path):
+        """三层链：无 test_params 时用 ts.default_value（裸串 static）。"""
+        import json
+        from run_ut import resolve_all_params
+        cfg = {"test_params": {}, "sources": {}}
+        cfg_path = tmp_path / "db.json"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        ts = {"meta": {"schedule": {"exec_params": {
+            "BIZ_CODE": {"default_value": "FALLBACK"},
+        }}}}
+        values = resolve_all_params(ts, str(cfg_path))
+        assert values["BIZ_CODE"] == "FALLBACK"
 
     def test_resolve_password_missing_env(self, monkeypatch):
         """环境变量不存在返回空"""

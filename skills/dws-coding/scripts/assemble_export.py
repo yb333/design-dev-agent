@@ -346,7 +346,15 @@ def build_group_variables(ts: dict) -> list[list]:
     exec_params = ts.get("meta", {}).get("schedule", {}).get("exec_params", {})
     rows = []
     for pname in sorted(exec_params.keys()):
-        default_val = "19000101000000" if pname == "P_CYCLE_ID" else ""
+        # 默认值从 ts.default_value 读（static 给值；dynamic 留空让平台运行时注入）
+        pdecl = exec_params.get(pname) or {}
+        dv = pdecl.get("default_value")
+        if isinstance(dv, dict):
+            default_val = dv.get("value", "") if dv.get("type") == "static" else ""
+        elif dv is not None and dv != "":
+            default_val = str(dv)
+        else:
+            default_val = ""
         rows.append([
             "",           # 规则编码（留空）
             pname,        # 动态参数/变量名

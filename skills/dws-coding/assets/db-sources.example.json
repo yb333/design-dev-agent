@@ -49,20 +49,11 @@
     "dws_rt": "dws-prod"
   },
   "test_params": {
-    "P_CYCLE_ID": {
-      "type": "dynamic",
-      "expr": "today_ymdhms",
-      "desc": "批次号=当天0点拼000000，如 20260804000000"
-    },
-    "BIZ_DATE": {
-      "type": "dynamic",
-      "expr": "today_ymd",
-      "desc": "业务日期=当天，如 20260804"
-    },
+    "_comment": "标准参数（P_CYCLE_ID/P_FLAG/P_START_DATE/P_END_DATE）默认值在 ts.json（脚本注入），无需在此配。此段仅用于覆盖特定参数（如开发库要用固定日期而非今天）。",
     "ACCT_PERIOD": {
       "type": "static",
       "value": "202608",
-      "desc": "会计期间（手动指定）"
+      "desc": "业务参数覆盖示例：开发环境手动指定（ts.default_value 已给默认，这里精确覆盖）"
     }
   },
   "security": {

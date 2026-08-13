@@ -57,38 +57,76 @@ STANDARD_AUDIT_TEMPLATE = {
 STANDARD_AUDIT_NAMES = set(STANDARD_AUDIT_TEMPLATE.keys())
 
 # 标准参数（所有资产默认都有，脚本自动注入，designer 无需声明）
-# 现仅批次号；如未来加标准参数，在此列表追加即可。
+# 加标准参数 = 在此列表追加一行（build_exec_params 通用循环处理，不改逻辑）
+# 加新动态表达式 = 在 run_ut.py 的 DYNAMIC_EXPRS 追加（default_value 里 expr 引用）
+# inject_when 枚举：always（所有资产）/ inline_init（inline init 模式）/ incremental（增量资产）
 STANDARD_PARAMS = [
-    {"name": "P_CYCLE_ID", "value_type": "string", "desc": "批次号"},
+    {"name": "P_CYCLE_ID", "value_type": "string", "desc": "批次号",
+     "inject_when": "always",
+     "default_value": {"type": "dynamic", "expr": "today_ymdhms"}},
+    {"name": "P_FLAG", "value_type": "string",
+     "desc": "初始化控制：1=日增量（默认），2=初始化",
+     "inject_when": "inline_init",
+     "default_value": "1"},
+    {"name": "P_START_DATE", "value_type": "date",
+     "desc": "增量范围起点（上次调度时间，运行时平台注入；UT 用 default 兜底）",
+     "inject_when": "incremental",
+     "default_value": {"type": "dynamic", "expr": "yesterday_ymd"}},
+    {"name": "P_END_DATE", "value_type": "date",
+     "desc": "增量范围终点（当前时间，运行时平台注入；UT 用 default 兜底）",
+     "inject_when": "incremental",
+     "default_value": {"type": "dynamic", "expr": "today_ymd"}},
 ]
 
 
-def build_exec_params(decisions):
-    """组装 exec_params：标准参数自动注入 + 业务参数透传。
+def _is_incremental_asset(decisions: dict) -> bool:
+    """判断是否增量资产（有 init 段，或有 incremental_extract/merge 规则，或规则带 incremental 段）。"""
+    if decisions.get("init"):
+        return True
+    for r in (decisions.get("rules") or []):
+        if (r.get("step_type") or "") in ("incremental_extract", "merge"):
+            return True
+        if r.get("incremental"):
+            return True
+    return False
 
-    返回 {param_name: {value_type, desc, standard}}。
-    standard=true 表示脚本自动注入（所有资产都有）。
+
+def _should_inject(when: str, decisions: dict) -> bool:
+    """按 inject_when 枚举判断标准参数是否注入。加新条件 = 加枚举分支。"""
+    if when == "always":
+        return True
+    if when == "inline_init":
+        init_dec = decisions.get("init") or {}
+        return isinstance(init_dec, dict) and (init_dec.get("group_mode") or "") == "inline"
+    if when == "incremental":
+        return _is_incremental_asset(decisions)
+    return False
+
+
+def build_exec_params(decisions):
+    """组装 exec_params：标准参数按 inject_when 条件注入 + 业务参数透传。
+
+    返回 {param_name: {value_type, desc, standard, default_value}}。
+    standard=true 表示脚本注入（自带 default_value）；业务参数 default_value 由 designer 给。
+    default_value 是 UT 兜底 + export 制品的默认值来源（运行时平台会覆盖）。
     """
     params = {}
+    # 标准参数：通用循环（加标准参数 = 在 STANDARD_PARAMS 追加，不改这里）
     for sp in STANDARD_PARAMS:
-        params[sp["name"]] = {
-            "value_type": sp["value_type"],
-            "desc": sp["desc"],
-            "standard": True,
-        }
+        if _should_inject(sp.get("inject_when", "always"), decisions):
+            params[sp["name"]] = {
+                "value_type": sp["value_type"],
+                "desc": sp["desc"],
+                "standard": True,
+                "default_value": sp.get("default_value", ""),
+            }
+    # 业务参数：designer 声明，透传 default_value
     for p in decisions.get("params", []):
         params[p["name"]] = {
             "value_type": p.get("value_type", "string"),
             "desc": p.get("desc", ""),
             "standard": False,
-        }
-    # inline 模式：自动注入 P_FLAG（运行时选 init/增量管道）。designer 不用声明。
-    init_dec = decisions.get("init") or {}
-    if isinstance(init_dec, dict) and (init_dec.get("group_mode") or "") == "inline":
-        params["P_FLAG"] = {
-            "value_type": "string",
-            "desc": "初始化控制：1=日增量（默认），2=初始化",
-            "standard": True,
+            "default_value": p.get("default_value", ""),
         }
     return params
 
@@ -892,10 +930,29 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
     # ============================================================
     # 横切（N22-N25）
     # ============================================================
+    # 参数校验：业务参数 default_value 必填 + 不重复声明标准参数
+    standard_names = {sp["name"].upper() for sp in STANDARD_PARAMS}
+    for p in (decisions.get("params") or []):
+        if not isinstance(p, dict):
+            continue
+        pname = (p.get("name") or "").strip()
+        if not pname:
+            continue
+        if pname.upper() in standard_names:
+            vr.add_warn("LC", "N_PARAM_DUP",
+                        f"参数 {pname} 是标准参数（脚本按 inject_when 自动注入），无需声明")
+            continue
+        dv = p.get("default_value")
+        if dv is None or (isinstance(dv, str) and dv == "") or (isinstance(dv, dict) and not dv):
+            vr.add_hard("LC", "N_PARAM_DEFAULT",
+                        f"业务参数 {pname} 缺 default_value（UT 兜底 + export 制品默认值都需要；运行时平台会覆盖）")
+
     # N22 增量 filter/init_filter 里 ${PARAM} 引用的参数都在 params 声明过
     declared_params = {p.get("name", "").upper() for p in (decisions.get("params") or []) if isinstance(p, dict)}
-    # P_CYCLE_ID 由脚本自动注入，不算未声明
-    declared_params.add("P_CYCLE_ID")
+    # 标准参数按 inject_when 注入的，自动算"已声明"（filter 引用合法）
+    for sp in STANDARD_PARAMS:
+        if _should_inject(sp.get("inject_when", "always"), decisions):
+            declared_params.add(sp["name"].upper())
     import re as _re2
     for rule in extract_rules:
         code = rule.get("rule_code", "?")
@@ -904,7 +961,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
             val = inc.get(f) or ""
             for m in _re2.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", val):
                 if m.upper() not in declared_params:
-                    vr.add_hard("LC", "N22", f"规则 {code} 的 incremental.{f} 引用参数 '${{{m}}}' 未在 params 声明（P_CYCLE_ID 自动注入除外）")
+                    vr.add_hard("LC", "N22", f"规则 {code} 的 incremental.{f} 引用参数 '${{{m}}}' 未在 params 声明（标准参数 P_CYCLE_ID/P_FLAG/P_START_DATE/P_END_DATE 按条件自动注入，引用合法）")
 
     # N25 design_approach 非空（进 ts 文档）
     ca = decisions.get("complexity_analysis") or {}
