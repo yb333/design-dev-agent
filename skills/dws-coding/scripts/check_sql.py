@@ -287,7 +287,7 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
 
     select_aliases = set(extract_select_aliases(sql_text))
 
-    # 只检查有 AS 的字段（没 AS 的隐式别名查不准，不报）
+    # 有 AS 才能校验字段覆盖；无 AS 报提示（统一 AS 写法便于静态对比）
     if select_aliases:
         missing = ts_fields - select_aliases
         # 审计字段单独检查（可能 coder 用了不同的 AS 写法）
@@ -315,6 +315,11 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
                     f"共 {len(real_extra)} 个:\n{_format_field_list(real_extra)}\n"
                     f"（可能是拼写错误）"
                 )
+    else:
+        issues.append(
+            "[字段覆盖] SELECT 输出列没有 AS 别名，字段覆盖无法校验"
+            "（输出列请统一用 `expr AS 别名` 写法，便于静态对比）"
+        )
 
     # 5. FROM 表引用：SELECT 引用的表 vs ts.json 的 source_tables
     ts_source_tables = set()

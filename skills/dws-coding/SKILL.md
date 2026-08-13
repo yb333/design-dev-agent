@@ -160,7 +160,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 
 **翻译原则**：
 - design_logic 描述"算什么口径"，SQL 实现"怎么算"
-- NULL 处理：COALESCE(xxx, 0) / COALESCE(xxx, '')
+- NULL 处理跟 design_logic 走：logic 没要求处理就**保留 NULL**（数仓 NULL/0 各有业务意义，不无脑 COALESCE）；logic 明确"空值补 0/补空串"才加 COALESCE
 - 不改变业务口径，只做技术翻译
 
 ---

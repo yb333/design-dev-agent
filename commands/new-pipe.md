@@ -174,7 +174,16 @@ python DESIGN_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
 
 ## 步骤 4：编码（闸口①后并行发起）
 
-闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。
+### 4-0：生成执行计划（先跑，统一判断——不要自己解析 ts.json 猜）
+
+```bash
+python SHARED_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
+```
+
+输出执行计划 JSON：`ddl` / `dq`（含条数）/ `etl_rules` / `init_rules` / `groups` / `summary`。
+**发起哪些任务一律以计划为准**——`dq=false` 不发 DQ coder，`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起，避免逐个判断把 DQ/init 拖到 ETL 后面串行跑。**
+
+闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）：
 
 > 并行编排是本步核心：DDL/规则 coder/DQ 各自只依赖 ts.json（闸口①前已就绪），互不读对方产出，可同时发起。coder 按规则组编排，init 因依赖增量 SQL 需等。
 
@@ -186,11 +195,11 @@ python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}
 
 > **I 视图自动推导**：mapping 目标表写 `_i` 后缀（如 `dwb_xxx_i`），脚本自动推导 F 表并先建 F 表再建 I 视图。
 
-### 4b：规则 coder（按 schedule_groups 组内并行）
+### 4b：规则 coder（按计划 groups 组内并行）
 
-读 ts.json 的 `rules` 和 `data_flow.schedule_groups`。**按组编排：组内规则的 coder 在同一消息并行发起（一个消息多个 Task），组间串行（上一组完成再发下一组）**。
+按执行计划的 `groups` 编排：**组内规则的 coder 在同一消息并行发起（一个消息多个 Task），组间串行（上一组完成再发下一组）**。规则清单以计划 `etl_rules` 为准。
 
-**对每个规则**：
+**对每个规则**（★ prompt 只含 ETL 编码任务本身——不提 DDL/DQ/init，那些是独立任务不是本 coder 的事）：
 ```
 Task(
   subagent_type="dws-coder",
@@ -199,15 +208,14 @@ Task(
 )
 ```
 
-**记住每个 coder 的 task_id**（规则→会话映射，步骤 6 执行回路要用）。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
+**task_id 由 Task 调用返回后你自己记录**（规则→会话映射，步骤 6 执行回路用）——这是你的记账，**不写进 coder 的 prompt**。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
 > coder 内部：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。静态对比不过记为失败规则，不阻塞同组其他规则。
 > 组内并行安全：每个 coder 写自己的 `{rule_code}.sql`（文件名不冲突），切片独立互不读对方产出。
 
-### 4c：DQ coder（条件化，与 4a/4b 并行）
+### 4c：DQ coder（计划 dq=true 时，与 4a/4b 同消息并行）
 
-读 `{deliver}/ts.json` 的 `dq_rules`：
-- **非空**（RS 有 DQ 需求，designer 已翻译）→ 调 coder 产 DQ（与 4a/4b 同消息并行）：
+执行计划 `dq=true`（RS 有 DQ 需求，designer 已翻译；**以计划为准，不自己解析 ts.json**）→ 调 coder 产 DQ（与 4a/4b **同消息**并行发起）：
 
 ```
 Task(
@@ -219,13 +227,13 @@ Task(
 )
 ```
 
-- **为空**（RS 无 DQ 需求）→ **跳过**：不调 coder，`dq/` 目录不建。无"标准三项系统兜底"。
+计划 `dq=false` → **跳过**：不调 coder，`dq/` 目录不建。无"标准三项系统兜底"。
 
 > DQ 只依赖 dq_rules（不依赖 DDL/coder 的 SELECT），故可与 4a/4b 并行。DQ 执行（UT 阶段）才依赖目标表存在。assemble_dq.py 已废弃，DQ 全部由 coder 按 dq_rules 产出。
 
-### 4d：init coder（等 4b 增量规则完成，条件化）
+### 4d：init coder（计划 init_rules 非空时，等 4b 完成）
 
-仅当 ts.json 有 `init` 段且 `init.rules` 非空：**4b 所有增量规则 .sql 落盘后**，逐 init 规则调 coder：
+执行计划 `init_rules` 非空：**4b 所有增量规则 .sql 落盘后**，按 `init_rules` 清单逐个调 coder：
 
 ```
 Task(
@@ -235,7 +243,7 @@ Task(
 )
 ```
 
-- **无 init 段**（非增量资产）→ 跳过。
+计划 `init_rules` 为空（非增量资产）→ 跳过。
 
 > init 规则在 `ts.init.rules`（与 `ts.rules` 平行）。coder 的 slice_ts 会从 init 段找到 `INIT_` 规则。
 > ★ **硬约束：4d 必须等 4b 增量规则完成**——derive 模式 init SQL = 增量 SQL 改 filter，源 .sql 得先在。4d 不等 4a/4c（init 不依赖 DDL/DQ）。

@@ -876,6 +876,23 @@ class TestLayer4Engineering:
         assert "N21" not in _codes(vr, "L4")
 
 
+    def test_n21_schema_prefix_hint(self):
+        """distribution_key 带 schema 前缀 → 报错明确格式问题（去掉前缀即可）。"""
+        dd = make_design_decisions()
+        dd["tables"] = {"dwb_test_f": {"distribution_key": ["dws.id"]}}
+        vr = _run(dd)
+        n21 = [i["msg"] for i in vr.items if i["code"] == "N21"]
+        assert n21 and "schema 前缀" in n21[0]
+
+    def test_n21_missing_field_lists_fields(self):
+        """distribution_key 字段真不存在 → 列本表字段帮对照 + 提示不带 schema。"""
+        dd = make_design_decisions()
+        dd["tables"] = {"dwb_test_f": {"distribution_key": ["no_such_col"]}}
+        vr = _run(dd)
+        n21 = [i["msg"] for i in vr.items if i["code"] == "N21"]
+        assert n21 and "不在该表字段中" in n21[0] and "不带 schema 前缀" in n21[0]
+
+
 class TestQuartzCron:
     """Quartz cron 校验函数单测。"""
 

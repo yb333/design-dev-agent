@@ -432,6 +432,14 @@ class TestCheckSql:
 # run_ut.py 的 INSERT 包装测试
 # ============================================================
 
+    def test_no_alias_cannot_verify(self):
+        """SELECT 无 AS 别名 → 报'字段覆盖无法校验'提示（统一 AS 写法）。"""
+        from check_sql import check_sql
+        ts = {"rules": {"R0001": {"field_targets": ["id"]}}, "design": {"audit_fields": {}}}
+        issues = check_sql("SELECT id FROM ods.t", ts, "R0001")
+        assert any("没有 AS 别名" in i for i in issues)
+
+
 class TestInsertWrapping:
     def test_wrap_insert_basic(self):
         """INSERT 包装基本功能"""

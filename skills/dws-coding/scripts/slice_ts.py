@@ -211,8 +211,8 @@ def main():
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
     parser.add_argument("--output", default="", help="输出 YAML 路径（默认打印到 stdout）")
-    parser.add_argument("--compact", action="store_true",
-                        help="compact 模式：direct 字段压一行（大规则场景省 70%% 体积，coder 读用）")
+    parser.add_argument("--verbose", action="store_true",
+                        help="完整模式：direct 字段逐个展开（默认 compact 压一行省 70% 体积；需逐字段细节时用）")
     args = parser.parse_args()
 
     # 读 ts.json
@@ -232,8 +232,8 @@ def main():
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # compact 模式：direct 压行
-    output_data = to_compact_view(sliced) if args.compact else sliced
+    # 默认 compact（direct 压行）；--verbose 展开完整字段
+    output_data = sliced if args.verbose else to_compact_view(sliced)
 
     # 输出
     yaml_text = yaml.dump(output_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
@@ -242,7 +242,7 @@ def main():
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(yaml_text, encoding="utf-8")
-        mode = " [compact]" if args.compact else ""
+        mode = "" if args.verbose else " [compact]"
         print(f"切片产出: {out}{mode}", file=sys.stderr)
         print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
     else:

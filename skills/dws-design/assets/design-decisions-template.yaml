@@ -115,7 +115,7 @@ rules:
 
     # 排重策略（★ 仅累积共建场景填：build_mode=accumulate 的表，多来源有数据重叠需排重时）
     # 三层分工：RS/mapping 给"需去重"→ designer 细化为可落地策略 → coder 翻译成 SQL
-    # transform 模式的表不需要填。
+    # 仅 accumulate 模式（多规则累积共建同一表，见下方 tables 段 build_mode）需要填；默认单规则产出的表不填。
     dedup_strategy:
       target: ""                       # 对哪张共建表排重
       key: []                          # 用什么键判断重复（如 ["order_id"]）

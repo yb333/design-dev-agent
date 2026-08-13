@@ -3,7 +3,7 @@
 > 用于空闲时段执行。复制下面**待办任务**的提示词给 agent，在项目目录下执行。
 > **任务一已完成**（command 脚本定位改 skill 注入，已落地，保留作历史记录，跳过）。
 > 待办按编号顺序（后者覆盖前者产出物）：
-> 任务二（legacy 整改）→ 任务三（precheck 校验增强）→ 任务四（测试补缺 + 回归，最后做）
+> 任务二（legacy 整改）→ 任务三（precheck 校验增强）→ 任务四（脚本按调用方归位）→ 任务五（测试补缺 + 回归，最后做）
 
 ---
 
@@ -173,11 +173,42 @@
 
 ---
 
-### 任务四：排查单元测试覆盖缺口并补充
+### 任务四：脚本按调用方归位（pipe 调的 → design-dev-shared）
+
+**背景**：脚本现在按"设计/编码"skill 分，但实际调用方有三类——designer（agent）、coder（agent）、pipe（command 编排）。**pipe 调的脚本放 designer/coder skill 下会让 agent 困惑**（"这俩脚本干啥的，我本身的工作用不到"）：
+- dws-design 下的 `preprocess.py` / `precheck.py` / `gate_summary.py` —— pipe 在步骤1/3 调，designer 不用
+- dws-coding 下的 `assemble_ddl.py` / `assemble_export.py` / `ut_precheck.py` / `ut_execute.py` / `check_db.py` —— pipe 在步骤4/5 调，coder 不用
+- design-dev-shared 已有的 `dispatch_plan.py` / `resolve_appid.py` 也是 pipe 调的（归位方向已定，新工具直接放对了地方）
+
+**要做的**：
+
+1. **挪文件**：上述 pipe 调的脚本挪到 `skills/design-dev-shared/scripts/`（文件名不变）
+2. **修引用**：
+   - `commands/new-pipe.md`：preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db 的调用从 DESIGN_SCRIPTS/CODING_SCRIPTS 改 SHARED_SCRIPTS
+   - 脚本间 sys.path 推算：挪到 shared 后原本"上三级找 design-dev-shared"变同级，简化；ut_precheck/ut_execute import run_ut（dws-coding 的 UT 函数库）——跨 skill import，用 sys.path 补（conftest 已把三目录都加了，脚本内确认）；或把 run_ut 一起挪 shared（作为 UT 链路函数库，执行时判断，**import 不断为准**）
+   - `agents/dws-designer.md` / `dws-coder.md` permission 路径（如有引用）
+   - `docs/tool-registry.md`（按调用方列）
+   - SKILL.md 引用：design SKILL 不再列 preprocess/precheck；coding SKILL 不再列 assemble_ddl/ut_*（designer/coder 各自的 SKILL 只列自己调的）
+3. **tests/conftest.py**：sys.path 目录确认（shared 已在列表）
+4. **install.py**：不用改（scan_skills 按目录整体拷）
+
+**约束**：
+- designer 调的（assemble_ts/explore/fill_type_risk_decision）留 dws-design；coder 调的（slice_ts/check_sql/pick_fields）留 dws-coding
+- dws_db/config_paths 本来就在 shared，不动
+- 挪完全链路 import 不能断
+
+**验证**：
+1. `python3 -m pytest tests/ -q` 全套通过
+2. `python3 install.py --check` 组件扫描正常
+3. grep 无残留旧路径引用（如 dws-design/scripts/preprocess）
+
+---
+
+### 任务五：排查单元测试覆盖缺口并补充
 
 **背景**：之前 `resolve_all_params` 函数被 Edit 操作撕裂（函数体截断无 return），导致 UT 执行脚本报错。但没有测试挡住——因为这个函数没有直接单元测试，只被 UT 脚本间接调用（而测试环境连不了库，走不到间接路径）。要排查所有类似缺口。
 
-**这是最后一个任务的原因**：前面的任务（二、三）都改了代码，本任务补测试 + 回归要覆盖到所有新代码（尤其任务二的 legacy 整改 + 任务三的 precheck 校验增强）。**必须最后做（二 → 三 → 四）**。
+**这是最后一个任务的原因**：前面的任务（二、三、四）都改了代码，本任务补测试 + 回归要覆盖到所有新代码（尤其任务二的 legacy 整改 + 任务三的 precheck 校验增强 + 任务四的脚本归位）。**必须最后做（二 → 三 → 四 → 五）**。
 
 **排查方法**：
 
@@ -258,7 +289,7 @@
 - 只补**纯逻辑函数**的测试（不连库、不读真实文件、不依赖外部环境）
 - 需要连库/读 xlsx 的函数用 mock 测核心逻辑（参数解析、SQL 拼接、返回值格式）
 - 不要为了凑覆盖率写无意义的测试——每个测试要验证一个明确的行为
-- **覆盖任务二（legacy 整改）+ 任务三（precheck 校验增强）的新代码**
+- **覆盖任务二（legacy 整改）+ 任务三（precheck 校验增强）+ 任务四（脚本归位）的新代码**
 - 补完跑 `python3 -m pytest tests/ -q` 确认全套通过
 
 **验证**：

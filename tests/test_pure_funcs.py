@@ -324,3 +324,35 @@ class TestOpencodeRoot:
         monkeypatch.chdir(tmp_path)  # tmp 下没 .opencode，其祖先也不会有
         # 全 miss → 回全局 opencode 根（home/.config/opencode），保留旧行为兜底
         assert opencode_root() == empty_home / ".config" / "opencode"
+
+
+# ============================================================
+# dispatch_plan.build_dispatch_plan（执行计划：pipe 统一发起的依据）
+# ============================================================
+
+class TestDispatchPlan:
+    def test_basic_plan(self):
+        from dispatch_plan import build_dispatch_plan
+        ts = {
+            "rules": {
+                "R0002": {"exec_sequence": 2, "is_view_step": False},
+                "R0001": {"exec_sequence": 1, "is_view_step": False},
+                "V0001": {"exec_sequence": 3, "is_view_step": True},  # 视图步骤，排除
+            },
+            "init": {"mode": "derive", "rules": {"INIT_R0001": {}}},
+            "dq_rules": [{"rule_name": "主键唯一"}],
+            "data_flow": {"schedule_groups": [{"sequence": 1, "rules": ["R0001", "R0002"]}]},
+        }
+        plan = build_dispatch_plan(ts)
+        assert plan["ddl"] is True
+        assert plan["dq"] is True and plan["dq_count"] == 1
+        assert plan["etl_rules"] == ["R0001", "R0002"]  # 按 exec_sequence 排序 + 排除视图
+        assert plan["init_rules"] == ["INIT_R0001"]
+        assert len(plan["groups"]) == 1
+
+    def test_no_dq_no_init(self):
+        from dispatch_plan import build_dispatch_plan
+        plan = build_dispatch_plan({"rules": {"R0001": {}}, "dq_rules": []})
+        assert plan["dq"] is False
+        assert plan["init_rules"] == []
+        assert "无 DQ" in plan["summary"]

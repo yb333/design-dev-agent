@@ -925,7 +925,19 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
         tbl_flds = table_fields.get(tbl_short, set())
         for dk in dkeys:
             if dk not in tbl_flds:
-                vr.add_hard("L4", "N21", f"表 '{tbl_short}' 的 distribution_key 字段 '{dk}' 不在该表字段中（建表会报错）")
+                # 智能区分：带 schema 前缀（含 .）剥掉后能命中 → 格式问题（去掉前缀即可）；
+                # 剥掉后也不命中 → 字段真不存在，列本表字段帮对照
+                if "." in str(dk):
+                    stripped = str(dk).split(".")[-1]
+                    if stripped in tbl_flds:
+                        vr.add_hard("L4", "N21",
+                                    f"表 '{tbl_short}' 的 distribution_key '{dk}' 带了 schema 前缀——"
+                                    f"字段名只写 '{stripped}'（不带 schema. 前缀），去掉前缀即可通过")
+                        continue
+                fld_preview = ", ".join(sorted(tbl_flds)[:10]) + ("..." if len(tbl_flds) > 10 else "")
+                vr.add_hard("L4", "N21",
+                            f"表 '{tbl_short}' 的 distribution_key 字段 '{dk}' 不在该表字段中"
+                            f"（本表字段: {fld_preview}。注意：填字段名不带 schema 前缀）")
 
     # ============================================================
     # 横切（N22-N25）
