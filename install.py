@@ -17,9 +17,9 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-# 配置文件统一放 _references/rules/dws-design-dev/（与其他项目隔离）
+# config 跟 skill 同根（rules 子目录名从 config_paths 取，避免硬编码漂移）
 sys.path.insert(0, str(SCRIPT_DIR / "skills" / "design-dev-shared" / "scripts"))
-from config_paths import config_dir as rules_config_dir
+from config_paths import RULES_DIR_NAME
 
 
 def find_python() -> str:
@@ -245,13 +245,6 @@ def run():
         dst = skills_dir / s
         copy_dir(src, dst)
         print(f"  ✓ {s}")
-
-    # 公共代码库（无 SKILL.md，scan_skills 扫不到，单独拷）
-    # design-dev-shared：设计开发 agent 各 skill 共享的 Python 代码（如 dws_db.py）
-    dd_shared_src = SCRIPT_DIR / "skills" / "design-dev-shared"
-    if dd_shared_src.exists():
-        copy_dir(dd_shared_src, skills_dir / "design-dev-shared")
-        print(f"  ✓ design-dev-shared（设计开发公共库）")
     print()
 
     # ── 5. 安装 agents + commands ──
@@ -273,8 +266,8 @@ def run():
         print(f"  ✓ command: {c}")
     print()
 
-    # ── 6. 数据库配置初始化 ──（config 统一放 _references/rules/dws-design-dev/，与其他项目隔离）
-    rules_dir = rules_config_dir()
+    # ── 6. 数据库配置初始化 ──（config 跟 skill 同根：global→~/.config/opencode，local→<cwd>/.opencode）
+    rules_dir = config_dir / "_references" / "rules" / RULES_DIR_NAME
     rules_dir.mkdir(parents=True, exist_ok=True)
     db_config = rules_dir / "db-sources.json"
     db_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "db-sources.example.json"

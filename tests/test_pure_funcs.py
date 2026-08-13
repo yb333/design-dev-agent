@@ -10,6 +10,8 @@
 """
 
 import json
+from pathlib import Path
+
 import pytest
 
 from check_sql import (
@@ -245,3 +247,38 @@ class TestResolveAppid:
         """文件不存在 → 空串（不阻断，调用方决定）。"""
         from config_paths import resolve_appid
         assert resolve_appid("slprd", str(tmp_path / "nope.json")) == ""
+
+
+# ============================================================
+# config_paths.opencode_root / config_dir（多候选探测 + 环境变量隔离）
+# ============================================================
+
+class TestOpencodeRoot:
+    def test_config_dir_env_priority(self, tmp_path, monkeypatch):
+        """环境变量 DWS_RULES_DIR 优先级最高——config_dir 直接返回它（不调 opencode_root）。"""
+        from config_paths import config_dir
+        monkeypatch.setenv("DWS_RULES_DIR", str(tmp_path))
+        assert config_dir() == tmp_path
+
+    def test_opencode_root_project_local(self, tmp_path, monkeypatch):
+        """__file__ 推算 + 全局都 miss 时，cwd 向上找 .opencode 命中（项目级安装场景）。"""
+        from config_paths import opencode_root, RULES_DIR_NAME
+        # 构造项目级安装结构：<proj>/.opencode/_references/rules/dws-design-dev/
+        proj = tmp_path / "myproj"
+        (proj / ".opencode" / "_references" / "rules" / RULES_DIR_NAME).mkdir(parents=True)
+        # 让全局探测 miss（home 指向 tmp 下空目录，避免命中机器真实全局 config）
+        empty_home = tmp_path / "empty_home"
+        empty_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: empty_home)
+        monkeypatch.chdir(proj)
+        assert opencode_root() == proj / ".opencode"
+
+    def test_opencode_root_fallback_to_home_when_all_miss(self, tmp_path, monkeypatch):
+        """全 miss（__file__/全局/项目级都没 marker）→ 回全局 home 路径（友好报错兜底）。"""
+        from config_paths import opencode_root
+        empty_home = tmp_path / "empty_home"
+        empty_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: empty_home)
+        monkeypatch.chdir(tmp_path)  # tmp 下没 .opencode，其祖先也不会有
+        # 全 miss → 回全局 opencode 根（home/.config/opencode），保留旧行为兜底
+        assert opencode_root() == empty_home / ".config" / "opencode"

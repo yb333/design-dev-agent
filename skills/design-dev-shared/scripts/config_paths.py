@@ -1,19 +1,65 @@
 """集中 config 文件路径解析（所有 skill 脚本统一调这里）。
 
-config 统一放 ~/.config/opencode/_references/rules/dws-design-dev/，
-与其他项目隔离（rules/ 是大项目共建目录，我们在其下开自己的文件夹）。
+config 跟随 skill 安装位置（用户级 ~/.config/opencode 或项目级 <proj>/.opencode），
+落在 <opencode_root>/_references/rules/dws-design-dev/，与其他项目隔离。
 
-改基址只动这里的 config_dir()，所有脚本自动跟进——避免路径散落各处漂移。
+定位策略（config_dir 优先用环境变量，否则从 opencode_root 推算）：
+- 环境变量 DWS_RULES_DIR：直接指向 rules 目录（部署/CI/测试强制覆盖，不碰真实 config）
+- opencode_root()：__file__ 推算（config 跟 skill 走）→ 全局 → 项目级 .opencode → 回全局
+
+改基址只动这里，所有脚本自动跟进——避免路径散落各处漂移。
 """
+import os
 from pathlib import Path
 
 # rules/ 下我们的文件夹名（跟 skill 命名一致）
 RULES_DIR_NAME = "dws-design-dev"
 
+# config 目录标记（探测 opencode 根用：根下有这个相对路径说明 config 装在这）
+_RULES_MARKER = Path("_references") / "rules" / RULES_DIR_NAME
+
+
+def opencode_root() -> Path:
+    """定位 opencode 配置根（skill + config 共同的父目录）。
+
+    优先级：
+      1. ``__file__`` 推算：本文件在 <root>/skills/design-dev-shared/scripts/，
+         parents[3] = <root>。该根下有 _references/rules/dws-design-dev/ → 命中
+         （config 自动跟随 skill，用户级 / 项目级安装都自动对齐）
+      2. 全局：~/.config/opencode（向后兼容老的纯全局安装）
+      3. 项目级：cwd 向上找 .opencode（install.py --local 的落点）
+      4. 全 miss：回全局路径（友好报错，不比固定 Path.home 差）
+
+    幂等：纯路径推算 + exists 检查，无副作用，assemble_ts main 校验阶段重复调安全。
+    """
+    # 1. __file__ 推算（最可靠：脚本知道自己在哪，跟 skill 走）
+    inferred = Path(__file__).resolve().parents[3]
+    if (inferred / _RULES_MARKER).exists():
+        return inferred
+    # 2. 全局安装
+    home = Path.home() / ".config" / "opencode"
+    if (home / _RULES_MARKER).exists():
+        return home
+    # 3. 项目级安装：cwd 向上找 .opencode
+    cwd = Path.cwd()
+    for d in [cwd, *cwd.parents]:
+        cand = d / ".opencode"
+        if (cand / _RULES_MARKER).exists():
+            return cand
+    # 4. 全 miss：回全局（友好报错，保留旧行为）
+    return home
+
 
 def config_dir() -> Path:
-    """我们的 config 根目录：~/.config/opencode/_references/rules/dws-design-dev/"""
-    return Path.home() / ".config" / "opencode" / "_references" / "rules" / RULES_DIR_NAME
+    """我们的 config 根目录（db-sources / platform_config / schedule_config / schema_apps 所在）。
+
+    优先用环境变量 DWS_RULES_DIR（直接指向 rules 目录，部署/CI/测试隔离用）；
+    否则从 opencode_root() 推算 = <opencode_root>/_references/rules/dws-design-dev/。
+    """
+    env = os.environ.get("DWS_RULES_DIR")
+    if env:
+        return Path(env)
+    return opencode_root() / "_references" / "rules" / RULES_DIR_NAME
 
 
 def db_sources_path() -> Path:

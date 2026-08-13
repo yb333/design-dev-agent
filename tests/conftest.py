@@ -3,8 +3,15 @@
 将 skill scripts 目录加入 sys.path，使测试可以直接 import 被测模块。
 所有测试数据用 Python dict 构造，不依赖外部 xlsx 文件。
 """
+import os
 import sys
 from pathlib import Path
+
+# 测试隔离：config 定位指向 tests 下固定目录，不碰机器全局 config
+# （DWS_RULES_DIR 在 config_paths.config_dir 里优先级最高，确保测试不读真实环境）
+_TEST_RULES_DIR = Path(__file__).resolve().parent / ".test_rules_config"
+_TEST_RULES_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("DWS_RULES_DIR", str(_TEST_RULES_DIR))
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent

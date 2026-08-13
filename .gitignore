@@ -25,6 +25,9 @@ eval-suite/results/
 # 运行时产出（跑流水线/评测生成的 SQL/DDL/ts.json/xlsx，本地重新生成，不进仓库）
 10_project_deliver/
 
+# 测试隔离目录（conftest 自动创建，指向 DWS_RULES_DIR 避免测试碰机器全局 config）
+tests/.test_rules_config/
+
 # 运行时产出（skill 写入的工作目录，可重跑覆盖）
 # 注：docs/output/dwl_con_pu_any_f 作为标准示例保留，其余忽略
 docs/output/*

@@ -46,16 +46,14 @@ agent: build
 
 ### 脚本路径定位
 
-设计段脚本在 dws-design skill，编码段脚本在 dws-coding skill。
-**不要用 glob 找**——直接用 Python 定位全局安装路径（跨平台兼容）：
+设计段脚本在 dws-design skill，编码段脚本在 dws-coding skill，公共脚本在 design-dev-shared skill。
+**先定位路径再开工**——调 Skill tool 加载 `design-dev-shared` skill，opencode 会注入它的 `location`（SKILL.md 绝对路径）。从 location 推算三个脚本目录：
 
-```bash
-python -c "from pathlib import Path; p=Path.home()/'.config'/'opencode'/'skills'/'dws-design'/'scripts'; print(p)"
-```
+- `SHARED_SCRIPTS` = location 同级 `/scripts`（design-dev-shared/scripts）
+- `DESIGN_SCRIPTS` = location 上三级 `/dws-design/scripts`（上三级 = skills 目录）
+- `CODING_SCRIPTS` = location 上三级 `/dws-coding/scripts`
 
-把输出路径记为 `DESIGN_SCRIPTS`（设计段脚本目录），同理获取 `CODING_SCRIPTS`（把 dws-design 换成 dws-coding）。
-
-> 如果全局目录不存在（项目级安装），用当前项目下的 `skills/dws-design/scripts`。
+**兜底**（skill 加载失败的极端情况）：用 `opencode debug skill` CLI 查 dws-design 的 location；或按候选路径探测——全局 `~/.config/opencode/skills/`、cwd 向上找 `.opencode/skills/`、cwd 向上找 `skills/`，第一个命中者作为 skills 根推算。
 
 下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录，`SHARED_SCRIPTS` 代指公共脚本目录（design-dev-shared/scripts，resolve_appid 在这）。
 调用时把变量替换为实际路径，例如：`python <DESIGN_SCRIPTS>/preprocess.py ...`
