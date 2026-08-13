@@ -221,41 +221,43 @@ class TestInjectWithAs:
 
 
 class TestResolveSampleBlocks:
-    """resolve_sample_blocks 测试：CLI 参数 > 配置文件默认 > 0。"""
+    """resolve_sample_blocks 测试：CLI（含显式 0）> config > 0。default=None 区分没传 vs 传0。"""
 
-    def test_cli_value_takes_priority(self, tmp_path):
-        """CLI 传了 >0 的值 → 用 CLI 值，不读配置。"""
+    def test_cli_positive_takes_priority(self, tmp_path):
+        """CLI 传 >0 → 用 CLI，不读 config。"""
         import json
         cfg = tmp_path / "db.json"
         cfg.write_text(json.dumps({"security": {"sample_blocks": 50}}))
-        result = resolve_sample_blocks(str(cfg), cli_value=10)
-        assert result == 10
+        assert resolve_sample_blocks(str(cfg), cli_value=10) == 10
 
-    def test_cli_zero_reads_config(self, tmp_path):
-        """CLI 没传（0）→ 从配置读默认值。"""
+    def test_cli_zero_forces_no_sample(self, tmp_path):
+        """CLI 传 0 → 强制不采样（不读 config，即使 config 配了 10）。"""
         import json
         cfg = tmp_path / "db.json"
         cfg.write_text(json.dumps({"security": {"sample_blocks": 10}}))
-        result = resolve_sample_blocks(str(cfg), cli_value=0)
-        assert result == 10
+        assert resolve_sample_blocks(str(cfg), cli_value=0) == 0
 
-    def test_no_config_no_cli_returns_zero(self, tmp_path):
-        """配置没有 sample_blocks + CLI 没传 → 0。"""
+    def test_none_reads_config(self, tmp_path):
+        """CLI 没传（None）→ 读 config 默认。"""
+        import json
+        cfg = tmp_path / "db.json"
+        cfg.write_text(json.dumps({"security": {"sample_blocks": 10}}))
+        assert resolve_sample_blocks(str(cfg), cli_value=None) == 10
+
+    def test_none_no_config_returns_zero(self, tmp_path):
+        """CLI 没传 + config 无 sample_blocks → 0。"""
         import json
         cfg = tmp_path / "db.json"
         cfg.write_text(json.dumps({"security": {"timeout": 600}}))
-        result = resolve_sample_blocks(str(cfg), cli_value=0)
-        assert result == 0
-
-    def test_config_file_not_found_returns_zero(self):
-        """配置文件不存在 → 0。"""
-        result = resolve_sample_blocks("/nonexistent/path/db.json", cli_value=0)
-        assert result == 0
+        assert resolve_sample_blocks(str(cfg), cli_value=None) == 0
 
     def test_config_zero_means_no_sample(self, tmp_path):
-        """配置 sample_blocks=0（UAT/生产）→ 0。"""
+        """CLI 没传 + config sample_blocks=0（UAT/生产）→ 0。"""
         import json
         cfg = tmp_path / "db.json"
         cfg.write_text(json.dumps({"security": {"sample_blocks": 0}}))
-        result = resolve_sample_blocks(str(cfg), cli_value=0)
-        assert result == 0
+        assert resolve_sample_blocks(str(cfg), cli_value=None) == 0
+
+    def test_config_file_not_found_returns_zero(self):
+        """CLI 没传 + 配置文件不存在 → 0。"""
+        assert resolve_sample_blocks("/nonexistent/path/db.json", cli_value=None) == 0

@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--rollback-dir", default="", help="回退脚本目录")
     parser.add_argument("--skip-ddl", action="store_true", help="跳过DDL执行")
     parser.add_argument("--result", default="", help="预检结果输出路径（JSON，默认 ts 同级 ut_precheck_result.json）")
-    parser.add_argument("--sample-blocks", type=int, default=0, help="主表块采样百分比（如 10=SYSTEM(10)），0=不采样。开发环境加速用")
+    parser.add_argument("--sample-blocks", type=int, default=None, help="主表块采样百分比（如 10=SYSTEM(10)）。不传=读 config 默认；0=强制不采样；N>0=采样。开发环境加速用")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)

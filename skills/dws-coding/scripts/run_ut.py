@@ -148,18 +148,18 @@ def _type_fallback(pdecl: dict) -> str:
     return ""
 
 
-def resolve_sample_blocks(config_path: str, cli_value: int = 0) -> int:
-    """解析采样块数：CLI 参数 > 配置文件默认值 > 0。
+def resolve_sample_blocks(config_path: str, cli_value: int = None) -> int:
+    """解析采样块数：CLI 参数（含显式 0）> 配置文件默认值 > 0。
 
-    - CLI 传了 --sample-blocks N（N>0）→ 用 N
-    - CLI 没传（0）→ 从 db-sources.json 的 security.sample_blocks 读默认值
+    - CLI 传了 --sample-blocks N → 用 N（含 0=强制不采样）
+    - CLI 没传（None）→ 从 db-sources.json 的 security.sample_blocks 读默认值
     - 都没有 → 0（不采样）
 
-    这样 AI 不用传参数，配置里写了 sample_blocks 就自动采样。
-    开发环境配 sample_blocks=10，UAT/生产配 0。
+    default=None 区分"没传"（读 config）vs"传 0"（强制不采样）——
+    避免 CLI 传 0 被当成"没传"反而读了 config 的非 0 值。
     """
-    if cli_value > 0:
-        return cli_value
+    if cli_value is not None:
+        return cli_value  # 显式传（含 0=强制不采样）
     try:
         import json
         from pathlib import Path
@@ -523,7 +523,7 @@ def main():
     parser.add_argument("--source", default="", help="数据源名（多schema多账号）")
     parser.add_argument("--skip-ddl", action="store_true", help="跳过DDL执行（表已存在）")
     parser.add_argument("--report", default="", help="UT 报告输出路径（ut_report.md）")
-    parser.add_argument("--sample-blocks", type=int, default=0, help="主表块采样百分比（如 10=SYSTEM(10)），0=不采样。开发环境加速用")
+    parser.add_argument("--sample-blocks", type=int, default=None, help="主表块采样百分比（如 10=SYSTEM(10)）。不传=读 config 默认；0=强制不采样；N>0=采样。开发环境加速用")
     args = parser.parse_args()
 
     # 读 ts.json

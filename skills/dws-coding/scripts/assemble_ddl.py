@@ -21,6 +21,7 @@ DDL 生成器: ts.json → DDL SQL 文件
 
 import sys
 import json
+import re
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -213,9 +214,34 @@ def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: d
     return "\n".join(lines)
 
 
+# 类型归一化：mapping 可能写非标准类型（int8(64)/number(10,2)/datetime），
+# 归一化到高斯支持的写法。加新映射 = 在此列表追加一行。
+_TYPE_NORMALIZE = [
+    (re.compile(r"^int8(\(\d+\))?$", re.I), "bigint"),       # int8 / int8(64) → bigint
+    (re.compile(r"^int4(\(\d+\))?$", re.I), "integer"),      # int4 / int4(10) → integer
+    (re.compile(r"^int2(\(\d+\))?$", re.I), "smallint"),
+    (re.compile(r"^int(\(\d+\))?$", re.I), "integer"),       # int / int(11) → integer
+    (re.compile(r"^number\((\d+),\s*(\d+)\)$", re.I), r"numeric(\1,\2)"),  # number(10,2) → numeric(10,2)
+    (re.compile(r"^number\((\d+)\)$", re.I), r"numeric(\1)"),
+    (re.compile(r"^datetime$", re.I), "timestamp"),
+    # varchar(N) / numeric(N,M) / decimal / char(N) / text / date 等保留
+]
+
+
+def normalize_type(t: str) -> str:
+    """归一化字段类型到高斯支持的写法（mapping 可能写 int8(64) 等非标准形式）。"""
+    if not t:
+        return ""
+    t = t.strip()
+    for pat, repl in _TYPE_NORMALIZE:
+        if pat.match(t):
+            return pat.sub(repl, t)
+    return t
+
+
 def type_or_empty(t: str) -> str:
-    """字段类型，空则返回空"""
-    return t if t else ""
+    """字段类型（归一化到高斯写法），空则返回空"""
+    return normalize_type(t) if t else ""
 
 
 def generate_rollback(schema: str, table: str, is_view: bool = False) -> str:

@@ -1,8 +1,9 @@
 # 闲时任务提示词
 
 > 用于空闲时段执行。复制下面**待办任务**的提示词给 agent，在项目目录下执行。
-> 三个任务**有顺序依赖，按编号顺序做**（后者覆盖前者产出物）：
-> 任务一（command 脚本定位改 skill 注入）→ 任务二（legacy 整改）→ 任务三（测试补缺 + 回归，最后做）
+> **任务一已完成**（command 脚本定位改 skill 注入，已落地，保留作历史记录，跳过）。
+> 待办按编号顺序（后者覆盖前者产出物）：
+> 任务二（legacy 整改）→ 任务三（precheck 校验增强）→ 任务四（测试补缺 + 回归，最后做）
 
 ---
 
@@ -12,7 +13,7 @@
 
 ---
 
-### 任务一：command 脚本定位改用 skill 注入 + config_paths 用 `__file__` 推算
+### ✅ 任务一：command 脚本定位改用 skill 注入 + config_paths 用 `__file__` 推算（已完成，跳过）
 
 **背景**：command（new-pipe.md）定位脚本目录时硬编码 `Path.home()/.config/opencode/skills/...`，假设"单一全局安装"。但 skill 可被项目级安装（`<proj>/.opencode/skills/`）或复用进别的工程，硬编码落空 → 所有脚本调用失败。同样，`config_paths.py` 的 config 定位也锚定 `Path.home()`，项目级安装时 config 也找不到。还有个附带 bug：`install.py --local` 模式下 skill 装项目级、config 却仍装全局（line 277 `rules_dir` 不分 mode），天然分裂。
 
@@ -133,11 +134,50 @@
 
 ---
 
-### 任务三：排查单元测试覆盖缺口并补充
+### 任务三：precheck 校验增强（源表级 alias 升 error + error 加修复指引）
+
+**背景**：precheck 阶段校验有几个可强化点（不阻断核心流程，属严谨性/体验优化）：
+1. **源表级 source_alias 空**（precheck.py:96）现在是 warn，建议升 error——源表没别名，字段级 source_alias 无从引用（虽字段级校验间接拦，但源头拦更清晰）
+2. **error 消息缺修复指引**：现在只报问题（如"字段 X 缺少来源字段"），没说怎么改。建议加修复指引，让用户/BA 知道改哪个源文件、哪一列
+3. **数据加工 source_column 空**（precheck.py:132-133）维持 warn（纯派生如 COUNT(*) 合法），只确认消息够清晰
+
+**先读这些理解上下文**：
+- `skills/dws-design/scripts/precheck.py` 的字段/别名校验段（line 90-235，含 3b 交叉校验 + 6 别名一致性）
+- 现有 error/warn 消息表述（确认哪些要加指引）
+
+**要做的**：
+
+1. **源表级 source_alias 空升 error**（precheck.py:96）：
+   - 现状：`result.add_warn(f"源表 ... 缺少别名 (source_alias)")`
+   - 改：`result.add_error(...)`，消息加指引"（在 mapping.xlsx 实体级定义的表别名列填，如 t/a/b）"
+
+2. **error 消息加修复指引**（各 add_error 处，统一指向源文件）：
+   - 字段缺 source_column → "在 mapping.xlsx 的 source_column 列填源表字段名"
+   - 字段 source_alias 空 / 不在实体级 → "在 mapping.xlsx 的表别名列填（须与实体级定义一致）"
+   - 映射规则不合法 → "改为 直接复制/数据加工/赋值/序列 之一"
+   - 目标 schema/table 缺失 → "在 RS L1.1 或 mapping 目标表补 schema.table"
+   - 其他 error 类似加"怎么改"指引。**统一原则：改源文件（mapping.xlsx / RS.md），不是产物 rs_input.json**
+
+3. **测试**（tests/test_precheck_db.py）：
+   - 源表级 alias 空 → 触发 error（不是 warn）
+   - 关键 error 消息含修复指引关键词（如 "mapping.xlsx"）
+
+**约束**：
+- 只改 precheck.py 的校验级别（warn→error）+ 消息文案，不动校验逻辑结构
+- 修复指引统一指向源文件（mapping.xlsx / RS.md），不指向 rs_input.json
+- 数据加工 source_column 空维持 warn（纯派生合法）
+
+**验证**：
+- `python3 -m pytest tests/ -q` 全套通过
+- 汇报：哪些 warn 升了 error、哪些消息加了指引
+
+---
+
+### 任务四：排查单元测试覆盖缺口并补充
 
 **背景**：之前 `resolve_all_params` 函数被 Edit 操作撕裂（函数体截断无 return），导致 UT 执行脚本报错。但没有测试挡住——因为这个函数没有直接单元测试，只被 UT 脚本间接调用（而测试环境连不了库，走不到间接路径）。要排查所有类似缺口。
 
-**这是最后一个任务的原因**：前面的任务（一、二）都改了代码，本任务补测试 + 回归要覆盖到所有新代码（尤其任务一的 config_paths `__file__` 推算 + 任务二的 legacy 整改）。**必须最后做（一 → 二 → 三）**。
+**这是最后一个任务的原因**：前面的任务（二、三）都改了代码，本任务补测试 + 回归要覆盖到所有新代码（尤其任务二的 legacy 整改 + 任务三的 precheck 校验增强）。**必须最后做（二 → 三 → 四）**。
 
 **排查方法**：
 
@@ -218,7 +258,7 @@
 - 只补**纯逻辑函数**的测试（不连库、不读真实文件、不依赖外部环境）
 - 需要连库/读 xlsx 的函数用 mock 测核心逻辑（参数解析、SQL 拼接、返回值格式）
 - 不要为了凑覆盖率写无意义的测试——每个测试要验证一个明确的行为
-- **覆盖任务一（config_paths `__file__` 推算）+ 任务二（legacy 整改）的新代码**
+- **覆盖任务二（legacy 整改）+ 任务三（precheck 校验增强）的新代码**
 - 补完跑 `python3 -m pytest tests/ -q` 确认全套通过
 
 **验证**：

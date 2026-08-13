@@ -91,7 +91,7 @@ def main():
     parser.add_argument("--source", default="", help="数据源名")
     parser.add_argument("--report", default="", help="UT 报告输出路径（ut_report.md）")
     parser.add_argument("--precheck-result", default="", help="预检结果 JSON（默认 ts 同级 ut_precheck_result.json）")
-    parser.add_argument("--sample-blocks", type=int, default=0, help="主表块采样百分比（如 10=SYSTEM(10)），0=不采样。开发环境加速用")
+    parser.add_argument("--sample-blocks", type=int, default=None, help="主表块采样百分比（如 10=SYSTEM(10)）。不传=读 config 默认；0=强制不采样；N>0=采样。开发环境加速用")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)

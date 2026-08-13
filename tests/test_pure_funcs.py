@@ -136,6 +136,36 @@ class TestTypeOrEmpty:
         assert type_or_empty(None) == ""
 
 
+class TestNormalizeType:
+    def test_int8_with_precision(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("int8(64)") == "bigint"
+
+    def test_int8_bare(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("int8") == "bigint"
+
+    def test_int4_to_integer(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("int4(10)") == "integer"
+
+    def test_number_to_numeric(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("number(10,2)") == "numeric(10,2)"
+
+    def test_varchar_kept(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("varchar(100)") == "varchar(100)"  # 保留
+
+    def test_case_insensitive(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("INT8(64)") == "bigint"
+
+    def test_empty(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("") == ""
+
+
 class TestGenerateRollback:
     def test_table_rollback(self):
         out = generate_rollback("dws", "dwb_test_f")
