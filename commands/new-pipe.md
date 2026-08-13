@@ -46,7 +46,13 @@ agent: build
 
 ### 脚本路径定位
 
-设计段脚本在 dws-design skill，编码段脚本在 dws-coding skill，公共脚本在 design-dev-shared skill。
+脚本按**调用方**分布在三个 skill 目录：
+- `design-dev-shared/scripts`（SHARED_SCRIPTS）：pipe 编排调的管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan/resolve_appid/schema_query）+ 公共库（dws_db/config_paths）。
+- `dws-design/scripts`（DESIGN_SCRIPTS）：designer 调的（assemble_ts/explore/fill_type_risk_decision）+ 类型库 type_compat。
+- `dws-coding/scripts`（CODING_SCRIPTS）：coder 调的（slice_ts/check_sql/pick_fields）+ UT 函数库（run_ut/ut_diagnose）。
+
+> 历史：pipe 脚本原按"阶段"散在 design/coding 下，2026-08 归位到 shared（按调用方归类，消除"agent skill 目录里混着 pipe 脚本"的混淆）。
+
 **先定位路径再开工**——调 Skill tool 加载 `design-dev-shared` skill，opencode 会注入它的 `location`（SKILL.md 绝对路径）。从 location 推算三个脚本目录：
 
 - `SHARED_SCRIPTS` = location 同级 `/scripts`（design-dev-shared/scripts）
@@ -55,8 +61,8 @@ agent: build
 
 **兜底**（skill 加载失败的极端情况）：用 `opencode debug skill` CLI 查 dws-design 的 location；或按候选路径探测——全局 `~/.config/opencode/skills/`、cwd 向上找 `.opencode/skills/`、cwd 向上找 `skills/`，第一个命中者作为 skills 根推算。
 
-下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录，`SHARED_SCRIPTS` 代指公共脚本目录（design-dev-shared/scripts，resolve_appid 在这）。
-调用时把变量替换为实际路径，例如：`python <DESIGN_SCRIPTS>/preprocess.py ...`
+下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录，`SHARED_SCRIPTS` 代指公共脚本目录（pipe 管线脚本 + 公共库所在）。
+调用时把变量替换为实际路径，例如：`python <SHARED_SCRIPTS>/preprocess.py ...`
 
 ### 确定 {deliver}（先查 appid）
 
@@ -81,7 +87,7 @@ python SHARED_SCRIPTS/resolve_appid.py --schema {schema}
 **步骤 1a：转换**（mapping + RS → rs_input.json）
 
 ```bash
-python DESIGN_SCRIPTS/preprocess.py \
+python SHARED_SCRIPTS/preprocess.py \
   --mapping {mapping路径} \
   --rs {RS路径} \
   --output {deliver}/_internal/rs_input.json
@@ -93,7 +99,7 @@ python DESIGN_SCRIPTS/preprocess.py \
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 
 ```bash
-python DESIGN_SCRIPTS/precheck.py \
+python SHARED_SCRIPTS/precheck.py \
   --input {deliver}/_internal/rs_input.json \
   --decision {deliver}/_internal/type_risk_decision.yaml
 ```
@@ -157,7 +163,7 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
 调脚本从 ts.json 直接生成摘要（不需要 AI 提取）：
 
 ```bash
-python DESIGN_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
+python SHARED_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
 ```
 
 拿到摘要后，**立即调 question 停下等用户确认**——不允许跑完摘要脚本直接进编码段，那不叫闸口：
@@ -190,7 +196,7 @@ python SHARED_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
 ### 4a：生成 DDL（脚本）
 
 ```bash
-python CODING_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}
+python SHARED_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}
 ```
 
 > **I 视图自动推导**：mapping 目标表写 `_i` 后缀（如 `dwb_xxx_i`），脚本自动推导 F 表并先建 F 表再建 I 视图。
@@ -229,7 +235,7 @@ Task(
 
 计划 `dq=false` → **跳过**：不调 coder，`dq/` 目录不建。无"标准三项系统兜底"。
 
-> DQ 只依赖 dq_rules（不依赖 DDL/coder 的 SELECT），故可与 4a/4b 并行。DQ 执行（UT 阶段）才依赖目标表存在。assemble_dq.py 已废弃，DQ 全部由 coder 按 dq_rules 产出。
+> DQ 只依赖 dq_rules（不依赖 DDL/coder 的 SELECT），故可与 4a/4b 并行。DQ 执行（UT 阶段）才依赖目标表存在。DQ 全部由 coder 按 dq_rules 产出（无脚本兜底，无"标准三项"系统生成）。
 
 ### 4d：init coder（计划 init_rules 非空时，等 4b 完成）
 
@@ -257,7 +263,7 @@ Task(
 **不要自己判断有没有数据源**——调脚本检查：
 
 ```bash
-python CODING_SCRIPTS/check_db.py --ts {deliver}/ts.json
+python SHARED_SCRIPTS/check_db.py --ts {deliver}/ts.json
 ```
 
 - 如果输出 `DB_OK` → 有数据源，继续跑 UT
@@ -268,7 +274,7 @@ python CODING_SCRIPTS/check_db.py --ts {deliver}/ts.json
 回退 + DDL + SELECT 预检。不写数据，只验证建表和查询能跑通。
 
 ```bash
-python CODING_SCRIPTS/ut_precheck.py \
+python SHARED_SCRIPTS/ut_precheck.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
@@ -282,7 +288,7 @@ python CODING_SCRIPTS/ut_precheck.py \
 按 load_mode 预处理 + INSERT 灌数据 + UT 检查 + 出报告。
 
 ```bash
-python CODING_SCRIPTS/ut_execute.py \
+python SHARED_SCRIPTS/ut_execute.py \
   --ts {deliver}/ts.json \
   --select-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
@@ -356,7 +362,7 @@ question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，�
 调 assemble_export.py 生成平台消费的 Excel：
 
 ```bash
-python CODING_SCRIPTS/assemble_export.py \
+python SHARED_SCRIPTS/assemble_export.py \
   --ts {deliver}/ts.json \
   --etl-dir {deliver}/etl/ \
   --ddl-dir {deliver}/ddl \

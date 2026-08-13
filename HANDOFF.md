@@ -65,7 +65,7 @@
 **2. 工程治理：工具注册表 + agent 瘦身 + legacy 清理**
 - `docs/tool-registry.md`：全脚本按**调用方**分组(command/designer/coder/imported)，含"读 ts[rules/init]"进度列。约定：改脚本必同步注册表。
 - dws-designer.md(197→85)/dws-coder.md(112→65) 瘦身：工作流削回 SKILL.md 指针(消灭双写)，分层定型 tool-registry/agent.md/SKILL.md。
-- 删 sql_validator/validate_ddl/verify_files(零引用死代码+孤儿测试)。assemble_dq(eval-suite 在调)/run_ut(UT 函数库)保留，整改挂闲时任务六。
+- 删 sql_validator/validate_ddl/verify_files(零引用死代码+孤儿测试)。assemble_dq/run_ut 整改原挂闲时任务六，已完成（2026-08）：assemble_dq.py 删除（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 legacy main() 成纯函数库。
 
 **3. config 集中 + 产出目录加 appid/schema 层**
 - `config_paths.py`(design-dev-shared)：config_dir() 集中，改基址只动一处。4 个 config 统一放 `~/.config/opencode/_references/rules/dws-design-dev/`(与其他项目隔离)。
@@ -150,7 +150,7 @@ R0003: merge              → 目标表 (target, reads=[tmp_a,tmp_b], load_mode=
 - **coder 按 step_type 产不同 SQL 的实际验证**：coder.md 和 etl-templates.md 已补引导，但还没拿真实增量资产跑过全链路验证（designer产design_decisions含step_type → coder产SELECT → run_ut的wrap_write执行）
 - **UT 按 produces_for/reads 编排执行顺序**：现在靠 schedule_groups 隐式数字排序，多步骤的显式依赖没用于执行编排
 - **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**：新 ts.json 不用 lts 兜底，可清理（platform_config 本身的 shujia 段删不掉，export 要用）——待讨论
-- **闲时任务六**（`eval-suite/idle-task-prompt.md`）：assemble_dq 退役（eval-suite 改走 coder 生成 DQ 后删）/ run_ut 去 legacy（函数库 vs main 拆分）
+- **闲时任务六（assemble_dq 退役 + run_ut 去 legacy）已完成 2026-08**：见 `eval-suite/idle-task-prompt.md` 任务一。assemble_dq.py 已删；run_ut.py 删 main() 成纯函数库
 
 ### 验证类
 - 拿 test_ai_emp 下的 mapping 文件按 RS 模板重建，跑全链路验证（用户之前提过）

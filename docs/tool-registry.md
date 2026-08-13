@@ -4,18 +4,18 @@
 > 已清理死代码（sql_validator / validate_ddl / verify_files 已删，零生产引用零测试）。
 > **维护约定**：加/改/删脚本时**同步这张表**（写进 AGENTS.md 编码约定）。漂移从这里一眼看出。
 >
-> **关键区分**：脚本**住在哪个 skill 目录**（按"阶段"组织：设计阶段脚本放 dws-design、编码阶段放 dws-coding）
-> ≠ **谁实际调用它**。本表按**调用方**分组——这才是"谁会用它"的真相。
+> **关键区分**：脚本**住在哪个 skill 目录**（按**调用方**组织：pipe 调的在 design-dev-shared、designer 调的在 dws-design、coder 调的在 dws-coding）
+> = **谁实际调用它**。本表按**调用方**分组。2026-08 归位：pipe 管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db）从 design/coding 挪到 design-dev-shared，消除"agent skill 目录里混着 pipe 脚本"。
 >
-> 末列「读 ts[rules/init]」是 init 下游物化进度表。Chunk 2 已接通：slice_ts / pick_fields / assemble_export / ut_precheck / ut_execute 都读 ts.rules + ts.init.rules（标 **both**）。check_sql / run_ut.main 尚未接通（init 走 slice_ts 间接覆盖；run_ut.main 是 legacy 不走）。
+> 末列「读 ts[rules/init]」是 init 下游物化进度表。Chunk 2 已接通：slice_ts / pick_fields / assemble_export / ut_precheck / ut_execute 都读 ts.rules + ts.init.rules（标 **both**）。check_sql 尚未直接接通 init（init 走 slice_ts 间接覆盖）；run_ut 是纯函数库（无 main），由 ut_execute 读 ts。
 
 ---
 
-## ① command 调用（new-pipe.md 编排，主线管线脚本）
+## ① command 调用（new-pipe.md 编排，主线管线脚本，住 design-dev-shared）
 
-> 这些脚本虽住在 dws-design / dws-coding 下（按阶段归类），但**调用方是编排 command**，不是 agent。
+> 这些脚本归 design-dev-shared/scripts（按调用方归类），**调用方是编排 command**，不是 agent。
 
-### 预处理 / 输入校验（设计阶段前端，住 dws-design）
+### 预处理 / 输入校验（住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本）+ rs_input_view.json（compact，给 designer） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
@@ -28,20 +28,20 @@
 |------|------|--------------|------------|-------------------|
 | `dispatch_plan.py` | 读 ts.json 输出编码段执行计划（ddl/dq/etl_rules/init_rules/groups），pipe 一次拿全并行发起，不手工解析判断 | 步骤 4-0 | ts.json → 执行计划 JSON（stdout） | **ts.rules + ts.init.rules** + ts.dq_rules + ts.data_flow |
 
-### 制品生成（编码阶段后端，住 dws-coding）
+### 制品生成（住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `assemble_ddl.py` | ts → DDL（CREATE TABLE/VIEW + COMMENT + 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables（init 复用 tmp 无新 DDL；Chunk 2 确认不重复建） |
 | `assemble_export.py` | ts + ETL + DDL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ + ddl/ → `export/*.xlsx` | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；计数含 init） |
-| `assemble_dq.py` | DQ SQL（标准三项）| **已弃用**（DQ 改 RS 驱动后仅 eval-suite 历史复现用） | ts.json → dq/*.sql | ts.dq_rules |
 
-### UT（需数据库，住 dws-coding）
+### UT（需数据库，住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
 | `ut_precheck.py` | 快速 UT 预检（回退 + DDL + SELECT 跑通，秒级，不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
 | `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **ts.rules + ts.init.rules**（init 先建基线→增量在基线上 merge；prev_failed 跨阶段级联） |
-| `run_ut.py` | **UT 函数库**（wrap_insert / wrap_write / run_ut_check / inject_tablesample / substitute_params 等，被 ut_precheck/ut_execute import）+ legacy `main()` 单执行器（new-pipe 不直接调，走 6a/6b） | 函数库：ut_precheck/ut_execute 用 | ts.json + etl/ + ddl/ → 报告 | **仅 ts.rules** + schedule_groups |
+| `run_ut.py` | **UT 函数库**（wrap_insert / wrap_write / run_ut_check / inject_tablesample / substitute_params / resolve_all_params 等，被 ut_precheck/ut_execute import）。纯函数库无 CLI 入口——UT 执行走 ut_precheck（6a）+ ut_execute（6b）两阶段 | 函数库：ut_precheck/ut_execute 用 | （由调用方读 ts） | 由调用方决定（ut_execute 读 ts.rules + ts.init.rules） |
+| `ut_diagnose.py` | UT 类型转换失败自动诊断（`diagnose_type_error`：圈跨类型字段→探测源表脏值+样例）。ut_execute INSERT 失败钩子调用（类型报错才触发）；也有 CLI 供 designer/coder 回退分析复跑（`--ts --rule`） | ut_execute 钩子调用 / designer·coder 复跑 | ts.json → 嫌疑字段诊断文本 | ts.tables[].fields + ts.rules[].source_tables + `_internal/schema_cache.json` |
 
 ### legacy 校验
 > 已删除（2026-08 清理）：`sql_validator.py` / `validate_ddl.py` / `verify_files.py` —— 零生产引用、零测试（validate_ddl 的孤儿测试一并清掉）。`CLAUDE.md` / `eval-suite/idle-task-prompt.md` 里还有提及，那两份是已知滞后文档，不再同步。
@@ -90,6 +90,5 @@
 | `new-pipe.md` 步骤 5b/6 | command | ✅ init coder 条件循环（5 后）；UT init-先说明 |
 | `assemble_ddl` | command | ✅ init 复用 tmp（build_tables 按表名去重，无新 DDL） |
 | `check_sql` | coder | ⚠️ 未直接改，但 init 切片经 slice_ts 解析，coder 自检流程不变 |
-| `run_ut.main` | — | ⚠️ legacy 单执行器未改（new-pipe 走 6a/6b 不用它） |
 
 derive 模式 init SQL：**不**用脚本字面派生——改由 coder 适配（slice_ts 带 clone_source，coder 读源 .sql 改 filter）。code 归 coder。

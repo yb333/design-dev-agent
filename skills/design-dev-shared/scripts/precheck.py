@@ -15,6 +15,15 @@ import argparse
 from typing import Any
 from pathlib import Path
 
+# 跨 skill import 引导：本脚本归 design-dev-shared/scripts（pipe 调），
+# lazy import design 的 type_compat/assemble_ts，按需把三个 skill 目录都加进 sys.path。
+_HERE = Path(__file__).resolve().parent
+_SKILLS = _HERE.parent.parent  # skills/
+for _sub in ("design-dev-shared", "dws-design", "dws-coding"):
+    _p = str(_SKILLS / _sub / "scripts")
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 
 class PrecheckResult:
     def __init__(self):
@@ -85,31 +94,53 @@ def precheck(
     target_schema = f_table.get("schema", "")
     target_table = f_table.get("table", "")
     if not target_schema or not target_table:
-        result.add_error("目标表 schema/table 缺失")
+        result.add_error(
+            "目标表 schema/table 缺失"
+            "——在 RS L1.1 或 mapping 实体级'目标表逻辑schema'/'目标表物理名称'补 schema.table"
+        )
     else:
         result.add_pass(f"目标表: {target_schema}.{target_table}")
+
+    # RS 降级提示：RS 提供了但目标表 schema/table 没解析出来（L1.1 段缺失/格式乱），
+    # preprocess 已用 mapping 兜底。这里只提示"目标表来源 mapping，建议补 RS L1.1"
+    if rs_input.get("_rs_degraded"):
+        result.add_warn(
+            "RS L1.1（资产基本信息）未解析出目标表 schema/table，已用 mapping 兜底"
+            "——建议修正 RS 的'资产 SCHEMA.接口视图'行写法后补 RS 重跑"
+        )
 
     # 2. 源表
     source_tables = rs_input.get("source_tables", [])
     if not source_tables:
-        result.add_error("无源表 (source_tables 为空)")
+        result.add_error(
+            "无源表 (source_tables 为空)——在 mapping.xlsx 实体级 mapping 补源表定义"
+        )
     else:
         result.add_pass(f"源表数: {len(source_tables)}")
+        # 源表级别名缺失升 error：字段级 source_alias 无从引用，源头拦更清晰
         for st in source_tables:
             if not st.get("source_alias"):
-                result.add_warn(f"源表 {st.get('source_table', '?')} 缺少别名 (source_alias)")
+                result.add_error(
+                    f"源表 {st.get('source_table', '?')} 缺少别名 (source_alias)"
+                    f"——字段级 source_alias 无从引用"
+                    f"（在 mapping.xlsx 实体级'源表别名'列填，如 t/a/b）"
+                )
 
     # 3. 字段映射 (含映射规则交叉校验)
     field_mappings = rs_input.get("field_mappings", [])
     if not field_mappings:
-        result.add_error("无字段映射 (field_mappings 为空)")
+        result.add_error(
+            "无字段映射 (field_mappings 为空)——在 mapping.xlsx 属性级 mapping 补字段映射"
+        )
     else:
         result.add_pass(f"字段映射数: {len(field_mappings)}")
 
         for fm in field_mappings:
             target_field = fm.get("target_column", "")
             if not target_field:
-                result.add_error("存在无目标字段名的映射行")
+                result.add_error(
+                    "存在无目标字段名的映射行——在 mapping.xlsx 属性级'目标字段名'列填字段名"
+                )
                 continue
 
             rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
@@ -118,25 +149,43 @@ def precheck(
 
             # 3a. 映射规则必须有值且合法
             if not rule:
-                result.add_error(f"字段 {target_field} 缺少映射规则")
+                result.add_error(
+                    f"字段 {target_field} 缺少映射规则"
+                    f"——在 mapping.xlsx'映射规则'列填 直接复制/数据加工/赋值/序列 之一"
+                )
                 continue
             if rule not in VALID_RULES:
-                result.add_error(f"字段 {target_field} 的映射规则 '{rule}' 不合法 (应为: 直接复制/数据加工/赋值/序列)")
+                result.add_error(
+                    f"字段 {target_field} 的映射规则 '{rule}' 不合法"
+                    f"——在 mapping.xlsx'映射规则'列改为 直接复制/数据加工/赋值/序列 之一"
+                )
                 continue
 
             # 3b. 交叉校验
             if rule == "直接复制":
                 # 直接复制填了表达式不报——BA 从关联从表取值时常在这里标注关联关系，是习惯写法
                 if not source_field:
-                    result.add_error(f"字段 {target_field} 是'直接复制'但缺少来源字段 (source_column)")
+                    result.add_error(
+                        f"字段 {target_field} 是'直接复制'但缺少来源字段 (source_column)"
+                        f"——在 mapping.xlsx'源表字段名'列填源表字段名"
+                    )
             elif rule == "数据加工":
                 if not expr or expr == "-":
-                    result.add_error(f"字段 {target_field} 是'数据加工'但映射表达式为空 (必须描述加工逻辑)")
+                    result.add_error(
+                        f"字段 {target_field} 是'数据加工'但映射表达式为空"
+                        f"——在 mapping.xlsx'映射表达式'列描述加工逻辑"
+                    )
                 if not source_field:
-                    result.add_warn(f"字段 {target_field} 是'数据加工'但没有来源字段, 确认是否为纯派生字段")
+                    result.add_warn(
+                        f"字段 {target_field} 是'数据加工'但没有来源字段"
+                        f"（纯派生如 COUNT(*) 合法；若有来源字段请在'源表字段名'列补）"
+                    )
             elif rule == "赋值":
                 if not expr or expr == "-":
-                    result.add_error(f"字段 {target_field} 是'赋值'但映射表达式为空 (必须说明赋什么值)")
+                    result.add_error(
+                        f"字段 {target_field} 是'赋值'但映射表达式为空"
+                        f"——在 mapping.xlsx'映射表达式'列说明赋什么值（如 'N' / ${P_CYCLE_ID}）"
+                    )
             elif rule == "序列":
                 result.add_pass(f"字段 {target_field} 是'序列'类型 (自增序列, 特殊处理)")
 
@@ -148,7 +197,10 @@ def precheck(
             seen_fields[tf] = seen_fields.get(tf, 0) + 1
     for field, count in seen_fields.items():
         if count > 1:
-            result.add_error(f"目标字段 '{field}' 重复出现 {count} 次")
+            result.add_error(
+                f"目标字段 '{field}' 重复出现 {count} 次"
+                f"——在 mapping.xlsx 去重，或确认是否多源合并（同目标字段多次违反唯一约束）"
+            )
 
     # 5. 调度信息 (来自 RS)
     schedule = rs_input.get("schedule", {})
@@ -178,7 +230,8 @@ def precheck(
         if not incremental_tables:
             result.add_error(
                 f"调度方案标了增量（增量识别方式={incremental_key}），"
-                f"但 RS 的'增量表及增量字段'段为空——必须有驱动表+增量字段"
+                f"但 RS 的'增量表及增量字段'段为空"
+                f"——在 RS L07'增量表及增量字段'段补驱动表+增量字段"
             )
         else:
             result.add_pass(f"增量场景: {len(incremental_tables)} 张驱动表")
@@ -190,9 +243,14 @@ def precheck(
                 drv_table = (it.get("source_table") or "").strip()
                 drv_key = (it.get("incremental_key") or "").strip()
                 if not drv_table:
-                    result.add_error("增量驱动表的来源表名为空")
+                    result.add_error(
+                        "增量驱动表的来源表名为空——在 RS L07'增量表及增量字段'段'来源表'列补表名"
+                    )
                 elif not drv_key:
-                    result.add_error(f"增量驱动表 '{drv_table}' 没填增量字段")
+                    result.add_error(
+                        f"增量驱动表 '{drv_table}' 没填增量字段"
+                        f"——在 RS L07'增量表及增量字段'段'增量字段'列补（如 update_time）"
+                    )
                 else:
                     # 驱动表名可能是 schema.table 或纯表名，取表名部分比对
                     drv_table_short = drv_table.split(".")[-1].lower()
@@ -200,7 +258,7 @@ def precheck(
                             and drv_table.lower() not in src_table_names):
                         result.add_error(
                             f"增量驱动表 '{drv_table}' 不在 mapping 的 source_tables 里"
-                            f"（检查表名拼写或补充源表）"
+                            f"——检查 RS 的表名拼写，或在 mapping 实体级补充该源表"
                         )
     else:
         # 全量场景：不应有增量驱动表（RS 增量识别=不涉及，但填了驱动表→矛盾）
@@ -222,10 +280,14 @@ def precheck(
             # 直接复制/数据加工字段该填 source_alias 没填 → error（多表 JOIN 会歧义，单表也无法定位来源）
             result.add_error(
                 f"字段 {fm.get('target_column', '?')} 的 source_alias 为空"
-                f"（映射规则='{fm_rule}'，需声明来源表别名以便 JOIN 定位）"
+                f"（映射规则='{fm_rule}'）——在 mapping.xlsx 属性级'源表别名'列填"
+                f"（须与实体级定义一致）"
             )
         elif fm_alias not in entity_aliases:
-            result.add_error(f"字段 {fm.get('target_column', '?')} 的来源别名 '{fm_alias}' 在实体级 mapping 中不存在")
+            result.add_error(
+                f"字段 {fm.get('target_column', '?')} 的来源别名 '{fm_alias}' 在实体级 mapping 中不存在"
+                f"——在 mapping.xlsx 属性级'源表别名'列改（须与实体级定义一致）"
+            )
 
     # 6a. 表别名重复检查（实体级同别名出现多次 → JOIN 时歧义）
     alias_count: dict[str, int] = {}
@@ -235,7 +297,10 @@ def precheck(
             alias_count[al] = alias_count.get(al, 0) + 1
     for al, cnt in alias_count.items():
         if cnt > 1:
-            result.add_error(f"实体级表别名 '{al}' 重复出现 {cnt} 次（JOIN 时会歧义）")
+            result.add_error(
+                f"实体级表别名 '{al}' 重复出现 {cnt} 次（JOIN 时会歧义）"
+                f"——在 mapping.xlsx 实体级'源表别名'列改重复别名（每张源表唯一）"
+            )
 
     # 6b. 字段级与表级一致性：字段级的 source_schema/source_table 应在实体级定义范围内
     # 跳过赋值/序列字段——它们没有真实来源表（赋值是固定值，如 NULL AS），
@@ -254,6 +319,7 @@ def precheck(
             result.add_error(
                 f"字段 {fm.get('target_column', '?')} 的来源表 {fm_sch}.{fm_tbl} "
                 f"在实体级 mapping 中未定义"
+                f"——在 mapping.xlsx 实体级补充该源表，或修正属性级来源表名"
             )
 
     # 6c. source_column 不能是中文（应是英文物理列名，中文是另一个字段"源表字段中文名"）
@@ -263,7 +329,8 @@ def precheck(
         if sc and _re.search(r"[\u4e00-\u9fff]", sc):
             result.add_error(
                 f"字段 {fm.get('target_column', '?')} 的 source_column '{sc}' 含中文"
-                f"（应为英文物理列名，中文列名应在'源表字段中文名'列）"
+                f"（应为英文物理列名）——在 mapping.xlsx'源表字段名'列改为英文列名，"
+                f"中文写进'源表字段中文名'列"
             )
 
     # 7. 映射表达式模糊术语检查
@@ -790,10 +857,6 @@ def _check_db_schema(
     if not cache_used:
         target = rs_input.get("meta", {}).get("target", {})
         target_schema = target.get("f_table", {}).get("schema", "") or target.get("schema", "")
-        sys.path.insert(
-            0,
-            str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"),
-        )
         from dws_db import create_executor_for_schema
 
         # create_executor 失败：区分环境问题（ImportError 驱动缺失→warn）vs 配置错误（→error 阻断）

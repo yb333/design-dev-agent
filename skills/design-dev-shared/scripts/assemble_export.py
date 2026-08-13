@@ -27,7 +27,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+# config_paths/resolve_appid 同目录（design-dev-shared/scripts）
 from config_paths import platform_config_path, resolve_appid
 
 try:

@@ -20,7 +20,7 @@ import os
 import argparse
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+# config_paths 同目录（design-dev-shared/scripts）
 from config_paths import db_sources_path
 
 
@@ -96,7 +96,6 @@ def main():
 
     # 按 target schema 选源，测 admin + etl 两个账号（与 precheck/UT 选源逻辑一致）
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
         from dws_db import create_executor_for_schema
 
         failures = []

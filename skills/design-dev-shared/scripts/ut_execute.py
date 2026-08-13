@@ -21,9 +21,14 @@ try:
 except AttributeError:
     pass
 
-# dws_db 在 design-dev-shared 公共库（与本 skill 平级）；run_ut 仍在同目录
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# 跨 skill import 引导：本脚本归 design-dev-shared/scripts（pipe 调），
+# import coding 的 run_ut/ut_diagnose；dws_db/config_paths 同目录。
+_HERE = Path(__file__).resolve().parent
+_SKILLS = _HERE.parent.parent  # skills/
+for _sub in ("design-dev-shared", "dws-design", "dws-coding"):
+    _p = str(_SKILLS / _sub / "scripts")
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from dws_db import create_executor
 from config_paths import db_sources_path
 from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks
@@ -80,6 +85,32 @@ def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
             lines.append("")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+# 类型转换类报错的关键字（DB 报错通常英文：invalid input syntax for type numeric）
+_TYPE_ERROR_KEYWORDS = ("invalid input syntax", "for type", "cast", "could not convert",
+                        "failed to convert", "invalid value")
+
+
+def _is_type_conversion_error(error_msg: str) -> bool:
+    """报错是否属类型转换类（值得跑自动诊断）。"""
+    low = (error_msg or "").lower()
+    return any(k in low for k in _TYPE_ERROR_KEYWORDS)
+
+
+def _diagnose_insert_failure(executor, rule: dict, ts: dict, ts_path: Path) -> str:
+    """INSERT 失败的类型转换类报错 → 自动诊断嫌疑脏数据字段，返回人读文本。
+
+    设计为增益不是依赖：诊断异常/无缓存都诚实返回提示，绝不抛出影响主流程。
+    schema_cache 不存在 → 诊断返回"未连库无缓存"（diagnose_type_error 内部处理）。
+    """
+    try:
+        from ut_diagnose import diagnose_type_error, format_diagnosis
+        cache_path = ts_path.parent / "_internal" / "schema_cache.json"
+        entries = diagnose_type_error(executor, rule, ts, cache_path)
+        return format_diagnosis(entries)
+    except Exception as e:
+        return f"自动诊断异常（无法定位，附原始报错请人排查）: {e}"
 
 
 def main():
@@ -248,6 +279,12 @@ def main():
                     rule_result["error_type"] = error_type
                     rule_result["detail"] = f"试跑(采样{sample_n}%)失败: {error_msg}"
                     print(f"  ❌ 试跑失败({error_type}): {error_msg}")
+                    # 类型转换类报错 → 自动诊断嫌疑脏数据（增益，不阻断）
+                    if _is_type_conversion_error(error_msg):
+                        diag = _diagnose_insert_failure(executor, rule, ts, ts_path)
+                        if diag:
+                            rule_result["diagnosis"] = diag
+                            print(f"  🔍 {diag.splitlines()[0]}")
                     _dump_rule_sql(ts_path, rule_code, target, trial_select, trial_insert,
                                    f"试跑(采样{sample_n}%)失败({error_type}): {error_msg}", [])
                     all_results.append(rule_result)
@@ -268,6 +305,12 @@ def main():
                 rule_result["error_type"] = error_type
                 rule_result["detail"] = f"INSERT失败: {error_msg}"
                 print(f"  ❌ INSERT失败({error_type}): {error_msg}")
+                # 类型转换类报错 → 自动诊断嫌疑脏数据（增益，不阻断）
+                if _is_type_conversion_error(error_msg):
+                    diag = _diagnose_insert_failure(executor, rule, ts, ts_path)
+                    if diag:
+                        rule_result["diagnosis"] = diag
+                        print(f"  🔍 {diag.splitlines()[0]}")
                 # 落地 SQL（失败也要落，这是最需要 debug 的场景）
                 _dump_rule_sql(ts_path, rule_code, target, select_sql, insert_sql,
                                f"执行失败({error_type}): {error_msg}", [])
@@ -350,6 +393,10 @@ def main():
         for r in all_results:
             if r["status"] == "FAIL":
                 report_lines.append(f"- ❌ **{r['rule']}**（{r['target']}）: {r['detail']}")
+                # 类型转换类失败的自动诊断（脏数据定位，贴在 FAIL detail 下）
+                if r.get("diagnosis"):
+                    for ln in r["diagnosis"].splitlines():
+                        report_lines.append(f"  - {ln}")
                 for c in r.get("checks", []):
                     if c["status"] == "FAIL" and c.get("samples"):
                         report_lines.append(f"  - {c['check']} 样例:")

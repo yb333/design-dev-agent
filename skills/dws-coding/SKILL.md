@@ -200,7 +200,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 | `assets/etl-templates.md` | SELECT 标准模板（各种加工模式） |
 | `references/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
 
-> 工具脚本（slice_ts.py / **pick_fields.py** / check_sql.py / dws_db.py / assemble_ddl.py / run_ut.py）在 `scripts/` 下，agent 通过 bash 调用。
+> coder 工具脚本（slice_ts.py / **pick_fields.py** / check_sql.py / run_ut.py(UT函数库)）在本 skill 的 `scripts/` 下，agent 通过 bash 调用。dws_db / config_paths 等公共库在 design-dev-shared；DDL/制品/UT 执行等 pipe 脚本（assemble_ddl/assemble_export/ut_precheck/ut_execute）也归 design-dev-shared（pipe 调，coder 不直接调）。
 
 ---
 

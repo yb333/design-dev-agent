@@ -18,18 +18,19 @@
 ```
 skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
-│   ├── scripts/         # preprocess.py assemble_ts.py precheck.py gate_summary.py explore.py
-│   │                    #   fill_type_risk_decision.py type_compat.py
+│   ├── scripts/         # assemble_ts.py explore.py fill_type_risk_decision.py type_compat.py
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json schema_apps.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
-│   ├── scripts/         # run_ut.py(UT函数库) ut_precheck.py ut_execute.py check_db.py check_sql.py
-│   │                    #   assemble_ddl.py assemble_export.py slice_ts.py pick_fields.py
-│   │                    #   assemble_dq.py(已弃用,仅 eval-suite 复现)
+│   ├── scripts/         # run_ut.py(UT函数库,无main) ut_diagnose.py(类型诊断) check_sql.py slice_ts.py pick_fields.py
 │   │   └── lib/         # dws_preprocessor.py
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
-└── design-dev-shared/   # ★ 公共代码库（无 SKILL.md，install 单独拷）
+└── design-dev-shared/   # ★ 公共代码库 + pipe 管线脚本（无 SKILL.md，install 单独拷）
     └── scripts/         # dws_db.py(连库) config_paths.py(★config路径集中) resolve_appid.py(查appid)
+                         #   dispatch_plan.py schema_query.py
+                         #   ★ pipe 调的管线脚本（2026-08 按调用方归位）：
+                         #   preprocess.py precheck.py gate_summary.py（原 dws-design）
+                         #   assemble_ddl.py assemble_export.py ut_precheck.py ut_execute.py check_db.py（原 dws-coding）
 agents/                  # dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
 commands/new-pipe.md     # ★ 唯一编排剧本（设计→闸口①→编码→UT→闸口② 全流程）
 install.py               # 装 skill/agent/command 到 ~/.config/opencode/
@@ -221,13 +222,13 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 - assemble_ts 新增 LD 层校验：N_DQ1（硬阻断，RS 有 DQ 但 dq_rules 空）/ N_DQ2（warn，条数偏少）/ N_DQ3（warn，RS 无但自加）。
 - DQ 调度任务条件化（dq_rules 空不建 tasks["dq"]）；coder 条件化调用（dq_rules 空不调）。
 - preprocess build_compact 加 `dq` 段（designer 读 view 就看到 RS 的 DQ 需求）。
-- assemble_dq.py（废弃脚本）不改逻辑仅供 eval 复现，文件头注释说明与生产路径不一致。
+- assemble_dq.py 已退役删除（2026-08）：eval-suite 改走 coder 生成 DQ（对齐生产 4c），两路 DQ 产出统一，无脚本兜底。
 
 ### 工程治理：工具注册表 + agent 瘦身 + legacy 清理（2026-08）
 
 - **工具注册表**（`docs/tool-registry.md`）：全管线脚本按**调用方**分组（command / designer / coder / imported），澄清"脚本住哪个 skill 目录 ≠ 谁调它"（preprocess/precheck 等住在 dws-design 但由 command 调）。含"读 ts[rules/init]"列——init 下游物化的进度表。编码约定加一条：**改/加脚本必须同步 tool-registry.md**（防漂移，之前 AGENTS.md 结构树已漏 pick_fields）。
 - **agent 瘦身**：dws-designer.md（197→85 行）/ dws-coder.md（112→65 行）——把抄 SKILL.md 的工作流/工具用法削回指针（coder.md 自认"与 SKILL §2.4 保持一致 改动要同步"的双写消除），只留身份+权限+角色独有行为+工具清单。分层定型：tool-registry（工具WHAT）+ agent.md（岗位）+ SKILL.md（工作流唯一源）。agent.md 独有的关联决策（倒推 JOIN / INNER-LEFT）迁进 SKILL §2 第2层。
-- **legacy 清理**：删 sql_validator.py / validate_ddl.py / verify_files.py（全仓查引用，零生产引用、零/孤儿测试）。保留 assemble_dq（eval-suite 在调）、run_ut（实为 UT 函数库，注册表原标 legacy 有误已修正）。assemble_dq/run_ut 的整改挂闲时任务六（`eval-suite/idle-task-prompt.md`）。
+- **legacy 清理**：删 sql_validator.py / validate_ddl.py / verify_files.py（全仓查引用，零生产引用、零/孤儿测试）。assemble_dq.py / run_ut legacy main() 的整改原挂闲时任务六，**已完成（2026-08）**：assemble_dq.py 删除（eval-suite 改走 coder 生成 DQ，对齐生产 4c）；run_ut.py 删 legacy main() 成纯函数库（6a/6b 两阶段是唯一执行入口）。
 
 ### config 集中 + 产出目录分层 + 编排者铁律（2026-08）
 
@@ -238,4 +239,4 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 ### 待讨论 / 闲时
 
 - **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**（新 ts.json 不用 lts 兜底，可清理）——待讨论。
-- **闲时任务六**：assemble_dq（eval-suite 改走 coder 生成 DQ 后删）/ run_ut（函数库 vs legacy main 拆分）。挂在 `eval-suite/idle-task-prompt.md`。
+- **闲时任务六**（assemble_dq 退役 + run_ut 去 legacy）**已完成 2026-08**：见 `eval-suite/idle-task-prompt.md` 任务一。assemble_dq.py 已删（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 main() 成纯函数库。

@@ -4,7 +4,7 @@
 但每步返回 PipelineStepResult（带耗时），不绑死 EvalReport。
 
 阶段：preprocess → precheck → designer(+assemble_ts) → coder →
-      assemble_ddl → assemble_dq → check_sql → ut(可选) → export
+      assemble_ddl → check_sql → ut(可选) → export
 
 调起 designer/coder 用 `opencode run --agent`（CLI，无 sidecar 依赖，适合内网）。
 """

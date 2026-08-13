@@ -29,6 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # 全局安装的 skill 路径
 DESIGN_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-design" / "scripts"
 CODING_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-coding" / "scripts"
+# pipe 管线脚本归 design-dev-shared（2026-08 按调用方归位：preprocess/precheck/gate_summary/
+# assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan 等）
+SHARED_REFS = Path.home() / ".config" / "opencode" / "skills" / "design-dev-shared" / "scripts"
 
 
 class EvalReport:
@@ -114,7 +117,7 @@ def step_preprocess(report, deliver, mapping, rs, skip_rs):
     if not skip_rs and rs:
         args.extend(["--rs", str(rs)])
 
-    code, out = run_python(str(DESIGN_REFS / "preprocess.py"), args)
+    code, out = run_python(str(SHARED_REFS / "preprocess.py"), args)
     if code == 0:
         data = json.loads(rs_input.read_text(encoding="utf-8"))
         n_fields = len(data.get("field_mappings", []))
@@ -129,7 +132,7 @@ def step_preprocess(report, deliver, mapping, rs, skip_rs):
 def step_precheck(report, deliver):
     """步骤2: 预检查"""
     rs_input = deliver / "_internal" / "rs_input.json"
-    code, out = run_python(str(DESIGN_REFS / "precheck.py"), ["--input", str(rs_input)])
+    code, out = run_python(str(SHARED_REFS / "precheck.py"), ["--input", str(rs_input)])
     if code == 0:
         report.pass_step("预检查(precheck)", "全部通过")
     elif code == 1:
@@ -211,7 +214,7 @@ def step_assemble_ddl(report, deliver):
     """步骤5: 生成 DDL"""
     ddl_dir = deliver / "ddl"
     code, out = run_python(
-        str(CODING_REFS / "assemble_ddl.py"),
+        str(SHARED_REFS / "assemble_ddl.py"),
         ["--ts", str(deliver / "ts.json"), "--outdir", str(deliver)]
     )
     ddl_dir_real = deliver / "ddl"
@@ -241,21 +244,53 @@ def step_assemble_ddl(report, deliver):
         return False
 
 
-def step_assemble_dq(report, deliver):
-    """步骤5.5: 生成 DQ 检查 SQL"""
+def step_coder_dq(report, deliver, skip_ai):
+    """步骤5.5: DQ coder 生成检查 SQL（与生产 new-pipe 4c 对齐）。
+
+    生产路径（DQ 完全跟随 RS）：
+      - RS 有 DQ 需求（ts.dq_rules 非空）→ coder 按 dq_rules 的 rule_desc 技术口径生成检查 SQL
+      - RS 无 DQ 需求（dq_rules 空）→ 跳过，不产 DQ（无"标准三项系统兜底"）
+    判定与 dispatch_plan 的 dq=bool(dq_rules) 一致。
+
+    --skip-ai 模式：DQ 是 AI 产物（coder 生成），无 AI 则跳过（与 SELECT 同等待遇）。
+    """
+    ts_path = deliver / "ts.json"
+    if not ts_path.exists():
+        report.warn("DQ(coder)", "ts.json 不存在，跳过")
+        return True
+
+    ts = json.loads(ts_path.read_text(encoding="utf-8"))
+    dq_rules = ts.get("dq_rules") or []
+    if not dq_rules:
+        report.pass_step("DQ(coder)", "dq_rules 为空（RS 无 DQ 需求），跳过")
+        return True
+
+    if skip_ai:
+        report.warn("DQ(coder)", f"跳过AI（--skip-ai），{len(dq_rules)} 条 DQ 未生成")
+        return True
+
     dq_dir = deliver / "dq"
     dq_dir.mkdir(parents=True, exist_ok=True)
-    code, out = run_python(
-        str(CODING_REFS / "assemble_dq.py"),
-        ["--ts", str(deliver / "ts.json"), "--outdir", str(dq_dir)]
-    )
-    dq_files = list(dq_dir.glob("*.sql")) if dq_dir.exists() else []
+    abs_ts = str(ts_path.resolve())
+    abs_dq = str(dq_dir.resolve())
 
-    if code == 0 and dq_files:
-        report.pass_step("DQ生成(assemble_dq)", f"{len(dq_files)}个DQ检查SQL")
+    prompt = (
+        f"读取 {abs_ts} 的 dq_rules，按每条规则的 rule_desc 技术口径"
+        f"生成检查 SQL，产出到 {abs_dq}/ 目录。"
+        f"每个文件命名 dq_{{检查类型}}.sql。"
+    )
+
+    run_cmd(
+        ["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt],
+        timeout=1800,
+    )
+
+    dq_files = list(dq_dir.glob("*.sql")) if dq_dir.exists() else []
+    if dq_files:
+        report.pass_step("DQ(coder)", f"{len(dq_files)}个DQ检查SQL")
         return True
     else:
-        report.fail_step("DQ生成(assemble_dq)", out[:200])
+        report.fail_step("DQ(coder)", "DQ 文件未生成")
         return False
 
 
@@ -286,7 +321,7 @@ def step_ut(report, deliver):
     """
     # 先判断有没有数据源（按 target schema 选源，传 ts.json）
     code, out = run_python(
-        str(CODING_REFS / "check_db.py"),
+        str(SHARED_REFS / "check_db.py"),
         ["--ts", str(deliver / "ts.json")],
         timeout=30,
     )
@@ -296,7 +331,7 @@ def step_ut(report, deliver):
 
     # 6a: UT 预检（秒级，不写数据）
     code, out = run_python(
-        str(CODING_REFS / "ut_precheck.py"),
+        str(SHARED_REFS / "ut_precheck.py"),
         ["--ts", str(deliver / "ts.json"),
          "--select-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),
@@ -310,7 +345,7 @@ def step_ut(report, deliver):
 
     # 6b: UT 执行（分钟级，写数据）
     code, out = run_python(
-        str(CODING_REFS / "ut_execute.py"),
+        str(SHARED_REFS / "ut_execute.py"),
         ["--ts", str(deliver / "ts.json"),
          "--select-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),
@@ -332,7 +367,7 @@ def step_assemble_export(report, deliver):
     """
     export_dir = deliver / "export"
     code, out = run_python(
-        str(CODING_REFS / "assemble_export.py"),
+        str(SHARED_REFS / "assemble_export.py"),
         ["--ts", str(deliver / "ts.json"),
          "--etl-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),
@@ -482,8 +517,8 @@ def main():
         # 步骤5: DDL
         step_assemble_ddl(report, deliver_base)
 
-        # 步骤5.5: DQ 检查 SQL
-        step_assemble_dq(report, deliver_base)
+        # 步骤5.5: DQ coder 检查 SQL（dq_rules 非空才调 coder，与生产 4c 对齐）
+        step_coder_dq(report, deliver_base, args.skip_ai)
 
         # 步骤6: 静态对比（对每个已编码规则）
         for rc in encoded_rules:

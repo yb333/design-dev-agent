@@ -1282,3 +1282,108 @@ class TestApplyTypeDecision:
         from conftest import make_type_risk_rs_input
         rs = make_type_risk_rs_input()
         assert _apply_type_decision(rs, tmp_path / "nope.yaml") == 0
+
+
+# ============================================================
+# 任务二：校验分级与容错（源表别名升 error + error 消息修复指引）
+# ============================================================
+
+class TestAliasGradingAndGuidance:
+    """源表级 source_alias 空升 error；error 消息含修复指引（指向 mapping.xlsx）。"""
+
+    def test_source_table_empty_alias_is_error(self, monkeypatch):
+        """源表级 source_alias 空 → error（不再是 warn）。源头拦更清晰。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input(
+            fields=[_biz_field(source_column="id")],
+            sources=[{"source_schema": "ods", "source_table": "ods_test_f",
+                      "source_table_cn": "测试源表", "source_alias": "",  # ★ 空
+                      "target_schema": "dws", "target_table": "dwb_test_i"}],
+        )
+        result = precheck(rs)
+        # 源表级别名空应作为 error（消息含"源表"+"别名"）
+        src_alias_errors = [
+            e for e in result.errors
+            if "源表" in e and "别名" in e and "source_alias" in e
+        ]
+        assert src_alias_errors, f"源表级 source_alias 空应报 error: {result.errors}"
+        # 不应作为 warning 出现
+        src_alias_warns = [
+            w for w in result.warnings
+            if "源表" in w and "source_alias" in w
+        ]
+        assert src_alias_warns == [], f"源表级别名空已升 error，不应再 warn: {src_alias_warns}"
+
+    def test_source_alias_error_has_mapping_xlsx_guidance(self, monkeypatch):
+        """源表级别名空的 error 含修复指引关键词 mapping.xlsx。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input(
+            fields=[_biz_field(source_column="id")],
+            sources=[{"source_schema": "ods", "source_table": "ods_test_f",
+                      "source_table_cn": "测试源表", "source_alias": "",
+                      "target_schema": "dws", "target_table": "dwb_test_i"}],
+        )
+        result = precheck(rs)
+        guidance = [e for e in result.errors if "mapping.xlsx" in e]
+        assert guidance, f"error 应含 mapping.xlsx 修复指引: {result.errors}"
+
+    def test_field_missing_source_column_has_guidance(self, monkeypatch):
+        """直接复制缺 source_column 的 error 含 mapping.xlsx 指引。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "", "source_type": "bigint",
+            "transform_rule": "直接复制", "transform_detail": "-",
+            "target_column": "amt", "target_column_cn": "金额",
+            "target_type": "bigint", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        missing = [e for e in result.errors if "来源字段" in e and "mapping.xlsx" in e]
+        assert missing, f"缺 source_column 的 error 应含 mapping.xlsx 指引: {result.errors}"
+
+    def test_invalid_mapping_rule_has_guidance(self, monkeypatch):
+        """映射规则不合法的 error 含'改为 ... 之一'指引。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "amt", "source_type": "bigint",
+            "transform_rule": "查表",  # ★ 不合法
+            "transform_detail": "-",
+            "target_column": "amt", "target_column_cn": "金额",
+            "target_type": "bigint", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        invalid = [e for e in result.errors if "不合法" in e and "改为" in e]
+        assert invalid, f"非法映射规则 error 应含'改为'指引: {result.errors}"
+
+    def test_derived_empty_source_column_stays_warn(self, monkeypatch):
+        """数据加工 source_column 空 → 仍 warn（纯派生如 COUNT(*) 合法），不升 error。"""
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+
+        rs = _make_rs_input([{
+            "source_schema": "ods", "source_table": "ods_test_f",
+            "source_column": "", "source_type": "bigint",
+            "transform_rule": "数据加工", "transform_detail": "COUNT(*)",
+            "target_column": "cnt", "target_column_cn": "计数",
+            "target_type": "bigint", "source_alias": "t", "remark": "",
+        }])
+        result = precheck(rs)
+        derived_warns = [w for w in result.warnings if "纯派生" in w or "来源字段" in w]
+        assert derived_warns, f"数据加工无来源字段应 warn: {result.warnings}"
+        # 不应是 error
+        derived_errors = [e for e in result.errors if "数据加工" in e and "没有来源字段" in e]
+        assert derived_errors == [], f"纯派生不应报 error: {derived_errors}"

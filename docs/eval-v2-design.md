@@ -31,7 +31,7 @@ cases/{case}/{mapping.xlsx, RS.md, checks.yaml}
   → 存档 results/{case}/{timestamp}/result.json
 ```
 
-**层1 流程层（新增）**：每阶段退出码+耗时+失败定位（preprocess/precheck/designer/coder/assemble_ddl/assemble_dq/check_sql/ut/export）。复用 local_eval 的 step_* 划分，每步包计时器。
+**层1 流程层（新增）**：每阶段退出码+耗时+失败定位（preprocess/precheck/designer/coder/assemble_ddl/check_sql/ut/export；DQ 由 coder 在编码阶段并行产，不单独成层）。复用 local_eval 的 step_* 划分，每步包计时器。
 
 **层2 产物层（迁移自 local_eval 结构校验）**：ts.json 顶层键齐全、business_key 非空、audit_fields 正好4个、每规则有 load_mode、文件齐全（**确定性文件名拼接，不用 glob**）、DDL/回退成对、I视图无 SELECT *、export manifest codes_filled=false。归因→脚本。
 

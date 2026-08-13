@@ -179,6 +179,66 @@ class TestValidationGrading:
 
 
 # ============================================================
+# 任务二：大小写不敏感 + RS 降级容错
+# ============================================================
+
+class TestCaseInsensitiveAndDegraded:
+    """validate_target_table 大小写不敏感（仅大小写差异→warning）；RS 降级容错。"""
+
+    def test_schema_case_only_difference_warns_not_blocks(self, capsys):
+        """schema 仅大小写不同（Ods vs ods）→ warning，不算不一致、不阻断。"""
+        from preprocess import validate_target_table
+        final_schema, final_table, errors, warnings = validate_target_table(
+            "Ods", "dwb_test_i", "ods", "dwb_test_i"
+        )
+        assert errors == [], f"仅大小写差异不应阻断: {errors}"
+        case_warns = [w for w in warnings if "大小写" in w]
+        assert case_warns, f"仅大小写差异应给规范化 warning: {warnings}"
+        # 大小写一致时取 RS 为准
+        assert final_schema == "Ods"
+
+    def test_table_case_only_difference_warns_not_blocks(self, capsys):
+        """表名仅大小写不同 → warning，不阻断。"""
+        from preprocess import validate_target_table
+        _, final_table, errors, warnings = validate_target_table(
+            "dws", "DWB_TEST_I", "dws", "dwb_test_i"
+        )
+        assert errors == [], f"仅大小写差异不应阻断: {errors}"
+        case_warns = [w for w in warnings if "大小写" in w]
+        assert case_warns, f"表名仅大小写差异应给 warning: {warnings}"
+        assert final_table == "DWB_TEST_I"
+
+    def test_schema_real_mismatch_still_blocks(self):
+        """schema 真不一致（dws vs ods）→ 仍阻断（大小写归一后仍不同）。"""
+        from preprocess import validate_target_table
+        _, _, errors, _ = validate_target_table(
+            "dws", "dwb_test_i", "ods", "dwb_test_i"
+        )
+        assert errors, "真不一致仍应阻断"
+
+    def test_rs_degraded_marker_when_target_missing(self, capsys):
+        """RS 非空但 schema/table 都没解析出（L1.1 缺失）→ 不 exit，标 _rs_degraded，mapping 兜底。"""
+        r = build_rs_input(
+            _mapping_raw(target_schema="dws", table="dwb_test_i"),
+            _rs_data(schema="", table=""),  # RS 有内容但目标表没解析出
+        )
+        # 不应 exit（到这就说明没 sys.exit）
+        assert r["_rs_degraded"] is True
+        # mapping 兜底：目标表来自 mapping
+        assert r["meta"]["target"]["f_table"]["schema"] == "dws"
+        assert _f_table(r) == "dwb_test_f"
+
+    def test_rs_degraded_not_set_when_table_present(self, capsys):
+        """RS 有 table（哪怕 schema 空）→ 不算降级（_rs_degraded 不设）。"""
+        r = build_rs_input(
+            _mapping_raw(target_schema="dws", table="dwb_test_i"),
+            _rs_data(schema="", table="dwb_test_i"),
+        )
+        assert "_rs_degraded" not in r
+        assert "_no_rs_mode" not in r
+
+
+# ============================================================
 # 3. 与 conftest 工厂函数集成（确保 make_rs_input 推导一致）
 # ============================================================
 

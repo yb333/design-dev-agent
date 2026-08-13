@@ -1061,27 +1061,44 @@ def validate_target_table(rs_schema: str, rs_table: str,
     errors: List[str] = []
     warnings: List[str] = []
 
-    # schema 校验（4 种情况）
+    # schema 校验（大小写不敏感：仅大小写差异视为一致，给规范化 warning）
     if not rs_schema and not mapping_schema:
         errors.append("目标表 schema：RS 和 mapping 都没写，无法确定 schema")
-    elif rs_schema and mapping_schema and rs_schema != mapping_schema:
-        errors.append(f"目标表 schema 不一致：RS='{rs_schema}', mapping='{mapping_schema}'")
+    elif rs_schema and mapping_schema:
+        if rs_schema.lower() != mapping_schema.lower():
+            errors.append(
+                f"目标表 schema 不一致：RS='{rs_schema}', mapping='{mapping_schema}'"
+                f"（在 RS L1.1 或 mapping 实体级确认 schema）"
+            )
+        elif rs_schema != mapping_schema:
+            # 仅大小写差异（如 Ods vs ods）→ 不算不一致，提示规范化
+            warnings.append(
+                f"目标表 schema 仅大小写不同：RS='{rs_schema}', mapping='{mapping_schema}'，视为一致"
+            )
     elif rs_schema and not mapping_schema:
         warnings.append(f"目标表 schema：mapping 没写 schema，用 RS 的 '{rs_schema}'")
     elif mapping_schema and not rs_schema:
         warnings.append(f"目标表 schema：RS 没写 schema，用 mapping 的 '{mapping_schema}'")
 
-    # table 校验（4 种情况）
+    # table 校验（大小写不敏感：仅大小写差异视为一致，给规范化 warning）
     if not rs_table and not mapping_table:
         errors.append("目标表名：RS 和 mapping 都没写，无法确定表名")
-    elif rs_table and mapping_table and rs_table != mapping_table:
-        errors.append(f"目标表名不一致：RS='{rs_table}', mapping='{mapping_table}'")
+    elif rs_table and mapping_table:
+        if rs_table.lower() != mapping_table.lower():
+            errors.append(
+                f"目标表名不一致：RS='{rs_table}', mapping='{mapping_table}'"
+                f"（在 RS L1.1 或 mapping 实体级确认表名）"
+            )
+        elif rs_table != mapping_table:
+            warnings.append(
+                f"目标表名仅大小写不同：RS='{rs_table}', mapping='{mapping_table}'，视为一致"
+            )
     elif rs_table and not mapping_table:
         warnings.append(f"目标表名：mapping 没写表名，用 RS 的 '{rs_table}'")
     elif mapping_table and not rs_table:
         warnings.append(f"目标表名：RS 没写表名，用 mapping 的 '{mapping_table}'")
 
-    # 互补：RS 有用 RS 的，否则用 mapping 的
+    # 互补：RS 有用 RS 的，否则用 mapping 的（大小写一致时取 RS 为准）
     final_schema = rs_schema or mapping_schema
     final_table = rs_table or mapping_table
 
@@ -1334,6 +1351,11 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
     # precheck 据此区分"调度信息缺失因为无RS" vs "RS写了但没解析出来"
     if not rs_data:
         rs_input["_no_rs_mode"] = True
+    elif not rs_schema and not rs_table:
+        # RS 降级：RS 提供了（rs_data 非空）但目标表 schema/table 没解析出来
+        # （L1.1 资产基本信息段缺失/格式乱，RS 生成不稳定的常态）。
+        # 已用 mapping 兜底（validate_target_table 互补）。precheck 据此提示。
+        rs_input["_rs_degraded"] = True
 
     return rs_input
 
@@ -1384,12 +1406,11 @@ def main():
             rs_warnings = rs_data.pop("_extract_warnings", [])
             for w in rs_warnings:
                 print(f"  ⚠️ RS 解析告警: {w}")
-            if rs_errors:
-                print(f"\n❌ RS 解析错误（必填项缺失）:", file=sys.stderr)
-                for e in rs_errors:
-                    print(f"  - {e}", file=sys.stderr)
-                # 必填项缺失不应继续——rs_data 关键段是空的，下游会出错
-                sys.exit(1)
+            # RS 容错：L1.1（资产基本信息）段缺失/解析失败是 RS 生成不稳定的常态，
+            # 不再 exit——降级为告警，mapping 目标表兜底（validate_target_table 互补），
+            # 质量判断留给 precheck 提示（_rs_degraded 标记）。mapping 本身的结构性错误仍阻断。
+            for e in rs_errors:
+                print(f"  ⚠️ RS 解析降级（已用 mapping 兜底）: {e}")
             no_rs_mode = False
         else:
             print(f"⚠️ RS 文件不存在: {args.rs}，进入无RS模式", file=sys.stderr)
@@ -1400,7 +1421,7 @@ def main():
         print("     调度方案 → 全量调度(默认)")
         print("     调度频率 → T+1(默认)")
         print("     增量识别 → 不涉及(全量)")
-        print("     DQ规则   → 空(用标准检查:主键唯一/非空/行数 兜底)")
+        print("     DQ规则   → 空（DQ 完全跟随 RS，无 RS 则不产 DQ）")
         print("     湖表调度 → 空(export时上游依赖需手补)")
         print("     目标表schema/table → 用 mapping 实体级的")
 
