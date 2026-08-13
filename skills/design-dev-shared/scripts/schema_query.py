@@ -6,10 +6,13 @@
   与 explore.py 互补：explore 连库试算（JOIN 键唯一性），本工具只查缓存（字段存在性）。
 
 用法（designer 写 design_logic 引用 mapping 未列的字段前 / coder 不确定时兜底）:
-  python schema_query.py --ts {deliver}/ts.json --table ods.ods_b                # 列全表字段
-  python schema_query.py --ts {deliver}/ts.json --table ods.ods_b --column col2  # 查单字段
+  python schema_query.py --ts {deliver}/_internal/rs_input.json --table ods.ods_b                # 设计阶段（ts 未产出，锚点传 rs_input）
+  python schema_query.py --ts {deliver}/ts.json --table ods.ods_b --column col2                  # 编码阶段兜底
 
-退出码: 0=总是（查询结果在 stdout，查不到也是提示不阻断）；2=参数/文件错误
+--ts 是定位锚点：只用于推算同级 _internal/schema_cache.json（precheck 连库时产出），
+锚点文件本身不要求存在（设计阶段 ts.json 还没产出是常态）。
+
+退出码: 0=总是（查询结果在 stdout，查不到也是提示不阻断）；2=参数错误
 """
 
 import sys
@@ -29,7 +32,11 @@ def query_fields(ts_path, schema: str, table: str, column: str = "") -> str:
     - column 没给 → 全表字段清单（名 + 类型）
     """
     ts_path = Path(ts_path)
+    # cache 两个候选位置：锚点在 deliver 根（ts.json / rs_input 在根的形态）→ 同级 _internal/；
+    # 锚点在 _internal/ 里（rs_input.json）→ cache 与它同级，直接找
     cache_path = ts_path.parent / "_internal" / "schema_cache.json"
+    if not cache_path.exists() and (ts_path.parent / "schema_cache.json").exists():
+        cache_path = ts_path.parent / "schema_cache.json"
     full = f"{schema}.{table}"
     if not cache_path.exists():
         return (f"[未连库] schema_cache.json 不存在（{cache_path}）。\n"
@@ -66,15 +73,16 @@ def query_fields(ts_path, schema: str, table: str, column: str = "") -> str:
 def main():
     parser = argparse.ArgumentParser(
         description="schema_cache 字段查询器（只读缓存不连库；designer/coder 公共）")
-    parser.add_argument("--ts", required=True, help="ts.json 路径（cache 在同级 _internal/）")
+    parser.add_argument("--ts", required=True,
+                        help="定位锚点：rs_input.json（设计阶段）或 ts.json（编码阶段）路径，"
+                             "用于推算同级 _internal/schema_cache.json（锚点本身不要求存在）")
     parser.add_argument("--table", required=True, help="表名（schema.table，如 ods.ods_b）")
     parser.add_argument("--column", default="", help="可选：确认某字段存在性（不给则列全表字段）")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
-    if not ts_path.exists():
-        print(f"错误: ts.json 不存在: {ts_path}", file=sys.stderr)
-        sys.exit(2)
+    # 锚点文件不要求存在（设计阶段 ts.json 未产出是常态），query_fields 里
+    # 会按锚点定位 cache 并对"cache 不存在"给出提示
     if "." not in args.table:
         print("错误: --table 需 schema.table 形式（如 ods.ods_b）", file=sys.stderr)
         sys.exit(2)

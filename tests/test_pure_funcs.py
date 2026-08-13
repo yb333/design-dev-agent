@@ -405,3 +405,12 @@ class TestSchemaQuery:
         ts = self._make_cache(tmp_path, {"ods.ods_b": {"id": "bigint"}})
         out = query_fields(ts, "ods", "ods_b")
         assert "字段清单" in out and "id" in out
+
+    def test_anchor_inside_internal(self, tmp_path):
+        """锚点在 _internal/ 里（设计阶段传 rs_input.json）→ cache 与锚点同级也能定位。"""
+        from schema_query import query_fields
+        self._make_cache(tmp_path, {"ods.ods_b": {"col2": "varchar(50)"}})
+        anchor = tmp_path / "_internal" / "rs_input.json"
+        anchor.write_text("{}", encoding="utf-8")
+        out = query_fields(anchor, "ods", "ods_b", "col2")
+        assert "存在" in out and "varchar(50)" in out
