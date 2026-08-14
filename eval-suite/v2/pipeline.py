@@ -54,6 +54,19 @@ def _run_python(script: str, args: list[str], timeout: int = 60) -> tuple[int, s
         return -1, str(e)
 
 
+def _fail_detail(step: str, deliver: Path, out: str) -> str:
+    """失败详情：取输出尾部（traceback 的崩溃行在末尾），全文落盘到 _internal/diagnose/。"""
+    try:
+        diag_dir = deliver / "_internal" / "diagnose"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        (diag_dir / f"pipeline_{step}.log").write_text(out, encoding="utf-8")
+        log_path = str(diag_dir / f"pipeline_{step}.log")
+    except Exception:
+        log_path = "(log落盘失败)"
+    tail = out[-600:].strip() if out.strip() else "(无输出)"
+    return f"{tail}\n[全文] {log_path}"
+
+
 def _run_cmd(cmd: list[str], timeout: int = 1800) -> tuple[int, str, str]:
     """运行命令，返回 (退出码, stdout, stderr)。"""
     try:
@@ -87,7 +100,8 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path) -> tuple[bool, str]:
     internal.mkdir(parents=True, exist_ok=True)
     rs_input = internal / "rs_input.json"
     args = ["--mapping", str(mapping), "--output", str(rs_input)]
-    if rs:
+    # 只有 RS.md 真实存在才传 --rs（Path 恒为真，不能直接 if rs）
+    if rs.exists():
         args.extend(["--rs", str(rs)])
     code, out = _run_python(str(SHARED_REFS / "preprocess.py"), args)
     if code == 0:
@@ -95,7 +109,7 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path) -> tuple[bool, str]:
         n_fields = len(data.get("field_mappings", []))
         n_sources = len(data.get("source_tables", []))
         return True, f"{n_fields}字段, {n_sources}源表"
-    return False, out[:200]
+    return False, _fail_detail("preprocess", deliver, out)
 
 
 def _precheck(deliver: Path) -> tuple[bool, str]:
@@ -105,7 +119,7 @@ def _precheck(deliver: Path) -> tuple[bool, str]:
         return True, "全部通过"
     if code == 1:
         return True, "有警告但不阻断"
-    return False, out[:200]
+    return False, _fail_detail("precheck", deliver, out)
 
 
 def _designer(deliver: Path, skip_ai: bool) -> tuple[bool, str]:
@@ -165,7 +179,7 @@ def _assemble_ddl(deliver: Path) -> tuple[bool, str]:
     # 确定性检查：目录存在即可（具体文件名由产物层断言检查）
     if code == 0 and ddl_dir.exists():
         return True, "DDL 生成完成"
-    return False, out[:200]
+    return False, _fail_detail("assemble_ddl", deliver, out)
 
 
 def _assemble_export(deliver: Path) -> tuple[bool, str]:
@@ -182,7 +196,7 @@ def _assemble_export(deliver: Path) -> tuple[bool, str]:
     export_dir = deliver / "export"
     if code == 0 and export_dir.exists():
         return True, "制品包生成完成"
-    return False, out[:200]
+    return False, _fail_detail("assemble_export", deliver, out)
 
 
 # ============================================================
@@ -208,6 +222,10 @@ def run_pipeline(
 
     # 1. preprocess
     steps.append(_step("preprocess", lambda: _preprocess(deliver, mapping, rs)))
+    # preprocess 失败立即短路：rs_input.json 缺失/残留旧版时继续跑 precheck
+    # 只会产生级联误报（读垃圾输入报 NoneType 之类），掩盖真正的失败原因
+    if steps[-1].status == CheckStatus.FAIL:
+        return steps
     # 2. precheck
     steps.append(_step("precheck", lambda: _precheck(deliver)))
 
