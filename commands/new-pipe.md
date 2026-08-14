@@ -47,11 +47,11 @@ agent: build
 ### 脚本路径定位
 
 脚本按**调用方**分布在三个 skill 目录：
-- `design-dev-shared/scripts`（SHARED_SCRIPTS）：pipe 编排调的管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan/resolve_appid/schema_query）+ 公共库（dws_db/config_paths）。
-- `dws-design/scripts`（DESIGN_SCRIPTS）：designer 调的（assemble_ts/explore/fill_type_risk_decision）+ 类型库 type_compat。
-- `dws-coding/scripts`（CODING_SCRIPTS）：coder 调的（slice_ts/check_sql/pick_fields）+ UT 函数库（run_ut/ut_diagnose）。
+- `design-dev-shared/scripts`（SHARED_SCRIPTS）：pipe 编排调的管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan/resolve_appid/schema_query）+ 公共库（dws_db/config_paths/run_ut/ut_diagnose/type_compat/sql_parse/dws_standards）。
+- `dws-design/scripts`（DESIGN_SCRIPTS）：designer 调的（assemble_ts/explore/fill_type_risk_decision）。
+- `dws-coding/scripts`（CODING_SCRIPTS）：coder 调的（slice_ts/check_sql/pick_fields）。
 
-> 历史：pipe 脚本原按"阶段"散在 design/coding 下，2026-08 归位到 shared（按调用方归类，消除"agent skill 目录里混着 pipe 脚本"的混淆）。
+> 历史：pipe 脚本原按"阶段"散在 design/coding 下，2026-08 归位到 shared（按调用方归类，消除"agent skill 目录里混着 pipe 脚本"的混淆）。随后把被 shared 消费的函数库（run_ut/ut_diagnose/type_compat + 抽出的 sql_parse/dws_standards）一并下沉到 shared——**分层铁律：shared 绝不 import dws-design/dws-coding，箭头单向**。
 
 **先定位路径再开工**——调 Skill tool 加载 `design-dev-shared` skill，opencode 会注入它的 `location`（SKILL.md 绝对路径）。从 location 推算三个脚本目录：
 

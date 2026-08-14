@@ -5,7 +5,7 @@
 > **维护约定**：加/改/删脚本时**同步这张表**（写进 AGENTS.md 编码约定）。漂移从这里一眼看出。
 >
 > **关键区分**：脚本**住在哪个 skill 目录**（按**调用方**组织：pipe 调的在 design-dev-shared、designer 调的在 dws-design、coder 调的在 dws-coding）
-> = **谁实际调用它**。本表按**调用方**分组。2026-08 归位：pipe 管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db）从 design/coding 挪到 design-dev-shared，消除"agent skill 目录里混着 pipe 脚本"。
+> = **谁实际调用它**。本表按**调用方**分组。2026-08 归位：pipe 管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db）从 design/coding 挪到 design-dev-shared，消除"agent skill 目录里混着 pipe 脚本"；随后**函数库下沉**（run_ut/ut_diagnose/type_compat 整文件 + STANDARD_AUDIT_TEMPLATE→dws_standards + SQL 解析原语→sql_parse），消掉 shared↔skill 依赖环。**分层铁律：shared 绝不 import dws-design/dws-coding（箭头单向：skill → shared）。**
 >
 > 末列「读 ts[rules/init]」是 init 下游物化进度表。Chunk 2 已接通：slice_ts / pick_fields / assemble_export / ut_precheck / ut_execute 都读 ts.rules + ts.init.rules（标 **both**）。check_sql 尚未直接接通 init（init 走 slice_ts 间接覆盖）；run_ut 是纯函数库（无 main），由 ut_execute 读 ts。
 
@@ -44,7 +44,7 @@
 | `ut_diagnose.py` | UT 类型转换失败自动诊断（`diagnose_type_error`：圈跨类型字段→探测源表脏值+样例）。ut_execute INSERT 失败钩子调用（类型报错才触发）；也有 CLI 供 designer/coder 回退分析复跑（`--ts --rule`） | ut_execute 钩子调用 / designer·coder 复跑 | ts.json → 嫌疑字段诊断文本 | ts.tables[].fields + ts.rules[].source_tables + `_internal/schema_cache.json` |
 
 ### legacy 校验
-> 已删除（2026-08 清理）：`sql_validator.py` / `validate_ddl.py` / `verify_files.py` —— 零生产引用、零测试（validate_ddl 的孤儿测试一并清掉）。`CLAUDE.md` / `eval-suite/idle-task-prompt.md` 里还有提及，那两份是已知滞后文档，不再同步。
+> 已删除（2026-08 清理）：`sql_validator.py` / `validate_ddl.py` / `verify_files.py` / `lib/dws_preprocessor.py`（仅被已删的 validate_sql 引用，零生产引用零测试）。`CLAUDE.md` / `eval-suite/idle-task-prompt.md` 里还有提及，那两份是已知滞后文档，不再同步。
 
 ---
 
@@ -73,8 +73,10 @@
 | 模块 | 干啥 | 被谁 import | 所在 |
 |------|------|------------|------|
 | `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
-| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN） | precheck | dws-design/scripts |
-| `lib/dws_preprocessor.py` | 预处理辅助 | coding scripts | dws-coding/scripts/lib |
+| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info） | precheck / ut_diagnose | design-dev-shared/scripts |
+| `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样） | ut_precheck / ut_execute | design-dev-shared/scripts |
+| `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / extract_select_aliases / extract_from_tables） | run_ut / check_sql | design-dev-shared/scripts |
+| `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
 
 ---
 

@@ -24,10 +24,9 @@ try:
 except AttributeError:
     pass
 
-# dws_db 在 design-dev-shared 公共库（与本 skill 平级）
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+# 依赖全在 shared 同目录（dws_db/sql_parse），无需跨目录引导
 from dws_db import load_test_params
-from check_sql import extract_select_aliases
+from sql_parse import extract_select_aliases
 
 
 # ============================================================

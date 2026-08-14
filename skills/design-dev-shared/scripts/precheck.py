@@ -15,14 +15,7 @@ import argparse
 from typing import Any
 from pathlib import Path
 
-# 跨 skill import 引导：本脚本归 design-dev-shared/scripts（pipe 调），
-# lazy import design 的 type_compat/assemble_ts，按需把三个 skill 目录都加进 sys.path。
-_HERE = Path(__file__).resolve().parent
-_SKILLS = _HERE.parent.parent  # skills/
-for _sub in ("design-dev-shared", "dws-design", "dws-coding"):
-    _p = str(_SKILLS / _sub / "scripts")
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# 依赖全在 shared 同目录（type_compat/dws_standards/preprocess/dws_db），无需跨目录引导。
 
 
 class PrecheckResult:
@@ -682,10 +675,7 @@ def _check_audit_fields(field_mappings: list, result: PrecheckResult):
                 )
 
         # 类型与标准比对（审计是平台契约，不因 mapping 漂移；不一致 assemble_ts 强制标准，此处源头提示）
-        try:
-            from assemble_ts import STANDARD_AUDIT_TEMPLATE as _AUDIT_STD
-        except ImportError:
-            _AUDIT_STD = {}
+        from dws_standards import STANDARD_AUDIT_TEMPLATE as _AUDIT_STD
         std = _AUDIT_STD.get(target_lower)
         if std:
             mt = (std["type"] or "").lower().replace(" ", "")

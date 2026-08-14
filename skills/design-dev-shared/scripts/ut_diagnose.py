@@ -26,11 +26,7 @@ import json
 import argparse
 from pathlib import Path
 
-# dws_db / type_compat 在 design-dev-shared + dws-design（与本 skill 平级）
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent.parent.parent / "design-dev-shared" / "scripts"))
-sys.path.insert(0, str(_HERE))  # run_ut 同目录（CLI 复用连库）
-sys.path.insert(0, str(_HERE.parent.parent.parent / "dws-design" / "scripts"))
+# 依赖全在 shared 同目录（type_compat），无需跨目录引导
 from type_compat import parse_type_info
 
 

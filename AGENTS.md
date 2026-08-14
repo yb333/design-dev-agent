@@ -18,12 +18,11 @@
 ```
 skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
-│   ├── scripts/         # assemble_ts.py explore.py fill_type_risk_decision.py type_compat.py
+│   ├── scripts/         # assemble_ts.py explore.py fill_type_risk_decision.py
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json schema_apps.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
-│   ├── scripts/         # run_ut.py(UT函数库,无main) ut_diagnose.py(类型诊断) check_sql.py slice_ts.py pick_fields.py
-│   │   └── lib/         # dws_preprocessor.py
+│   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 └── design-dev-shared/   # ★ 公共代码库 + pipe 管线脚本（无 SKILL.md，install 单独拷）
     └── scripts/         # dws_db.py(连库) config_paths.py(★config路径集中) resolve_appid.py(查appid)
@@ -31,6 +30,11 @@ skills/
                          #   ★ pipe 调的管线脚本（2026-08 按调用方归位）：
                          #   preprocess.py precheck.py gate_summary.py（原 dws-design）
                          #   assemble_ddl.py assemble_export.py ut_precheck.py ut_execute.py check_db.py（原 dws-coding）
+                         #   ★ 被 shared 消费的函数库（2026-08 下沉，消 shared↔skill 依赖环）：
+                         #   run_ut.py(UT函数库,无main) ut_diagnose.py(类型诊断) type_compat.py(类型兼容)
+                         #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量)
+                         #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import dws-design/dws-coding；
+                         #     design/coding 只能向下 import shared（箭头单向）
 agents/                  # dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
 commands/new-pipe.md     # ★ 唯一编排剧本（设计→闸口①→编码→UT→闸口② 全流程）
 install.py               # 装 skill/agent/command 到 ~/.config/opencode/
@@ -49,7 +53,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 | **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design | assemble_ts（组装）/ explore（JOIN键唯一性） | `_internal/design_decisions.yaml` |
 | **dws-coder** | 单规则 design_logic → SELECT | dws-coding | slice_ts / pick_fields / check_sql | `etl/*.sql`、`dq/*.sql` |
 
-> ★ 其余管线脚本（preprocess / precheck / gate_summary / assemble_ddl / assemble_export / run_ut / ut_* / check_db 等）**调用方都是 command（new-pipe.md 编排）**，不是 agent——它们按"阶段"住在 skill 目录下，但由编排 command 调。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
+> ★ 其余管线脚本（preprocess / precheck / gate_summary / assemble_ddl / assemble_export / run_ut / ut_* / check_db 等）**调用方都是 command（new-pipe.md 编排）**，不是 agent——它们统一住在 `design-dev-shared/scripts`（2026-08 按调用方归位）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
 
 > 注：`dws-run.py` 在根目录但已不是核心入口，编排走 `commands/new-pipe.md`。
 
@@ -240,3 +244,4 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 - **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**（新 ts.json 不用 lts 兜底，可清理）——待讨论。
 - **闲时任务六**（assemble_dq 退役 + run_ut 去 legacy）**已完成 2026-08**：见 `eval-suite/idle-task-prompt.md` 任务一。assemble_dq.py 已删（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 main() 成纯函数库。
+- **函数库下沉消依赖环（2026-08）**：闲时任务四挪了 pipe 入口但库留在 skill 目录，造成 shared↔design / shared↔coding 两个依赖环（lazy import + 3-目录 sys.path bootstrap 掩盖）。修复：run_ut / ut_diagnose / type_compat 整文件下沉 shared；STANDARD_AUDIT_TEMPLATE 抽出 `dws_standards.py`；SQL 解析原语抽出 `sql_parse.py`（check_sql 反向 import 保旧名）；删全部跨目录 bootstrap；顺手删零引用的 `lib/dws_preprocessor.py`。**分层铁律入册 + `tests/test_layering.py` AST 守护**（含函数内 lazy import——上翻正是靠它藏的）。测试 730→732。

@@ -24,14 +24,7 @@ try:
 except AttributeError:
     pass
 
-# 跨 skill import 引导：本脚本归 design-dev-shared/scripts（pipe 调），
-# import coding 的 run_ut（UT 函数库）；dws_db/config_paths 同目录。
-_HERE = Path(__file__).resolve().parent
-_SKILLS = _HERE.parent.parent  # skills/
-for _sub in ("design-dev-shared", "dws-design", "dws-coding"):
-    _p = str(_SKILLS / _sub / "scripts")
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# 依赖全在 shared 同目录（dws_db/config_paths/run_ut），无需跨目录引导
 from dws_db import create_executor, load_test_params
 from config_paths import db_sources_path
 from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample, resolve_sample_blocks
