@@ -196,7 +196,7 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 - `skills/dws-design/assets/ts-template.json`——ts.json 权威结构定义
 - `skills/dws-design/assets/design-decisions-template.yaml`——designer 产出格式（含 build_mode/dedup_strategy/data_volume/exemptions）
 - `docs/architecture/architecture.md`——架构（环境/四区/决策记录）
-- `eval-suite/idle-task-prompt.md`——闲时任务（试算SQL/调度路径/测试覆盖）
+- `eval-suite/idle-task-prompt.md`——闲时任务（常规巡检：健康回归/文档-代码一致性/死代码扫描/覆盖缺口 + 当期专项插槽）
 
 ## 已知滞后项
 
@@ -243,5 +243,5 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 ### 待讨论 / 闲时
 
 - **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**（新 ts.json 不用 lts 兜底，可清理）——待讨论。
-- **闲时任务六**（assemble_dq 退役 + run_ut 去 legacy）**已完成 2026-08**：见 `eval-suite/idle-task-prompt.md` 任务一。assemble_dq.py 已删（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 main() 成纯函数库。
+- **闲时任务六**（assemble_dq 退役 + run_ut 去 legacy）**已完成 2026-08**：assemble_dq.py 已删（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 main() 成纯函数库。
 - **函数库下沉消依赖环（2026-08）**：闲时任务四挪了 pipe 入口但库留在 skill 目录，造成 shared↔design / shared↔coding 两个依赖环（lazy import + 3-目录 sys.path bootstrap 掩盖）。修复：run_ut / ut_diagnose / type_compat 整文件下沉 shared；STANDARD_AUDIT_TEMPLATE 抽出 `dws_standards.py`；SQL 解析原语抽出 `sql_parse.py`（check_sql 反向 import 保旧名）；删全部跨目录 bootstrap；顺手删零引用的 `lib/dws_preprocessor.py`。**分层铁律入册 + `tests/test_layering.py` AST 守护**（含函数内 lazy import——上翻正是靠它藏的）。测试 730→732。
