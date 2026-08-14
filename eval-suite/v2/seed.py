@@ -44,13 +44,14 @@ UNCATEGORIZED = "未分类"  # deliver_only 案例的默认分类（后续可 mv
 
 # 复用 assert_sql 的提取函数（已兼容裸 SELECT）
 import assert_sql  # noqa: E402
-from _paths import find_select_file  # noqa: E402
+from _paths import find_select_file, find_deliver  # noqa: E402
 
 
 def seed_case(case_dir: Path) -> str:
     """从案例产出抽取事实，返回 checks.yaml 草稿字符串。"""
     case_name = case_dir.name
-    deliver = DELIVER_BASE / case_name / "ddlc_design_dev"
+    # 产出目录：平铺或 {appid}/{schema} 三层，find_deliver 统一定位
+    deliver = find_deliver(DELIVER_BASE, case_name) or (DELIVER_BASE / case_name / "ddlc_design_dev")
     ts_path = deliver / "ts.json"
     rs_input_path = deliver / "_internal" / "rs_input.json"
 
@@ -175,8 +176,8 @@ def _resolve_case_dir(case_arg: str, cases_dir: Path) -> Path | None:
             candidate = cat_dir / case_arg
             if candidate.is_dir():
                 return candidate
-    # 4. 回退：10_project_deliver/{case} 有产出 → 建 cases_real/未分类/{case} 占位
-    if (DELIVER_BASE / case_arg / "ddlc_design_dev" / "ts.json").exists():
+    # 4. 回退：10_project_deliver 有产出（平铺/三层）→ 建 cases_real/未分类/{case} 占位
+    if find_deliver(DELIVER_BASE, case_arg):
         placeholder = CASES_REAL_DIR / UNCATEGORIZED / case_arg
         placeholder.mkdir(parents=True, exist_ok=True)
         print(f"  ℹ️ 用例 {case_arg} 无输入目录，已建占位 {placeholder}")

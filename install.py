@@ -245,6 +245,13 @@ def run():
         dst = skills_dir / s
         copy_dir(src, dst)
         print(f"  ✓ {s}")
+    # design-dev-shared 无 SKILL.md，scan_skills 扫不到，单独拷。
+    # 它是 pipe 管线脚本（preprocess/assemble_* 等）+ 公共库，全局安装的 skill 脚本
+    # 靠 ../../design-dev-shared 相对路径推算它，不拷会 import 失败/脚本缺失。
+    shared_src = SCRIPT_DIR / "skills" / "design-dev-shared"
+    if shared_src.exists():
+        copy_dir(shared_src, skills_dir / "design-dev-shared")
+        print("  ✓ design-dev-shared（管线脚本，无 SKILL.md 单独拷）")
     print()
 
     # ── 5. 安装 agents + commands ──

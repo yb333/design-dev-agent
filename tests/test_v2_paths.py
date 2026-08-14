@@ -75,6 +75,52 @@ class TestListSelectRules:
         assert _paths.list_select_rules(tmp_path) == ["R0001", "R0002"]
 
 
+# ============================================================
+# 产出目录定位（平铺 / 三层 appid-schema 兼容）
+# ============================================================
+
+
+def _make_deliver_at(path: Path) -> Path:
+    """在 path 下造 ddlc_design_dev/ts.json，返回 deliver 目录。"""
+    d = path / "ddlc_design_dev"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "ts.json").write_text("{}", encoding="utf-8")
+    return d
+
+
+class TestFindDeliver:
+    def test_flat_structure(self, tmp_path):
+        """平铺（老结构）：{asset}/ddlc_design_dev/ts.json。"""
+        d = _make_deliver_at(tmp_path / "dwb_x")
+        assert _paths.find_deliver(tmp_path, "dwb_x") == d
+
+    def test_three_level_structure(self, tmp_path):
+        """三层（新结构）：{appid}/{schema}/{asset}/ddlc_design_dev/ts.json。"""
+        d = _make_deliver_at(tmp_path / "app001" / "dwb" / "dwb_x")
+        assert _paths.find_deliver(tmp_path, "dwb_x") == d
+
+    def test_flat_preferred_over_three_level(self, tmp_path):
+        """平铺与三层同名 → 平铺优先。"""
+        flat = _make_deliver_at(tmp_path / "dwb_x")
+        _make_deliver_at(tmp_path / "app" / "dwb" / "dwb_x")
+        assert _paths.find_deliver(tmp_path, "dwb_x") == flat
+
+    def test_none_when_absent(self, tmp_path):
+        assert _paths.find_deliver(tmp_path, "nope") is None
+
+
+class TestScanDeliverAssets:
+    def test_flat_and_three_level_merged(self, tmp_path):
+        """平铺 + 三层混合扫描，资产名统一收集。"""
+        a = _make_deliver_at(tmp_path / "dwb_flat")
+        b = _make_deliver_at(tmp_path / "app001" / "dwb" / "dwb_three")
+        assets = _paths.scan_deliver_assets(tmp_path)
+        assert assets == {"dwb_flat": a, "dwb_three": b}
+
+    def test_empty_when_no_base(self, tmp_path):
+        assert _paths.scan_deliver_assets(tmp_path / "nodir") == {}
+
+
 class TestFindTsMd:
     def test_plain_ts_md(self, tmp_path):
         """老格式 ts.md。"""

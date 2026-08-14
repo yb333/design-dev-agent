@@ -30,6 +30,7 @@ from checks_schema import load_checks  # noqa: E402
 from engine import run_evaluation  # noqa: E402
 from pipeline import run_pipeline  # noqa: E402
 from report_v2 import render_report  # noqa: E402
+from _paths import find_deliver  # noqa: E402
 import baseline  # noqa: E402
 
 
@@ -69,7 +70,7 @@ def resolve_case(case_arg: str, cases_dir: Path) -> Path:
 def _is_case_dir(d: Path) -> bool:
     """判断目录是否为有效案例（有输入 mapping.xlsx 或 10_project_deliver 同名产出）。"""
     has_input = (d / "mapping.xlsx").exists()
-    has_deliver = (DELIVER_BASE / d.name / "ddlc_design_dev" / "ts.json").exists()
+    has_deliver = find_deliver(DELIVER_BASE, d.name) is not None
     return has_input or has_deliver
 
 
@@ -97,7 +98,9 @@ def _scan_all_cases(cases_dir: Path) -> list[Path]:
 def run_one_case(case_dir: Path, eval_only: bool, skip_ai: bool) -> int:
     """跑单个用例。"""
     case_name = case_dir.name
-    deliver = DELIVER_BASE / case_name / "ddlc_design_dev"
+    # 产出目录：平铺或 {appid}/{schema} 三层，find_deliver 统一定位；
+    # 找不到时保留平铺拼接（用于下游报错信息）
+    deliver = find_deliver(DELIVER_BASE, case_name) or (DELIVER_BASE / case_name / "ddlc_design_dev")
     checks_path = case_dir / "checks.yaml"
 
     config = load_checks(checks_path)

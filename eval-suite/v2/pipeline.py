@@ -28,9 +28,12 @@ from engine import PipelineStepResult
 
 # 项目根
 ROOT = Path(__file__).resolve().parents[2]
-# skill 脚本目录（install 后在 ~/.config/opencode/skills/）
-DESIGN_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-design" / "scripts"
-CODING_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-coding" / "scripts"
+# skill 脚本目录：repo 内源优先（最新且必然存在），回退全局安装（install.py 装）。
+# pipe 管线脚本归 design-dev-shared/scripts（2026-08 按调用方归位：preprocess/precheck/
+# assemble_ddl/assemble_export/ut_*/check_db 等；dws-design/dws-coding 下只剩 agent 用的）。
+_REPO_SHARED = ROOT / "skills" / "design-dev-shared" / "scripts"
+_GLOBAL_SHARED = Path.home() / ".config" / "opencode" / "skills" / "design-dev-shared" / "scripts"
+SHARED_REFS = _REPO_SHARED if _REPO_SHARED.exists() else _GLOBAL_SHARED
 
 
 def _run_python(script: str, args: list[str], timeout: int = 60) -> tuple[int, str]:
@@ -86,7 +89,7 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path) -> tuple[bool, str]:
     args = ["--mapping", str(mapping), "--output", str(rs_input)]
     if rs:
         args.extend(["--rs", str(rs)])
-    code, out = _run_python(str(DESIGN_REFS / "preprocess.py"), args)
+    code, out = _run_python(str(SHARED_REFS / "preprocess.py"), args)
     if code == 0:
         data = json.loads(rs_input.read_text(encoding="utf-8"))
         n_fields = len(data.get("field_mappings", []))
@@ -97,7 +100,7 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path) -> tuple[bool, str]:
 
 def _precheck(deliver: Path) -> tuple[bool, str]:
     rs_input = deliver / "_internal" / "rs_input.json"
-    code, out = _run_python(str(DESIGN_REFS / "precheck.py"), ["--input", str(rs_input)])
+    code, out = _run_python(str(SHARED_REFS / "precheck.py"), ["--input", str(rs_input)])
     if code == 0:
         return True, "全部通过"
     if code == 1:
@@ -133,28 +136,28 @@ def _designer(deliver: Path, skip_ai: bool) -> tuple[bool, str]:
 
 
 def _coder(deliver: Path, rule_code: str, skip_ai: bool) -> tuple[bool, str]:
-    select_dir = deliver / "select"
-    select_dir.mkdir(exist_ok=True)
+    etl_dir = deliver / "etl"
+    etl_dir.mkdir(exist_ok=True)
     if skip_ai:
         return False, "跳过AI"
 
     abs_ts = str((deliver / "ts.json").resolve())
-    abs_select = str(select_dir.resolve())
-    prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_select}/{rule_code}_select.sql"
+    abs_etl = str(etl_dir.resolve())
+    prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_etl}/{rule_code}.sql"
 
     _run_cmd(["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt], timeout=1800)
 
-    # 确定性文件名（不用 glob）
-    select_file = select_dir / f"{rule_code}_select.sql"
+    # 确定性文件名（不用 glob）；兼容带后缀命名由评测层 find_select_file 处理
+    select_file = etl_dir / f"{rule_code}.sql"
     if select_file.exists():
         n_lines = len(select_file.read_text(encoding="utf-8").strip().splitlines())
         return True, f"{n_lines}行 SELECT"
-    return False, f"SELECT 文件未生成: {rule_code}_select.sql"
+    return False, f"SELECT 文件未生成: {rule_code}.sql"
 
 
 def _assemble_ddl(deliver: Path) -> tuple[bool, str]:
     code, out = _run_python(
-        str(CODING_REFS / "assemble_ddl.py"),
+        str(SHARED_REFS / "assemble_ddl.py"),
         ["--ts", str(deliver / "ts.json"), "--outdir", str(deliver)],
     )
     ddl_dir = deliver / "ddl"
@@ -167,10 +170,10 @@ def _assemble_ddl(deliver: Path) -> tuple[bool, str]:
 
 def _assemble_export(deliver: Path) -> tuple[bool, str]:
     code, out = _run_python(
-        str(CODING_REFS / "assemble_export.py"),
+        str(SHARED_REFS / "assemble_export.py"),
         [
             "--ts", str(deliver / "ts.json"),
-            "--etl-dir", str(deliver / "select"),
+            "--etl-dir", str(deliver / "etl"),
             "--ddl-dir", str(deliver / "ddl"),
             "--outdir", str(deliver),
         ],

@@ -27,6 +27,11 @@ DELIVER_BASE = ROOT / "10_project_deliver"
 
 SEP = "═" * 56
 
+# 产出扫描（平铺/三层兼容）来自公共定位模块
+if str(V2_DIR) not in sys.path:
+    sys.path.insert(0, str(V2_DIR))
+from _paths import scan_deliver_assets  # noqa: E402
+
 
 # ============================================================
 # 交互辅助
@@ -134,14 +139,10 @@ def _discover_real_cases() -> list[CaseInfo]:
                 if asset_dir.is_dir():
                     placed_cases[asset_dir.name] = (cat_dir.name, asset_dir)
 
-    # 产出目录：10_project_deliver/{资产}/（平铺）
-    deliver_cases: set[str] = set()
-    if DELIVER_BASE.exists():
-        for d in DELIVER_BASE.iterdir():
-            if d.is_dir() and (d / "ddlc_design_dev" / "ts.json").exists():
-                deliver_cases.add(d.name)
+    # 产出目录：10_project_deliver/（平铺或 {appid}/{schema} 三层，统一扫描）
+    deliver_assets = scan_deliver_assets(DELIVER_BASE)  # {资产名: ddlc_design_dev}
 
-    all_names = sorted(set(placed_cases) | deliver_cases)
+    all_names = sorted(set(placed_cases) | set(deliver_assets))
     infos = []
     for n in all_names:
         cat, dir_for_cat = placed_cases.get(n, (UNCATEGORIZED, None))
@@ -152,7 +153,7 @@ def _discover_real_cases() -> list[CaseInfo]:
                 name=n,
                 category=cat,
                 input_dir=dir_for_cat if has_mapping else None,
-                has_deliver=n in deliver_cases,
+                has_deliver=n in deliver_assets,
                 has_checks=has_checks,
             )
         )

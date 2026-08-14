@@ -26,12 +26,19 @@ from datetime import datetime
 
 # 项目根
 ROOT = Path(__file__).resolve().parent.parent
-# 全局安装的 skill 路径
-DESIGN_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-design" / "scripts"
-CODING_REFS = Path.home() / ".config" / "opencode" / "skills" / "dws-coding" / "scripts"
+# skill 脚本路径：repo 内源优先（最新且必然存在），回退全局安装（install.py 装）
+_GLOBAL_SKILLS = Path.home() / ".config" / "opencode" / "skills"
+
+
+def _skill_scripts(name: str) -> Path:
+    repo = ROOT / "skills" / name / "scripts"
+    return repo if repo.exists() else _GLOBAL_SKILLS / name / "scripts"
+
+
+CODING_REFS = _skill_scripts("dws-coding")
 # pipe 管线脚本归 design-dev-shared（2026-08 按调用方归位：preprocess/precheck/gate_summary/
 # assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan 等）
-SHARED_REFS = Path.home() / ".config" / "opencode" / "skills" / "design-dev-shared" / "scripts"
+SHARED_REFS = _skill_scripts("design-dev-shared")
 
 
 class EvalReport:
