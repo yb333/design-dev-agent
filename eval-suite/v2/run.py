@@ -2,18 +2,23 @@
 """评测 v2 CLI 入口。
 
 用法:
-    python eval-suite/v2/run.py --case 002            # 全流程（跑流水线 + 评测）
-    python eval-suite/v2/run.py --case 002 --eval-only # 只评测（已有产出）
-    python eval-suite/v2/run.py --all                   # 跑全部用例
-    python eval-suite/v2/run.py --case 002 --skip-ai    # 跳过 AI（只跑脚本链路）
+    python eval-suite/v2/run.py --case 002             # 全流程（跑流水线 + 评测）
+    python eval-suite/v2/run.py --case 002 --eval-only  # 只评测（已有产出）
+    python eval-suite/v2/run.py --all                    # 跑全部用例
+    python eval-suite/v2/run.py --case 002 --repeat 10   # 稳定性：连跑10次出稳定性报告
+    python eval-suite/v2/run.py --case 002 --skip-ai     # 跳过 AI（只跑脚本链路）
+    python eval-suite/v2/run.py --case 002 --timeout-ai 3600 --timeout-script 300
 
-输出: 分层报告到 stdout。
+输出: 分层报告到 stdout；--repeat 额外出稳定性报告，异常轮产出物留档
+（results/{case}/{ts}/artifacts/，仅异常轮保留）。
+golden 层：案例目录有 golden/ 就比对（命中任一即过；全不中=越界待人裁决）。
 """
 
 from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -25,13 +30,18 @@ for p in (str(EVAL_SUITE), str(V2_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# v2 包内 import（用相对 import 需以包形式跑，这里兼容直接跑）
 from checks_schema import load_checks  # noqa: E402
-from engine import run_evaluation  # noqa: E402
-from pipeline import run_pipeline  # noqa: E402
+from engine import run_evaluation, LAYER_GOLDEN  # noqa: E402
+from pipeline import (  # noqa: E402
+    DEFAULT_TIMEOUT_AI,
+    DEFAULT_TIMEOUT_SCRIPT,
+    run_pipeline,
+)
 from report_v2 import render_report  # noqa: E402
 from _paths import find_deliver  # noqa: E402
 import baseline  # noqa: E402
+import golden  # noqa: E402
+import stability  # noqa: E402
 
 
 CASES_DIR_DEFAULT = EVAL_SUITE / "cases"
@@ -95,8 +105,106 @@ def _scan_all_cases(cases_dir: Path) -> list[Path]:
     return results
 
 
-def run_one_case(case_dir: Path, eval_only: bool, skip_ai: bool) -> int:
-    """跑单个用例。"""
+def _attach_golden(result, deliver: Path, case_dir: Path) -> None:
+    """挂 golden 命中层（案例无 golden 时该层 SKIP，不影响其他层）。"""
+    result.add_layer(LAYER_GOLDEN, golden.golden_check(deliver, case_dir))
+
+
+def _result_has_fail(result) -> bool:
+    return any(
+        r.status.value == "fail"
+        for checks in result.layer_results.values()
+        for r in checks
+    ) or any(s.status.value == "fail" for s in (result.pipeline_steps or []))
+
+
+def _fail_summary_line(result, pipeline_steps) -> str:
+    """--all 失败清单用的一行摘要。"""
+    failed_steps = [s.step for s in (pipeline_steps or []) if s.status.value == "fail"]
+    failed_checks = [
+        c for checks in result.layer_results.values() for c in checks if c.status.value == "fail"
+    ]
+    if not failed_steps and not failed_checks:
+        return ""
+    parts = []
+    if failed_steps:
+        parts.append("流程挂: " + ",".join(failed_steps[:3]))
+    if failed_checks:
+        brief = "; ".join(c.detail.split("\n")[0][:60] for c in failed_checks[:3])
+        parts.append(f"断言挂{len(failed_checks)}条: {brief}")
+    return " | ".join(parts)
+
+
+def _archive_anomalous_artifacts(case_name: str, snapshot, deliver: Path) -> str:
+    """异常轮产出物留档（仅失败/越界轮调用，稳定轮不占磁盘）。"""
+    try:
+        ts_dir = (
+            baseline.RESULTS_DIR
+            / baseline._safe_name(case_name)
+            / snapshot.timestamp.replace(":", "-")
+        )
+        dest = ts_dir / "artifacts"
+        shutil.copytree(deliver, dest, dirs_exist_ok=True)
+        return str(dest)
+    except Exception as e:
+        return f"(留档失败: {e})"
+
+
+def _run_repeat(
+    case_dir: Path,
+    case_name: str,
+    deliver: Path,
+    config,
+    skip_ai: bool,
+    repeat: int,
+    timeout_ai: float,
+    timeout_script: float,
+) -> tuple[int, str]:
+    """稳定性模式：连跑 N 次，聚合稳定性报告。评测零交互，不问任何问题。"""
+    pipeline_ok_runs = 0
+    for i in range(1, repeat + 1):
+        print(f"\n{'=' * 60}\n  [重复 {i}/{repeat}] {case_name}\n{'=' * 60}")
+        pipeline_steps = run_pipeline(
+            case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
+        )
+        pipeline_failed = any(s.status.value == "fail" for s in pipeline_steps)
+        if not pipeline_failed:
+            pipeline_ok_runs += 1
+
+        result = run_evaluation(deliver, config, pipeline_steps)
+        _attach_golden(result, deliver, case_dir)
+
+        snapshot = baseline.snapshot_from_result(result)
+        snapshot.case_name = case_name
+        baseline.save_snapshot(snapshot)
+
+        stats = result.summary()
+        p = sum(v["pass"] for v in stats.values())
+        f = sum(v["fail"] for v in stats.values())
+        golden_results = result.layer_results.get("golden", [])
+        gs = golden_results[0].detail.split("\n")[0] if golden_results else "无golden"
+        print(f"  ▸ 本轮: ✅{p} ❌{f}  golden: {gs}")
+
+        if pipeline_failed or _result_has_fail(result):
+            dest = _archive_anomalous_artifacts(case_name, snapshot, deliver)
+            print(f"  ▸ 异常轮，产出已留档: {dest}")
+
+    snaps = stability.load_recent_snapshots(case_name, repeat)
+    print(stability.render_stability(case_name, snaps))
+    # 稳定性模式是测量不是闸门：只要不是"每轮流水线都崩"就返回 0（细节看报告）
+    rc = 0 if pipeline_ok_runs > 0 else 1
+    return rc, f"{repeat}轮完成（{pipeline_ok_runs}轮流水线正常，详见稳定性报告）"
+
+
+def run_one_case(
+    case_dir: Path,
+    eval_only: bool,
+    skip_ai: bool,
+    repeat: int = 1,
+    timeout_ai: float = DEFAULT_TIMEOUT_AI,
+    timeout_script: float = DEFAULT_TIMEOUT_SCRIPT,
+) -> tuple[int, str]:
+    """跑单个用例。返回 (退出码, 失败摘要行——全过时为空)。"""
     case_name = case_dir.name
     # 产出目录：平铺或 {appid}/{schema} 三层，find_deliver 统一定位；
     # 找不到时保留平铺拼接（用于下游报错信息）
@@ -107,11 +215,22 @@ def run_one_case(case_dir: Path, eval_only: bool, skip_ai: bool) -> int:
     if not config.case_name:
         config.case_name = case_name
 
+    # 稳定性模式
+    if repeat > 1:
+        if eval_only:
+            print("[v2] ❌ --repeat 与 --eval-only 互斥（稳定性要重跑流水线）", file=sys.stderr)
+            return 1, "参数冲突"
+        return _run_repeat(
+            case_dir, case_name, deliver, config, skip_ai, repeat, timeout_ai, timeout_script
+        )
+
     pipeline_steps = None
     if not eval_only:
         deliver.mkdir(parents=True, exist_ok=True)
         print(f"[v2] 跑流水线: {case_name} → {deliver}")
-        pipeline_steps = run_pipeline(case_dir, deliver, skip_ai=skip_ai)
+        pipeline_steps = run_pipeline(
+            case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
+        )
         # 流程层失败提示
         failed = [s for s in pipeline_steps if s.status.value == "fail"]
         if failed:
@@ -119,11 +238,12 @@ def run_one_case(case_dir: Path, eval_only: bool, skip_ai: bool) -> int:
     else:
         if not deliver.exists():
             print(f"[v2] ❌ 产出目录不存在: {deliver}（去掉 --eval-only 先跑流水线）", file=sys.stderr)
-            return 1
+            return 1, "产出不存在"
         print(f"[v2] 只评测: {case_name} ← {deliver}")
 
     # 评测（result.case_name 用 checks.yaml 的展示名，报告友好）
     result = run_evaluation(deliver, config, pipeline_steps)
+    _attach_golden(result, deliver, case_dir)
 
     # baseline 对比（存档前先找上轮，对比后再存本次）
     # baseline 统一用 case_dir.name（目录名稳定唯一），不用展示名
@@ -138,13 +258,8 @@ def run_one_case(case_dir: Path, eval_only: bool, skip_ai: bool) -> int:
 
     print(render_report(result, diff))
 
-    # 退出码：有 FAIL 返回 1
-    has_fail = any(
-        r.status.value == "fail"
-        for checks in result.layer_results.values()
-        for r in checks
-    ) or any(s.status.value == "fail" for s in (result.pipeline_steps or []))
-    return 1 if has_fail else 0
+    has_fail = _result_has_fail(result)
+    return (1 if has_fail else 0), _fail_summary_line(result, pipeline_steps)
 
 
 def main() -> int:
@@ -153,6 +268,12 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="跑全部用例")
     parser.add_argument("--eval-only", action="store_true", help="只评测，不跑流水线")
     parser.add_argument("--skip-ai", action="store_true", help="跳过 AI 阶段（只跑脚本链路）")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="稳定性模式：连跑 N 次并出稳定性报告（默认 1=普通单跑）")
+    parser.add_argument("--timeout-ai", type=int, default=DEFAULT_TIMEOUT_AI,
+                        help=f"AI 阶段超时秒数（默认 {DEFAULT_TIMEOUT_AI}）")
+    parser.add_argument("--timeout-script", type=int, default=DEFAULT_TIMEOUT_SCRIPT,
+                        help=f"管线脚本阶段超时秒数（默认 {DEFAULT_TIMEOUT_SCRIPT}）")
     parser.add_argument(
         "--cases-dir",
         default="",
@@ -170,10 +291,23 @@ def main() -> int:
             print(f"[v2] 无用例: {cases_dir}", file=sys.stderr)
             return 1
         exit_code = 0
+        failures: list[tuple[str, str]] = []
         for case_dir in cases:
-            print(f"\n{'='*60}\n  {case_dir.name}\n{'='*60}")
-            rc = run_one_case(case_dir, args.eval_only, args.skip_ai)
+            print(f"\n{'=' * 60}\n  {case_dir.name}\n{'=' * 60}")
+            rc, line = run_one_case(
+                case_dir, args.eval_only, args.skip_ai,
+                repeat=args.repeat,
+                timeout_ai=args.timeout_ai,
+                timeout_script=args.timeout_script,
+            )
             exit_code = exit_code or rc
+            if rc:
+                failures.append((case_dir.name, line))
+        # 失败清单（哪里报错一眼可见；逐案详情往上翻或看 results/ 存档）
+        if failures:
+            print(f"\n{'=' * 60}\n  失败清单（{len(failures)}/{len(cases)} 案例）\n{'=' * 60}")
+            for name, line in failures:
+                print(f"  ❌ {name}: {line or '见上方报告'}")
         return exit_code
 
     if not args.case:
@@ -185,7 +319,13 @@ def main() -> int:
         print(f"[v2] ❌ 用例不存在: {args.case}（在 {cases_dir} 找不到）", file=sys.stderr)
         return 1
 
-    return run_one_case(case_dir, args.eval_only, args.skip_ai)
+    rc, _ = run_one_case(
+        case_dir, args.eval_only, args.skip_ai,
+        repeat=args.repeat,
+        timeout_ai=args.timeout_ai,
+        timeout_script=args.timeout_script,
+    )
+    return rc
 
 
 if __name__ == "__main__":

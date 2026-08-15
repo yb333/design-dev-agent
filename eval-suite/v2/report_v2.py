@@ -107,4 +107,5 @@ def _owner(layer: str) -> str:
         "artifacts": "脚本（assemble_ts/assemble_ddl 等）",
         "design": "designer 角色（或 design skill）",
         "code": "coder 角色（或 coding skill）",
+        "golden": "待人工裁决（可能新合理方案 → promote 沉淀；可能回归 → 修）",
     }.get(layer, "未知")

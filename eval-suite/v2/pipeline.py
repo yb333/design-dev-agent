@@ -1,19 +1,27 @@
-"""跑流水线：封装各阶段，每步加计时器。
-
-复用 local_eval.py 的脚本路径和调用方式（opencode run --agent CLI），
-但每步返回 PipelineStepResult（带耗时），不绑死 EvalReport。
+"""跑流水线：实时流式输出 + 阶段横幅 + 计时 + 可配置超时。
 
 阶段：preprocess → precheck → designer(+assemble_ts) → coder →
-      assemble_ddl → check_sql → ut(可选) → export
+      assemble_ddl → export
+（UT 连库阶段不在评测流水线内——需显式 opt-in，见 eval-suite/README.md）
 
 调起 designer/coder 用 `opencode run --agent`（CLI，无 sidecar 依赖，适合内网）。
+
+可观测性约定：
+- 子进程输出实时上屏（缩进 4 格），不再憋到结束——用户随时知道跑到哪了
+- 每阶段起止打横幅（▶ 开始 / ✅❌ 结果+耗时）
+- 失败详情取输出尾部（traceback 崩溃行在末尾）+ 全文落盘
+  {deliver}/_internal/diagnose/pipeline_{step}.log
+- 超时可配（--timeout-ai / --timeout-script 传入），超时 kill 进程标记失败，
+  不拖垮整轮（单案例失败由 run.py 继续下一个）
 """
 
 from __future__ import annotations
 
 import json
+import queue
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -35,23 +43,77 @@ _REPO_SHARED = ROOT / "skills" / "design-dev-shared" / "scripts"
 _GLOBAL_SHARED = Path.home() / ".config" / "opencode" / "skills" / "design-dev-shared" / "scripts"
 SHARED_REFS = _REPO_SHARED if _REPO_SHARED.exists() else _GLOBAL_SHARED
 
+# 默认超时（秒）：AI 阶段（designer/coder 走 opencode）与管线脚本阶段，可由 CLI 覆盖
+DEFAULT_TIMEOUT_AI = 1800
+DEFAULT_TIMEOUT_SCRIPT = 120
 
-def _run_python(script: str, args: list[str], timeout: int = 60) -> tuple[int, str]:
-    """运行 Python 脚本，返回 (退出码, 合并输出)。"""
+
+# ============================================================
+# 子进程运行（流式 + 超时）
+# ============================================================
+
+
+def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tuple[int, str]:
+    """流式运行命令：输出实时上屏 + 全量缓存；超时 kill 并标记。
+
+    返回 (退出码, 合并输出)。超时返回 -1，输出尾部带 [TIMEOUT] 标记。
+    读子进程输出走独立线程 + 队列，主循环按 deadline 轮询——
+    僵死进程（无输出无退出）也能被超时收割。
+    """
     try:
-        r = subprocess.run(
-            [sys.executable, script] + args,
-            capture_output=True,
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout,
-            cwd=str(ROOT),
+            cwd=str(cwd or ROOT),
         )
-        combined = r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")
-        return r.returncode, combined
-    except subprocess.TimeoutExpired:
-        return -1, f"超时({timeout}s)"
     except Exception as e:
         return -1, str(e)
+
+    q: queue.Queue = queue.Queue()
+
+    def _reader() -> None:
+        try:
+            for line in proc.stdout:  # type: ignore[union-attr]
+                q.put(line)
+        finally:
+            q.put(None)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    buf: list[str] = []
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    while True:
+        try:
+            item = q.get(timeout=0.5)
+        except queue.Empty:
+            if time.monotonic() > deadline:
+                timed_out = True
+                proc.kill()
+                break
+            continue
+        if item is None:
+            break
+        buf.append(item)
+        print("    " + item, end="", flush=True)  # 缩进区分子进程输出
+
+    if timed_out:
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+        combined = "".join(buf) + f"\n[TIMEOUT] 超时({timeout:.0f}s)已终止: {' '.join(cmd[:3])}..."
+        print(f"    {combined.rsplit(chr(10), 1)[-1]}", flush=True)
+        return -1, combined
+    proc.wait()
+    return proc.returncode or 0, "".join(buf)
+
+
+def _run_python(script: str, args: list[str], timeout: float) -> tuple[int, str]:
+    """运行 Python 脚本（当前解释器），返回 (退出码, 合并输出)。"""
+    return _run_stream([sys.executable, script] + args, timeout)
 
 
 def _fail_detail(step: str, deliver: Path, out: str) -> str:
@@ -67,19 +129,9 @@ def _fail_detail(step: str, deliver: Path, out: str) -> str:
     return f"{tail}\n[全文] {log_path}"
 
 
-def _run_cmd(cmd: list[str], timeout: int = 1800) -> tuple[int, str, str]:
-    """运行命令，返回 (退出码, stdout, stderr)。"""
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(ROOT))
-        return r.returncode, r.stdout, r.stderr
-    except subprocess.TimeoutExpired:
-        return -1, "", f"超时({timeout}s)"
-    except Exception as e:
-        return -1, "", str(e)
-
-
 def _step(name: str, fn) -> PipelineStepResult:
-    """包装一个阶段：计时 + 转 PipelineStepResult。"""
+    """包装一个阶段：横幅 + 计时 + 转 PipelineStepResult。"""
+    print(f"\n▶ {name}", flush=True)
     start = time.monotonic()
     try:
         ok, detail = fn()
@@ -87,6 +139,8 @@ def _step(name: str, fn) -> PipelineStepResult:
         ok, detail = False, f"异常: {e}"
     duration = time.monotonic() - start
     status = CheckStatus.PASS if ok else CheckStatus.FAIL
+    icon = "✅" if ok else "❌"
+    print(f"{icon} {name} ({duration:.1f}s)" + (f" — {detail}" if detail else ""), flush=True)
     return PipelineStepResult(step=name, status=status, detail=detail, duration_seconds=duration)
 
 
@@ -95,7 +149,7 @@ def _step(name: str, fn) -> PipelineStepResult:
 # ============================================================
 
 
-def _preprocess(deliver: Path, mapping: Path, rs: Path) -> tuple[bool, str]:
+def _preprocess(deliver: Path, mapping: Path, rs: Path, timeout: float) -> tuple[bool, str]:
     internal = deliver / "_internal"
     internal.mkdir(parents=True, exist_ok=True)
     rs_input = internal / "rs_input.json"
@@ -103,7 +157,7 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path) -> tuple[bool, str]:
     # 只有 RS.md 真实存在才传 --rs（Path 恒为真，不能直接 if rs）
     if rs.exists():
         args.extend(["--rs", str(rs)])
-    code, out = _run_python(str(SHARED_REFS / "preprocess.py"), args)
+    code, out = _run_python(str(SHARED_REFS / "preprocess.py"), args, timeout)
     if code == 0:
         data = json.loads(rs_input.read_text(encoding="utf-8"))
         n_fields = len(data.get("field_mappings", []))
@@ -112,9 +166,9 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path) -> tuple[bool, str]:
     return False, _fail_detail("preprocess", deliver, out)
 
 
-def _precheck(deliver: Path) -> tuple[bool, str]:
+def _precheck(deliver: Path, timeout: float) -> tuple[bool, str]:
     rs_input = deliver / "_internal" / "rs_input.json"
-    code, out = _run_python(str(SHARED_REFS / "precheck.py"), ["--input", str(rs_input)])
+    code, out = _run_python(str(SHARED_REFS / "precheck.py"), ["--input", str(rs_input)], timeout)
     if code == 0:
         return True, "全部通过"
     if code == 1:
@@ -122,7 +176,7 @@ def _precheck(deliver: Path) -> tuple[bool, str]:
     return False, _fail_detail("precheck", deliver, out)
 
 
-def _designer(deliver: Path, skip_ai: bool) -> tuple[bool, str]:
+def _designer(deliver: Path, skip_ai: bool, timeout: float) -> tuple[bool, str]:
     internal = deliver / "_internal"
     rs_input = internal / "rs_input.json"
     if skip_ai:
@@ -138,7 +192,9 @@ def _designer(deliver: Path, skip_ai: bool) -> tuple[bool, str]:
         f"--decisions {abs_internal}/design_decisions.yaml "
         f"--outdir {abs_deliver} 组装 ts.json + ts.md。"
     )
-    _run_cmd(["opencode", "run", "--agent", "dws-designer", "--format", "json", prompt], timeout=1800)
+    _, out = _run_stream(
+        ["opencode", "run", "--agent", "dws-designer", "--format", "json", prompt], timeout
+    )
 
     ts_json = deliver / "ts.json"
     decisions = internal / "design_decisions.yaml"
@@ -146,10 +202,10 @@ def _designer(deliver: Path, skip_ai: bool) -> tuple[bool, str]:
         ts = json.loads(ts_json.read_text(encoding="utf-8"))
         n_rules = len(ts.get("rules", {}))
         return True, f"{n_rules}规则"
-    return False, f"产出缺失: ts.json={ts_json.exists()}, decisions={decisions.exists()}"
+    return False, _fail_detail("designer", deliver, out or "(opencode 无输出)")
 
 
-def _coder(deliver: Path, rule_code: str, skip_ai: bool) -> tuple[bool, str]:
+def _coder(deliver: Path, rule_code: str, skip_ai: bool, timeout: float) -> tuple[bool, str]:
     etl_dir = deliver / "etl"
     etl_dir.mkdir(exist_ok=True)
     if skip_ai:
@@ -159,30 +215,32 @@ def _coder(deliver: Path, rule_code: str, skip_ai: bool) -> tuple[bool, str]:
     abs_etl = str(etl_dir.resolve())
     prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_etl}/{rule_code}.sql"
 
-    _run_cmd(["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt], timeout=1800)
+    _, out = _run_stream(
+        ["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt], timeout
+    )
 
-    # 确定性文件名（不用 glob）；兼容带后缀命名由评测层 find_select_file 处理
+    # 确定性文件名（不用 glob）；带后缀命名由评测层 find_select_file 兼容
     select_file = etl_dir / f"{rule_code}.sql"
     if select_file.exists():
         n_lines = len(select_file.read_text(encoding="utf-8").strip().splitlines())
         return True, f"{n_lines}行 SELECT"
-    return False, f"SELECT 文件未生成: {rule_code}.sql"
+    return False, _fail_detail(f"coder_{rule_code}", deliver, out or "(opencode 无输出)")
 
 
-def _assemble_ddl(deliver: Path) -> tuple[bool, str]:
+def _assemble_ddl(deliver: Path, timeout: float) -> tuple[bool, str]:
     code, out = _run_python(
         str(SHARED_REFS / "assemble_ddl.py"),
         ["--ts", str(deliver / "ts.json"), "--outdir", str(deliver)],
+        timeout,
     )
     ddl_dir = deliver / "ddl"
-    rollback_dir = deliver / "ddl_rollback"
     # 确定性检查：目录存在即可（具体文件名由产物层断言检查）
     if code == 0 and ddl_dir.exists():
         return True, "DDL 生成完成"
     return False, _fail_detail("assemble_ddl", deliver, out)
 
 
-def _assemble_export(deliver: Path) -> tuple[bool, str]:
+def _assemble_export(deliver: Path, timeout: float) -> tuple[bool, str]:
     code, out = _run_python(
         str(SHARED_REFS / "assemble_export.py"),
         [
@@ -191,7 +249,7 @@ def _assemble_export(deliver: Path) -> tuple[bool, str]:
             "--ddl-dir", str(deliver / "ddl"),
             "--outdir", str(deliver),
         ],
-        timeout=120,
+        timeout,
     )
     export_dir = deliver / "export"
     if code == 0 and export_dir.exists():
@@ -208,6 +266,8 @@ def run_pipeline(
     case_dir: Path,
     deliver: Path,
     skip_ai: bool = False,
+    timeout_ai: float = DEFAULT_TIMEOUT_AI,
+    timeout_script: float = DEFAULT_TIMEOUT_SCRIPT,
 ) -> list[PipelineStepResult]:
     """跑完整流水线，返回各阶段结果（带计时）。
 
@@ -215,26 +275,28 @@ def run_pipeline(
         case_dir: 用例目录（含 mapping.xlsx + RS.md）。
         deliver: 产出目录（ddlc_design_dev）。
         skip_ai: 跳过 AI 阶段（只跑脚本链路）。
+        timeout_ai: AI 阶段（designer/coder）超时秒数。
+        timeout_script: 管线脚本阶段超时秒数。
     """
     steps: list[PipelineStepResult] = []
     mapping = case_dir / "mapping.xlsx"
     rs = case_dir / "RS.md"
 
     # 1. preprocess
-    steps.append(_step("preprocess", lambda: _preprocess(deliver, mapping, rs)))
+    steps.append(_step("preprocess", lambda: _preprocess(deliver, mapping, rs, timeout_script)))
     # preprocess 失败立即短路：rs_input.json 缺失/残留旧版时继续跑 precheck
     # 只会产生级联误报（读垃圾输入报 NoneType 之类），掩盖真正的失败原因
     if steps[-1].status == CheckStatus.FAIL:
         return steps
     # 2. precheck
-    steps.append(_step("precheck", lambda: _precheck(deliver)))
+    steps.append(_step("precheck", lambda: _precheck(deliver, timeout_script)))
 
     # 前置失败则不继续
     if any(s.status == CheckStatus.FAIL for s in steps):
         return steps
 
     # 3. designer
-    steps.append(_step("designer", lambda: _designer(deliver, skip_ai)))
+    steps.append(_step("designer", lambda: _designer(deliver, skip_ai, timeout_ai)))
     if steps[-1].status == CheckStatus.FAIL:
         return steps
 
@@ -244,11 +306,13 @@ def run_pipeline(
         ts = json.loads(ts_path.read_text(encoding="utf-8"))
         rules = list(ts.get("rules", {}).keys())
         for code in rules:
-            steps.append(_step(f"coder({code})", lambda c=code: _coder(deliver, c, skip_ai)))
+            steps.append(
+                _step(f"coder({code})", lambda c=code: _coder(deliver, c, skip_ai, timeout_ai))
+            )
 
     # 5. assemble_ddl
-    steps.append(_step("assemble_ddl", lambda: _assemble_ddl(deliver)))
+    steps.append(_step("assemble_ddl", lambda: _assemble_ddl(deliver, timeout_script)))
     # 6. export
-    steps.append(_step("export", lambda: _assemble_export(deliver)))
+    steps.append(_step("export", lambda: _assemble_export(deliver, timeout_script)))
 
     return steps

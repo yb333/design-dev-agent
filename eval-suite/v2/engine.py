@@ -32,12 +32,14 @@ LAYER_PIPELINE = "pipeline"
 LAYER_ARTIFACTS = "artifacts"
 LAYER_DESIGN = "design"
 LAYER_CODE = "code"
+LAYER_GOLDEN = "golden"
 
 LAYER_NAMES = {
     LAYER_PIPELINE: "流程层",
     LAYER_ARTIFACTS: "产物层",
     LAYER_DESIGN: "design 质量",
     LAYER_CODE: "code 质量",
+    LAYER_GOLDEN: "golden 命中",
 }
 
 

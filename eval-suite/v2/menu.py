@@ -214,10 +214,12 @@ def main() -> int:
             ("跑评测", "跑流水线(designer+coder) + 评测打分 + 对比上轮"),
             ("只评测已有产出", "不重跑流水线，对 10_project_deliver 里的产出打分"),
             ("生成断言草稿 (seed)", "从已跑通的产出抽取事实，生成 checks.yaml 草稿"),
+            ("稳定性测试", "同一案例连跑 N 次，出断言级稳定/摇摆 + golden 命中分布报告"),
+            ("沉淀 golden", "把实际调测中认可的产出手工拷进案例 golden/（纯拷贝，决定在人）"),
             ("退出", ""),
         ])
-        action = _ask_choice("做什么", 4)
-        if action == 4:
+        action = _ask_choice("做什么", 6)
+        if action == 6:
             print("再见 👋")
             return 0
 
@@ -261,6 +263,39 @@ def main() -> int:
                 case = _pick_case(case_paths)
                 if case:
                     _run(["seed.py", "--case", case.name, cases_dir_arg, "--review"])
+        elif action == 4:
+            # 稳定性测试：单案例连跑 N 次（零交互，全程不问）
+            if scope == 1:
+                print("\n  ℹ️ 稳定性测试一次只处理一个用例，请选单个。")
+            if is_real:
+                info = _pick_real_case(real_cases)
+                _ensure_real_case_dir(info)
+                case_name, extra_skip = info.name, _ask_yes_no("跳过 AI 阶段？", default=False)
+            else:
+                case = _pick_case(case_paths)
+                if not case:
+                    continue
+                case_name, extra_skip = case.name, _ask_yes_no("跳过 AI 阶段？", default=False)
+            raw = input("重复次数 (默认5): ").strip()
+            n = int(raw) if raw.isdigit() and int(raw) > 0 else 5
+            extra = ["--skip-ai"] if extra_skip else []
+            _run(["run.py", "--case", case_name, cases_dir_arg, "--repeat", str(n)] + extra)
+        elif action == 5:
+            # 沉淀 golden（纯拷贝，认可决定在人）
+            if scope == 1:
+                print("\n  ℹ️ 沉淀 golden 一次只处理一个用例，请选单个。")
+            if is_real:
+                info = _pick_real_case(real_cases)
+                _ensure_real_case_dir(info)
+                case_name = info.name
+            else:
+                case = _pick_case(case_paths)
+                if not case:
+                    continue
+                case_name = case.name
+            gname = input("golden 方案名（回车=自动 方案A/B/C...）: ").strip()
+            name_args = ["--name", gname] if gname else []
+            _run(["promote.py", "--case", case_name, cases_dir_arg] + name_args)
         else:
             # 跑评测 / 只评测
             eval_only = action == 2
