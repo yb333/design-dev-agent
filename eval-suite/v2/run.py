@@ -37,6 +37,7 @@ from pipeline import (  # noqa: E402
     DEFAULT_TIMEOUT_SCRIPT,
     run_pipeline,
 )
+from real_pipe import DEFAULT_TIMEOUT_PIPE, run_real_pipe  # noqa: E402
 from report_v2 import render_report  # noqa: E402
 from _paths import find_deliver  # noqa: E402
 import baseline  # noqa: E402
@@ -46,6 +47,14 @@ import stability  # noqa: E402
 
 CASES_DIR_DEFAULT = EVAL_SUITE / "cases"
 DELIVER_BASE = ROOT / "10_project_deliver"
+
+
+def select_executor(replay: bool, skip_ai: bool) -> str:
+    """执行方式选择：real=真实入口（默认，/new-pipe 命令）| replay=分阶段重放（诊断）。
+
+    --skip-ai 只在重放模式有意义（真实入口不可能跳过 AI）→ 请求 skip-ai 自动降级 replay。
+    """
+    return "replay" if (replay or skip_ai) else "real"
 
 
 def resolve_case(case_arg: str, cases_dir: Path) -> Path:
@@ -150,22 +159,34 @@ def _archive_anomalous_artifacts(case_name: str, snapshot, deliver: Path) -> str
         return f"(留档失败: {e})"
 
 
+def _run_pipeline_for(case_dir: Path, deliver: Path, executor: str, skip_ai: bool,
+                      timeout_ai: float, timeout_script: float, timeout_pipe: float):
+    """按执行方式跑流程：real=真实入口单步 / replay=分阶段重放。"""
+    if executor == "real":
+        return run_real_pipe(case_dir, DELIVER_BASE, timeout_pipe)
+    return run_pipeline(
+        case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
+    )
+
+
 def _run_repeat(
     case_dir: Path,
     case_name: str,
     deliver: Path,
     config,
+    executor: str,
     skip_ai: bool,
     repeat: int,
     timeout_ai: float,
     timeout_script: float,
+    timeout_pipe: float,
 ) -> tuple[int, str]:
     """稳定性模式：连跑 N 次，聚合稳定性报告。评测零交互，不问任何问题。"""
     pipeline_ok_runs = 0
     for i in range(1, repeat + 1):
-        print(f"\n{'=' * 60}\n  [重复 {i}/{repeat}] {case_name}\n{'=' * 60}")
-        pipeline_steps = run_pipeline(
-            case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
+        print(f"\n{'=' * 60}\n  [重复 {i}/{repeat}] {case_name}（{executor}）\n{'=' * 60}")
+        pipeline_steps = _run_pipeline_for(
+            case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
         )
         pipeline_failed = any(s.status.value == "fail" for s in pipeline_steps)
         if not pipeline_failed:
@@ -201,8 +222,10 @@ def run_one_case(
     eval_only: bool,
     skip_ai: bool,
     repeat: int = 1,
+    replay: bool = False,
     timeout_ai: float = DEFAULT_TIMEOUT_AI,
     timeout_script: float = DEFAULT_TIMEOUT_SCRIPT,
+    timeout_pipe: float = DEFAULT_TIMEOUT_PIPE,
 ) -> tuple[int, str]:
     """跑单个用例。返回 (退出码, 失败摘要行——全过时为空)。"""
     case_name = case_dir.name
@@ -215,21 +238,25 @@ def run_one_case(
     if not config.case_name:
         config.case_name = case_name
 
+    executor = select_executor(replay, skip_ai)
+
     # 稳定性模式
     if repeat > 1:
         if eval_only:
             print("[v2] ❌ --repeat 与 --eval-only 互斥（稳定性要重跑流水线）", file=sys.stderr)
             return 1, "参数冲突"
         return _run_repeat(
-            case_dir, case_name, deliver, config, skip_ai, repeat, timeout_ai, timeout_script
+            case_dir, case_name, deliver, config, executor, skip_ai, repeat,
+            timeout_ai, timeout_script, timeout_pipe,
         )
 
     pipeline_steps = None
     if not eval_only:
         deliver.mkdir(parents=True, exist_ok=True)
-        print(f"[v2] 跑流水线: {case_name} → {deliver}")
-        pipeline_steps = run_pipeline(
-            case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
+        mode_desc = "真实入口 /new-pipe" if executor == "real" else "重放诊断 --replay"
+        print(f"[v2] 跑流水线（{mode_desc}）: {case_name} → {deliver}")
+        pipeline_steps = _run_pipeline_for(
+            case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
         )
         # 流程层失败提示
         failed = [s for s in pipeline_steps if s.status.value == "fail"]
@@ -270,10 +297,14 @@ def main() -> int:
     parser.add_argument("--skip-ai", action="store_true", help="跳过 AI 阶段（只跑脚本链路）")
     parser.add_argument("--repeat", type=int, default=1,
                         help="稳定性模式：连跑 N 次并出稳定性报告（默认 1=普通单跑）")
+    parser.add_argument("--replay", action="store_true",
+                        help="分阶段重放模式（诊断用）；默认真实入口 /new-pipe")
+    parser.add_argument("--timeout-pipe", type=int, default=DEFAULT_TIMEOUT_PIPE,
+                        help=f"真实入口整条流程超时秒数（默认 {DEFAULT_TIMEOUT_PIPE}）")
     parser.add_argument("--timeout-ai", type=int, default=DEFAULT_TIMEOUT_AI,
-                        help=f"AI 阶段超时秒数（默认 {DEFAULT_TIMEOUT_AI}）")
+                        help=f"重放模式 AI 阶段超时秒数（默认 {DEFAULT_TIMEOUT_AI}）")
     parser.add_argument("--timeout-script", type=int, default=DEFAULT_TIMEOUT_SCRIPT,
-                        help=f"管线脚本阶段超时秒数（默认 {DEFAULT_TIMEOUT_SCRIPT}）")
+                        help=f"重放模式脚本阶段超时秒数（默认 {DEFAULT_TIMEOUT_SCRIPT}）")
     parser.add_argument(
         "--cases-dir",
         default="",
@@ -297,8 +328,10 @@ def main() -> int:
             rc, line = run_one_case(
                 case_dir, args.eval_only, args.skip_ai,
                 repeat=args.repeat,
+                replay=args.replay,
                 timeout_ai=args.timeout_ai,
                 timeout_script=args.timeout_script,
+                timeout_pipe=args.timeout_pipe,
             )
             exit_code = exit_code or rc
             if rc:
@@ -322,8 +355,10 @@ def main() -> int:
     rc, _ = run_one_case(
         case_dir, args.eval_only, args.skip_ai,
         repeat=args.repeat,
+        replay=args.replay,
         timeout_ai=args.timeout_ai,
         timeout_script=args.timeout_script,
+        timeout_pipe=args.timeout_pipe,
     )
     return rc
 

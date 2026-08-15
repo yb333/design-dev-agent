@@ -211,7 +211,7 @@ def main() -> int:
 
     while True:
         _print_menu("设计开发 Agent 评测系统", [
-            ("跑评测", "跑流水线(designer+coder) + 评测打分 + 对比上轮"),
+            ("跑评测", "真实入口 /new-pipe 全流程 + 评测打分 + 对比上轮"),
             ("只评测已有产出", "不重跑流水线，对 10_project_deliver 里的产出打分"),
             ("生成断言草稿 (seed)", "从已跑通的产出抽取事实，生成 checks.yaml 草稿"),
             ("稳定性测试", "同一案例连跑 N 次，出断言级稳定/摇摆 + golden 命中分布报告"),
@@ -278,7 +278,8 @@ def main() -> int:
                 case_name, extra_skip = case.name, _ask_yes_no("跳过 AI 阶段？", default=False)
             raw = input("重复次数 (默认5): ").strip()
             n = int(raw) if raw.isdigit() and int(raw) > 0 else 5
-            extra = ["--skip-ai"] if extra_skip else []
+            # 跳过AI只在重放模式有意义 → 自动带 --replay；默认真实入口连跑
+            extra = ["--replay", "--skip-ai"] if extra_skip else []
             _run(["run.py", "--case", case_name, cases_dir_arg, "--repeat", str(n)] + extra)
         elif action == 5:
             # 沉淀 golden（纯拷贝，认可决定在人）
@@ -308,22 +309,15 @@ def main() -> int:
                         _ensure_real_case_dir(info)
                 _run(["run.py", "--all", cases_dir_arg] + extra)
             else:
-                # 单个
+                # 单个：真实入口（默认），无 skip-ai 问题（真实流程不可能跳 AI；
+                # 脚本链路快查走 CLI --replay --skip-ai）
                 if is_real:
                     info = _pick_real_case(real_cases)
                     _ensure_real_case_dir(info)
-                    if not eval_only:
-                        skip = _ask_yes_no("跳过 AI 阶段？", default=False)
-                        if skip:
-                            extra.append("--skip-ai")
                     _run(["run.py", "--case", info.name, cases_dir_arg] + extra)
                 else:
                     case = _pick_case(case_paths)
                     if case:
-                        if not eval_only:
-                            skip = _ask_yes_no("跳过 AI 阶段？", default=False)
-                            if skip:
-                                extra.append("--skip-ai")
                         _run(["run.py", "--case", case.name, cases_dir_arg] + extra)
 
         # 跑完问要不要继续

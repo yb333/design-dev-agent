@@ -26,11 +26,13 @@
 ./eval.sh                                    # 或双击 eval.bat
 
 # CLI 直调
-python3 eval-suite/v2/run.py --case 002                     # 单案例全流程（流水线+评测）
+python3 eval-suite/v2/run.py --case 002                     # 单案例：真实入口全流程+评测（默认）
 python3 eval-suite/v2/run.py --case 002 --eval-only          # 只评测已有产出
+python3 eval-suite/v2/run.py --case 002 --replay             # 分阶段重放（诊断：定位哪个阶段挂/慢）
 python3 eval-suite/v2/run.py --all --cases-dir=eval-suite/cases_real   # 全部真实案例
-python3 eval-suite/v2/run.py --case X --repeat 10            # 稳定性：连跑10次出报告
-python3 eval-suite/v2/run.py --case X --timeout-ai 3600 --timeout-script 300  # 超时可配
+python3 eval-suite/v2/run.py --case X --repeat 10            # 稳定性：真实入口连跑10次出报告
+python3 eval-suite/v2/run.py --case X --timeout-pipe 7200    # 真实流程整条超时（默认3600s）
+python3 eval-suite/v2/run.py --case X --replay --skip-ai     # 重放+跳AI（脚本链路快查）
 
 python3 eval-suite/v2/seed.py --case X --cases-dir=eval-suite/cases_real --review
 #    ↑ 从产出抽事实生成 checks.yaml 草稿（[AUTO-SEEDED] 需人工 review 固化）
@@ -71,11 +73,15 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
 
 ## 六、其他约定
 
+- **执行方式**：默认**真实入口**（`opencode run --command new-pipe` + 显式非交互声明，
+  编排 100% 走 commands/new-pipe.md，评测零编排拷贝）；`--replay` 为分阶段重放诊断模式。
+  真实入口下流程层是单步（不拆阶段计时），要分阶段定位用 `--replay`。
+- **UT 连库属于真实流程**：真实入口跑的是完整 new-pipe（含 check_db 探活 + UT），
+  评测不干预——测的就是真实行为；`--replay` 重放模式不含 UT。
 - **产出定位**：平铺 `10_project_deliver/{资产}/` 与三层 `{appid}/{schema}/{资产}/`
-  自动兼容（平铺优先），案例按资产名与产出关联。
-- **超时**：AI 阶段默认 1800s、脚本阶段默认 120s，CLI 可覆盖；超时 kill 该阶段标记
-  失败，**不拖垮整轮**（单案例失败自动继续下一个）。
-- **UT 连库不在评测流水线内**（需显式 opt-in + 环境隔离，后续再做）。
+  自动兼容（平铺优先），案例按资产名与产出关联（案例目录名=资产表名）。
+- **超时**：真实流程默认 3600s（`--timeout-pipe`）；重放模式 AI 1800s/脚本 120s
+  （`--timeout-ai`/`--timeout-script`）。超时 kill 该阶段标记失败，**不拖垮整轮**。
 - **失败排查**：报告失败详情带输出尾部（traceback 崩溃行）+ 全文 log 路径。
 - **版本提示**：快照存 git sha；repo 与全局安装技能有版本差时，结果解读要留意
   （建议跑评测前重跑 `install.py` 同步，或确认评测走 repo 源——默认 repo 优先）。
