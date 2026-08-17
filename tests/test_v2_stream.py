@@ -18,6 +18,22 @@ class TestRunStream:
         assert code == 0
         assert "hello-stream" in out
 
+    def test_full_command_echoed(self, capsys):
+        """执行窗口回显完整提交命令（含空格参数加引号）。"""
+        _run_stream([sys.executable, "-c", "print('x')"], timeout=10)
+        captured = capsys.readouterr().out
+        assert "$ " in captured
+        assert sys.executable in captured
+        assert "-c" in captured
+
+    def test_spaced_arg_quoted_in_echo(self, capsys):
+        _run_stream([sys.executable, "-c", "print('y')"], timeout=10, )
+        # 直接验证引号逻辑：含空格消息整体加引号
+        from pipeline import _run_stream as rs
+        rs(["echo", "hello world"], timeout=5, )
+        captured = capsys.readouterr().out
+        assert '"hello world"' in captured
+
     def test_timeout_kills_hung_process(self):
         code, out = _run_stream(
             [sys.executable, "-c", "import time; time.sleep(30)"], timeout=1

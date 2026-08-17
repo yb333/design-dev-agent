@@ -97,6 +97,9 @@ def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tupl
             sys.stdout.reconfigure(errors="replace")
         except Exception:
             pass
+        # 执行窗口回显完整提交命令（人能直接看到/复制重跑；含空格参数加引号）
+        quoted = [f'"{c}"' if " " in str(c) else str(c) for c in cmd]
+        print(f"    $ {' '.join(quoted)}", flush=True)
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
