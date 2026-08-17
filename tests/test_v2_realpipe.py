@@ -12,6 +12,7 @@ for p in (str(_EVAL_SUITE), str(_V2_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import pipeline
 import real_pipe
 from run import select_executor
 
@@ -117,3 +118,25 @@ class TestRunRealPipe:
         case_dir.mkdir()
         steps = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert steps[0].status.value == "fail"
+
+
+class TestOpencodeCmd:
+    """Windows 坑修复：opencode.cmd 的 Popen 解析（WinError 2）。"""
+
+    def setup_method(self):
+        pipeline._OPENCODE_RESOLVED = None  # 清缓存
+
+    def test_env_override_wins(self, monkeypatch):
+        monkeypatch.setenv("EVAL_OPENCODE", "C:/xx/npm/opencode.cmd")
+        assert pipeline.opencode_cmd() == ["C:/xx/npm/opencode.cmd"]
+
+    def test_which_resolves(self, monkeypatch):
+        monkeypatch.delenv("EVAL_OPENCODE", raising=False)
+        monkeypatch.setattr(pipeline.shutil, "which", lambda name: "/usr/local/bin/opencode")
+        assert pipeline.opencode_cmd() == ["/usr/local/bin/opencode"]
+
+    def test_not_found_raises_with_hint(self, monkeypatch):
+        monkeypatch.delenv("EVAL_OPENCODE", raising=False)
+        monkeypatch.setattr(pipeline.shutil, "which", lambda name: None)
+        with pytest.raises(RuntimeError, match="WinError 2"):
+            pipeline.opencode_cmd()

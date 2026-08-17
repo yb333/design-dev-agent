@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -47,6 +49,30 @@ SHARED_REFS = _REPO_SHARED if _REPO_SHARED.exists() else _GLOBAL_SHARED
 DEFAULT_TIMEOUT_AI = 1800
 DEFAULT_TIMEOUT_SCRIPT = 120
 
+# opencode 解析缓存（Windows 下 Popen 解析不到 .cmd，见 opencode_cmd）
+_OPENCODE_RESOLVED: list[str] | None = None
+
+
+def opencode_cmd() -> list[str]:
+    """解析 opencode 可执行命令，返回可作 Popen argv 前缀的列表。
+
+    Windows 坑：npm 全局装的 opencode 是 opencode.cmd，Popen(["opencode", ...])
+    不按 PATHEXT 解析 .cmd/.bat → WinError 2 系统找不到指定的文件。
+    shutil.which 会按 PATHEXT 找到完整路径，跨平台安全。
+    优先级：环境变量 EVAL_OPENCODE（run.py --opencode 注入）> shutil.which。
+    """
+    global _OPENCODE_RESOLVED
+    if _OPENCODE_RESOLVED is None:
+        exe = os.environ.get("EVAL_OPENCODE", "").strip() or shutil.which("opencode")
+        if not exe:
+            raise RuntimeError(
+                "opencode 不在 PATH（Windows npm 安装形如 opencode.cmd，Python Popen 解析不到，"
+                "报 WinError 2）。确认 opencode 已安装；或用 --opencode 传完整路径，"
+                "如 C:/Users/<你>/AppData/Roaming/npm/opencode.cmd"
+            )
+        _OPENCODE_RESOLVED = [exe]
+    return _OPENCODE_RESOLVED
+
 
 # ============================================================
 # 子进程运行（流式 + 超时）
@@ -61,6 +87,11 @@ def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tupl
     僵死进程（无输出无退出）也能被超时收割。
     """
     try:
+        # Windows 重定向/GBK 控制台遇 UTF-8 子进程输出（emoji/中文）不炸整轮
+        try:
+            sys.stdout.reconfigure(errors="replace")
+        except Exception:
+            pass
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -193,7 +224,7 @@ def _designer(deliver: Path, skip_ai: bool, timeout: float) -> tuple[bool, str]:
         f"--outdir {abs_deliver} 组装 ts.json + ts.md。"
     )
     _, out = _run_stream(
-        ["opencode", "run", "--agent", "dws-designer", "--format", "json", prompt], timeout
+        opencode_cmd() + ["run", "--agent", "dws-designer", "--format", "json", prompt], timeout
     )
 
     ts_json = deliver / "ts.json"
@@ -216,7 +247,7 @@ def _coder(deliver: Path, rule_code: str, skip_ai: bool, timeout: float) -> tupl
     prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_etl}/{rule_code}.sql"
 
     _, out = _run_stream(
-        ["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt], timeout
+        opencode_cmd() + ["run", "--agent", "dws-coder", "--format", "json", prompt], timeout
     )
 
     # 确定性文件名（不用 glob）；带后缀命名由评测层 find_select_file 兼容

@@ -41,6 +41,17 @@ CODING_REFS = _skill_scripts("dws-coding")
 SHARED_REFS = _skill_scripts("design-dev-shared")
 
 
+
+
+def _opencode_argv() -> list:
+    """解析 opencode 完整命令（Windows Popen 解析不到 opencode.cmd → WinError 2）。"""
+    import os, shutil
+    exe = os.environ.get("EVAL_OPENCODE", "").strip() or shutil.which("opencode")
+    if not exe:
+        raise RuntimeError("opencode 不在 PATH（Windows npm 装 opencode.cmd，Popen 解析不到）")
+    return [exe]
+
+
 class EvalReport:
     """评测报告收集器"""
     def __init__(self, asset):
@@ -165,7 +176,7 @@ def step_designer(report, deliver, skip_ai):
     prompt = f"读取 {abs_rs}，产出 design_decisions.yaml 到 {abs_internal}/。然后调 assemble_ts.py --rs {abs_rs} --decisions {abs_internal}/design_decisions.yaml --outdir {abs_deliver} 组装 ts.json + ts.md。"
 
     code, out, err = run_cmd(
-        ["opencode", "run", "--agent", "dws-designer", "--format", "json", prompt],
+        _opencode_argv() + ["run", "--agent", "dws-designer", "--format", "json", prompt],
         timeout=1800  # 大案例（264字段）可能需要30分钟
     )
 
@@ -202,7 +213,7 @@ def step_coder(report, deliver, rule_code, skip_ai):
     prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_select}/{rule_code}.sql"
 
     code, out, err = run_cmd(
-        ["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt],
+        _opencode_argv() + ["run", "--agent", "dws-coder", "--format", "json", prompt],
         timeout=1800  # 大案例多规则可能需要30分钟
     )
 
@@ -288,7 +299,7 @@ def step_coder_dq(report, deliver, skip_ai):
     )
 
     run_cmd(
-        ["opencode", "run", "--agent", "dws-coder", "--format", "json", prompt],
+        _opencode_argv() + ["run", "--agent", "dws-coder", "--format", "json", prompt],
         timeout=1800,
     )
 

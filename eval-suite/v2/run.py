@@ -17,6 +17,7 @@ golden 层：案例目录有 golden/ 就比对（命中任一即过；全不中=
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -252,7 +253,8 @@ def run_one_case(
 
     pipeline_steps = None
     if not eval_only:
-        deliver.mkdir(parents=True, exist_ok=True)
+        if executor == "replay":
+            deliver.mkdir(parents=True, exist_ok=True)  # 重放 preprocess 要写 _internal
         mode_desc = "真实入口 /new-pipe" if executor == "real" else "重放诊断 --replay"
         print(f"[v2] 跑流水线（{mode_desc}）: {case_name} → {deliver}")
         pipeline_steps = _run_pipeline_for(
@@ -305,12 +307,18 @@ def main() -> int:
                         help=f"重放模式 AI 阶段超时秒数（默认 {DEFAULT_TIMEOUT_AI}）")
     parser.add_argument("--timeout-script", type=int, default=DEFAULT_TIMEOUT_SCRIPT,
                         help=f"重放模式脚本阶段超时秒数（默认 {DEFAULT_TIMEOUT_SCRIPT}）")
+    parser.add_argument("--opencode", default="",
+                        help="opencode 可执行完整路径（Windows Popen 解析不到 opencode.cmd "
+                             "报 WinError 2 时显式指定，如 C:/Users/xx/AppData/Roaming/npm/opencode.cmd）")
     parser.add_argument(
         "--cases-dir",
         default="",
         help="用例目录（默认 eval-suite/cases/；内网真实用例用 eval-suite/cases_real/）",
     )
     args = parser.parse_args()
+
+    if args.opencode:
+        os.environ["EVAL_OPENCODE"] = args.opencode
 
     cases_dir = Path(args.cases_dir) if args.cases_dir else CASES_DIR_DEFAULT
 

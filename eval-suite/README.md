@@ -83,5 +83,8 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
 - **超时**：真实流程默认 3600s（`--timeout-pipe`）；重放模式 AI 1800s/脚本 120s
   （`--timeout-ai`/`--timeout-script`）。超时 kill 该阶段标记失败，**不拖垮整轮**。
 - **失败排查**：报告失败详情带输出尾部（traceback 崩溃行）+ 全文 log 路径。
+- **WinError 2（Windows 找不到 opencode）**：npm 全局装的 opencode 是 opencode.cmd，
+  Python Popen 不按 PATHEXT 解析 → 已内置 `shutil.which` 解析；仍找不到就用
+  `--opencode C:/Users/<你>/AppData/Roaming/npm/opencode.cmd` 显式指定。
 - **版本提示**：快照存 git sha；repo 与全局安装技能有版本差时，结果解读要留意
   （建议跑评测前重跑 `install.py` 同步，或确认评测走 repo 源——默认 repo 优先）。

@@ -28,7 +28,7 @@ for p in (str(_V2_DIR), str(_EVAL_SUITE)):
 from validators.base import CheckStatus  # type: ignore
 
 from engine import PipelineStepResult
-from pipeline import _run_stream, _step, _fail_detail
+from pipeline import _run_stream, _step, _fail_detail, opencode_cmd
 from _paths import find_deliver, list_select_rules
 
 # 真实流程一整条（设计→编码→UT→export），超时给足
@@ -81,7 +81,7 @@ def run_real_pipe(
 
     def _do() -> tuple[bool, str]:
         code, out = _run_stream(
-            ["opencode", "run", "--command", "new-pipe", "--format", "json", message],
+            opencode_cmd() + ["run", "--command", "new-pipe", "--format", "json", message],
             timeout,
         )
         deliver = find_deliver(deliver_base, case_dir.name)
