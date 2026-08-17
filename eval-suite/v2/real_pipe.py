@@ -80,8 +80,9 @@ def run_real_pipe(
     message = " ".join(args + [NON_INTERACTIVE_CLAUSE])
 
     def _do() -> tuple[bool, str]:
+        # 不带 --format json：降低内网包壳启动器的旗标兼容面，默认格式流式输出更适合看进度
         code, out = _run_stream(
-            opencode_cmd() + ["run", "--command", "new-pipe", "--format", "json", message],
+            opencode_cmd() + ["run", "--command", "new-pipe", message],
             timeout,
         )
         deliver = find_deliver(deliver_base, case_dir.name)

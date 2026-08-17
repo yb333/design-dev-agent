@@ -73,18 +73,22 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
 
 ## 六、其他约定
 
-- **执行方式**：默认**真实入口**（`opencode run --command new-pipe` + 显式非交互声明，
+- **执行方式**：默认**真实入口**（`<启动器> run --command new-pipe` + 显式非交互声明，
   编排 100% 走 commands/new-pipe.md，评测零编排拷贝）；`--replay` 为分阶段重放诊断模式。
   真实入口下流程层是单步（不拆阶段计时），要分阶段定位用 `--replay`。
+- **agent 启动器**：自动解析顺序 `--opencode`/EVAL_OPENCODE → `nga`（内网包壳）→
+  `opencode`（本地/标准）。包壳不支持 `--command` 旗标时用 `--opencode` 指到
+  支持的入口并反馈，评测侧可切换为消息内 `/new-pipe` 前缀方式。
 - **UT 连库属于真实流程**：真实入口跑的是完整 new-pipe（含 check_db 探活 + UT），
   评测不干预——测的就是真实行为；`--replay` 重放模式不含 UT。
-- **产出定位**：平铺 `10_project_deliver/{资产}/` 与三层 `{appid}/{schema}/{资产}/`
-  自动兼容（平铺优先），案例按资产名与产出关联（案例目录名=资产表名）。
+- **产出定位（三层唯一约定）**：`10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。
+  真实入口跑完自动重新定位；重放模式无既有产出时按 schema（mapping 目标表）+
+  appid（schema_apps.json）推导三层路径；平铺老结构不再识别。
 - **超时**：真实流程默认 3600s（`--timeout-pipe`）；重放模式 AI 1800s/脚本 120s
   （`--timeout-ai`/`--timeout-script`）。超时 kill 该阶段标记失败，**不拖垮整轮**。
 - **失败排查**：报告失败详情带输出尾部（traceback 崩溃行）+ 全文 log 路径。
-- **WinError 2（Windows 找不到 opencode）**：npm 全局装的 opencode 是 opencode.cmd，
-  Python Popen 不按 PATHEXT 解析 → 已内置 `shutil.which` 解析；仍找不到就用
-  `--opencode C:/Users/<你>/AppData/Roaming/npm/opencode.cmd` 显式指定。
+- **WinError 2（Windows 找不到启动器）**：npm 全局装的 opencode 是 opencode.cmd，
+  Python Popen 不按 PATHEXT 解析 → 已内置 `shutil.which` 解析（nga/opencode 同理）；
+  仍找不到就用 `--opencode` 传完整路径。
 - **版本提示**：快照存 git sha；repo 与全局安装技能有版本差时，结果解读要留意
   （建议跑评测前重跑 `install.py` 同步，或确认评测走 repo 源——默认 repo 优先）。

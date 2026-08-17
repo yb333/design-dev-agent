@@ -54,21 +54,26 @@ _OPENCODE_RESOLVED: list[str] | None = None
 
 
 def opencode_cmd() -> list[str]:
-    """解析 opencode 可执行命令，返回可作 Popen argv 前缀的列表。
+    """解析 agent 启动器（opencode 家族），返回可作 Popen argv 前缀的列表。
 
-    Windows 坑：npm 全局装的 opencode 是 opencode.cmd，Popen(["opencode", ...])
-    不按 PATHEXT 解析 .cmd/.bat → WinError 2 系统找不到指定的文件。
-    shutil.which 会按 PATHEXT 找到完整路径，跨平台安全。
-    优先级：环境变量 EVAL_OPENCODE（run.py --opencode 注入）> shutil.which。
+    内网用自包壳启动器 `nga run "提示词"`，本地/标准环境用 `opencode`——
+    两者 run 子命令形态一致，只是可执行名不同，统一走本解析器。
+    优先级：环境变量 EVAL_OPENCODE（run.py --opencode 注入，可指向任意启动器）
+    > shutil.which("nga")（内网包壳）> shutil.which("opencode")。
+
+    Windows 坑：npm 全局装的是 opencode.cmd，Popen 不按 PATHEXT 解析
+    .cmd/.bat → WinError 2；shutil.which 按 PATHEXT 找完整路径，跨平台安全。
     """
     global _OPENCODE_RESOLVED
     if _OPENCODE_RESOLVED is None:
-        exe = os.environ.get("EVAL_OPENCODE", "").strip() or shutil.which("opencode")
+        exe = os.environ.get("EVAL_OPENCODE", "").strip()
+        if not exe:
+            exe = shutil.which("nga") or shutil.which("opencode")
         if not exe:
             raise RuntimeError(
-                "opencode 不在 PATH（Windows npm 安装形如 opencode.cmd，Python Popen 解析不到，"
-                "报 WinError 2）。确认 opencode 已安装；或用 --opencode 传完整路径，"
-                "如 C:/Users/<你>/AppData/Roaming/npm/opencode.cmd"
+                "未找到 agent 启动器（先找 nga，再找 opencode）。确认已安装并在 PATH；"
+                "或用 --opencode 传完整路径（Windows npm 形如 "
+                "C:/Users/<你>/AppData/Roaming/npm/opencode.cmd；内网包壳传 nga 完整路径）"
             )
         _OPENCODE_RESOLVED = [exe]
     return _OPENCODE_RESOLVED

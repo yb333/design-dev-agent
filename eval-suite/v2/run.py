@@ -170,6 +170,66 @@ def _run_pipeline_for(case_dir: Path, deliver: Path, executor: str, skip_ai: boo
     )
 
 
+def _resolve_appid_quiet(schema: str) -> str:
+    """按 schema 查 appid（schema_apps.json 标准源）；查不到返回空串不抛异常。"""
+    if not schema:
+        return ""
+    try:
+        import pipeline as _pipeline
+
+        if str(_pipeline.SHARED_REFS) not in sys.path:
+            sys.path.insert(0, str(_pipeline.SHARED_REFS))
+        from config_paths import resolve_appid
+
+        return resolve_appid(schema) or ""
+    except Exception:
+        return ""
+
+
+def _resolve_replay_deliver(case_dir: Path, case_name: str, timeout_script: float) -> Path:
+    """重放模式无既有产出时，推导三层产出目录 {appid}/{schema}/{case}/ddlc_design_dev。
+
+    路径推导与 new-pipe 同源：schema 从 mapping 目标表（preprocess 产物）读，
+    appid 查 schema_apps.json。先预处理到暂存目录，推导后把 _internal 搬过去。
+    """
+    import json as _json
+
+    from pipeline import _preprocess
+
+    staging = DELIVER_BASE / "_replay_staging" / case_name
+    ok, detail = _preprocess(staging, case_dir / "mapping.xlsx", case_dir / "RS.md", timeout_script)
+    rs_input = staging / "_internal" / "rs_input.json"
+    if not rs_input.exists():
+        raise RuntimeError(
+            f"重放定位失败：preprocess 未产出 rs_input（{detail.splitlines()[0][:150]}）"
+        )
+    data = _json.loads(rs_input.read_text(encoding="utf-8"))
+    schema = data.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
+    appid = _resolve_appid_quiet(schema)
+    if not schema or not appid:
+        raise RuntimeError(
+            f"重放定位失败：无法确定三层目录（schema='{schema}' appid='{appid}'）。"
+            "schema 从 mapping 目标表推导；appid 需要 schema_apps.json 配置该 schema——"
+            "配置后重试，或先跑一次真实入口让 new-pipe 建好目录"
+        )
+    deliver = DELIVER_BASE / appid / schema / case_name / "ddlc_design_dev"
+    deliver.mkdir(parents=True, exist_ok=True)
+    # 搬运暂存 _internal（重放的 preprocess 会再跑一遍写入 deliver，这里只为目录成型）
+    if not (deliver / "_internal" / "rs_input.json").exists():
+        shutil.copytree(staging / "_internal", deliver / "_internal", dirs_exist_ok=True)
+    return deliver
+
+
+def _prepare_deliver_for(deliver: Path | None, executor: str, case_dir: Path, case_name: str,
+                         timeout_script: float) -> Path:
+    """跑流程前确保 deliver 就绪：重放无产出时推导三层路径并建目录；真实入口不动。"""
+    if executor != "replay":
+        return deliver or (DELIVER_BASE / "_未定位" / case_name / "ddlc_design_dev")
+    deliver = deliver or _resolve_replay_deliver(case_dir, case_name, timeout_script)
+    deliver.mkdir(parents=True, exist_ok=True)
+    return deliver
+
+
 def _run_repeat(
     case_dir: Path,
     case_name: str,
@@ -186,9 +246,13 @@ def _run_repeat(
     pipeline_ok_runs = 0
     for i in range(1, repeat + 1):
         print(f"\n{'=' * 60}\n  [重复 {i}/{repeat}] {case_name}（{executor}）\n{'=' * 60}")
+        deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
         pipeline_steps = _run_pipeline_for(
             case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
         )
+        if executor == "real":
+            # 真实入口的产出目录由 new-pipe 自建（三层），跑完重新定位
+            deliver = find_deliver(DELIVER_BASE, case_name) or deliver
         pipeline_failed = any(s.status.value == "fail" for s in pipeline_steps)
         if not pipeline_failed:
             pipeline_ok_runs += 1
@@ -230,9 +294,9 @@ def run_one_case(
 ) -> tuple[int, str]:
     """跑单个用例。返回 (退出码, 失败摘要行——全过时为空)。"""
     case_name = case_dir.name
-    # 产出目录：平铺或 {appid}/{schema} 三层，find_deliver 统一定位；
-    # 找不到时保留平铺拼接（用于下游报错信息）
-    deliver = find_deliver(DELIVER_BASE, case_name) or (DELIVER_BASE / case_name / "ddlc_design_dev")
+    # 三层产出定位（{appid}/{schema}/{资产}）；无产出时 None——
+    # 重放模式由 _prepare_deliver_for 推导，真实入口跑完重定位，eval-only 直接报错
+    deliver = find_deliver(DELIVER_BASE, case_name)
     checks_path = case_dir / "checks.yaml"
 
     config = load_checks(checks_path)
@@ -253,20 +317,27 @@ def run_one_case(
 
     pipeline_steps = None
     if not eval_only:
-        if executor == "replay":
-            deliver.mkdir(parents=True, exist_ok=True)  # 重放 preprocess 要写 _internal
+        deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
         mode_desc = "真实入口 /new-pipe" if executor == "real" else "重放诊断 --replay"
-        print(f"[v2] 跑流水线（{mode_desc}）: {case_name} → {deliver}")
+        print(f"[v2] 跑流水线（{mode_desc}）: {case_name}")
         pipeline_steps = _run_pipeline_for(
             case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
         )
+        if executor == "real":
+            # 真实入口的产出目录由 new-pipe 自建（三层），跑完重新定位再评测
+            deliver = find_deliver(DELIVER_BASE, case_name) or deliver
+            print(f"[v2] 产出定位: {deliver}")
         # 流程层失败提示
         failed = [s for s in pipeline_steps if s.status.value == "fail"]
         if failed:
             print(f"[v2] ⚠️ 流水线有 {len(failed)} 阶段失败，继续评测已有产出")
     else:
-        if not deliver.exists():
-            print(f"[v2] ❌ 产出目录不存在: {deliver}（去掉 --eval-only 先跑流水线）", file=sys.stderr)
+        if not deliver:
+            print(
+                f"[v2] ❌ 三层产出不存在: 10_project_deliver/{{appid}}/{{schema}}/{case_name}"
+                f"/ddlc_design_dev（去掉 --eval-only 先跑真实入口）",
+                file=sys.stderr,
+            )
             return 1, "产出不存在"
         print(f"[v2] 只评测: {case_name} ← {deliver}")
 
@@ -308,8 +379,9 @@ def main() -> int:
     parser.add_argument("--timeout-script", type=int, default=DEFAULT_TIMEOUT_SCRIPT,
                         help=f"重放模式脚本阶段超时秒数（默认 {DEFAULT_TIMEOUT_SCRIPT}）")
     parser.add_argument("--opencode", default="",
-                        help="opencode 可执行完整路径（Windows Popen 解析不到 opencode.cmd "
-                             "报 WinError 2 时显式指定，如 C:/Users/xx/AppData/Roaming/npm/opencode.cmd）")
+                        help="agent 启动器完整路径（默认先找 nga 再找 opencode；"
+                             "解析不到时显式指定，如内网 nga 或 Windows 的 "
+                             "C:/Users/xx/AppData/Roaming/npm/opencode.cmd）")
     parser.add_argument(
         "--cases-dir",
         default="",

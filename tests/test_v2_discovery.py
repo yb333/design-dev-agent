@@ -20,8 +20,8 @@ import seed
 
 
 def _make_deliver(base: Path, asset: str) -> None:
-    """在 base 下造一个 {asset}/ddlc_design_dev/ts.json 产出。"""
-    d = base / asset / "ddlc_design_dev"
+    """在 base 下造三层产出 {appid}/{schema}/{asset}/ddlc_design_dev/ts.json。"""
+    d = base / "app1" / "sch1" / asset / "ddlc_design_dev"
     d.mkdir(parents=True, exist_ok=True)
     (d / "ts.json").write_text("{}", encoding="utf-8")
 

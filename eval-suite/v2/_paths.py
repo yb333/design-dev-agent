@@ -68,25 +68,19 @@ def find_ts_md(output_dir: Path) -> Path | None:
 
 
 # ============================================================
-# 产出目录定位（平铺 / 三层 appid-schema 兼容）
+# 产出目录定位（固定三层 {appid}/{schema}/{资产}）
 # ============================================================
 
-# 产出目录结构演变：老平铺 10_project_deliver/{资产}/ →
-# 新三层 10_project_deliver/{appid}/{schema}/{资产}/（appid/schema 从 schema_apps.json 查）。
-# eval 侧不依赖 config，直接按资产名扫描发现（先平铺后三层）。
+# 产出目录唯一约定：10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/
+# （appid/schema 由 new-pipe 按 schema_apps.json 建；eval 侧不依赖 config，
+#  直接按资产名在三层下扫描发现）
 
 
 def find_deliver(base: Path, asset: str) -> Path | None:
-    """定位某资产的产出目录（ddlc_design_dev），兼容平铺与三层结构。
+    """定位某资产的产出目录（ddlc_design_dev），三层 {appid}/{schema}/{asset}/ 扫描。
 
-    先试平铺 {asset}/，再扫三层 {appid}/{schema}/{asset}/（限深遍历，不用 glob）。
-    返回 ddlc_design_dev 目录（存在 ts.json 才算），找不到返回 None。
+    返回存在 ts.json 的 ddlc_design_dev 目录，找不到返回 None。
     """
-    # 1. 平铺（老结构）
-    flat = base / asset / "ddlc_design_dev"
-    if (flat / "ts.json").exists():
-        return flat
-    # 2. 三层 {appid}/{schema}/{asset}/（新结构）
     if base.exists():
         for appid_dir in sorted(base.iterdir()):
             if not appid_dir.is_dir():
@@ -101,22 +95,14 @@ def find_deliver(base: Path, asset: str) -> Path | None:
 
 
 def scan_deliver_assets(base: Path) -> dict[str, Path]:
-    """扫描全部资产产出，返回 {资产名: ddlc_design_dev 目录}。
-
-    兼容平铺与三层结构；同名资产平铺优先（新结构未跑到的场合）。
-    """
+    """扫描全部资产产出（三层结构），返回 {资产名: ddlc_design_dev 目录}。"""
     assets: dict[str, Path] = {}
     if not base.exists():
         return assets
-    for d in sorted(base.iterdir()):
-        if not d.is_dir():
+    for appid_dir in sorted(base.iterdir()):
+        if not appid_dir.is_dir():
             continue
-        deliver = d / "ddlc_design_dev"
-        if (deliver / "ts.json").exists():
-            assets[d.name] = deliver
-            continue
-        # 三层：appid 目录 → schema 目录 → 资产
-        for schema_dir in sorted(d.iterdir()):
+        for schema_dir in sorted(appid_dir.iterdir()):
             if not schema_dir.is_dir():
                 continue
             for asset_dir in sorted(schema_dir.iterdir()):

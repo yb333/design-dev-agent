@@ -14,6 +14,7 @@ for p in (str(_EVAL_SUITE), str(_V2_DIR)):
 
 import pipeline
 import real_pipe
+import run as run_mod
 from run import select_executor
 
 
@@ -138,5 +139,64 @@ class TestOpencodeCmd:
     def test_not_found_raises_with_hint(self, monkeypatch):
         monkeypatch.delenv("EVAL_OPENCODE", raising=False)
         monkeypatch.setattr(pipeline.shutil, "which", lambda name: None)
-        with pytest.raises(RuntimeError, match="WinError 2"):
+        with pytest.raises(RuntimeError, match="未找到 agent 启动器"):
             pipeline.opencode_cmd()
+
+    def test_nga_preferred_over_opencode(self, monkeypatch):
+        """内网包壳 nga 优先于标准 opencode。"""
+        monkeypatch.delenv("EVAL_OPENCODE", raising=False)
+        monkeypatch.setattr(
+            pipeline.shutil, "which",
+            lambda name: {"nga": "/usr/bin/nga", "opencode": "/usr/bin/opencode"}.get(name))
+        assert pipeline.opencode_cmd() == ["/usr/bin/nga"]
+
+
+class TestReplayDeliverResolve:
+    """重放模式无既有产出时的三层目录推导。"""
+
+    def _fake_preprocess(self, tmp_path):
+        """造假 _preprocess：往暂存目录写 rs_input（schema=sch1）。"""
+        def fake(staging, mapping, rs, timeout):
+            internal = staging / "_internal"
+            internal.mkdir(parents=True, exist_ok=True)
+            import json as j
+            (internal / "rs_input.json").write_text(j.dumps(
+                {"meta": {"target": {"f_table": {"schema": "sch1", "table": "dwb_x"}}}}),
+                encoding="utf-8")
+            return True, "ok"
+        return fake
+
+    def test_resolves_three_level_path(self, tmp_path, monkeypatch):
+        case = tmp_path / "dwb_x"
+        case.mkdir()
+        (case / "mapping.xlsx").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(run_mod, "DELIVER_BASE", tmp_path)
+        monkeypatch.setattr(pipeline, "_preprocess", self._fake_preprocess(tmp_path))
+        monkeypatch.setattr(run_mod, "_resolve_appid_quiet", lambda schema: "APP1" if schema == "sch1" else "")
+        deliver = run_mod._resolve_replay_deliver(case, "dwb_x", 5)
+        assert deliver == tmp_path / "APP1" / "sch1" / "dwb_x" / "ddlc_design_dev"
+        assert (deliver / "_internal" / "rs_input.json").exists()
+
+    def test_raises_when_appid_unresolvable(self, tmp_path, monkeypatch):
+        case = tmp_path / "dwb_x"
+        case.mkdir()
+        (case / "mapping.xlsx").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(run_mod, "DELIVER_BASE", tmp_path)
+        monkeypatch.setattr(pipeline, "_preprocess", self._fake_preprocess(tmp_path))
+        monkeypatch.setattr(run_mod, "_resolve_appid_quiet", lambda schema: "")
+        with pytest.raises(RuntimeError, match="schema_apps"):
+            run_mod._resolve_replay_deliver(case, "dwb_x", 5)
+
+    def test_prepare_skips_real(self, tmp_path):
+        """真实入口不做推导（new-pipe 自建目录）。"""
+        out = run_mod._prepare_deliver_for(None, "real", tmp_path, "dwb_x", 5)
+        assert "_未定位" in str(out)
+
+    def test_prepare_replay_creates_dir(self, tmp_path, monkeypatch):
+        case = tmp_path / "dwb_x"
+        case.mkdir()
+        monkeypatch.setattr(
+            run_mod, "_resolve_replay_deliver",
+            lambda c, n, t: tmp_path / "APP1" / "sch1" / n / "ddlc_design_dev")
+        out = run_mod._prepare_deliver_for(None, "replay", case, "dwb_x", 5)
+        assert out.exists()

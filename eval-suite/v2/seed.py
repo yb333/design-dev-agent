@@ -50,8 +50,8 @@ from _paths import find_select_file, find_deliver  # noqa: E402
 def seed_case(case_dir: Path) -> str:
     """从案例产出抽取事实，返回 checks.yaml 草稿字符串。"""
     case_name = case_dir.name
-    # 产出目录：平铺或 {appid}/{schema} 三层，find_deliver 统一定位
-    deliver = find_deliver(DELIVER_BASE, case_name) or (DELIVER_BASE / case_name / "ddlc_design_dev")
+    # 产出目录：三层 {appid}/{schema}/{资产}（唯一约定）
+    deliver = find_deliver(DELIVER_BASE, case_name)
     ts_path = deliver / "ts.json"
     rs_input_path = deliver / "_internal" / "rs_input.json"
 

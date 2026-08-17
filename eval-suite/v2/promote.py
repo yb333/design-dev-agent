@@ -110,8 +110,8 @@ def main() -> int:
     else:
         deliver = find_deliver(DELIVER_BASE, args.case)
         if not deliver:
-            print(f"❌ 10_project_deliver 下未找到 {args.case} 的产出（用 --from 显式指定）",
-                  file=sys.stderr)
+            print(f"❌ 三层产出未找到: 10_project_deliver/{{appid}}/{{schema}}/{args.case}"
+                  f"/ddlc_design_dev（用 --from 显式指定产出路径）", file=sys.stderr)
             return 1
 
     # 定位案例目录（没有则建 未分类/{case} 占位）

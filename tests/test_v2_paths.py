@@ -76,7 +76,7 @@ class TestListSelectRules:
 
 
 # ============================================================
-# 产出目录定位（平铺 / 三层 appid-schema 兼容）
+# 产出目录定位（固定三层 {appid}/{schema}/{资产}）
 # ============================================================
 
 
@@ -89,33 +89,37 @@ def _make_deliver_at(path: Path) -> Path:
 
 
 class TestFindDeliver:
-    def test_flat_structure(self, tmp_path):
-        """平铺（老结构）：{asset}/ddlc_design_dev/ts.json。"""
-        d = _make_deliver_at(tmp_path / "dwb_x")
-        assert _paths.find_deliver(tmp_path, "dwb_x") == d
-
     def test_three_level_structure(self, tmp_path):
-        """三层（新结构）：{appid}/{schema}/{asset}/ddlc_design_dev/ts.json。"""
+        """三层：{appid}/{schema}/{asset}/ddlc_design_dev/ts.json。"""
         d = _make_deliver_at(tmp_path / "app001" / "dwb" / "dwb_x")
         assert _paths.find_deliver(tmp_path, "dwb_x") == d
 
-    def test_flat_preferred_over_three_level(self, tmp_path):
-        """平铺与三层同名 → 平铺优先。"""
-        flat = _make_deliver_at(tmp_path / "dwb_x")
-        _make_deliver_at(tmp_path / "app" / "dwb" / "dwb_x")
-        assert _paths.find_deliver(tmp_path, "dwb_x") == flat
+    def test_flat_not_recognized(self, tmp_path):
+        """平铺（老结构）不再识别——三层是唯一约定。"""
+        _make_deliver_at(tmp_path / "dwb_x")
+        assert _paths.find_deliver(tmp_path, "dwb_x") is None
+
+    def test_requires_ts_json(self, tmp_path):
+        """三层下目录存在但无 ts.json → 不算产出。"""
+        (tmp_path / "app" / "dwb" / "dwb_x" / "ddlc_design_dev").mkdir(parents=True)
+        assert _paths.find_deliver(tmp_path, "dwb_x") is None
 
     def test_none_when_absent(self, tmp_path):
         assert _paths.find_deliver(tmp_path, "nope") is None
 
 
 class TestScanDeliverAssets:
-    def test_flat_and_three_level_merged(self, tmp_path):
-        """平铺 + 三层混合扫描，资产名统一收集。"""
-        a = _make_deliver_at(tmp_path / "dwb_flat")
-        b = _make_deliver_at(tmp_path / "app001" / "dwb" / "dwb_three")
+    def test_three_level_scan(self, tmp_path):
+        """跨 appid/schema 扫描，资产名统一收集。"""
+        a = _make_deliver_at(tmp_path / "app001" / "dwb" / "dwb_a")
+        b = _make_deliver_at(tmp_path / "app002" / "dws" / "dwb_b")
         assets = _paths.scan_deliver_assets(tmp_path)
-        assert assets == {"dwb_flat": a, "dwb_three": b}
+        assert assets == {"dwb_a": a, "dwb_b": b}
+
+    def test_flat_ignored(self, tmp_path):
+        """平铺产出不进发现结果。"""
+        _make_deliver_at(tmp_path / "dwb_flat")
+        assert _paths.scan_deliver_assets(tmp_path) == {}
 
     def test_empty_when_no_base(self, tmp_path):
         assert _paths.scan_deliver_assets(tmp_path / "nodir") == {}
