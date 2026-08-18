@@ -111,7 +111,7 @@ class TestRunRealPipe:
 
         calls = {}
 
-        def fake_stream(cmd, timeout, cwd=None, label="", stage_provider=None):
+        def fake_stream(cmd, timeout, cwd=None, label="", stage_provider=None, line_hook=None):
             calls["cmd"] = cmd
             return 0, ""
 
@@ -122,9 +122,9 @@ class TestRunRealPipe:
         monkeypatch.setattr(real_pipe, "find_deliver", fake_find)
 
         case_dir = tmp_path / "dwb_x"
-        steps, stage_times = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
+        steps, stage_times, stage_loops = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert len(steps) == 1
-        assert isinstance(stage_times, dict)
+        assert isinstance(stage_times, dict) and isinstance(stage_loops, dict)
         assert steps[0].step == "new-pipe(真实流程)"
         assert steps[0].status.value == "pass"
         # 调用形态：--command new-pipe + 消息含 mapping 路径与非交互声明
@@ -135,10 +135,10 @@ class TestRunRealPipe:
     def test_fail_step_when_no_artifacts(self, tmp_path, monkeypatch):
         (tmp_path / "dwb_x").mkdir(exist_ok=True)
         (tmp_path / "dwb_x" / "mapping.xlsx").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="", stage_provider=None: (0, "ran ok"))
+        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="", stage_provider=None, line_hook=None: (0, "ran ok"))
         monkeypatch.setattr(real_pipe, "find_deliver", lambda base, name: None)
         case_dir = tmp_path / "dwb_x"
-        steps, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
+        steps, _, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert steps[0].status.value == "fail"
 
 
@@ -263,3 +263,55 @@ class TestStageWatcher:
         times = w.finish()
         assert "预处理" in times and "TS组装" in times
         assert times["预处理"] >= 0.03  # 两个 marker 之间的间隔成了预处理阶段耗时
+
+
+class TestStageTracker:
+    """L2 流锚点状态机：阶段推进 + 回路计数 + 耗时时间线。"""
+
+    def test_advance_by_anchors(self):
+        t = real_pipe._StageTracker()
+        t.feed("Running bash: python SHARED_SCRIPTS/preprocess.py --mapping x.xlsx\n")
+        assert t.stage_text() == "预处理"
+        t.feed("Task(subagent_type='dws-designer' ...)\n")
+        assert t.stage_text() == "设计"
+        t.feed("Running bash: python SHARED_SCRIPTS/assemble_ts.py --rs ...\n")
+        assert t.stage_text() == "TS组装"
+
+    def test_specific_anchor_wins_on_same_line(self):
+        """assemble_ts 命令行含 design_decisions 路径——具体锚点（TS组装）优先。"""
+        t = real_pipe._StageTracker()
+        t.feed("python assemble_ts.py --decisions _internal/design_decisions.yaml\n")
+        assert t.stage_text() == "TS组装"
+
+    def test_loop_counted_on_revisit(self):
+        """UT 后再现 dws-coder = 执行回路，显示(第2次·回路)。"""
+        t = real_pipe._StageTracker()
+        t.feed("dws-coder task for R0001\n")
+        t.feed("python ut_precheck.py\n")
+        assert t.stage_text() == "UT执行"
+        t.feed("dws-coder 恢复会话修复 R0001\n")
+        assert t.stage_text() == "规则编码(第2次·回路)"
+
+    def test_finish_aggregates_loop_time_into_stage(self):
+        import time as _t
+        t = real_pipe._StageTracker()
+        t.feed("python preprocess.py\n")
+        _t.sleep(0.05)
+        t.feed("dws-coder R0001\n")
+        _t.sleep(0.05)
+        t.feed("python ut_execute.py\n")
+        _t.sleep(0.05)
+        t.feed("dws-coder 修复\n")  # 回路：编码第二次
+        _t.sleep(0.05)
+        t.feed("python assemble_export.py\n")
+        times, loops = t.finish()
+        assert loops["规则编码"] == 2
+        # 两次编码区段（0.05+0.05）都归编码——应明显大于单区段的预处理
+        assert times["规则编码"] > times["预处理"] * 1.5
+
+    def test_fallback_when_stream_blind(self):
+        """流锚点全程没匹配 → 兜底文件观察器。"""
+        t = real_pipe._StageTracker(fallback=None)
+        t.feed("totally unrecognized output\n")
+        times, loops = t.finish()
+        assert times == {} and loops == {}

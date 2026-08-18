@@ -15,6 +15,7 @@ UT 连库属于真实流程的一部分（new-pipe 自己会 check_db 探活决�
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import time
@@ -93,7 +94,8 @@ def run_real_pipe(
     """
     args = build_command_args(case_dir)
     message = " ".join(args + [NON_INTERACTIVE_CLAUSE])
-    watcher = _StageWatcher(case_dir, deliver_base)
+    watcher = _StageWatcher(case_dir, deliver_base)  # L3 兜底：流锚点失明时给粗粒度
+    tracker = _StageTracker(watcher)  # L2 主力：输出流锚点匹配 + 回路计数
 
     def _do() -> tuple[bool, str]:
         # 不带 --format json：降低内网包壳启动器的旗标兼容面，默认格式流式输出更适合看进度
@@ -101,14 +103,15 @@ def run_real_pipe(
             opencode_cmd() + ["run", "--command", "new-pipe", message],
             timeout,
             label="new-pipe 真实流程",
-            stage_provider=watcher.stage_text,
+            stage_provider=tracker.stage_text,
+            line_hook=tracker.feed,
         )
         deliver = find_deliver(deliver_base, case_dir.name)
         return judge_real_run(deliver, code, out)
 
     steps = [_step("new-pipe(真实流程)", _do)]
-    stage_times = watcher.finish()
-    return steps, stage_times
+    stage_times, stage_loops = tracker.finish()
+    return steps, stage_times, stage_loops
 
 
 # ============================================================
@@ -145,6 +148,83 @@ def _find_deliver_loose(base: Path, asset: str) -> Path | None:
             if cand.is_dir():
                 return cand
     return None
+
+
+# ============================================================
+# L2 主力：输出流锚点匹配（new-pipe.md 硬性规定的脚本名/subagent 名天然是阶段锚点）
+# ============================================================
+
+# 顺序敏感：具体脚本名在前，防一条命令行误配早阶段（如 assemble_ts 命令含
+# design_decisions 路径）。锚点全部来自剧本的确定性命令行，agent 执行必然经过。
+_STREAM_ANCHORS: list[tuple["re.Pattern[str]", str]] = [
+    (re.compile(r"assemble_ts\.py"), "TS组装"),
+    (re.compile(r"gate_summary\.py"), "闸口①摘要"),
+    (re.compile(r"dispatch_plan\.py"), "执行计划"),
+    (re.compile(r"assemble_ddl\.py"), "DDL生成"),
+    (re.compile(r"dws-coder"), "规则编码"),
+    (re.compile(r"check_db\.py|DB_OK|NO_DB_SOURCE"), "UT探活"),
+    (re.compile(r"ut_precheck\.py|ut_execute\.py|run_ut_check"), "UT执行"),
+    (re.compile(r"assemble_export\.py"), "制品打包"),
+    (re.compile(r"dws-designer"), "设计"),
+    (re.compile(r"fill_type_risk|TYPE_RISK_PENDING"), "类型风险决策"),
+    (re.compile(r"precheck\.py"), "预检"),
+    (re.compile(r"resolve_appid|preprocess\.py"), "预处理"),
+]
+
+
+class _StageTracker:
+    """输出流阶段状态机：锚点匹配推进阶段；同阶段再现 = 执行回路。
+
+    阶段耗时按事件时间线归算：每阶段各次出现区段求和（回路第二轮的耗时
+    归入该阶段），finish 返回 ({阶段: 总秒}, {阶段: 出现次数})。
+    """
+
+    def __init__(self, fallback: "_StageWatcher | None" = None):
+        self._fallback = fallback
+        self._start = time.monotonic()
+        self._cur: str | None = None
+        self._t_cur = self._start
+        self._counts: dict[str, int] = {}
+        self._segments: list[tuple[str, float, float]] = []  # (阶段, 起, 止)
+
+    def feed(self, line: str) -> None:
+        stage = self._match(line)
+        if stage is None or stage == self._cur:
+            return
+        now = time.monotonic()
+        if self._cur is not None:
+            self._segments.append((self._cur, self._t_cur, now))
+        self._counts[stage] = self._counts.get(stage, 0) + 1
+        self._cur, self._t_cur = stage, now
+
+    @staticmethod
+    def _match(line: str) -> str | None:
+        for pat, stage in _STREAM_ANCHORS:
+            if pat.search(line):
+                return stage
+        return None
+
+    def stage_text(self) -> str:
+        if self._cur is None:
+            return self._fallback.stage_text() if self._fallback else "启动中"
+        occ = self._counts.get(self._cur, 1)
+        suffix = f"(第{occ}次·回路)" if occ > 1 else ""
+        if self._cur == "规则编码" and self._fallback is not None and self._fallback._etl_count:
+            suffix += f"({self._fallback._etl_count}个SQL)"
+        return f"{self._cur}{suffix}"
+
+    def finish(self) -> tuple[dict[str, float], dict[str, int]]:
+        now = time.monotonic()
+        if self._cur is not None:
+            self._segments.append((self._cur, self._t_cur, now))
+        raw: dict[str, float] = {}
+        for stage, t0, t1 in self._segments:
+            raw[stage] = raw.get(stage, 0.0) + (t1 - t0)
+        times = {k: round(v, 2) for k, v in raw.items()}  # 先累加后统一round，防舍入滚雪球
+        if not times and self._fallback is not None:
+            # 流锚点全程失明（输出格式变化/包壳吞输出）→ 兜底观察器
+            return self._fallback.finish(), {}
+        return times, dict(self._counts)
 
 
 class _StageWatcher:

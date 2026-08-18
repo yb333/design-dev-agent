@@ -51,7 +51,8 @@ class BaselineSnapshot:
     pipeline_steps: list[dict] = field(default_factory=list)
     score: int | None = None  # 扣分制总分（跨轮可比）
     deductions: list[dict] = field(default_factory=list)  # [{cat,weight,desc}]
-    stage_times: dict[str, float] = field(default_factory=dict)  # {阶段:秒}（真实=marker估算/重放=步骤耗时）
+    stage_times: dict[str, float] = field(default_factory=dict)  # {阶段:秒}（真实=流锚点时间线/重放=步骤耗时）
+    stage_loops: dict[str, int] = field(default_factory=dict)  # {阶段:出现次数}（>1=执行回路）
 
 
 def _git_sha() -> str:
@@ -138,6 +139,7 @@ def save_snapshot(snapshot: BaselineSnapshot) -> Path:
         "score": snapshot.score,
         "deductions": snapshot.deductions,
         "stage_times": snapshot.stage_times,
+        "stage_loops": snapshot.stage_loops,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -177,6 +179,7 @@ def _load_snapshot(path: Path) -> BaselineSnapshot | None:
         score=data.get("score"),
         deductions=data.get("deductions", []),
         stage_times=data.get("stage_times", {}),
+        stage_loops=data.get("stage_loops", {}),
     )
 
 

@@ -105,7 +105,7 @@ def opencode_cmd() -> list[str]:
 
 def _run_stream(
     cmd: list[str], timeout: float, cwd: Path | None = None, label: str = "",
-    stage_provider=None,
+    stage_provider=None, line_hook=None,
 ) -> tuple[int, str]:
     """运行命令：全量缓存输出；超时 kill 并标记。
 
@@ -224,6 +224,11 @@ def _run_stream(
         buf.append(item)
         out_bytes += len(item)
         last_output = time.monotonic()
+        if line_hook is not None:
+            try:
+                line_hook(item)
+            except Exception:
+                pass
         if live_f:
             try:
                 live_f.write(item)

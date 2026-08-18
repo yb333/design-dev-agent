@@ -176,6 +176,18 @@ def render_stability(case_name: str, snaps: list[dict]) -> str:
                 f"  {stage:<8} avg {avg:7.1f}s  min {min(vals):7.1f}s  max {max(vals):7.1f}s  ({len(vals)}轮)"
             )
 
+    # 执行回路统计（UT失败回 coder/designer 修复再跑——流程质量核心指标）
+    loop_rounds: dict[str, int] = defaultdict(int)
+    for snap in snaps:
+        for stage, occ in (snap.get("stage_loops") or {}).items():
+            if occ > 1:
+                loop_rounds[stage] += 1
+    if loop_rounds:
+        lines.append("")
+        lines.append("── 执行回路 ─────────────────────────────────────────")
+        for stage, cnt in sorted(loop_rounds.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  {stage} 回路: {cnt}/{n} 轮触发（该阶段被重复执行）")
+
     # 流程阶段稳定性
     lines.append("")
     lines.append("── 流程阶段稳定性 ──────────────────────────────────")

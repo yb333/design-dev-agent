@@ -131,3 +131,20 @@ class TestStageTimeStats:
         assert "阶段耗时分布" in report
         assert "预处理" in report and "设计决策" in report
         assert "avg" in report and "(2轮)" in report
+
+
+class TestLoopStats:
+    def test_loop_section_rendered(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(baseline, "RESULTS_DIR", tmp_path)
+        case_dir = tmp_path / "t"
+        _write_snap(case_dir, "2026-08-15T10:00:00", [_chk("artifacts", "ts.json", "pass")])
+        import json as j
+        d = case_dir / "2026-08-15T10-00-00" / "result.json"
+        data = j.loads(d.read_text(encoding="utf-8"))
+        data["stage_loops"] = {"规则编码": 2, "UT执行": 1}
+        d.write_text(j.dumps(data, ensure_ascii=False), encoding="utf-8")
+        report = stability.render_stability("t", stability.load_recent_snapshots("t", 1))
+        assert "执行回路" in report
+        assert "规则编码 回路: 1/1 轮" in report
+        # UT执行 只出现1次不算回路
+        assert "UT执行 回路" not in report

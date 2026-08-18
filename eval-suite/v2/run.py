@@ -166,7 +166,8 @@ def _run_pipeline_for(case_dir: Path, deliver: Path, executor: str, skip_ai: boo
                       timeout_ai: float, timeout_script: float, timeout_pipe: float):
     """按执行方式跑流程：real=真实入口单步 / replay=分阶段重放。
 
-    返回 (步骤结果, 阶段耗时)：真实=marker 估算；重放=各步骤实测耗时。
+    返回 (步骤结果, 阶段耗时, 阶段回路次数)：真实=流锚点时间线（回路感知）；
+    重放=各步骤实测耗时（无回路概念）。
     """
     if executor == "real":
         return run_real_pipe(case_dir, DELIVER_BASE, timeout_pipe)
@@ -174,7 +175,7 @@ def _run_pipeline_for(case_dir: Path, deliver: Path, executor: str, skip_ai: boo
         case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
     )
     stage_times = {s.step: round(s.duration_seconds, 1) for s in steps}
-    return steps, stage_times
+    return steps, stage_times, {}
 
 
 def _resolve_appid_quiet(schema: str) -> str:
@@ -283,7 +284,7 @@ def _run_repeat(
             if not keep_artifacts:
                 _clean_deliver(deliver)  # 每轮清场：旧产出会让 AI 复用，污染稳定性
             deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
-            pipeline_steps, stage_times = _run_pipeline_for(
+            pipeline_steps, stage_times, stage_loops = _run_pipeline_for(
                 case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
             )
             if executor == "real":
@@ -302,6 +303,7 @@ def _run_repeat(
             snapshot.score = score["total"]
             snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d in score["deductions"]]
             snapshot.stage_times = stage_times
+            snapshot.stage_loops = stage_loops
             baseline.save_snapshot(snapshot)
 
             stats = result.summary()
@@ -372,7 +374,7 @@ def run_one_case(
         deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
         mode_desc = "真实入口 /new-pipe" if executor == "real" else "重放诊断 --replay"
         print(f"[v2] 跑流水线（{mode_desc}）: {case_name}")
-        pipeline_steps, stage_times = _run_pipeline_for(
+        pipeline_steps, stage_times, stage_loops = _run_pipeline_for(
             case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
         )
         if executor == "real":
@@ -409,6 +411,7 @@ def run_one_case(
     snapshot.score = score["total"]
     snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d in score["deductions"]]
     snapshot.stage_times = stage_times
+    snapshot.stage_loops = stage_loops
     saved_path = baseline.save_snapshot(snapshot)
     print(f"[v2] baseline 已存档: {saved_path.name}")
 
