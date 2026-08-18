@@ -29,7 +29,7 @@ from validators.base import CheckStatus  # type: ignore
 
 from engine import PipelineStepResult
 from pipeline import _run_stream, _step, _fail_detail, opencode_cmd
-from _paths import find_deliver, list_select_rules
+from _paths import find_deliver, list_select_rules, find_mapping_file, find_rs_file
 
 # 真实流程一整条（设计→编码→UT→export），超时给足
 DEFAULT_TIMEOUT_PIPE = 3600
@@ -42,10 +42,19 @@ NON_INTERACTIVE_CLAUSE = (
 
 
 def build_command_args(case_dir: Path) -> list[str]:
-    """构造 /new-pipe 的 $ARGUMENTS：mapping 路径必传，RS.md 存在才传。"""
-    args = [str((case_dir / "mapping.xlsx").resolve())]
-    rs = case_dir / "RS.md"
-    if rs.exists():
+    """构造 /new-pipe 的 $ARGUMENTS：按文件特征发现输入（不硬编码文件名）。
+
+    mapping 必须有（*.xlsx/xls 名含 mapping，标准名 mapping.xlsx 优先）；
+    RS 可选（*.md/txt 名含 rs/需求），找到才传。
+    """
+    mapping = find_mapping_file(case_dir)
+    if not mapping:
+        raise RuntimeError(
+            f"案例目录没有 mapping 文件（识别：*.xlsx/xls 且文件名含 mapping）: {case_dir}"
+        )
+    args = [str(mapping.resolve())]
+    rs = find_rs_file(case_dir)
+    if rs:
         args.append(str(rs.resolve()))
     return args
 

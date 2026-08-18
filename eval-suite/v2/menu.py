@@ -30,7 +30,7 @@ SEP = "═" * 56
 # 产出扫描（平铺/三层兼容）来自公共定位模块
 if str(V2_DIR) not in sys.path:
     sys.path.insert(0, str(V2_DIR))
-from _paths import scan_deliver_assets  # noqa: E402
+from _paths import scan_deliver_assets, find_mapping_file  # noqa: E402
 
 
 # ============================================================
@@ -77,12 +77,10 @@ def _ask_yes_no(prompt: str, default: bool = True) -> bool:
 
 
 def _list_cases(cases_dir: Path) -> list[Path]:
-    """扫描用例目录，返回含 mapping.xlsx 的子目录列表。"""
+    """扫描用例目录，返回含 mapping 文件的子目录列表（文件名按特征发现）。"""
     if not cases_dir.exists():
         return []
-    return sorted(
-        [d for d in cases_dir.iterdir() if d.is_dir() and (d / "mapping.xlsx").exists()]
-    )
+    return sorted(d for d in cases_dir.iterdir() if d.is_dir() and find_mapping_file(d))
 
 
 def _pick_case(cases: list[Path]) -> Path | None:
@@ -146,7 +144,7 @@ def _discover_real_cases() -> list[CaseInfo]:
     infos = []
     for n in all_names:
         cat, dir_for_cat = placed_cases.get(n, (UNCATEGORIZED, None))
-        has_mapping = bool(dir_for_cat and (dir_for_cat / "mapping.xlsx").exists())
+        has_mapping = bool(dir_for_cat and find_mapping_file(dir_for_cat))
         has_checks = bool(dir_for_cat and (dir_for_cat / "checks.yaml").exists())
         infos.append(
             CaseInfo(

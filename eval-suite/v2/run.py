@@ -40,7 +40,7 @@ from pipeline import (  # noqa: E402
 )
 from real_pipe import DEFAULT_TIMEOUT_PIPE, run_real_pipe  # noqa: E402
 from report_v2 import render_report  # noqa: E402
-from _paths import find_deliver  # noqa: E402
+from _paths import find_deliver, find_mapping_file, find_rs_file  # noqa: E402
 import baseline  # noqa: E402
 import golden  # noqa: E402
 import stability  # noqa: E402
@@ -88,8 +88,8 @@ def resolve_case(case_arg: str, cases_dir: Path) -> Path:
 
 
 def _is_case_dir(d: Path) -> bool:
-    """判断目录是否为有效案例（有输入 mapping.xlsx 或 10_project_deliver 同名产出）。"""
-    has_input = (d / "mapping.xlsx").exists()
+    """判断目录是否为有效案例（有输入 mapping 文件或 10_project_deliver 同名产出）。"""
+    has_input = find_mapping_file(d) is not None
     has_deliver = find_deliver(DELIVER_BASE, d.name) is not None
     return has_input or has_deliver
 
@@ -197,7 +197,12 @@ def _resolve_replay_deliver(case_dir: Path, case_name: str, timeout_script: floa
     from pipeline import _preprocess
 
     staging = DELIVER_BASE / "_replay_staging" / case_name
-    ok, detail = _preprocess(staging, case_dir / "mapping.xlsx", case_dir / "RS.md", timeout_script)
+    from _paths import find_mapping_file, find_rs_file
+
+    mapping = find_mapping_file(case_dir)
+    if not mapping:
+        raise RuntimeError(f"案例目录没有 mapping 文件（*.xlsx/xls 名含 mapping）: {case_dir}")
+    ok, detail = _preprocess(staging, mapping, find_rs_file(case_dir), timeout_script)
     rs_input = staging / "_internal" / "rs_input.json"
     if not rs_input.exists():
         raise RuntimeError(

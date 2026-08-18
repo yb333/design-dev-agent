@@ -41,6 +41,26 @@ class TestBuildCommandArgs:
         assert len(args) == 1
         assert args[0].endswith("mapping.xlsx")
 
+    def test_nonstandard_filenames_discovered(self, tmp_path):
+        """非标准文件名（xx资产mapping.xlsx / RS需求文档.md）也能正确入参。"""
+        (tmp_path / "订单中心资产mapping.xlsx").write_text("x", encoding="utf-8")
+        (tmp_path / "RS需求文档.md").write_text("x", encoding="utf-8")
+        args = real_pipe.build_command_args(tmp_path)
+        assert len(args) == 2
+        assert args[0].endswith("订单中心资产mapping.xlsx")
+        assert args[1].endswith("RS需求文档.md")
+
+    def test_raises_when_no_mapping(self, tmp_path):
+        (tmp_path / "无关文件.txt").write_text("x", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="mapping"):
+            real_pipe.build_command_args(tmp_path)
+
+    def test_mapping_only_when_rs_absent(self, tmp_path):
+        """目录里没有 RS 类文件 → 只传 mapping（无RS模式）。"""
+        (tmp_path / "mapping.xlsx").write_text("x", encoding="utf-8")
+        args = real_pipe.build_command_args(tmp_path)
+        assert len(args) == 1
+
     def test_non_interactive_clause_declares_eval(self):
         """非交互声明必须显式（new-pipe.md 闸口的唯一合法跳过条件）。"""
         assert "非交互" in real_pipe.NON_INTERACTIVE_CLAUSE
@@ -85,7 +105,8 @@ class TestSelectExecutor:
 class TestRunRealPipe:
     def test_single_step_result(self, tmp_path, monkeypatch):
         """打桩 _run_stream + find_deliver：返回单步 PipelineStepResult。"""
-        (tmp_path / "mapping.xlsx").write_text("x", encoding="utf-8")
+        (tmp_path / "dwb_x").mkdir(exist_ok=True)
+        (tmp_path / "dwb_x" / "mapping.xlsx").write_text("x", encoding="utf-8")
         deliver = _make_deliver(tmp_path / "base" / "dwb_x")
 
         calls = {}
@@ -101,7 +122,6 @@ class TestRunRealPipe:
         monkeypatch.setattr(real_pipe, "find_deliver", fake_find)
 
         case_dir = tmp_path / "dwb_x"
-        case_dir.mkdir()
         steps = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert len(steps) == 1
         assert steps[0].step == "new-pipe(真实流程)"
@@ -112,11 +132,11 @@ class TestRunRealPipe:
         assert "mapping.xlsx" in msg and "非交互" in msg
 
     def test_fail_step_when_no_artifacts(self, tmp_path, monkeypatch):
-        (tmp_path / "mapping.xlsx").write_text("x", encoding="utf-8")
+        (tmp_path / "dwb_x").mkdir(exist_ok=True)
+        (tmp_path / "dwb_x" / "mapping.xlsx").write_text("x", encoding="utf-8")
         monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None: (0, "ran ok"))
         monkeypatch.setattr(real_pipe, "find_deliver", lambda base, name: None)
         case_dir = tmp_path / "dwb_x"
-        case_dir.mkdir()
         steps = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert steps[0].status.value == "fail"
 

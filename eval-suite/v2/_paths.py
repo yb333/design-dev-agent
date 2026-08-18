@@ -112,3 +112,48 @@ def scan_deliver_assets(base: Path) -> dict[str, Path]:
                 if (deliver / "ts.json").exists():
                     assets[asset_dir.name] = deliver
     return assets
+
+
+# ============================================================
+# 案例输入文件发现（mapping / RS，文件名不做硬性约定）
+# ============================================================
+
+# 案例输入是用户拷进来的业务文件，文件名天然多样（如 `xx资产mapping.xlsx`、
+# `RS需求文档.md`）——这里按特征发现：标准名优先，模式匹配兜底，sorted 保证
+# 多候选时确定性。这不同于管线产物查找（产物名由脚本命名规则确定，走精确拼接）。
+
+
+def find_mapping_file(case_dir: Path) -> Path | None:
+    """定位案例的 mapping 文件。
+
+    优先标准名 mapping.xlsx；否则取 *.xlsx/xls 且文件名含 mapping 的第一个（按名排序）。
+    """
+    if not case_dir.is_dir():
+        return None
+    exact = case_dir / "mapping.xlsx"
+    if exact.exists():
+        return exact
+    candidates = sorted(
+        f for f in case_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in (".xlsx", ".xls") and "mapping" in f.name.lower()
+    )
+    return candidates[0] if candidates else None
+
+
+def find_rs_file(case_dir: Path) -> Path | None:
+    """定位案例的 RS 文件（可选输入，找不到返回 None=无RS模式）。
+
+    优先标准名 RS.md；否则取 *.md/txt 且文件名含 rs 或"需求"的第一个。
+    """
+    if not case_dir.is_dir():
+        return None
+    exact = case_dir / "RS.md"
+    if exact.exists():
+        return exact
+    candidates = sorted(
+        f for f in case_dir.iterdir()
+        if f.is_file()
+        and f.suffix.lower() in (".md", ".txt")
+        and ("rs" in f.name.lower() or "需求" in f.name)
+    )
+    return candidates[0] if candidates else None

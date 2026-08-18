@@ -144,3 +144,48 @@ class TestFindTsMd:
 
     def test_none_when_absent(self, tmp_path):
         assert _paths.find_ts_md(tmp_path) is None
+
+
+# ============================================================
+# 案例输入文件发现（mapping / RS，文件名不做硬性约定）
+# ============================================================
+
+
+class TestFindMappingFile:
+    def test_exact_name_preferred(self, tmp_path):
+        (tmp_path / "mapping.xlsx").write_text("x", encoding="utf-8")
+        (tmp_path / "xx资产mapping.xlsx").write_text("x", encoding="utf-8")
+        assert _paths.find_mapping_file(tmp_path).name == "mapping.xlsx"
+
+    def test_nonstandard_name_discovered(self, tmp_path):
+        """非标准名（如 连接层粒度转换案例mapping.xlsx）也能发现。"""
+        (tmp_path / "连接层粒度转换案例mapping.xlsx").write_text("x", encoding="utf-8")
+        assert _paths.find_mapping_file(tmp_path).name == "连接层粒度转换案例mapping.xlsx"
+
+    def test_xls_suffix_and_sorted_deterministic(self, tmp_path):
+        (tmp_path / "b资产mapping.xls").write_text("x", encoding="utf-8")
+        (tmp_path / "a资产mapping.xlsx").write_text("x", encoding="utf-8")
+        assert _paths.find_mapping_file(tmp_path).name == "a资产mapping.xlsx"
+
+    def test_none_when_absent(self, tmp_path):
+        (tmp_path / "别的.xlsx").write_text("x", encoding="utf-8")  # 不含 mapping
+        assert _paths.find_mapping_file(tmp_path) is None
+
+
+class TestFindRsFile:
+    def test_exact_name_preferred(self, tmp_path):
+        (tmp_path / "RS.md").write_text("x", encoding="utf-8")
+        (tmp_path / "RS需求文档.md").write_text("x", encoding="utf-8")
+        assert _paths.find_rs_file(tmp_path).name == "RS.md"
+
+    def test_nonstandard_name_discovered(self, tmp_path):
+        (tmp_path / "订单中心RS需求说明.md").write_text("x", encoding="utf-8")
+        assert _paths.find_rs_file(tmp_path).name == "订单中心RS需求说明.md"
+
+    def test_xu_qiu_keyword_matches(self, tmp_path):
+        (tmp_path / "需求文档.md").write_text("x", encoding="utf-8")
+        assert _paths.find_rs_file(tmp_path).name == "需求文档.md"
+
+    def test_none_when_absent(self, tmp_path):
+        (tmp_path / "notes.md").write_text("x", encoding="utf-8")  # 不含 rs/需求
+        assert _paths.find_rs_file(tmp_path) is None

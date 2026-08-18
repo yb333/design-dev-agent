@@ -35,6 +35,7 @@ if str(_VALIDATORS_DIR) not in sys.path:
 from base import CheckStatus  # type: ignore
 
 from engine import PipelineStepResult
+from _paths import find_mapping_file, find_rs_file
 
 # 项目根
 ROOT = Path(__file__).resolve().parents[2]
@@ -193,8 +194,8 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path, timeout: float) -> tuple
     internal.mkdir(parents=True, exist_ok=True)
     rs_input = internal / "rs_input.json"
     args = ["--mapping", str(mapping), "--output", str(rs_input)]
-    # 只有 RS.md 真实存在才传 --rs（Path 恒为真，不能直接 if rs）
-    if rs.exists():
+    # 只有 RS 真实存在才传 --rs（None=无RS模式；Path 恒为真，不能直接 if rs）
+    if rs and rs.exists():
         args.extend(["--rs", str(rs)])
     code, out = _run_python(str(SHARED_REFS / "preprocess.py"), args, timeout)
     if code == 0:
@@ -318,8 +319,9 @@ def run_pipeline(
         timeout_script: 管线脚本阶段超时秒数。
     """
     steps: list[PipelineStepResult] = []
-    mapping = case_dir / "mapping.xlsx"
-    rs = case_dir / "RS.md"
+    # 输入文件按特征发现（用户业务文件名多样，不硬编码 mapping.xlsx/RS.md）
+    mapping = find_mapping_file(case_dir) or (case_dir / "mapping.xlsx")
+    rs = find_rs_file(case_dir)
 
     # 1. preprocess
     steps.append(_step("preprocess", lambda: _preprocess(deliver, mapping, rs, timeout_script)))
