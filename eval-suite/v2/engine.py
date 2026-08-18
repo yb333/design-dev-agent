@@ -126,7 +126,9 @@ def run_evaluation(
     # 层3：design 质量
     result.add_layer(
         LAYER_DESIGN,
-        assert_design.run_design_checks(output_dir, config.design or None, rs_input),
+        assert_design.run_design_checks(
+            output_dir, config.design or None, rs_input, rules_expected=config.rules_expected or None
+        ),
     )
 
     # 层4：code 质量

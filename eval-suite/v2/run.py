@@ -327,7 +327,11 @@ def run_one_case(
     deliver = find_deliver(DELIVER_BASE, case_name)
     checks_path = case_dir / "checks.yaml"
 
-    config = load_checks(checks_path)
+    try:
+        config = load_checks(checks_path)
+    except ValueError as e:
+        print(f"[v2] ❌ checks.yaml 校验失败: {e}", file=sys.stderr)
+        return 1, "checks.yaml 键名校验失败"
     if not config.case_name:
         config.case_name = case_name
 

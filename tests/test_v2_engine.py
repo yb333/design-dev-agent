@@ -289,3 +289,53 @@ class TestCodeGroupByBareSelect:
         # GROUP BY 提取的是源列名 user_id（不是别名），应匹配
         passed = [x for x in r if "GROUP BY 粒度正确" in x.detail]
         assert passed, f"裸 SELECT 的 GROUP BY 应能提取: {[x.detail for x in r]}"
+
+
+# ============================================================
+# 契约断言：rules_expected / load_mode_expected
+# ============================================================
+
+
+class TestRulesExpected:
+    def _ts(self, rules):
+        return {"design": {"business_key": ["id"], "audit_fields": {},
+                           "complexity_analysis": {}}, "rules": rules}
+
+    def test_match_passes(self, tmp_path):
+        ts = self._ts({"R0001": {"load_mode": "truncate_table"}})
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {}, rules_expected=["R0001"])
+        passed = [x for x in r if "规则集匹配" in x.detail]
+        assert passed, f"{[x.detail for x in r]}"
+
+    def test_mismatch_fails(self, tmp_path):
+        ts = self._ts({"R0001": {}, "R0002": {}})
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {}, rules_expected=["R0001"])
+        failed = [x for x in r if "规则集不符" in x.detail and "缺" not in x.detail.split("（")[0]]
+        assert any("多 ['R0002']" in x.detail for x in failed)
+
+    def test_none_skips(self, tmp_path):
+        ts = self._ts({})
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {}, rules_expected=None)
+        assert not any("规则集" in x.detail for x in r)
+
+
+class TestLoadModeExpected:
+    def _ts(self, code="R0001", mode="merge_into"):
+        return {"design": {"business_key": ["id"], "audit_fields": {},
+                           "complexity_analysis": {}},
+                "rules": {code: {"load_mode": mode}}}
+
+    def test_match_passes(self, tmp_path):
+        ts = self._ts()
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {"load_mode_expected": {"R0001": "merge_into"}})
+        assert any("load_mode 契约匹配" in x.detail for x in r)
+
+    def test_mismatch_fails(self, tmp_path):
+        ts = self._ts(mode="truncate_table")
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        r = assert_design.run_design_checks(tmp_path, {"load_mode_expected": {"R0001": "merge_into"}})
+        assert any("load_mode 契约不符" in x.detail for x in r)

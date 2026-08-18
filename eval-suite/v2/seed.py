@@ -83,22 +83,10 @@ def seed_case(case_dir: Path, deliver_override: Path | None = None) -> str:
     meta = ts.get("meta", {}).get("target", {})
     f_table = meta.get("f_table", {}).get("table", "")
     rules = list(ts.get("rules", {}).keys())
+    # case 段（rules_expected 是真断言：规则集合契约；name 展示用）
     lines.append("case:")
     lines.append(f'  name: "{case_name}"')
-    lines.append(f'  target_table: "{f_table}"')
-    lines.append(f"  rules_expected: {rules}")
-    lines.append("")
-
-    # artifacts 段（默认结构）
-    lines.append("artifacts:")
-    lines.append("  ts_json_top_keys: [version, meta, design, rules, data_flow]")
-    lines.append("  audit_fields_count: 4")
-    lines.append(
-        "  audit_field_names: [del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date]"
-    )
-    lines.append("  each_rule_has_load_mode: true")
-    lines.append("  ddl_rollback_paired: true")
-    lines.append("  no_select_star_in_view: true")
+    lines.append(f"  rules_expected: {rules}  # [AUTO-SEEDED] 规则集合契约，确认后去标记")
     lines.append("")
 
     # design 段
@@ -109,11 +97,6 @@ def seed_case(case_dir: Path, deliver_override: Path | None = None) -> str:
         lines.append(f"  business_key: {bk}  # [AUTO-SEEDED] 确认业务主键是否正确")
     else:
         lines.append("  business_key: []  # [AUTO-SEEDED] ts.json 无 business_key，需人工填")
-    lines.append("  field_targets_cover_rs_input: true")
-    lines.append("  field_targets_no_cross_rule_dup: true")
-    lines.append("  load_mode_valid: true")
-    lines.append("  join_safety_strategy_when_not_unique: true")
-    lines.append("  segmentation_reason_when_segmented: true")
 
     # source_tables [AUTO-SEEDED]（来自 rs_input）
     sources = rs_input.get("source_tables", [])
@@ -152,9 +135,6 @@ def seed_case(case_dir: Path, deliver_override: Path | None = None) -> str:
             lines.append(f"    join_tables: {join_tables}")
         if groupby:
             lines.append(f"    group_by_granularity: {groupby}  # 注意：提取的是源列名")
-        lines.append("    case_when_must_have_else: true")
-        lines.append("    no_select_star: true")
-        lines.append("    audit_fields_in_select: true")
 
     return "\n".join(lines)
 

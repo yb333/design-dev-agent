@@ -178,3 +178,7 @@ class TestSeedCaseDeliverNone:
         case.mkdir(parents=True)
         draft = seed_mod.seed_case(case, deliver_override=deliver)
         assert "business_key" in draft and "R0001" in draft
+        # 修剪后：不再生成死键和默认true开关
+        assert "target_table" not in draft
+        assert "case_when_must_have_else: true" not in draft
+        assert "rules_expected" in draft  # 现在是真断言

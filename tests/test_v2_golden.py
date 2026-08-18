@@ -23,7 +23,10 @@ def _make_deliver(tmp_path: Path, business_key=None) -> Path:
     (deliver / "etl").mkdir()
     ts = {
         "design": {"business_key": business_key or ["order_id"], "audit_fields": {}},
-        "rules": {"R0001": {"load_mode": "truncate_table"}},
+        "rules": {"R0001": {"load_mode": "truncate_table", "target_table": "dwb.x_f",
+                            "source_tables": [{"schema": "ods", "table": "ods_a", "alias": "a"}]}},
+        "tables": {"tmp1": {"type": "intermediate", "distribution_key": ["order_id"],
+                            "build_mode": ""}},
     }
     (deliver / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
     (deliver / "etl" / "R0001.sql").write_text(
@@ -117,3 +120,39 @@ class TestGoldenCheck:
         results = golden.golden_check(deliver, case)
         assert results[0].status.value == "pass"
         assert "方案B" in results[0].detail
+
+
+class TestFingerprintStructureFacts:
+    """表结构事实（类型/分布键/build_mode）+ 规则数据流（源/目标表）进指纹。"""
+
+    def _deliver_with_facts(self, tmp_path, name, dist_key, target):
+        import json as j
+        d = tmp_path / name
+        (d / "_internal").mkdir(parents=True)
+        (d / "etl").mkdir()
+        (d / "ts.json").write_text(j.dumps({
+            "design": {"business_key": ["order_id"]},
+            "rules": {"R0001": {"load_mode": "truncate_table", "target_table": target,
+                                "source_tables": [{"table": "ods_a"}]}},
+            "tables": {"tmp1": {"type": "intermediate", "distribution_key": dist_key}},
+        }), encoding="utf-8")
+        (d / "etl" / "R0001.sql").write_text("SELECT 1 AS x", encoding="utf-8")
+        return d
+
+    def test_distribution_key_diff_detected(self, tmp_path):
+        a = golden.fingerprint(self._deliver_with_facts(tmp_path, "a", ["order_id"], "dwb.x_f"))
+        b = golden.fingerprint(self._deliver_with_facts(tmp_path, "b", ["cust_id"], "dwb.x_f"))
+        hit, diffs = golden.compare(a, b)
+        assert not hit and any("表结构" in d for d in diffs)
+
+    def test_rule_flow_diff_detected(self, tmp_path):
+        a = golden.fingerprint(self._deliver_with_facts(tmp_path, "a", ["order_id"], "dwb.x_f"))
+        b = golden.fingerprint(self._deliver_with_facts(tmp_path, "b", ["order_id"], "dwb.y_f"))
+        hit, diffs = golden.compare(a, b)
+        assert not hit and any("规则数据流" in d for d in diffs)
+
+    def test_fingerprint_contains_facts(self, tmp_path):
+        fp = golden.fingerprint(self._deliver_with_facts(tmp_path, "a", ["order_id"], "dwb.x_f"))
+        assert fp["tables"]["tmp1"]["distribution_key"] == ["order_id"]
+        assert fp["rule_flow"]["R0001"]["target"] == "dwb.x_f"
+        assert fp["rule_flow"]["R0001"]["sources"] == ["ods_a"]

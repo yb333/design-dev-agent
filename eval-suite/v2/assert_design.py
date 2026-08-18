@@ -43,6 +43,7 @@ def run_design_checks(
     output_dir: Path,
     checks: dict | None,
     rs_input: dict | None = None,
+    rules_expected: list[str] | None = None,
 ) -> list[CheckResult]:
     """跑 design 质量断言。
 
@@ -50,6 +51,7 @@ def run_design_checks(
         output_dir: ddlc_design_dev 目录。
         checks: checks.yaml 的 design 段（None=无配置，跑默认检查）。
         rs_input: rs_input.json（用来校验 field_targets 覆盖）；None 则跳过覆盖检查。
+        rules_expected: case 段的规则集合契约（严格相等；None=不查）。
     """
     cfg = checks or {}
     results: list[CheckResult] = []
@@ -70,6 +72,10 @@ def run_design_checks(
 
     # 加载 design_decisions（yaml，没有也能跑部分检查）
     dec = _load_yaml(dec_path)
+
+    # 0. rules_expected：规则集合严格相等（方案契约——认可方案里规则数/编码稳定）
+    if rules_expected:
+        results.extend(_check_rules_expected(ts, rules_expected))
 
     # 1. business_key（严格相等）
     if "business_key" in cfg:
@@ -97,6 +103,10 @@ def run_design_checks(
     # 7. source_tables 识别（集合包含）
     if "source_tables_required" in cfg:
         results.extend(_check_source_tables(ts, cfg["source_tables_required"]))
+
+    # 7.5 load_mode_expected：每规则 load_mode 等于契约值（增量场景用）
+    if "load_mode_expected" in cfg:
+        results.extend(_check_load_mode_expected(ts, cfg["load_mode_expected"]))
 
     # 8. segmentation 自洽
     if cfg.get("segmentation_reason_when_segmented", True):
@@ -338,6 +348,61 @@ def _check_source_tables(ts: dict, required: list) -> list[CheckResult]:
             check_type="design",
             status=CheckStatus.PASS,
             detail=f"源表识别完整 ({len(actual_bare)} 表)",
+        )
+    ]
+
+
+def _check_rules_expected(ts: dict, expected: list) -> list[CheckResult]:
+    """规则集合严格相等（编码集合，不序）。"""
+    actual = set(ts.get("rules", {}).keys())
+    exp = set(expected)
+    missing = exp - actual
+    extra = actual - exp
+    if missing or extra:
+        parts = []
+        if missing:
+            parts.append(f"缺 {sorted(missing)}")
+        if extra:
+            parts.append(f"多 {sorted(extra)}")
+        return [
+            CheckResult(
+                check_type="design",
+                status=CheckStatus.FAIL,
+                detail=f"规则集不符: {'; '.join(parts)}（实际 {sorted(actual)} ≠ 期望 {sorted(exp)}）",
+            )
+        ]
+    return [
+        CheckResult(
+            check_type="design",
+            status=CheckStatus.PASS,
+            detail=f"规则集匹配 ({len(exp)} 规则: {sorted(exp)})",
+        )
+    ]
+
+
+def _check_load_mode_expected(ts: dict, expected: dict) -> list[CheckResult]:
+    """每规则 load_mode 等于契约值（如增量案例 R0001 必须 merge_into）。"""
+    rules = ts.get("rules", {})
+    bad = []
+    for code, exp in expected.items():
+        actual = rules.get(code, {}).get("load_mode", "")
+        if not actual:
+            bad.append(f"{code}: 规则不存在或无 load_mode")
+        elif actual != exp:
+            bad.append(f"{code}: {actual} ≠ {exp}")
+    if bad:
+        return [
+            CheckResult(
+                check_type="design",
+                status=CheckStatus.FAIL,
+                detail=f"load_mode 契约不符: {bad}",
+            )
+        ]
+    return [
+        CheckResult(
+            check_type="design",
+            status=CheckStatus.PASS,
+            detail=f"load_mode 契约匹配 ({len(expected)} 规则)",
         )
     ]
 

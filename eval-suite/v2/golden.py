@@ -36,6 +36,8 @@ def fingerprint(deliver: Path) -> dict:
         "rules": [],
         "load_modes": {},
         "field_targets": [],
+        "tables": {},
+        "rule_flow": {},
         "selects": {},
     }
     ts_path = deliver / "ts.json"
@@ -48,6 +50,24 @@ def fingerprint(deliver: Path) -> dict:
 
     fp["business_key"] = sorted(ts.get("design", {}).get("business_key", []))
     rules = ts.get("rules", {})
+
+    # 表结构事实：类型/分布键/build_mode（中间表几个、每个的分布键——设计结构全貌）
+    fp["tables"] = {
+        name: {
+            "type": t.get("type", ""),
+            "distribution_key": sorted(t.get("distribution_key", []) or []),
+            "build_mode": t.get("build_mode", ""),
+        }
+        for name, t in (ts.get("tables") or {}).items()
+    }
+    # 规则数据流：每规则的目标表 + 来源表集合（去重）
+    fp["rule_flow"] = {
+        code: {
+            "target": r.get("target_table", ""),
+            "sources": sorted({st.get("table", "") for st in (r.get("source_tables") or [])}),
+        }
+        for code, r in rules.items()
+    }
     fp["rules"] = sorted(rules)
     fp["load_modes"] = {c: r.get("load_mode", "") for c, r in rules.items()}
 
@@ -92,6 +112,10 @@ def compare(fp_a: dict, fp_b: dict) -> tuple[bool, list[str]]:
         diffs.append("load_mode")
     if fp_a.get("field_targets") != fp_b.get("field_targets"):
         diffs.append("field_targets")
+    if fp_a.get("tables") != fp_b.get("tables"):
+        diffs.append("表结构(类型/分布键/build_mode)")
+    if fp_a.get("rule_flow") != fp_b.get("rule_flow"):
+        diffs.append("规则数据流(源表/目标表)")
     codes = sorted(set(fp_a.get("selects", {})) | set(fp_b.get("selects", {})))
     for code in codes:
         sa, sb = fp_a.get("selects", {}).get(code), fp_b.get("selects", {}).get(code)
