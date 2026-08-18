@@ -214,20 +214,28 @@ def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: d
     return "\n".join(lines)
 
 
-# 类型归一化：只转「mapping 合法但 Gauss 非法」的写法——int 家族带精度后缀（int4(32) 是
-# Oracle 合法写法，Gauss 拒绝）。类型本身 Gauss 认的（nvarchar2/varchar2/number/datetime/
-# tinyint/裸 int8 等）一律原样透传：mapping 是目标类型的 source of truth，写错了改 mapping
-# （precheck 源头提示），DDL 不代改。加新映射 = 在此列表追加一行。
+# 类型归一化分两类（规则不混）：
+# 1) 非法写法修正：int 家族带精度后缀（int4(32) 是 Oracle 合法写法，Gauss 拒绝）。
+#    类型本身 Gauss 认的（nvarchar2/varchar2/number/tinyint/裸 int8 等）一律原样透传：
+#    mapping 是目标类型的 source of truth，写错了改 mapping（precheck 源头提示），DDL 不代改。
+# 2) 时间类型标准化书写：与容量陷阱的字符类型不同，datetime/裸 timestamp → 标准写法
+#    timestamp(0) without time zone 是**等价转换**（秒级口径与审计标准一致，库里都执行）；
+#    显式精度的只补全写法（timestamp(6) → timestamp(6) without time zone）；
+#    with time zone 不动（存储语义不同，precheck 同名比对也视为不同类型）；date/time 不动。
 _TYPE_NORMALIZE = [
     (re.compile(r"^int8\(\d+\)$", re.I), "bigint"),       # int8(64) → bigint（裸 int8 Gauss 认，不动）
     (re.compile(r"^int4\(\d+\)$", re.I), "integer"),      # int4(32) → integer
     (re.compile(r"^int2\(\d+\)$", re.I), "smallint"),     # int2(16) → smallint
     (re.compile(r"^int\(\d+\)$", re.I), "integer"),       # int(11) → integer
+    # 时间类型标准化（等价转换，不涉容量/语义变化）
+    (re.compile(r"^datetime$", re.I), "timestamp(0) without time zone"),
+    (re.compile(r"^timestamp(\(\d+\))?( without time zone)?$", re.I),
+     lambda m: f"timestamp{m.group(1) or '(0)'} without time zone"),  # 裸/无后缀 → 补 (0) + 标准后缀
 ]
 
 
 def normalize_type(t: str) -> str:
-    """归一化字段类型：只处理「带精度后缀的 int 家族」这类 mapping 合法但 Gauss 非法的写法，其余原样透传。"""
+    """归一化字段类型：带精度 int 家族（非法写法）+ 时间类型标准书写，其余原样透传。"""
     if not t:
         return ""
     t = t.strip()

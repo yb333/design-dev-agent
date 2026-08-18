@@ -175,8 +175,41 @@ class TestNormalizeType:
     def test_number_datetime_tinyint_passthrough(self):
         from assemble_ddl import normalize_type
         assert normalize_type("number(10,2)") == "number(10,2)"
-        assert normalize_type("datetime") == "datetime"
         assert normalize_type("tinyint") == "tinyint"
+
+
+class TestTimestampStandardWriting:
+    """时间类型标准化书写（等价转换，不涉容量/语义）：datetime/裸 timestamp →
+    timestamp(0) without time zone；显式精度保留只补全后缀；tz 系/date/time 不动。"""
+
+    def test_datetime_to_standard(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("datetime") == "timestamp(0) without time zone"
+        assert normalize_type("DATETIME") == "timestamp(0) without time zone"  # 大小写不敏感
+
+    def test_bare_timestamp_gets_standard(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("timestamp") == "timestamp(0) without time zone"
+
+    def test_explicit_precision_kept(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("timestamp(6)") == "timestamp(6) without time zone"
+
+    def test_already_standard_idempotent(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("timestamp(0) without time zone") == "timestamp(0) without time zone"
+        assert normalize_type("timestamp(3) without time zone") == "timestamp(3) without time zone"
+
+    def test_tz_not_touched(self):
+        """with time zone 存储语义不同（precheck 同名比对也视为不同类型），不标准化。"""
+        from assemble_ddl import normalize_type
+        assert normalize_type("timestamptz") == "timestamptz"
+        assert normalize_type("timestamp(6) with time zone") == "timestamp(6) with time zone"
+
+    def test_date_time_not_touched(self):
+        from assemble_ddl import normalize_type
+        assert normalize_type("date") == "date"
+        assert normalize_type("time") == "time"
 
 
 class TestGenerateRollback:
