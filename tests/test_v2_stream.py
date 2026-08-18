@@ -78,3 +78,25 @@ class TestQuietVsVerbose:
         pipeline.set_verbose(False)
         code, out = _run_stream([sys.executable, "-c", "print('PAYLOAD')"], timeout=10)
         assert "PAYLOAD" in out  # 安静≠丢失：全文在返回值里，失败时由 _fail_detail 展示
+
+
+class TestLiveLog:
+    def test_live_log_written_in_quiet(self, tmp_path, monkeypatch, capsys):
+        """安静模式实时全文落盘（黑箱可打开查看），带 label 才开。"""
+        import pipeline as pl
+
+        pl.set_verbose(False)
+        monkeypatch.setattr(pl, "_LIVE_DIR", tmp_path / "_live")
+        _run_stream([sys.executable, "-c", "print('LIVE_PAYLOAD')"], timeout=10, label="designer")
+        out = capsys.readouterr().out
+        assert "实时全文可查看" in out  # 提示路径是关键节点信息
+        live = tmp_path / "_live" / "designer.log"
+        assert live.exists()
+        assert "LIVE_PAYLOAD" in live.read_text(encoding="utf-8")
+
+    def test_no_label_no_live_log(self, tmp_path, monkeypatch):
+        import pipeline as pl
+
+        monkeypatch.setattr(pl, "_LIVE_DIR", tmp_path / "_live")
+        _run_stream([sys.executable, "-c", "print('x')"], timeout=10)
+        assert not (tmp_path / "_live").exists()

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,11 @@ def set_verbose(v: bool) -> None:
 
 
 _SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+# 实时全文日志目录（安静模式也能随时查看子进程在干嘛，不用 --verbose 重跑）
+_LIVE_DIR = ROOT / "eval-suite" / "results" / "_live"
+# 输出静默超过该秒数，spinner 切 ⚠ 提示"可能卡住或长思考"
+_QUIET_WARN_SECONDS = 60
 
 # opencode 解析缓存（Windows 下 Popen 解析不到 .cmd，见 opencode_cmd）
 _OPENCODE_RESOLVED: list[str] | None = None
@@ -152,6 +158,26 @@ def _run_stream(
     is_tty = sys.stdout.isatty()
     spin_idx = 0
     last_spin = start
+    last_output = start  # 最近一次子进程输出时间（卡住 vs 正常的判别信号）
+    out_bytes = 0
+
+    # 实时全文日志（带 label 的调用才开；每次运行覆盖，可随时打开看进度）
+    live_f = None
+    live_path = None
+    if label:
+        try:
+            _LIVE_DIR.mkdir(parents=True, exist_ok=True)
+            safe = re.sub(r"[^\w\-]+", "_", label)
+            live_path = _LIVE_DIR / f"{safe}.log"
+            live_f = open(live_path, "w", encoding="utf-8", errors="replace")
+        except Exception:
+            live_f = None
+    if live_path:
+        try:
+            hint = f"    （实时全文可查看: {live_path.relative_to(ROOT)}）"
+        except Exception:
+            hint = f"    （实时全文可查看: {live_path}）"
+        print(hint, flush=True)
 
     def _spin() -> None:
         nonlocal spin_idx, last_spin
@@ -159,9 +185,13 @@ def _run_stream(
             return
         now = time.monotonic()
         if now - last_spin >= 0.5:
-            frame = _SPIN_FRAMES[spin_idx % len(_SPIN_FRAMES)]
+            quiet_s = int(now - last_output)
+            # 输出静默超阈值 → ⚠：可能是模型长思考，也可能真卡了（区分不了就如实说）
+            frame = "⚠" if quiet_s >= _QUIET_WARN_SECONDS else _SPIN_FRAMES[spin_idx % len(_SPIN_FRAMES)]
             spin_idx += 1
-            sys.stdout.write(f"\r    {frame} {label or '执行中'} {int(now - start)}s…")
+            stats = f" · {len(buf)}行/{out_bytes // 1024}KB · 静默{quiet_s}s"
+            warn = f"（可能卡住或长思考，超时上限{int(timeout)}s）" if quiet_s >= _QUIET_WARN_SECONDS else ""
+            sys.stdout.write(f"\r    {frame} {label or '执行中'} {int(now - start)}s{stats}{warn}   ")
             sys.stdout.flush()
             last_spin = now
 
@@ -183,12 +213,24 @@ def _run_stream(
         if item is None:
             break
         buf.append(item)
+        out_bytes += len(item)
+        last_output = time.monotonic()
+        if live_f:
+            try:
+                live_f.write(item)
+            except Exception:
+                pass
         if VERBOSE:
             print("    " + item, end="", flush=True)  # 缩进区分子进程输出
         else:
             _spin()
 
     _spin_end()
+    if live_f:
+        try:
+            live_f.close()
+        except Exception:
+            pass
     if timed_out:
         try:
             proc.wait(timeout=5)
