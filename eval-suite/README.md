@@ -81,10 +81,10 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
   支持的入口并反馈，评测侧可切换为消息内 `/new-pipe` 前缀方式。
 - **UT 连库属于真实流程**：真实入口跑的是完整 new-pipe（含 check_db 探活 + UT），
   评测不干预——测的就是真实行为；`--replay` 重放模式不含 UT。
-- **输入文件名发现（不做硬性约定）**：案例目录里的业务文件名天然多样，按特征识别——
-  mapping = *.xlsx/xls 且文件名含 mapping（标准名 `mapping.xlsx` 优先）；
-  RS = *.md/txt 且文件名含 rs 或"需求"（标准名 `RS.md` 优先，找不到=无RS模式）；
-  多候选按文件名排序取第一。真实入口提示词、重放预处理、案例发现全部走同一套发现。
+- **输入文件发现**：案例目录的业务文件就两类——唯一的 *.xlsx/xls 即 mapping，
+  唯一的 *.md/txt 即 RS（可选，无则无RS模式）；评测自己的 yaml/json 不占这两个
+  后缀不干扰。多个时名字含 mapping/rs/需求 的优先。真实入口提示词、重放预处理、
+  案例发现全部走同一套发现。
 - **产出定位（三层唯一约定）**：`10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。
   真实入口跑完自动重新定位；重放模式无既有产出时按 schema（mapping 目标表）+
   appid（schema_apps.json）推导三层路径；平铺老结构不再识别。

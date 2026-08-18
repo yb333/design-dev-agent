@@ -152,40 +152,42 @@ class TestFindTsMd:
 
 
 class TestFindMappingFile:
-    def test_exact_name_preferred(self, tmp_path):
-        (tmp_path / "mapping.xlsx").write_text("x", encoding="utf-8")
-        (tmp_path / "xx资产mapping.xlsx").write_text("x", encoding="utf-8")
-        assert _paths.find_mapping_file(tmp_path).name == "mapping.xlsx"
+    def test_only_xlsx_is_mapping(self, tmp_path):
+        """目录里唯一的 xlsx 就是 mapping（不看文件名）。"""
+        (tmp_path / "连接层粒度转换案例.xlsx").write_text("x", encoding="utf-8")
+        assert _paths.find_mapping_file(tmp_path).name == "连接层粒度转换案例.xlsx"
 
-    def test_nonstandard_name_discovered(self, tmp_path):
-        """非标准名（如 连接层粒度转换案例mapping.xlsx）也能发现。"""
-        (tmp_path / "连接层粒度转换案例mapping.xlsx").write_text("x", encoding="utf-8")
-        assert _paths.find_mapping_file(tmp_path).name == "连接层粒度转换案例mapping.xlsx"
+    def test_multiple_xlsx_prefers_mapping_keyword(self, tmp_path):
+        """多个 xlsx：名字含 mapping 的优先。"""
+        (tmp_path / "a别的表.xlsx").write_text("x", encoding="utf-8")
+        (tmp_path / "b资产mapping.xlsx").write_text("x", encoding="utf-8")
+        assert _paths.find_mapping_file(tmp_path).name == "b资产mapping.xlsx"
 
-    def test_xls_suffix_and_sorted_deterministic(self, tmp_path):
-        (tmp_path / "b资产mapping.xls").write_text("x", encoding="utf-8")
-        (tmp_path / "a资产mapping.xlsx").write_text("x", encoding="utf-8")
-        assert _paths.find_mapping_file(tmp_path).name == "a资产mapping.xlsx"
-
-    def test_none_when_absent(self, tmp_path):
-        (tmp_path / "别的.xlsx").write_text("x", encoding="utf-8")  # 不含 mapping
+    def test_none_when_no_xlsx(self, tmp_path):
         assert _paths.find_mapping_file(tmp_path) is None
+
+    def test_eval_own_files_not_mistaken(self, tmp_path):
+        """评测自己的 yaml/json 不占 xlsx 后缀，不干扰识别。"""
+        (tmp_path / "mapping.xlsx").write_text("x", encoding="utf-8")
+        (tmp_path / "RS.md").write_text("x", encoding="utf-8")
+        (tmp_path / "checks.yaml").write_text("x", encoding="utf-8")
+        (tmp_path / "expectations.json").write_text("x", encoding="utf-8")
+        (tmp_path / "checks.seeded.yaml").write_text("x", encoding="utf-8")
+        assert _paths.find_mapping_file(tmp_path).name == "mapping.xlsx"
+        assert _paths.find_rs_file(tmp_path).name == "RS.md"
 
 
 class TestFindRsFile:
-    def test_exact_name_preferred(self, tmp_path):
-        (tmp_path / "RS.md").write_text("x", encoding="utf-8")
-        (tmp_path / "RS需求文档.md").write_text("x", encoding="utf-8")
-        assert _paths.find_rs_file(tmp_path).name == "RS.md"
+    def test_only_md_is_rs(self, tmp_path):
+        """目录里唯一的 md 就是 RS（不看文件名）。"""
+        (tmp_path / "订单中心需求说明.md").write_text("x", encoding="utf-8")
+        assert _paths.find_rs_file(tmp_path).name == "订单中心需求说明.md"
 
-    def test_nonstandard_name_discovered(self, tmp_path):
-        (tmp_path / "订单中心RS需求说明.md").write_text("x", encoding="utf-8")
-        assert _paths.find_rs_file(tmp_path).name == "订单中心RS需求说明.md"
+    def test_multiple_md_prefers_rs_keyword(self, tmp_path):
+        """多个 md：名字含 rs/需求 的优先。"""
+        (tmp_path / "a笔记.md").write_text("x", encoding="utf-8")
+        (tmp_path / "b需求文档.md").write_text("x", encoding="utf-8")
+        assert _paths.find_rs_file(tmp_path).name == "b需求文档.md"
 
-    def test_xu_qiu_keyword_matches(self, tmp_path):
-        (tmp_path / "需求文档.md").write_text("x", encoding="utf-8")
-        assert _paths.find_rs_file(tmp_path).name == "需求文档.md"
-
-    def test_none_when_absent(self, tmp_path):
-        (tmp_path / "notes.md").write_text("x", encoding="utf-8")  # 不含 rs/需求
+    def test_none_when_no_md(self, tmp_path):
         assert _paths.find_rs_file(tmp_path) is None
