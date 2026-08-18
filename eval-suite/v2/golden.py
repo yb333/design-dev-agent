@@ -95,6 +95,8 @@ def fingerprint(deliver: Path) -> dict:
                 "fields": sorted(assert_sql._extract_select_columns(sql)),
                 "joins": sorted(str(t) for t in assert_sql._extract_join_tables(sql)),
                 "group_by": sorted(assert_sql._extract_groupby_columns(sql)),
+                # 字段级口径签名（refs/aggs/consts）——L3 映射忠实度比对载体
+                "field_sigs": assert_sql._extract_field_signatures(sql),
             }
         except Exception:
             continue
@@ -128,6 +130,12 @@ def compare(fp_a: dict, fp_b: dict) -> tuple[bool, list[str]]:
             diffs.append(f"{code}:JOIN表")
         if sa.get("group_by") != sb.get("group_by"):
             diffs.append(f"{code}:GROUP_BY")
+        sig_a, sig_b = sa.get("field_sigs", {}), sb.get("field_sigs", {})
+        diff_fields = sorted(
+            {k for k in set(sig_a) | set(sig_b) if sig_a.get(k) != sig_b.get(k)}
+        )
+        if diff_fields:
+            diffs.append(f"{code}:字段口径({','.join(diff_fields[:4])})")
     return (not diffs, diffs)
 
 

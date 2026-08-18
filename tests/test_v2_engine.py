@@ -339,3 +339,52 @@ class TestLoadModeExpected:
         (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
         r = assert_design.run_design_checks(tmp_path, {"load_mode_expected": {"R0001": "merge_into"}})
         assert any("load_mode 契约不符" in x.detail for x in r)
+
+
+# ============================================================
+# 字段口径签名 + 字段覆盖契约（默认零配置）
+# ============================================================
+
+
+class TestFieldSignatures:
+    def test_signature_shape(self):
+        sql = "SELECT SUM(a.amt) AS total, a.id AS oid, 'N' AS flag FROM ods.t a GROUP BY a.id"
+        sigs = assert_sql._extract_field_signatures(sql)
+        assert sigs["total"] == {"refs": ["a.amt"], "aggs": ["SUM"], "consts": []}
+        assert sigs["oid"] == {"refs": ["a.id"], "aggs": [], "consts": []}
+        assert sigs["flag"] == {"refs": [], "aggs": [], "consts": ["N"]}
+
+    def test_cast_and_coalesce_tolerated(self):
+        a = assert_sql._extract_field_signatures("SELECT a.amt AS t FROM ods.t a")
+        b = assert_sql._extract_field_signatures("SELECT CAST(COALESCE(a.amt, 0) AS int) AS t FROM ods.t a")
+        # COALESCE 引入常量 0 —— refs/口径主体一致，consts 差异如实体现
+        assert a["t"]["refs"] == b["t"]["refs"] == ["a.amt"]
+        assert "0" in b["t"]["consts"]
+
+
+class TestFieldCoverageContract:
+    """默认契约：SELECT 输出 ⊇ ts 该规则 field_targets（零配置）。"""
+
+    def _ts_with_ft(self, ft):
+        return {"design": {"business_key": ["id"], "audit_fields": {},
+                           "complexity_analysis": {}},
+                "rules": {"R0001": {"load_mode": "truncate_table", "field_targets": ft}}}
+
+    def test_covered_passes(self, tmp_path):
+        (tmp_path / "ts.json").write_text(json.dumps(self._ts_with_ft(["order_id", "amt"])), encoding="utf-8")
+        _write_select(tmp_path, "R0001", "SELECT a.id AS order_id, a.amt AS amt FROM ods.t a")
+        r = assert_sql.run_code_checks(tmp_path, None, ts=self._ts_with_ft(["order_id", "amt"]))
+        assert any("字段覆盖契约完整" in x.detail for x in r)
+
+    def test_missing_field_fails(self, tmp_path):
+        ts = self._ts_with_ft(["order_id", "amt", "remark"])
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        _write_select(tmp_path, "R0001", "SELECT a.id AS order_id, a.amt AS amt FROM ods.t a")
+        r = assert_sql.run_code_checks(tmp_path, None, ts=ts)
+        assert any("字段覆盖契约缺字段" in x.detail and "remark" in x.detail for x in r)
+
+    def test_no_field_targets_skips(self, tmp_path):
+        ts = self._ts_with_ft([])
+        _write_select(tmp_path, "R0001", "SELECT 1 AS x")
+        r = assert_sql.run_code_checks(tmp_path, None, ts=ts)
+        assert not any("字段覆盖契约" in x.detail for x in r)

@@ -156,3 +156,55 @@ class TestFingerprintStructureFacts:
         assert fp["tables"]["tmp1"]["distribution_key"] == ["order_id"]
         assert fp["rule_flow"]["R0001"]["target"] == "dwb.x_f"
         assert fp["rule_flow"]["R0001"]["sources"] == ["ods_a"]
+
+
+class TestFieldSignatureDimension:
+    """L3 映射忠实度进 golden：字段级口径签名（refs/aggs/consts）。"""
+
+    def _deliver_with_sql(self, tmp_path, name, sql):
+        import json as j
+        d = tmp_path / name
+        (d / "_internal").mkdir(parents=True)
+        (d / "etl").mkdir()
+        (d / "ts.json").write_text(j.dumps({
+            "design": {"business_key": ["order_id"]},
+            "rules": {"R0001": {"load_mode": "truncate_table"}},
+        }), encoding="utf-8")
+        (d / "etl" / "R0001.sql").write_text(sql, encoding="utf-8")
+        return d
+
+    def test_cast_wrap_same_signature(self, tmp_path):
+        """CAST 包裹（类型适配）不改口径签名——合法变体不误杀。"""
+        a = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "a", "SELECT a.amt AS total_amt FROM ods.t a"))
+        b = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "b", "SELECT CAST(a.amt AS decimal(18,2)) AS total_amt FROM ods.t a"))
+        hit, diffs = golden.compare(a, b)
+        assert hit, f"CAST 包裹应视为同一口径: {diffs}"
+
+    def test_sum_vs_bare_column_detected(self, tmp_path):
+        """SUM(amt) vs 裸 amt——聚合口径不同必须 diff。"""
+        a = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "a", "SELECT SUM(a.amt) AS total_amt FROM ods.t a"))
+        b = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "b", "SELECT a.amt AS total_amt FROM ods.t a"))
+        hit, diffs = golden.compare(a, b)
+        assert not hit and any("字段口径" in d and "total_amt" in d for d in diffs)
+
+    def test_wrong_source_column_detected(self, tmp_path):
+        """同函数但引用错列（a.amt vs b.amt）必须 diff。"""
+        a = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "a", "SELECT SUM(a.amt) AS total FROM ods.t a"))
+        b = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "b", "SELECT SUM(b.amt) AS total FROM ods.t b"))
+        hit, diffs = golden.compare(a, b)
+        assert not hit and any("字段口径" in d for d in diffs)
+
+    def test_const_value_change_detected(self, tmp_path):
+        """赋值/CASE 常量变了（'N' vs 0）必须 diff。"""
+        a = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "a", "SELECT 'N' AS del_flag FROM ods.t"))
+        b = golden.fingerprint(self._deliver_with_sql(
+            tmp_path, "b", "SELECT 0 AS del_flag FROM ods.t"))
+        hit, diffs = golden.compare(a, b)
+        assert not hit and any("del_flag" in d for d in diffs)

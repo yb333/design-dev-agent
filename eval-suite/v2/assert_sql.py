@@ -115,6 +115,30 @@ def run_code_checks(
         rule_cfg = cfg.get(code, {}) if cfg else {}
         results.extend(_check_one_rule(code, sql_text, rule_cfg))
 
+        # 默认契约断言（零配置，从产出内部推导，逐步替代手写 fields_required）：
+        # SELECT 输出字段 ⊇ ts 该规则 field_targets——coder 漏字段不需要 golden 就能查
+        rule = (ts or {}).get("rules", {}).get(code) or {}
+        rule_ft = [str(f).lower() for f in (rule.get("field_targets") or [])]
+        if rule_ft:
+            actual = _extract_select_columns(sql_text)
+            missing = set(rule_ft) - actual
+            if missing:
+                results.append(
+                    CheckResult(
+                        check_type="code",
+                        status=CheckStatus.FAIL,
+                        detail=f"{code}: 字段覆盖契约缺字段: {sorted(missing)}",
+                    )
+                )
+            else:
+                results.append(
+                    CheckResult(
+                        check_type="code",
+                        status=CheckStatus.PASS,
+                        detail=f"{code}: 字段覆盖契约完整 ({len(rule_ft)}/{len(rule_ft)})",
+                    )
+                )
+
     return results
 
 
@@ -268,6 +292,50 @@ def _check_one_rule(code: str, sql_text: str, rule_cfg: dict) -> list[CheckResul
         )
 
     return results
+
+
+def _extract_field_signatures(sql_text: str) -> dict[str, dict]:
+    """每输出字段的口径签名：{别名: {refs/aggs/consts}}——L3 映射忠实度的 golden 载体。
+
+    格式不敏感（CAST/COALESCE/括号包裹不改签名），口径敏感：
+    - refs：表达式引用的源列（a.amt vs a.qty / b.amt 都能区分）
+    - aggs：聚合函数集合（SUM(a.amt) vs 裸 a.amt = 聚合口径不同）
+    - consts：常量集合（'N' vs 0 这类赋值/CASE 分支值）
+    忠实与否不靠规则枚举（列不完合法变体），靠与人审 golden 比对。
+    """
+    import sqlglot
+    from sqlglot import exp
+
+    sigs: dict[str, dict] = {}
+    try:
+        trees = sqlglot.parse(sql_text, dialect="postgres")
+        for tree in trees:
+            if not tree:
+                continue
+            # 取最外层 SELECT（find_all 先序遍历，第一个即主查询；CTE 在其子树内）
+            select = next(tree.find_all(exp.Select), None)
+            if select is None:
+                continue
+            for proj in select.expressions:
+                alias = proj.alias_or_name.lower()
+                refs: set[str] = set()
+                aggs: set[str] = set()
+                consts: set[str] = set()
+                for node in proj.walk():
+                    if isinstance(node, exp.Column):
+                        ref = f"{node.table}.{node.name}" if node.table else node.name
+                        refs.add(ref.lower())
+                    elif isinstance(node, exp.AggFunc):
+                        aggs.add(node.sql_name().upper())
+                    elif isinstance(node, (exp.Boolean, exp.Literal)):
+                        parent = getattr(node, "parent", None)
+                        if isinstance(parent, (exp.DataType, exp.DataTypeParam)):
+                            continue  # 类型精度字面量（decimal(18,2) 的 18/2）不是口径常量
+                        consts.add(str(node.this))
+                sigs[alias] = {"refs": sorted(refs), "aggs": sorted(aggs), "consts": sorted(consts)}
+    except Exception:
+        pass
+    return sigs
 
 
 def _extract_select_columns(sql_text: str) -> set[str]:

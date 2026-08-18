@@ -55,8 +55,11 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
 
 1. **只能人手工沉淀**：`promote.py` 是纯拷贝工具，"这个产出认不认可"永远人定；
    评测系统绝不自动把某轮产出推成 golden。
-2. **比指纹不比文本**：business_key/规则集/load_mode/field_targets/每规则 SELECT 的
-   字段·JOIN·GROUP BY——同一 golden 允许多种 SQL 写法。
+2. **比指纹不比文本**：business_key/规则集/load_mode/field_targets/表结构
+   （类型·分布键·build_mode）/规则数据流（源表·目标表）/每规则 SELECT 的
+   字段·JOIN·GROUP BY·**字段口径签名**——同一 golden 允许多种 SQL 写法。
+   口径签名 = 每字段引用的源列+聚合函数+常量（CAST/COALESCE 包裹不改签名；
+   SUM vs 裸列、引用错列、常量变了都会 diff）——映射忠实度（L3）靠它比对。
 3. **多解兼容**：golden 集合可存多个方案（方案A/B/C），命中任一即 PASS；
    全不中 = 越界 → FAIL 标出与最接近方案的差异，待人工裁决。
 4. 典型循环：实际调测出认可产出 → promote 沉淀 → `--repeat N` 批量测 →
