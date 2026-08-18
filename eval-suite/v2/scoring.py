@@ -40,6 +40,7 @@ FATAL_ROOTS = {
     "load_mode",        # 写入模式契约错（清历史事故级）
     "rules",            # 规则集契约错
     "view_cols",        # I 视图缺列（交付物不完整）
+    "audit_standard",   # 审计字段不合标准写法（类型=标准是硬契约，不看 mapping）
 }
 
 # 断言失败 detail 关键词 → 根因（未命中的按层归 default）
@@ -51,6 +52,7 @@ _ASSERTION_ROOTS = [
     (("artifacts", "DDL列"), "ddl_columns"),
     (("artifacts", "DDL类型"), "ddl_type"),
     (("artifacts", "I视图列"), "view_cols"),
+    (("artifacts", "审计字段"), "audit_standard"),
     (("code", "字段覆盖契约"), "field_coverage"),
 ]
 

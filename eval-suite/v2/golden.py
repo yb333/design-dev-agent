@@ -178,8 +178,11 @@ def parse_ddl_columns(ddl_path: Path) -> dict[str, str]:
                 continue
             if stripped.startswith(")"):
                 break
-            m = re.match(r'^"?\s*([A-Za-z_][\w]*)"?\s+([A-Za-z_][\w]*(?:\s*\([^)]*\))?)',
-                         stripped, re.IGNORECASE)
+            # 类型含多词形态（timestamp(0) without time zone），尾部带/不带 time zone 都要吃到
+            m = re.match(
+                r'^"?\s*([A-Za-z_][\w]*)"?\s+'
+                r'([A-Za-z_][\w]*(?:\s*\([^)]*\))?(?:\s+(?:without|with)\s+time\s+zone)?)',
+                stripped, re.IGNORECASE)
             if m:
                 cols[m.group(1).lower()] = m.group(2).strip().lower()
         return cols

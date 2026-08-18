@@ -44,9 +44,11 @@ def _write_table_ddl(d: Path, table: str, cols: list[tuple[str, str]], dist: str
     (d / "ddl" / f"create_table_{table}.sql").write_text(ddl + ";", encoding="utf-8")
 
 
-GOOD_COLS = [("id", "varchar(50)"), ("amt", "decimal(18,2)"), ("del_flag", "char(1)"),
-             ("crt_cycle_id", "varchar(10)"), ("last_upd_cycle_id", "varchar(10)"),
-             ("dw_last_update_date", "date")]
+# 审计字段按标准写法（dws_standards.py）——不标准的写法会被审计断言当场抓住
+GOOD_COLS = [("id", "varchar(50)"), ("amt", "decimal(18,2)"),
+             ("del_flag", "nvarchar2(1)"), ("crt_cycle_id", "bigint"),
+             ("last_upd_cycle_id", "bigint"),
+             ("dw_last_update_date", "timestamp(0) without time zone")]
 
 
 class TestDdlConsistency:
@@ -163,3 +165,40 @@ class TestGoldenDdlDimension:
         assert results[0].status.value == "fail"
         assert "golden=" in results[0].detail and "实际=" in results[0].detail
         assert "business_key" in results[0].detail
+
+
+class TestAuditStandard:
+    """审计字段标准写法：类型=标准（不看 mapping），缺失=违规。"""
+
+    def test_nonstandard_type_fails(self, tmp_path):
+        d = _make_deliver(tmp_path, {"dwb_x_f": {
+            "type": "target", "distribution_key": ["id"],
+            "fields": [{"target_field": "id", "field_type": "varchar(50)"}]}})
+        cols = [("id", "varchar(50)"), ("amt", "decimal(18,2)"),
+                ("del_flag", "char(1)"),  # 不标准
+                ("crt_cycle_id", "bigint"), ("last_upd_cycle_id", "bigint"),
+                ("dw_last_update_date", "timestamp(0) without time zone")]
+        _write_table_ddl(d, "dwb_x_f", cols, "DISTRIBUTE BY HASH(id)")
+        (d / "ddl_rollback" / "rollback_create_table_dwb_x_f.sql").write_text("DROP TABLE x;", encoding="utf-8")
+        r = assert_artifacts.run_artifact_checks(d)
+        assert any("审计字段不合标准" in x.detail and "del_flag" in x.detail for x in r)
+
+    def test_missing_audit_fails(self, tmp_path):
+        d = _make_deliver(tmp_path, {"dwb_x_f": {
+            "type": "target", "distribution_key": ["id"],
+            "fields": [{"target_field": "id", "field_type": "varchar(50)"}]}})
+        _write_table_ddl(d, "dwb_x_f", [("id", "varchar(50)"), ("amt", "decimal(18,2)")],
+                         "DISTRIBUTE BY HASH(id)")
+        (d / "ddl_rollback" / "rollback_create_table_dwb_x_f.sql").write_text("DROP TABLE x;", encoding="utf-8")
+        r = assert_artifacts.run_artifact_checks(d)
+        assert any("缺审计字段" in x.detail for x in r)
+
+    def test_standard_passes(self, tmp_path):
+        d = _make_deliver(tmp_path, {"dwb_x_f": {
+            "type": "target", "distribution_key": ["id"],
+            "fields": [{"target_field": "id", "field_type": "varchar(50)"},
+                        ("del_flag" and {"target_field": "del_flag", "field_type": "nvarchar2(1)"})]}})
+        _write_table_ddl(d, "dwb_x_f", GOOD_COLS, "DISTRIBUTE BY HASH(id)")
+        (d / "ddl_rollback" / "rollback_create_table_dwb_x_f.sql").write_text("DROP TABLE x;", encoding="utf-8")
+        r = assert_artifacts.run_artifact_checks(d)
+        assert any("审计字段符合标准写法" in x.detail for x in r)

@@ -414,3 +414,40 @@ class TestTypesMatchInput:
         rs = {"field_mappings": [{"target_column": "amt", "target_type": "decimal(18,2)"}]}
         r = assert_design.run_design_checks(tmp_path, {}, rs)
         assert any("类型不符输入要求" in x.detail for x in r)
+
+
+class TestAuditExemptions:
+    """审计字段豁免：mapping 写法不做依据（类型=标准，另有专项断言）。"""
+
+    def test_types_match_input_skips_audit(self, tmp_path):
+        """mapping 写 del_flag=varchar(1)，ts 按标准 bigint/nvarchar2——不算类型不符。"""
+        ts = {
+            "design": {"business_key": ["id"], "audit_fields": {}, "complexity_analysis": {}},
+            "rules": {},
+            "tables": {"t_f": {"fields": [
+                {"target_field": "del_flag", "field_type": "nvarchar2(1)"},
+                {"target_field": "crt_cycle_id", "field_type": "bigint"}]}},
+        }
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        rs = {"field_mappings": [
+            {"target_column": "del_flag", "target_type": "varchar(1)"},   # mapping 乱写
+            {"target_column": "crt_cycle_id", "target_type": "varchar(10)"}]}
+        r = assert_design.run_design_checks(tmp_path, {}, rs)
+        assert any("类型符合输入要求" in x.detail for x in r)
+        assert not any("类型不符输入要求" in x.detail for x in r)
+
+    def test_coverage_audit_extra_ok(self, tmp_path):
+        """ts 补了审计字段而 mapping 没写——不算覆盖"多出"。"""
+        ts = {"design": {"business_key": ["id"], "audit_fields": {}, "complexity_analysis": {}},
+              "rules": {}}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        (tmp_path / "_internal").mkdir()
+        import yaml
+        (tmp_path / "_internal" / "design_decisions.yaml").write_text(yaml.dump(
+            {"rules": [{"rule_code": "R0001",
+                        "field_targets": ["id", "amt", "del_flag", "crt_cycle_id"]}]}),
+            encoding="utf-8")
+        rs = {"field_mappings": [{"target_column": "id"}, {"target_column": "amt"}]}  # 无审计
+        r = assert_design.run_design_checks(tmp_path, {}, rs)
+        assert any("完整覆盖" in x.detail for x in r)
+        assert not any("覆盖不全" in x.detail for x in r)

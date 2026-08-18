@@ -37,6 +37,12 @@
 | 实时全文 log | `results/_live/{阶段}.log` | 安静模式也能随时看子进程在干嘛 |
 | 失败诊断全文 | 产出 `_internal/diagnose/pipeline_{阶段}.log` | 阶段挂了看这里 |
 
+**审计字段铁律**：4 个审计字段（del_flag/crt_cycle_id/last_upd_cycle_id/
+dw_last_update_date）类型由标准固定（单一来源 `dws_standards.py`，评测经
+standards.py 接入）——**不管 mapping 写没写、写的什么类型**。类型≠标准或
+缺失 = 致命违规；mapping 里的审计写法在"输入类型断言"和"覆盖多出"检查中
+一律豁免（mapping 不是审计字段的依据）。
+
 **命名贯通规则**：`案例目录名 = 资产表名`（三层产出按它定位）；输入文件按后缀发现
 （目录里唯一的 xlsx/xls = mapping，唯一的 md/txt = RS 可选；评测自己的 yaml/json 不干扰）。
 
@@ -63,7 +69,7 @@ python3 eval-suite/v2/history.py --case X    # 或 --all
 | 层 | 判什么 | 归因 |
 |---|---|---|
 | 流程层 | 真实入口单步（跑没跑出东西）；重放模式逐阶段 | 脚本/契约/案例数据 |
-| 产物层 | ts 结构/文件齐全/回退成对/**DDL自洽（列⊇ts/基类型/分布键/视图列/回退DROP）** | assemble_ddl（不一致即其锅） |
+| 产物层 | ts 结构/文件齐全/回退成对/**DDL自洽（列⊇ts/基类型/分布键/视图列/回退DROP）**/**审计字段标准写法** | assemble_ddl（不一致即其锅） |
 | design 质量 | business_key/规则集/load_mode 契约 + **ts类型vs mapping输入类型** + 默认检查 | designer / 脚本 |
 | code 质量 | **字段覆盖契约（SELECT⊇field_targets，零配置）** + 配置类断言 | coder |
 | golden 命中 | 八维指纹 vs 人审 golden 集合（命中任一即过） | 待人工裁决 |

@@ -24,6 +24,7 @@ from validators.base import CheckResult, CheckStatus  # type: ignore
 
 from checks_schema import DEFAULT_ARTIFACT_CHECKS
 from _paths import find_select_file, find_ts_md
+from standards import STANDARD_AUDIT_NAMES, standard_audit_type, norm_type
 import assert_sql
 from golden import parse_ddl_columns
 
@@ -80,7 +81,65 @@ def run_artifact_checks(
     # 8. DDL 自洽（零配置默认）：DDL↔ts 列/类型/分布键 + 视图列 + 回退内容
     results.extend(_check_ddl_consistency(output_dir, ts))
 
+    # 9. 审计字段标准写法（零配置）：类型必须=标准（不看 mapping），缺失=违规
+    results.extend(_check_audit_standard(output_dir, ts))
+
     return results
+
+
+def _check_audit_standard(output_dir: Path, ts: dict) -> list[CheckResult]:
+    """审计字段标准写法断言：ts 字段与 DDL 列里出现的审计字段，类型必须等于标准。
+
+    标准单一来源 dws_standards.py（经 standards.py 接入）。不管 mapping 写没写、
+    写的什么类型，审计字段类型固定——mapping 里的写法不做依据。
+    """
+    results: list[CheckResult] = []
+    bad: list[str] = []
+
+    # ts 侧：tables 字段里的审计字段
+    for tname, tdef in (ts.get("tables") or {}).items():
+        for f in tdef.get("fields", []):
+            col = (f.get("target_field") or "").lower()
+            std = standard_audit_type(col)
+            if not std:
+                continue
+            got = norm_type(f.get("field_type") or "")
+            if got and got != std:
+                bad.append(f"ts.{tname}.{col}: {got} ≠ 标准 {std}")
+
+    # DDL 侧：列里的审计字段 + 缺失检查
+    ddl_dir = output_dir / "ddl"
+    for tname in (ts.get("tables") or {}):
+        ddl_file = ddl_dir / f"create_table_{tname}.sql"
+        cols = parse_ddl_columns(ddl_file)
+        if not cols:
+            continue
+        present_audit = set(cols) & STANDARD_AUDIT_NAMES
+        missing_audit = STANDARD_AUDIT_NAMES - present_audit
+        if missing_audit:
+            bad.append(f"DDL.{tname} 缺审计字段 {sorted(missing_audit)}")
+        for col in present_audit:
+            std = standard_audit_type(col)
+            got = norm_type(cols[col])
+            if got != std:
+                bad.append(f"DDL.{tname}.{col}: {got} ≠ 标准 {std}")
+
+    if bad:
+        return [
+            CheckResult(
+                check_type="artifacts",
+                status=CheckStatus.FAIL,
+                detail=f"审计字段不合标准写法: {bad[:5]}（→ designer/assemble_ddl，"
+                       f"标准见 dws_standards.py，不看 mapping 写法）",
+            )
+        ]
+    return [
+        CheckResult(
+            check_type="artifacts",
+            status=CheckStatus.PASS,
+            detail="审计字段符合标准写法（4字段类型=标准）",
+        )
+    ]
 
 
 # ============================================================

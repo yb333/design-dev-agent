@@ -28,6 +28,8 @@ if str(_EVAL_SUITE) not in sys.path:
 
 from validators.base import CheckResult, CheckStatus  # type: ignore
 
+from standards import STANDARD_AUDIT_NAMES  # 审计字段标准写法（豁免/校验同源）
+
 # 合法 load_mode 枚举
 VALID_LOAD_MODES = {
     "truncate_table",
@@ -180,7 +182,8 @@ def _check_field_targets_cover(dec: dict, ts: dict, rs_input: dict) -> list[Chec
             actual.update(r.get("field_targets", []))
 
     missing = expected - actual
-    extra = actual - expected
+    # 审计字段由标准补充（designer 按标准加），mapping 没写不算"多出"
+    extra = actual - expected - STANDARD_AUDIT_NAMES
     if not missing and not extra:
         return [
             CheckResult(
@@ -378,6 +381,8 @@ def _check_types_match_input(ts: dict, rs_input: dict) -> list[CheckResult]:
                 actual[col] = (f.get("field_type") or "").strip()
     bad = []
     for col, want in wanted.items():
+        if col in STANDARD_AUDIT_NAMES:
+            continue  # 审计字段类型由标准定（不看 mapping 写什么），另有专项断言
         got = actual.get(col)
         if not got:
             continue
