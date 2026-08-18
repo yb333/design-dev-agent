@@ -47,16 +47,26 @@ import assert_sql  # noqa: E402
 from _paths import find_select_file, find_deliver  # noqa: E402
 
 
-def seed_case(case_dir: Path) -> str:
-    """从案例产出抽取事实，返回 checks.yaml 草稿字符串。"""
+def seed_case(case_dir: Path, deliver_override: Path | None = None) -> str:
+    """从案例产出抽取事实，返回 checks.yaml 草稿字符串。
+
+    deliver_override：--from 显式指定的产出目录（兼容任意位置/结构的产出，
+    如尚未迁到三层的旧平铺产出）。
+    """
     case_name = case_dir.name
-    # 产出目录：三层 {appid}/{schema}/{资产}（唯一约定）
-    deliver = find_deliver(DELIVER_BASE, case_name)
+    # 产出目录：三层 {appid}/{schema}/{资产}（唯一约定）；--from 可显式覆盖
+    deliver = deliver_override or find_deliver(DELIVER_BASE, case_name)
+    if not deliver:
+        return (
+            f"# 错误: 未找到 {case_name} 的产出 "
+            f"(10_project_deliver/{{appid}}/{{schema}}/{case_name}/ddlc_design_dev)\n"
+            f"# 先跑真实入口生成产出；或用 --from 显式指定产出目录路径"
+        )
     ts_path = deliver / "ts.json"
     rs_input_path = deliver / "_internal" / "rs_input.json"
 
     if not ts_path.exists():
-        return f"# 错误: {ts_path} 不存在，请先跑流水线再 seed"
+        return f"# 错误: {ts_path} 不存在，请先跑流水线再 seed（或检查 --from 路径）"
 
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
     rs_input = {}
@@ -195,6 +205,8 @@ def main() -> int:
         default="",
         help="用例目录（默认 eval-suite/cases/；真实用例用 eval-suite/cases_real/）",
     )
+    parser.add_argument("--from", dest="deliver_from", default="",
+                        help="产出目录显式路径（三层找不到时指定，如旧的平铺产出位置）")
     args = parser.parse_args()
 
     # 用例目录（默认 cases/，可指向 cases_real/）
@@ -205,7 +217,8 @@ def main() -> int:
         print(f"用例不存在: {args.case}（在 {cases_dir} 和 {DELIVER_BASE} 都没找到）", file=sys.stderr)
         return 1
 
-    draft = seed_case(case_dir)
+    deliver_override = Path(args.deliver_from) if args.deliver_from else None
+    draft = seed_case(case_dir, deliver_override)
 
     if args.review:
         out = case_dir / "checks.seeded.yaml"

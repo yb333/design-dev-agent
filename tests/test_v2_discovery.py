@@ -141,3 +141,40 @@ class TestResolveCaseDir:
         monkeypatch.setattr(seed, "DELIVER_BASE", tmp_path / "nodir")
         monkeypatch.setattr(seed, "CASES_REAL_DIR", tmp_path / "cases_real")
         assert seed._resolve_case_dir("nope", tmp_path) is None
+
+
+class TestSeedCaseDeliverNone:
+    """回归：三层下找不到产出时 seed 不得崩溃（原 None / "ts.json" 报错）。"""
+
+    def test_returns_error_string_not_crash(self, tmp_path, monkeypatch):
+        import seed as seed_mod
+
+        monkeypatch.setattr(seed_mod, "DELIVER_BASE", tmp_path)  # 无任何产出
+        case = tmp_path / "cases_real" / "分类" / "dwb_x"
+        case.mkdir(parents=True)
+        draft = seed_mod.seed_case(case)
+        assert draft.startswith("# 错误")
+        assert "未找到" in draft and "--from" in draft
+
+    def test_from_override_seeds_flat_deliver(self, tmp_path, monkeypatch):
+        """--from 指向任意产出目录（如旧平铺）可直接抽草稿。"""
+        import json as j
+        import seed as seed_mod
+
+        monkeypatch.setattr(seed_mod, "DELIVER_BASE", tmp_path)  # 三层扫描必空
+        deliver = tmp_path / "old_flat" / "dwb_x" / "ddlc_design_dev"
+        (deliver / "_internal").mkdir(parents=True)
+        (deliver / "etl").mkdir()
+        (deliver / "ts.json").write_text(j.dumps({
+            "design": {"business_key": ["shop_id"]},
+            "rules": {"R0001": {"load_mode": "truncate_table"}},
+        }), encoding="utf-8")
+        (deliver / "etl" / "R0001.sql").write_text(
+            "SELECT a.shop_id AS shop_id FROM ods.t a", encoding="utf-8")
+        (deliver / "_internal" / "design_decisions.yaml").write_text(
+            "rules:\n- rule_code: R0001\n  field_targets: [shop_id]\n", encoding="utf-8")
+
+        case = tmp_path / "cases_real" / "分类" / "dwb_x"
+        case.mkdir(parents=True)
+        draft = seed_mod.seed_case(case, deliver_override=deliver)
+        assert "business_key" in draft and "R0001" in draft
