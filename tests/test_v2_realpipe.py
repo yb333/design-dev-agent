@@ -315,3 +315,55 @@ class TestStageTracker:
         t.feed("totally unrecognized output\n")
         times, loops = t.finish()
         assert times == {} and loops == {}
+
+
+class TestParallelGroupStages:
+    """编码段并行组（new-pipe 4a/4b/4c）：DDL/DQ/规则编码共存不互吞。"""
+
+    def test_parallel_window_display(self):
+        t = real_pipe._StageTracker()
+        t.feed("python dispatch_plan.py --ts ts.json\n")
+        assert t.stage_text() == "执行计划"
+        t.feed("python assemble_ddl.py --ts ts.json\n")       # 4a 先出
+        assert t.stage_text() == "DDL生成"
+        t.feed("Task(subagent_type='dws-coder' R0001)\n")      # 4b 并行加入
+        assert "规则编码" in t.stage_text() and "DDL生成" in t.stage_text()
+        assert "(并行)" in t.stage_text()
+        t.feed("产出 DQ SQL 到 /x/dq/\n")                       # 4c 也加入
+        text = t.stage_text()
+        assert "DQ生成" in text and "规则编码" in text and "DDL生成" in text
+        # 顺序按流水线序
+        assert text.index("DDL生成") < text.index("DQ生成") < text.index("规则编码")
+
+    def test_serial_stage_closes_parallel_window(self):
+        t = real_pipe._StageTracker()
+        t.feed("assemble_ddl.py\n")
+        t.feed("dws-coder R0001\n")
+        t.feed("python check_db.py\n")  # UT探活=串行阶段，关掉并行组
+        assert t.stage_text() == "UT探活"
+
+    def test_parallel_durations_overlap_ok(self):
+        """并行段各阶段各算各的活跃窗口（真并行，允许总和>墙钟）。"""
+        import time as _t
+        t = real_pipe._StageTracker()
+        t.feed("assemble_ddl.py\n")          # DDL t0
+        _t.sleep(0.03)
+        t.feed("dws-coder R0001\n")          # coder t0=+0.03
+        _t.sleep(0.06)
+        t.feed("python check_db.py\n")       # t=0.09 关组：DDL 0.09, coder 0.06
+        _t.sleep(0.01)
+        times, _ = t.finish()
+        assert abs(times["DDL生成"] - times["规则编码"] - 0.03) < 0.02
+
+    def test_loop_back_after_parallel_closed(self):
+        """UT后回coder：并行组清空后再到达=回路计数。"""
+        t = real_pipe._StageTracker()
+        t.feed("dws-coder R0001\n")
+        t.feed("python ut_execute.py\n")
+        t.feed("dws-coder 修复R0001\n")
+        assert "第2次·回路" in t.stage_text()
+
+    def test_dq_anchor(self):
+        t = real_pipe._StageTracker()
+        t.feed("dq_rules 非空，调 dws-coder 产出 DQ SQL 到 deliver/dq/\n")
+        assert "DQ生成" in t.stage_text()

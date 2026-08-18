@@ -161,7 +161,8 @@ _STREAM_ANCHORS: list[tuple["re.Pattern[str]", str]] = [
     (re.compile(r"gate_summary\.py"), "闸口①摘要"),
     (re.compile(r"dispatch_plan\.py"), "执行计划"),
     (re.compile(r"assemble_ddl\.py"), "DDL生成"),
-    (re.compile(r"dws-coder"), "规则编码"),
+    (re.compile(r"dq_rules|/dq/|DQ SQL"), "DQ生成"),
+    (re.compile(r"dws-coder|etl/R\d{4}"), "规则编码"),
     (re.compile(r"check_db\.py|DB_OK|NO_DB_SOURCE"), "UT探活"),
     (re.compile(r"ut_precheck\.py|ut_execute\.py|run_ut_check"), "UT执行"),
     (re.compile(r"assemble_export\.py"), "制品打包"),
@@ -171,31 +172,52 @@ _STREAM_ANCHORS: list[tuple["re.Pattern[str]", str]] = [
     (re.compile(r"resolve_appid|preprocess\.py"), "预处理"),
 ]
 
+# 编码段并行组（new-pipe 4a/4b/4c 同消息并行发起）：组内共存不互斥，
+# 组员到达只清掉组外的旧阶段。串行阶段到达则清空整组开启新段。
+_PARALLEL_GROUP = {"DDL生成", "DQ生成", "规则编码"}
+
+# 展示排序（流水线顺序）
+_STAGE_ORDER = ["预处理", "预检", "类型风险决策", "设计", "TS组装", "闸口①摘要",
+                "执行计划", "DDL生成", "DQ生成", "规则编码", "UT探活", "UT执行", "制品打包"]
+_STAGE_RANK = {st: i for i, st in enumerate(_STAGE_ORDER)}
+
 
 class _StageTracker:
-    """输出流阶段状态机：锚点匹配推进阶段；同阶段再现 = 执行回路。
+    """输出流阶段状态机（并行组模型）。
 
-    阶段耗时按事件时间线归算：每阶段各次出现区段求和（回路第二轮的耗时
-    归入该阶段），finish 返回 ({阶段: 总秒}, {阶段: 出现次数})。
+    - 串行阶段到达 → 关闭当前活动集（各阶段累计各自活跃区段），开启新段
+    - 并行组（DDL/DQ/规则编码）到达 → 加入活动集与组内共存，只清组外旧阶段
+      —— 对应 new-pipe 4a/4b/4c 同消息并行发起的真实形态
+    - 回路：阶段清空后再次到达 → 出现次数+1（UT挂回coder天然可见）
+    - 耗时：并行段内各阶段各算各的活跃窗口（真并行，允许总和>墙钟）
     """
 
     def __init__(self, fallback: "_StageWatcher | None" = None):
         self._fallback = fallback
         self._start = time.monotonic()
-        self._cur: str | None = None
-        self._t_cur = self._start
+        self._active: dict[str, float] = {}  # 阶段 → 本段进入时间
         self._counts: dict[str, int] = {}
-        self._segments: list[tuple[str, float, float]] = []  # (阶段, 起, 止)
+        self._totals: dict[str, float] = {}
 
     def feed(self, line: str) -> None:
         stage = self._match(line)
-        if stage is None or stage == self._cur:
+        if stage is None:
             return
         now = time.monotonic()
-        if self._cur is not None:
-            self._segments.append((self._cur, self._t_cur, now))
+        if stage in self._active:
+            return  # 已在活动集（并行组内重复行）
+        if stage in _PARALLEL_GROUP:
+            # 只清组外旧阶段，组内共存
+            for st in [k for k in self._active if k not in _PARALLEL_GROUP]:
+                self._close_stage(st, now)
+        else:
+            for st in list(self._active):
+                self._close_stage(st, now)
+        self._active[stage] = now
         self._counts[stage] = self._counts.get(stage, 0) + 1
-        self._cur, self._t_cur = stage, now
+
+    def _close_stage(self, stage: str, now: float) -> None:
+        self._totals[stage] = self._totals.get(stage, 0.0) + (now - self._active.pop(stage))
 
     @staticmethod
     def _match(line: str) -> str | None:
@@ -204,23 +226,26 @@ class _StageTracker:
                 return stage
         return None
 
+    def _stage_label(self, stage: str) -> str:
+        occ = self._counts.get(stage, 1)
+        label = stage + (f"(第{occ}次·回路)" if occ > 1 else "")
+        if stage == "规则编码" and self._fallback is not None and self._fallback._etl_count:
+            label += f"({self._fallback._etl_count}个SQL)"
+        return label
+
     def stage_text(self) -> str:
-        if self._cur is None:
+        if not self._active:
             return self._fallback.stage_text() if self._fallback else "启动中"
-        occ = self._counts.get(self._cur, 1)
-        suffix = f"(第{occ}次·回路)" if occ > 1 else ""
-        if self._cur == "规则编码" and self._fallback is not None and self._fallback._etl_count:
-            suffix += f"({self._fallback._etl_count}个SQL)"
-        return f"{self._cur}{suffix}"
+        labels = [self._stage_label(st) for st in sorted(self._active, key=_STAGE_RANK.get)]
+        if len(labels) > 1:
+            return "+".join(labels) + "(并行)"
+        return labels[0]
 
     def finish(self) -> tuple[dict[str, float], dict[str, int]]:
         now = time.monotonic()
-        if self._cur is not None:
-            self._segments.append((self._cur, self._t_cur, now))
-        raw: dict[str, float] = {}
-        for stage, t0, t1 in self._segments:
-            raw[stage] = raw.get(stage, 0.0) + (t1 - t0)
-        times = {k: round(v, 2) for k, v in raw.items()}  # 先累加后统一round，防舍入滚雪球
+        for st in list(self._active):
+            self._close_stage(st, now)
+        times = {k: round(v, 2) for k, v in self._totals.items()}
         if not times and self._fallback is not None:
             # 流锚点全程失明（输出格式变化/包壳吞输出）→ 兜底观察器
             return self._fallback.finish(), {}
