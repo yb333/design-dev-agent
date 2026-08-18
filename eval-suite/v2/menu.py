@@ -27,6 +27,13 @@ DELIVER_BASE = ROOT / "10_project_deliver"
 
 SEP = "═" * 56
 
+
+def baseline_results_dir() -> Path:
+    """评测快照根目录（history 分析用）。"""
+    import baseline
+
+    return baseline.RESULTS_DIR
+
 # 产出扫描（平铺/三层兼容）来自公共定位模块
 if str(V2_DIR) not in sys.path:
     sys.path.insert(0, str(V2_DIR))
@@ -214,12 +221,34 @@ def main() -> int:
             ("生成断言草稿 (seed)", "从已跑通的产出抽取事实，生成 checks.yaml 草稿"),
             ("稳定性测试", "同一案例连跑 N 次，出断言级稳定/摇摆 + golden 命中分布报告"),
             ("沉淀 golden", "把实际调测中认可的产出手工拷进案例 golden/（纯拷贝，决定在人）"),
+            ("历史分析", "跨轮趋势（分数/阶段耗时早期vs晚期/回路）+ 跨案例总览"),
             ("退出", ""),
         ])
-        action = _ask_choice("做什么", 6)
-        if action == 6:
+        action = _ask_choice("做什么", 7)
+        if action == 7:
             print("再见 👋")
             return 0
+        if action == 6:
+            _print_menu("历史分析", [
+                ("单案例全量历史", "轮次明细/分数趋势/阶段耗时早期vs晚期/回路统计"),
+                ("跨案例总览", "所有案例的平均分/耗时/回路率对比"),
+            ])
+            h = _ask_choice("看哪个", 2)
+            if h == 2:
+                _run(["history.py", "--all"])
+            else:
+                cases = sorted(
+                    d.name for d in baseline_results_dir().iterdir()
+                    if d.is_dir()) if baseline_results_dir().exists() else []
+                if not cases:
+                    print("\n  ⚠️ results/ 下无快照（先跑评测）")
+                    input("  按回车继续...")
+                    continue
+                _print_menu("选择案例", [(c, "") for c in cases])
+                ci = _ask_choice("选哪个", len(cases))
+                _run(["history.py", "--case", cases[ci - 1]])
+            input("\n  按回车返回菜单...")
+            continue
 
         # 选用例来源
         is_real = _pick_source()

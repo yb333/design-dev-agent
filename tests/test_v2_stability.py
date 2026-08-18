@@ -148,3 +148,54 @@ class TestLoopStats:
         assert "规则编码 回路: 1/1 轮" in report
         # UT执行 只出现1次不算回路
         assert "UT执行 回路" not in report
+
+
+class TestHistoryAnalysis:
+    """历史分析：跨轮趋势 + 跨案例总览。"""
+
+    def _snap_with(self, ts, score, stage_times, loops=None):
+        return {
+            "case_name": "t", "timestamp": ts, "git_sha": "x",
+            "layer_stats": {}, "pipeline_steps": [], "checks": [],
+            "score": score, "stage_times": stage_times,
+            "stage_loops": loops or {},
+        }
+
+    def test_case_history_trends(self, tmp_path, monkeypatch):
+        import history
+
+        monkeypatch.setattr(baseline, "RESULTS_DIR", tmp_path)
+        # 4轮：设计从400s降到200s，第3轮有回路
+        rounds = [
+            ("2026-08-15T10:00:00", 90, {"预处理": 10, "设计": 400}),
+            ("2026-08-15T11:00:00", 92, {"预处理": 10, "设计": 350}),
+            ("2026-08-15T12:00:00", 60, {"预处理": 10, "设计": 300, "规则编码": 100},
+             {"规则编码": 2}),
+            ("2026-08-15T13:00:00", 95, {"预处理": 10, "设计": 200}),
+        ]
+        for ts, score, st, *loops in rounds:
+            d = tmp_path / "t" / ts.replace(":", "-")
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "result.json").write_text(json.dumps(
+                self._snap_with(ts, score, st, loops[0] if loops else None),
+                ensure_ascii=False), encoding="utf-8")
+        out = history.render_case_history("t")
+        assert "4 轮" in out
+        assert "分数" in out and "92" in out
+        assert "早期" in out and "晚期" in out and "↓变快" in out  # 设计变快了
+        assert "规则编码: 共 1 次回路" in out
+        assert "最耗时阶段: 设计" in out
+
+    def test_all_cases_overview(self, tmp_path, monkeypatch):
+        import history
+
+        monkeypatch.setattr(baseline, "RESULTS_DIR", tmp_path)
+        for case, score in [("ca", 90), ("cb", 70)]:
+            d = tmp_path / case / "2026-08-15T10-00-00"
+            d.mkdir(parents=True)
+            (d / "result.json").write_text(json.dumps(
+                self._snap_with("2026-08-15T10:00:00", score, {"预处理": 10}),
+                ensure_ascii=False), encoding="utf-8")
+        out = history.render_all_cases()
+        assert "跨案例总览" in out and "ca" in out and "cb" in out
+        assert "90" in out and "70" in out

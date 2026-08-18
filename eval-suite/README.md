@@ -102,7 +102,23 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
   `未命中 1/10` = 越界轮，待裁决
 - **流程阶段稳定性**：某阶段偶发挂（如 precheck 9/10）也是摇摆信号
 
-## 七、其他约定
+## 七、数据持久化与历史分析
+
+**每轮评测自动存档**：`eval-suite/results/{case}/{时间戳}/result.json`——含
+timestamp / git_sha / **score** / **deductions** / **stage_times（各阶段耗时）** /
+**stage_loops（回路次数）** / checks（逐断言）/ pipeline_steps。数据在本机累积
+（gitignore），跑得越多分析越准。`--repeat` 的稳定性报告也落盘为同目录
+`stability_report.md`。
+
+**历史分析**（menu[6] 或 CLI）：
+```bash
+python3 eval-suite/v2/history.py --case dwb_x   # 单案例全量历史：
+                                                #   轮次明细/分数趋势/阶段耗时早期vs晚期/回路统计
+python3 eval-suite/v2/history.py --all          # 跨案例总览：平均分/耗时/最耗时阶段/回路率
+```
+"早期→晚期"对比直接回答优化效果（如设计阶段 400s→200s ↓变快）。
+
+## 八、其他约定
 
 - **执行方式**：默认**真实入口**（`<启动器> run --command new-pipe` + 显式非交互声明，
   编排 100% 走 commands/new-pipe.md，评测零编排拷贝）；`--replay` 为分阶段重放诊断模式。

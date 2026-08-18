@@ -323,7 +323,19 @@ def _run_repeat(
                   file=sys.stderr)
 
     snaps = stability.load_recent_snapshots(case_name, repeat)
-    print(stability.render_stability(case_name, snaps))
+    report = stability.render_stability(case_name, snaps)
+    print(report)
+    # 报告落盘（关窗口可回看；随最新快照一起存档）
+    try:
+        latest = (
+            baseline.RESULTS_DIR / baseline._safe_name(case_name)
+            / snaps[-1].get("timestamp", "").replace(":", "-") if snaps else None
+        )
+        if latest and latest.exists():
+            (latest / "stability_report.md").write_text(report, encoding="utf-8")
+            print(f"[v2] 稳定性报告已存档: {latest / 'stability_report.md'}")
+    except Exception as e:
+        print(f"[v2] ⚠️ 报告落盘失败: {e}")
     # 稳定性模式是测量不是闸门：只要不是"每轮流水线都崩"就返回 0（细节看报告）
     rc = 0 if pipeline_ok_runs > 0 else 1
     return rc, f"{repeat}轮完成（{pipeline_ok_runs}轮流水线正常，详见稳定性报告）"
