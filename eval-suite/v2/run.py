@@ -39,6 +39,7 @@ from pipeline import (  # noqa: E402
     run_pipeline,
 )
 from real_pipe import DEFAULT_TIMEOUT_PIPE, run_real_pipe  # noqa: E402
+import pipeline  # noqa: E402
 from report_v2 import render_report  # noqa: E402
 from _paths import find_deliver, find_mapping_file, find_rs_file  # noqa: E402
 import baseline  # noqa: E402
@@ -269,38 +270,45 @@ def _run_repeat(
 ) -> tuple[int, str]:
     """稳定性模式：连跑 N 次，聚合稳定性报告。评测零交互，不问任何问题。"""
     pipeline_ok_runs = 0
+    crashed_rounds = 0
     for i in range(1, repeat + 1):
         print(f"\n{'=' * 60}\n  [重复 {i}/{repeat}] {case_name}（{executor}）\n{'=' * 60}")
-        if not keep_artifacts:
-            _clean_deliver(deliver)  # 每轮清场：旧产出会让 AI 复用，污染稳定性
-        deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
-        pipeline_steps = _run_pipeline_for(
-            case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
-        )
-        if executor == "real":
-            # 真实入口的产出目录由 new-pipe 自建（三层），跑完重新定位
-            deliver = find_deliver(DELIVER_BASE, case_name) or deliver
-        pipeline_failed = any(s.status.value == "fail" for s in pipeline_steps)
-        if not pipeline_failed:
-            pipeline_ok_runs += 1
+        try:
+            if not keep_artifacts:
+                _clean_deliver(deliver)  # 每轮清场：旧产出会让 AI 复用，污染稳定性
+            deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
+            pipeline_steps = _run_pipeline_for(
+                case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
+            )
+            if executor == "real":
+                # 真实入口的产出目录由 new-pipe 自建（三层），跑完重新定位
+                deliver = find_deliver(DELIVER_BASE, case_name) or deliver
+            pipeline_failed = any(s.status.value == "fail" for s in pipeline_steps)
+            if not pipeline_failed:
+                pipeline_ok_runs += 1
 
-        result = run_evaluation(deliver, config, pipeline_steps)
-        _attach_golden(result, deliver, case_dir)
+            result = run_evaluation(deliver, config, pipeline_steps)
+            _attach_golden(result, deliver, case_dir)
 
-        snapshot = baseline.snapshot_from_result(result)
-        snapshot.case_name = case_name
-        baseline.save_snapshot(snapshot)
+            snapshot = baseline.snapshot_from_result(result)
+            snapshot.case_name = case_name
+            baseline.save_snapshot(snapshot)
 
-        stats = result.summary()
-        p = sum(v["pass"] for v in stats.values())
-        f = sum(v["fail"] for v in stats.values())
-        golden_results = result.layer_results.get("golden", [])
-        gs = golden_results[0].detail.split("\n")[0] if golden_results else "无golden"
-        print(f"  ▸ 本轮: ✅{p} ❌{f}  golden: {gs}")
+            stats = result.summary()
+            p = sum(v["pass"] for v in stats.values())
+            f = sum(v["fail"] for v in stats.values())
+            golden_results = result.layer_results.get("golden", [])
+            gs = golden_results[0].detail.split("\n")[0] if golden_results else "无golden"
+            print(f"  ▸ 本轮: ✅{p} ❌{f}  golden: {gs}")
 
-        if pipeline_failed or _result_has_fail(result):
-            dest = _archive_anomalous_artifacts(case_name, snapshot, deliver)
-            print(f"  ▸ 异常轮，产出已留档: {dest}")
+            if pipeline_failed or _result_has_fail(result):
+                dest = _archive_anomalous_artifacts(case_name, snapshot, deliver)
+                print(f"  ▸ 异常轮，产出已留档: {dest}")
+        except Exception as e:  # 单轮崩只算该轮失败，不拖垮剩余轮次
+            crashed_rounds += 1
+            print(f"  ❌ 第 {i} 轮异常: {type(e).__name__}: {e}", file=sys.stderr)
+            print("    排查：--verbose 重跑看实时输出；产物 _internal/diagnose/ 有各阶段全文",
+                  file=sys.stderr)
 
     snaps = stability.load_recent_snapshots(case_name, repeat)
     print(stability.render_stability(case_name, snaps))
@@ -412,6 +420,9 @@ def main() -> int:
                         help=f"重放模式 AI 阶段超时秒数（默认 {DEFAULT_TIMEOUT_AI}）")
     parser.add_argument("--timeout-script", type=int, default=DEFAULT_TIMEOUT_SCRIPT,
                         help=f"重放模式脚本阶段超时秒数（默认 {DEFAULT_TIMEOUT_SCRIPT}）")
+    parser.add_argument("--verbose", action="store_true",
+                        help="实时流式打印子进程全量输出（默认安静：关键节点+旋转动画，"
+                             "全文静默进 log，失败才展示尾部）")
     parser.add_argument("--keep-artifacts", action="store_true",
                         help="跑前不清空该资产旧产出（默认清空防 AI 复用旧结果；"
                              "留给迭代/优化场景复用旧产出的钩子）")
@@ -425,6 +436,8 @@ def main() -> int:
         help="用例目录（默认 eval-suite/cases/；内网真实用例用 eval-suite/cases_real/）",
     )
     args = parser.parse_args()
+
+    pipeline.set_verbose(args.verbose)
 
     if args.opencode:
         os.environ["EVAL_OPENCODE"] = args.opencode
@@ -442,15 +455,21 @@ def main() -> int:
         failures: list[tuple[str, str]] = []
         for case_dir in cases:
             print(f"\n{'=' * 60}\n  {case_dir.name}\n{'=' * 60}")
-            rc, line = run_one_case(
-                case_dir, args.eval_only, args.skip_ai,
-                repeat=args.repeat,
-                replay=args.replay,
-                timeout_ai=args.timeout_ai,
-                timeout_script=args.timeout_script,
-                timeout_pipe=args.timeout_pipe,
-                keep_artifacts=args.keep_artifacts,
-            )
+            try:
+                rc, line = run_one_case(
+                    case_dir, args.eval_only, args.skip_ai,
+                    repeat=args.repeat,
+                    replay=args.replay,
+                    timeout_ai=args.timeout_ai,
+                    timeout_script=args.timeout_script,
+                    timeout_pipe=args.timeout_pipe,
+                    keep_artifacts=args.keep_artifacts,
+                )
+            except Exception as e:  # 单案例崩只标记失败，批次继续
+                rc, line = 1, f"异常 {type(e).__name__}: {str(e)[:80]}"
+                print(f"[v2] ❌ {case_dir.name} 异常: {e}", file=sys.stderr)
+                print("    排查：--verbose 重跑看实时输出；产物 _internal/diagnose/ 有各阶段全文",
+                      file=sys.stderr)
             exit_code = exit_code or rc
             if rc:
                 failures.append((case_dir.name, line))
@@ -470,15 +489,21 @@ def main() -> int:
         print(f"[v2] ❌ 用例不存在: {args.case}（在 {cases_dir} 找不到）", file=sys.stderr)
         return 1
 
-    rc, _ = run_one_case(
-        case_dir, args.eval_only, args.skip_ai,
-        repeat=args.repeat,
-        replay=args.replay,
-        timeout_ai=args.timeout_ai,
-        timeout_script=args.timeout_script,
-        timeout_pipe=args.timeout_pipe,
-        keep_artifacts=args.keep_artifacts,
-    )
+    try:
+        rc, _ = run_one_case(
+            case_dir, args.eval_only, args.skip_ai,
+            repeat=args.repeat,
+            replay=args.replay,
+            timeout_ai=args.timeout_ai,
+            timeout_script=args.timeout_script,
+            timeout_pipe=args.timeout_pipe,
+            keep_artifacts=args.keep_artifacts,
+        )
+    except Exception as e:  # 干净报错替代裸 traceback 退出
+        print(f"[v2] ❌ {case_dir.name} 异常: {type(e).__name__}: {e}", file=sys.stderr)
+        print("    排查：--verbose 重跑看实时输出；产物 _internal/diagnose/ 有各阶段全文",
+              file=sys.stderr)
+        return 1
     return rc
 
 

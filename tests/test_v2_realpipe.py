@@ -111,7 +111,7 @@ class TestRunRealPipe:
 
         calls = {}
 
-        def fake_stream(cmd, timeout, cwd=None):
+        def fake_stream(cmd, timeout, cwd=None, label=""):
             calls["cmd"] = cmd
             return 0, ""
 
@@ -134,7 +134,7 @@ class TestRunRealPipe:
     def test_fail_step_when_no_artifacts(self, tmp_path, monkeypatch):
         (tmp_path / "dwb_x").mkdir(exist_ok=True)
         (tmp_path / "dwb_x" / "mapping.xlsx").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None: (0, "ran ok"))
+        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="": (0, "ran ok"))
         monkeypatch.setattr(real_pipe, "find_deliver", lambda base, name: None)
         case_dir = tmp_path / "dwb_x"
         steps = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)

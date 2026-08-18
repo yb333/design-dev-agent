@@ -97,6 +97,11 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
   appid（schema_apps.json）推导三层路径；平铺老结构不再识别。
 - **超时**：真实流程默认 3600s（`--timeout-pipe`）；重放模式 AI 1800s/脚本 120s
   （`--timeout-ai`/`--timeout-script`）。超时 kill 该阶段标记失败，**不拖垮整轮**。
+- **输出模式**：默认**安静**——只打关键节点（`$ 命令回显`/`▶ 阶段横幅`/`✅❌ 结果`），
+  执行中显示旋转动画（`⠋ new-pipe 真实流程 32s…`，仅终端）；子进程全文静默进
+  log，失败才展示尾部+全文路径。`--verbose` 切实时全量输出（调试用）。
+- **崩溃隔离**：单案例异常只标记该案例失败（`--all` 批次继续）；`--repeat` 单轮
+  崩只算该轮失败（剩余轮继续）；不再一崩整轮退出。
 - **失败排查**：报告失败详情带输出尾部（traceback 崩溃行）+ 全文 log 路径。
 - **WinError 2（Windows 找不到启动器）**：npm 全局装的 opencode 是 opencode.cmd，
   Python Popen 不按 PATHEXT 解析 → 已内置 `shutil.which` 解析（nga/opencode 同理）；

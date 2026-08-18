@@ -9,6 +9,7 @@ _V2_DIR = Path(__file__).resolve().parent.parent / "eval-suite" / "v2"
 if str(_V2_DIR) not in sys.path:
     sys.path.insert(0, str(_V2_DIR))
 
+import pipeline
 from pipeline import _run_stream
 
 
@@ -52,3 +53,28 @@ class TestUtf8Passthrough:
         code, out = _run_stream([sys.executable, "-c", "print('中文输出测试✅')"], timeout=10)
         assert code == 0
         assert "中文输出测试" in out
+
+
+class TestQuietVsVerbose:
+    def test_quiet_does_not_print_child_lines(self, capsys):
+        """安静模式：子进程行不上屏（全量仍进返回值），命令回显保留。"""
+        pipeline.set_verbose(False)
+        # marker 拼接产生：只出现在子进程输出，不出现在命令回显文本里
+        _run_stream([sys.executable, "-c", "print('NO'+'ISY_MARKER')"], timeout=10, label="t")
+        out = capsys.readouterr().out
+        assert "NOISY_MARKER" not in out
+        assert "$ " in out  # 命令回显仍是关键节点
+
+    def test_verbose_prints_child_lines(self, capsys):
+        pipeline.set_verbose(True)
+        try:
+            _run_stream([sys.executable, "-c", "print('NO'+'ISY_MARKER')"], timeout=10, label="t")
+            out = capsys.readouterr().out
+            assert "NOISY_MARKER" in out
+        finally:
+            pipeline.set_verbose(False)
+
+    def test_output_returned_regardless_of_mode(self):
+        pipeline.set_verbose(False)
+        code, out = _run_stream([sys.executable, "-c", "print('PAYLOAD')"], timeout=10)
+        assert "PAYLOAD" in out  # 安静≠丢失：全文在返回值里，失败时由 _fail_detail 展示

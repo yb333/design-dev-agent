@@ -93,6 +93,7 @@ def run_real_pipe(
         code, out = _run_stream(
             opencode_cmd() + ["run", "--command", "new-pipe", message],
             timeout,
+            label="new-pipe 真实流程",
         )
         deliver = find_deliver(deliver_base, case_dir.name)
         return judge_real_run(deliver, code, out)

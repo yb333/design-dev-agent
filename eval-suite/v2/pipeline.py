@@ -50,6 +50,18 @@ SHARED_REFS = _REPO_SHARED if _REPO_SHARED.exists() else _GLOBAL_SHARED
 DEFAULT_TIMEOUT_AI = 1800
 DEFAULT_TIMEOUT_SCRIPT = 120
 
+# 输出模式：False=安静（默认，关键节点+旋转动画，子进程全文静默进 log，失败才展示尾部）；
+# True=verbose（实时流式全量上屏，调试用，--verbose 开启）
+VERBOSE = False
+
+
+def set_verbose(v: bool) -> None:
+    global VERBOSE
+    VERBOSE = v
+
+
+_SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
 # opencode 解析缓存（Windows 下 Popen 解析不到 .cmd，见 opencode_cmd）
 _OPENCODE_RESOLVED: list[str] | None = None
 
@@ -85,8 +97,15 @@ def opencode_cmd() -> list[str]:
 # ============================================================
 
 
-def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tuple[int, str]:
-    """流式运行命令：输出实时上屏 + 全量缓存；超时 kill 并标记。
+def _run_stream(
+    cmd: list[str], timeout: float, cwd: Path | None = None, label: str = ""
+) -> tuple[int, str]:
+    """运行命令：全量缓存输出；超时 kill 并标记。
+
+    输出模式（VERBOSE）：
+    - 安静（默认）：不实时上屏，终端显示旋转动画（label+耗时，原地刷新，
+      仅 TTY；重定向时完全静默）；失败时由 _fail_detail 展示尾部+全文
+    - verbose：实时流式上屏（调试用）
 
     返回 (退出码, 合并输出)。超时返回 -1，输出尾部带 [TIMEOUT] 标记。
     读子进程输出走独立线程 + 队列，主循环按 deadline 轮询——
@@ -127,8 +146,30 @@ def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tupl
     threading.Thread(target=_reader, daemon=True).start()
 
     buf: list[str] = []
-    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    deadline = start + timeout
     timed_out = False
+    is_tty = sys.stdout.isatty()
+    spin_idx = 0
+    last_spin = start
+
+    def _spin() -> None:
+        nonlocal spin_idx, last_spin
+        if not is_tty or VERBOSE:
+            return
+        now = time.monotonic()
+        if now - last_spin >= 0.5:
+            frame = _SPIN_FRAMES[spin_idx % len(_SPIN_FRAMES)]
+            spin_idx += 1
+            sys.stdout.write(f"\r    {frame} {label or '执行中'} {int(now - start)}s…")
+            sys.stdout.flush()
+            last_spin = now
+
+    def _spin_end() -> None:
+        if is_tty and not VERBOSE:
+            sys.stdout.write("\r" + " " * 60 + "\r")
+            sys.stdout.flush()
+
     while True:
         try:
             item = q.get(timeout=0.5)
@@ -137,12 +178,17 @@ def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tupl
                 timed_out = True
                 proc.kill()
                 break
+            _spin()
             continue
         if item is None:
             break
         buf.append(item)
-        print("    " + item, end="", flush=True)  # 缩进区分子进程输出
+        if VERBOSE:
+            print("    " + item, end="", flush=True)  # 缩进区分子进程输出
+        else:
+            _spin()
 
+    _spin_end()
     if timed_out:
         try:
             proc.wait(timeout=5)
@@ -163,7 +209,7 @@ def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tupl
 
 def _run_python(script: str, args: list[str], timeout: float) -> tuple[int, str]:
     """运行 Python 脚本（当前解释器），返回 (退出码, 合并输出)。"""
-    return _run_stream([sys.executable, script] + args, timeout)
+    return _run_stream([sys.executable, script] + args, timeout, label=Path(script).stem)
 
 
 def _fail_detail(step: str, deliver: Path, out: str) -> str:
@@ -243,7 +289,8 @@ def _designer(deliver: Path, skip_ai: bool, timeout: float) -> tuple[bool, str]:
         f"--outdir {abs_deliver} 组装 ts.json + ts.md。"
     )
     _, out = _run_stream(
-        opencode_cmd() + ["run", "--agent", "dws-designer", "--format", "json", prompt], timeout
+        opencode_cmd() + ["run", "--agent", "dws-designer", "--format", "json", prompt], timeout,
+        label="designer",
     )
 
     ts_json = deliver / "ts.json"
@@ -266,7 +313,8 @@ def _coder(deliver: Path, rule_code: str, skip_ai: bool, timeout: float) -> tupl
     prompt = f"ts.json 路径: {abs_ts}，编码规则: {rule_code}，产出 SELECT 到 {abs_etl}/{rule_code}.sql"
 
     _, out = _run_stream(
-        opencode_cmd() + ["run", "--agent", "dws-coder", "--format", "json", prompt], timeout
+        opencode_cmd() + ["run", "--agent", "dws-coder", "--format", "json", prompt], timeout,
+        label=f"coder({rule_code})",
     )
 
     # 确定性文件名（不用 glob）；带后缀命名由评测层 find_select_file 兼容
