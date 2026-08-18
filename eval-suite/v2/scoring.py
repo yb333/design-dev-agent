@@ -1,20 +1,11 @@
-"""扣分制评分：命中 golden = 100 分基准，按差异/断言失败扣分。
+"""两级评分：致命项（及格门）+ 非致命项（只扣分）。
 
-哲学（讨论定稿）：golden = 标准，命中是义务，不命中 = 发现问题 = 扣分。
-不做归一化遮丑；分数是跨轮可比的刻度（baseline 存分数，稳定性报告看趋势）。
+及格标准（用户定义）：结果准确、不影响交付——加工逻辑没错、字段全、
+类型满足输入要求。及格 = 致命项零失败（不是分数阈值）；非致命项
+（结构漂移/常量/精度）只扣分做趋势，不拦及格。
 
-分类映射（谁失败/差什么 → 扣哪类分）：
-- design 契约（business_key/规则集/load_mode）           → design_contract   -20
-- 自洽性（DDL≠ts / SELECT漏字段 / 回退缺DROP / 视图列）    → self_consistency  -15
-- 字段口径（SUM vs 裸列 / 引用错列 / 常量变值）           → field_caliber     -10
-- 结构标准（表结构/数据流/命名/JOIN/GROUP_BY/field_targets）→ structure_std     -5
-- 流程阶段挂                                              → pipeline_stage    -10
-- 其他产物层断言                                          → artifact          -8
-- 其他 design 层断言                                      → design_default    -6
-- 其他 code 层断言                                        → code_default      -6
-
-权重可用 checks.yaml 的 scoring: 段按案例覆盖（只写要改的键）。
-无 golden 案例：不产生 golden 扣分项，其余照扣（断言层加权得分）。
+根因去重：同一根因只扣一次——契约断言已扣过的维度，golden 的同维度
+差异只在报告展示证据，不重复计分。
 """
 
 from __future__ import annotations
@@ -28,50 +19,72 @@ if str(_V2_DIR) not in sys.path:
     sys.path.insert(0, str(_V2_DIR))
 
 DEFAULT_WEIGHTS: dict[str, int] = {
-    "design_contract": 20,
-    "self_consistency": 15,
-    "field_caliber": 10,
-    "structure_std": 5,
-    "pipeline_stage": 10,
-    "artifact": 8,
-    "design_default": 6,
-    "code_default": 6,
+    "fatal": 20,          # 致命项单项（任一失败即不及格）
+    "structure_std": 5,   # 表结构/命名/数据流/GROUP_BY/JOIN 漂移
+    "caliber_const": 2,   # 口径常量差异（写法差异，人裁决）
+    "type_precision": 2,  # 类型精度差异（基类型满足输入要求即可）
+    "artifact": 8,        # 其他产物层断言失败
+    "design_default": 6,  # 其他 design 层断言失败
+    "code_default": 6,    # 其他 code 层断言失败
 }
 
-# design 层 detail 关键词 → 契约类（重）；其余 design 失败 → design_default
-_DESIGN_CONTRACT_KEYWORDS = ("business_key", "规则集", "load_mode 契约", "incremental")
-# code 层 detail 关键词 → 自洽类；其余 → code_default
-_CODE_CONSISTENCY_KEYWORDS = ("字段覆盖契约",)
-# artifacts 层 detail 关键词 → 自洽类；其余 → artifact
-_ARTIFACT_CONSISTENCY_KEYWORDS = ("DDL列", "DDL类型", "DISTRIBUTE", "分布键", "I视图列", "回退SQL")
-# golden 差异维度 → 分类
-_GOLDEN_DIFF_MAP = [
-    (("business_key", "规则集", "load_mode"), "design_contract"),
-    (("DDL(", "SELECT缺失", "输出字段"), "self_consistency"),
-    (("字段口径",), "field_caliber"),
+# 致命根因集合：任一出现 = 不及格
+FATAL_ROOTS = {
+    "pipeline",         # 流程没跑通
+    "field_coverage",   # 字段不全（SELECT漏字段/DDL缺列/覆盖不全）
+    "ddl_columns",      # DDL 列集合不符
+    "ddl_type",         # DDL 基类型不符
+    "type_input",       # ts 类型不符 mapping 输入要求
+    "caliber_logic",    # 加工逻辑错（口径 refs/aggs 与 golden 不一致）
+    "business_key",     # 主键契约错（粒度错）
+    "load_mode",        # 写入模式契约错（清历史事故级）
+    "rules",            # 规则集契约错
+    "view_cols",        # I 视图缺列（交付物不完整）
+}
+
+# 断言失败 detail 关键词 → 根因（未命中的按层归 default）
+_ASSERTION_ROOTS = [
+    (("design", "business_key"), "business_key"),
+    (("design", "规则集"), "rules"),
+    (("design", "load_mode 契约"), "load_mode"),
+    (("design", "类型不符输入要求"), "type_input"),
+    (("artifacts", "DDL列"), "ddl_columns"),
+    (("artifacts", "DDL类型"), "ddl_type"),
+    (("artifacts", "I视图列"), "view_cols"),
+    (("code", "字段覆盖契约"), "field_coverage"),
+]
+
+# golden 差异 → 根因
+_GOLDEN_ROOTS = [
+    (("business_key",), "business_key"),
+    (("规则集",), "rules"),
+    (("load_mode",), "load_mode"),
+    (("DDL(列)",), "ddl_columns"),
+    (("DDL(基类型)",), "ddl_type"),
+    (("DDL(类型精度)",), "type_precision"),
+    (("SELECT缺失", "输出字段"), "field_coverage"),
+    (("口径逻辑",), "caliber_logic"),
+    (("口径常量",), "caliber_const"),
     (("表结构", "规则数据流", "field_targets", "GROUP_BY", "JOIN表"), "structure_std"),
 ]
 
 
-def _classify_check(layer: str, detail: str) -> str:
-    """把一条失败断言归入扣分类别。"""
-    if layer == "pipeline":
-        return "pipeline_stage"
-    if layer == "design":
-        return "design_contract" if any(k in detail for k in _DESIGN_CONTRACT_KEYWORDS) else "design_default"
-    if layer == "code":
-        return "self_consistency" if any(k in detail for k in _CODE_CONSISTENCY_KEYWORDS) else "code_default"
-    if layer == "artifacts":
-        return "self_consistency" if any(k in detail for k in _ARTIFACT_CONSISTENCY_KEYWORDS) else "artifact"
-    return "artifact"
+def _root_of_assertion(layer: str, detail: str) -> tuple[str, str]:
+    """断言失败 → (根因, 扣分类别)。根因在 FATAL_ROOTS → 类别 fatal。"""
+    for (ly, kw), root in _ASSERTION_ROOTS:
+        if layer == ly and kw in detail:
+            return root, "fatal" if root in FATAL_ROOTS else "structure_std"
+    return f"{layer}_default", {
+        "pipeline": "fatal", "artifacts": "artifact",
+        "design": "design_default", "code": "code_default",
+    }.get(layer, "artifact")
 
 
-def classify_golden_diff(diff: str) -> str:
-    """把 golden compare 的一个差异维度归入扣分类别。"""
-    for keywords, cat in _GOLDEN_DIFF_MAP:
-        if any(k in diff for k in keywords):
-            return cat
-    return "structure_std"
+def _root_of_golden_diff(diff: str) -> tuple[str, str]:
+    for kws, root in _GOLDEN_ROOTS:
+        if any(k in diff for k in kws):
+            return root, "fatal" if root in FATAL_ROOTS else root
+    return "structure_std", "structure_std"
 
 
 def score_result(
@@ -81,41 +94,42 @@ def score_result(
     weights_override: dict | None = None,
     golden_diffs: list[str] | None = None,
 ) -> dict:
-    """对一次评测结果算分。
-
-    Args:
-        result: EvalResult（含各层断言与流程步骤）。
-        deliver: 产出目录（golden 比对用）。
-        case_dir: 案例目录（golden/ 在其下）。
-        weights_override: checks.yaml scoring: 段的覆盖。
-        golden_diffs: golden 层失败的差异维度列表；None 时按需自行比对。
+    """对一次评测结果算分（两级）。
 
     Returns:
-        {"total": int, "deductions": [(类别, 扣分, 描述), ...], "has_golden": bool}
+        {"total", "deductions": [(类别, 扣分, 描述, 是否致命)],
+         "fatal": [致命描述...], "passed": bool, "has_golden": bool}
     """
     weights = dict(DEFAULT_WEIGHTS)
     if weights_override:
         weights.update({k: v for k, v in weights_override.items() if k in DEFAULT_WEIGHTS})
 
-    deductions: list[tuple[str, int, str]] = []
+    deductions: list[tuple[str, int, str, bool]] = []
+    fatal_descs: list[str] = []
+    deducted_roots: set[str] = set()
 
-    # 流程层
+    # 流程层（致命）
     for st in result.pipeline_steps or []:
         if st.status.value == "fail":
-            deductions.append(("pipeline_stage", weights["pipeline_stage"],
-                               f"流程挂: {st.step}"))
+            deductions.append(("fatal", weights["fatal"], f"流程挂: {st.step}", True))
+            fatal_descs.append(f"流程挂: {st.step}")
+            deducted_roots.add("pipeline")
 
     # 断言层
     for layer, checks in result.layer_results.items():
         if layer == "golden":
-            continue  # golden 单独算（按差异维度，不按断言条数）
+            continue
         for c in checks:
             if c.status.value != "fail":
                 continue
-            cat = _classify_check(layer, c.detail)
-            deductions.append((cat, weights[cat], c.detail.split("\n")[0][:80]))
+            root, cat = _root_of_assertion(layer, c.detail)
+            deductions.append((cat, weights[cat], c.detail.split("\n")[0][:80],
+                               root in FATAL_ROOTS))
+            if root in FATAL_ROOTS:
+                fatal_descs.append(c.detail.split("\n")[0][:60])
+            deducted_roots.add(root)
 
-    # golden 层：按差异维度逐项扣
+    # golden 层：按差异维度逐项扣；同根因已扣过（断言层）→ 只展示不重复扣
     has_golden = False
     if golden_diffs is None:
         import golden
@@ -129,25 +143,43 @@ def score_result(
     if golden_diffs:
         has_golden = True
         for d in golden_diffs:
-            cat = classify_golden_diff(d)
-            deductions.append((cat, weights[cat], f"golden差异: {d}"))
+            root, cat = _root_of_golden_diff(d)
+            if root in deducted_roots:
+                continue  # 根因去重：断言层已扣，golden 只做证据展示
+            deductions.append((cat, weights[cat], f"golden差异: {d[:80]}", root in FATAL_ROOTS))
+            if root in FATAL_ROOTS:
+                fatal_descs.append(f"golden差异: {d[:60]}")
+            deducted_roots.add(root)
 
-    total = max(0, 100 - sum(w for _, w, _ in deductions))
-    return {"total": total, "deductions": deductions, "has_golden": has_golden}
+    total = max(0, 100 - sum(w for _, w, _, _ in deductions))
+    return {
+        "total": total,
+        "deductions": deductions,
+        "fatal": fatal_descs,
+        "passed": not fatal_descs,
+        "has_golden": has_golden,
+    }
 
 
 def render_score(score: dict, prev_total: int | None = None) -> str:
     """总分块文本（嵌入评测报告）。"""
     lines = ["── 总分 ───────────────────────────────────────────"]
     prev = f"（上轮 {prev_total}）" if prev_total is not None else ""
-    lines.append(f"  {score['total']}/100{prev}  无golden（仅断言层计分）"
-                 if not score["has_golden"] else f"  {score['total']}/100{prev}")
-    if score["deductions"]:
-        lines.append("  扣分明细:")
-        for cat, w, desc in score["deductions"][:10]:
-            lines.append(f"    -{w:<3} [{cat}] {desc}")
-        if len(score["deductions"]) > 10:
-            lines.append(f"    … 其余 {len(score['deductions']) - 10} 项")
+    if score["passed"]:
+        lines.append(f"  ✔及格（交付安全）{score['total']}/100{prev}")
     else:
+        lines.append(f"  ✘不及格 {score['total']}/100{prev}  致命项:")
+        for f in score["fatal"][:6]:
+            lines.append(f"     ✘ {f}")
+        if len(score["fatal"]) > 6:
+            lines.append(f"     … 其余 {len(score['fatal']) - 6} 项")
+    if not score["has_golden"]:
+        lines.append("  ⚠️ 无golden（致命④加工逻辑无参照，仅自洽兜底，及格含金量打折）")
+    non_fatal = [d for d in score["deductions"] if not d[3]]
+    if non_fatal:
+        lines.append("  非致命扣分（不拦及格，看趋势）:")
+        for cat, w, desc, _ in non_fatal[:8]:
+            lines.append(f"    -{w:<3} [{cat}] {desc}")
+    elif not score["fatal"]:
         lines.append("  ✅ 零扣分")
     return "\n".join(lines)

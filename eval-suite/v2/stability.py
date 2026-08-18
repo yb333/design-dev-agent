@@ -117,8 +117,17 @@ def render_stability(case_name: str, snaps: list[dict]) -> str:
         if (case_dir / "artifacts").exists():
             archived = f"  [产出已留档: .../{ts_dir}/artifacts]"
         sc = snap.get("score")
-        score_part = f"  分数 {sc}" if sc is not None else ""
+        passed = snap.get("passed")
+        mark = {"True": "✔", "False": "✘", None: " "}.get(str(passed), " ")
+        score_part = f"  {mark}{sc}" if sc is not None else ""
         lines.append(f"  #{i:<2} {icon} {p}通过/{f}失败{score_part}  golden: {gs}{archived}")
+
+    # 及格率
+    passed_n = sum(1 for s in snaps if s.get("passed") is True)
+    if any(s.get("passed") is not None for s in snaps):
+        lines.append("")
+        lines.append("── 及格率 ───────────────────────────────────────────")
+        lines.append(f"  {passed_n}/{n} 轮及格（致命项零失败）")
 
     # 分数趋势
     scores = [s.get("score") for s in snaps if s.get("score") is not None]

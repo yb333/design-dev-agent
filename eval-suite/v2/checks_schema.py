@@ -27,6 +27,7 @@ ARTIFACTS_KEYS = {
 }
 DESIGN_KEYS = {
     "business_key",
+    "types_match_input",
     "field_targets_cover_rs_input",
     "field_targets_no_cross_rule_dup",
     "load_mode_valid",
@@ -37,11 +38,10 @@ DESIGN_KEYS = {
     "load_mode_expected",
 }
 SCORING_KEYS = {  # 扣分类别（scoring.py DEFAULT_WEIGHTS 的键），值=该类单项扣分
-    "design_contract",
-    "self_consistency",
-    "field_caliber",
+    "fatal",  # 致命项单项扣分（任一致命失败即不及格）
     "structure_std",
-    "pipeline_stage",
+    "caliber_const",
+    "type_precision",
     "artifact",
     "design_default",
     "code_default",

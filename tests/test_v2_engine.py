@@ -388,3 +388,29 @@ class TestFieldCoverageContract:
         _write_select(tmp_path, "R0001", "SELECT 1 AS x")
         r = assert_sql.run_code_checks(tmp_path, None, ts=ts)
         assert not any("字段覆盖契约" in x.detail for x in r)
+
+
+class TestTypesMatchInput:
+    """致命③：ts 字段基类型 vs mapping 输入类型。"""
+
+    def _ts_with_type(self, field_type):
+        return {
+            "design": {"business_key": ["id"], "audit_fields": {},
+                       "complexity_analysis": {}},
+            "rules": {},
+            "tables": {"t_f": {"fields": [{"target_field": "amt", "field_type": field_type}]}},
+        }
+
+    def test_base_match_passes(self, tmp_path):
+        ts = self._ts_with_type("decimal(18,2)")
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        rs = {"field_mappings": [{"target_column": "amt", "target_type": "decimal(10,4)"}]}
+        r = assert_design.run_design_checks(tmp_path, {}, rs)
+        assert any("类型符合输入要求" in x.detail for x in r)
+
+    def test_base_mismatch_fails(self, tmp_path):
+        ts = self._ts_with_type("int")
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        rs = {"field_mappings": [{"target_column": "amt", "target_type": "decimal(18,2)"}]}
+        r = assert_design.run_design_checks(tmp_path, {}, rs)
+        assert any("类型不符输入要求" in x.detail for x in r)

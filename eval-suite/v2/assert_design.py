@@ -108,6 +108,10 @@ def run_design_checks(
     if "load_mode_expected" in cfg:
         results.extend(_check_load_mode_expected(ts, cfg["load_mode_expected"]))
 
+    # 7.6 类型符合输入要求（致命）：ts 表字段基类型 vs mapping 目标类型
+    if rs_input and cfg.get("types_match_input", True):
+        results.extend(_check_types_match_input(ts, rs_input))
+
     # 8. segmentation 自洽
     if cfg.get("segmentation_reason_when_segmented", True):
         results.extend(_check_segmentation(dec, ts))
@@ -348,6 +352,52 @@ def _check_source_tables(ts: dict, required: list) -> list[CheckResult]:
             check_type="design",
             status=CheckStatus.PASS,
             detail=f"源表识别完整 ({len(actual_bare)} 表)",
+        )
+    ]
+
+
+def _check_types_match_input(ts: dict, rs_input: dict) -> list[CheckResult]:
+    """ts 表字段基类型 vs mapping（rs_input）目标类型——"类型满足输入要求"。
+
+    只查双方都有的字段（缺字段由覆盖类断言负责）；比基类型（varchar(50) vs
+    varchar(100) 算满足）；audit 字段不在 mapping 范围跳过。
+    """
+    wanted = {}
+    for fm in rs_input.get("field_mappings", []):
+        col = (fm.get("target_column") or "").lower()
+        typ = (fm.get("target_type") or "").strip()
+        if col and typ:
+            wanted[col] = typ
+    if not wanted:
+        return []
+    actual: dict[str, str] = {}
+    for tdef in (ts.get("tables") or {}).values():
+        for f in tdef.get("fields", []):
+            col = (f.get("target_field") or "").lower()
+            if col:
+                actual[col] = (f.get("field_type") or "").strip()
+    bad = []
+    for col, want in wanted.items():
+        got = actual.get(col)
+        if not got:
+            continue
+        base_w = want.lower().split("(")[0].strip()
+        base_g = got.lower().split("(")[0].strip()
+        if base_w != base_g:
+            bad.append(f"{col}: 输入要求 {want} / 实际 {got}")
+    if bad:
+        return [
+            CheckResult(
+                check_type="design",
+                status=CheckStatus.FAIL,
+                detail=f"类型不符输入要求: {bad[:5]}（→ designer/assembler 类型映射）",
+            )
+        ]
+    return [
+        CheckResult(
+            check_type="design",
+            status=CheckStatus.PASS,
+            detail=f"字段类型符合输入要求 ({len(wanted)} 字段基类型比对)",
         )
     ]
 

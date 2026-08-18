@@ -87,14 +87,14 @@ def fingerprint(deliver: Path) -> dict:
         except Exception:
             pass
 
-    # DDL 维度：每表列集合 {列:类型}（ts 有表定义且 ddl 文件存在才采）
+    # DDL 维度：每表 {列: [基类型, 精度]}——基类型相等才算同口径，精度差异只扣分不拦及格
     ddl: dict[str, dict] = {}
     ddl_dir = deliver / "ddl"
     for tname in (ts.get("tables") or {}):
         ddl_file = ddl_dir / f"create_table_{tname}.sql"
         parsed = parse_ddl_columns(ddl_file)
         if parsed:
-            ddl[tname] = parsed
+            ddl[tname] = {c: _split_type(t) for c, t in parsed.items()}
     fp["ddl"] = ddl
 
     for code in rules:
@@ -130,8 +130,8 @@ def compare(fp_a: dict, fp_b: dict) -> tuple[bool, list[str]]:
         diffs.append("表结构(类型/分布键/build_mode)")
     if fp_a.get("rule_flow") != fp_b.get("rule_flow"):
         diffs.append("规则数据流(源表/目标表)")
-    if fp_a.get("ddl") != fp_b.get("ddl"):
-        diffs.append("DDL(列/类型)")
+    ddl_diffs = _ddl_diffs(fp_a.get("ddl"), fp_b.get("ddl"))
+    diffs.extend(ddl_diffs)
     codes = sorted(set(fp_a.get("selects", {})) | set(fp_b.get("selects", {})))
     for code in codes:
         sa, sb = fp_a.get("selects", {}).get(code), fp_b.get("selects", {}).get(code)
@@ -145,11 +145,17 @@ def compare(fp_a: dict, fp_b: dict) -> tuple[bool, list[str]]:
         if sa.get("group_by") != sb.get("group_by"):
             diffs.append(f"{code}:GROUP_BY")
         sig_a, sig_b = sa.get("field_sigs", {}), sb.get("field_sigs", {})
-        diff_fields = sorted(
-            {k for k in set(sig_a) | set(sig_b) if sig_a.get(k) != sig_b.get(k)}
-        )
-        if diff_fields:
-            diffs.append(f"{code}:字段口径({','.join(diff_fields[:4])})")
+        logic_f, const_f = [], []
+        for f in sorted(set(sig_a) | set(sig_b)):
+            ga, gb = sig_a.get(f) or {}, sig_b.get(f) or {}
+            if ga.get("refs") != gb.get("refs") or ga.get("aggs") != gb.get("aggs"):
+                logic_f.append(f)  # 引用源列/聚合口径变了 = 加工逻辑错（致命）
+            elif ga.get("consts") != gb.get("consts"):
+                const_f.append(f)  # 仅常量不同（写法差异，非致命，人裁决）
+        if logic_f:
+            diffs.append(f"{code}:口径逻辑({','.join(logic_f[:4])})")
+        if const_f:
+            diffs.append(f"{code}:口径常量({','.join(const_f[:4])})")
     return (not diffs, diffs)
 
 
@@ -179,6 +185,38 @@ def parse_ddl_columns(ddl_path: Path) -> dict[str, str]:
         return cols
     except Exception:
         return {}
+
+
+def _split_type(t: str) -> list[str]:
+    """类型拆 [基类型, 精度]：decimal(18,2) → ['decimal', '18,2']；varchar → ['varchar', '']。"""
+    t = (t or "").strip().lower().replace(" ", "")
+    base, _, prec = t.partition("(")
+    return [base, prec.rstrip(")") if prec else ""]
+
+
+def _ddl_diffs(a: dict | None, b: dict | None) -> list[str]:
+    """DDL 三层差异：列集合（致命）/ 基类型（致命）/ 精度（非致命，只扣分）。"""
+    a, b = a or {}, b or {}
+    diffs: list[str] = []
+    cols_missing, base_bad, prec_bad = [], [], []
+    for t in sorted(set(a) | set(b)):
+        if t not in a or t not in b:
+            cols_missing.append(t)
+            continue
+        for c in sorted(set(a[t]) | set(b[t])):
+            if c not in a[t] or c not in b[t]:
+                cols_missing.append(f"{t}.{c}")
+            elif a[t][c][0] != b[t][c][0]:
+                base_bad.append(f"{t}.{c}")
+            elif a[t][c][1] != b[t][c][1]:
+                prec_bad.append(f"{t}.{c}")
+    if cols_missing:
+        diffs.append(f"DDL(列): {','.join(cols_missing[:4])}")
+    if base_bad:
+        diffs.append(f"DDL(基类型): {','.join(base_bad[:4])}")
+    if prec_bad:
+        diffs.append(f"DDL(类型精度): {','.join(prec_bad[:4])}")
+    return diffs
 
 
 def load_goldens(case_dir: Path) -> dict[str, dict]:

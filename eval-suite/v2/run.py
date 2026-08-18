@@ -301,7 +301,8 @@ def _run_repeat(
             snapshot = baseline.snapshot_from_result(result)
             snapshot.case_name = case_name
             snapshot.score = score["total"]
-            snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d in score["deductions"]]
+            snapshot.passed = score["passed"]
+            snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d, _f in score["deductions"]]
             snapshot.stage_times = stage_times
             snapshot.stage_loops = stage_loops
             baseline.save_snapshot(snapshot)
@@ -421,7 +422,8 @@ def run_one_case(
     snapshot = baseline.snapshot_from_result(result)
     snapshot.case_name = case_name
     snapshot.score = score["total"]
-    snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d in score["deductions"]]
+    snapshot.passed = score["passed"]
+    snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d, _f in score["deductions"]]
     snapshot.stage_times = stage_times
     snapshot.stage_loops = stage_loops
     saved_path = baseline.save_snapshot(snapshot)
@@ -430,8 +432,9 @@ def run_one_case(
     print(render_report(result, diff))
     print(scoring.render_score(score, prev_total=diff.baseline_score if diff.has_baseline else None))
 
-    has_fail = _result_has_fail(result)
-    return (1 if has_fail else 0), _fail_summary_line(result, pipeline_steps)
+    # 退出码挂钩及格门（致命项），非致命漂移（含 golden 结构性未命中）不挂退出码
+    rc = 0 if score["passed"] else 1
+    return rc, _fail_summary_line(result, pipeline_steps)
 
 
 def main() -> int:

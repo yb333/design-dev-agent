@@ -189,7 +189,7 @@ class TestFieldSignatureDimension:
         b = golden.fingerprint(self._deliver_with_sql(
             tmp_path, "b", "SELECT a.amt AS total_amt FROM ods.t a"))
         hit, diffs = golden.compare(a, b)
-        assert not hit and any("字段口径" in d and "total_amt" in d for d in diffs)
+        assert not hit and any("口径逻辑" in d and "total_amt" in d for d in diffs)
 
     def test_wrong_source_column_detected(self, tmp_path):
         """同函数但引用错列（a.amt vs b.amt）必须 diff。"""
@@ -198,7 +198,7 @@ class TestFieldSignatureDimension:
         b = golden.fingerprint(self._deliver_with_sql(
             tmp_path, "b", "SELECT SUM(b.amt) AS total FROM ods.t b"))
         hit, diffs = golden.compare(a, b)
-        assert not hit and any("字段口径" in d for d in diffs)
+        assert not hit and any("口径逻辑" in d for d in diffs)
 
     def test_const_value_change_detected(self, tmp_path):
         """赋值/CASE 常量变了（'N' vs 0）必须 diff。"""
@@ -207,4 +207,44 @@ class TestFieldSignatureDimension:
         b = golden.fingerprint(self._deliver_with_sql(
             tmp_path, "b", "SELECT 0 AS del_flag FROM ods.t"))
         hit, diffs = golden.compare(a, b)
-        assert not hit and any("del_flag" in d for d in diffs)
+        assert not hit and any("口径常量" in d and "del_flag" in d for d in diffs)
+
+
+class TestDdlTypeGranularity:
+    """DDL 三层：列（致命）/基类型（致命）/精度（非致命只扣分）。"""
+
+    def _fp(self, tmp_path, name, amt_type):
+        import json as j
+        d = tmp_path / name
+        (d / "ddl").mkdir(parents=True)
+        (d / "etl").mkdir()
+        (d / "ts.json").write_text(j.dumps({
+            "design": {"business_key": ["id"]},
+            "rules": {"R0001": {"load_mode": "truncate_table"}},
+            "tables": {"t1": {"type": "target", "distribution_key": ["id"], "fields": []}},
+        }), encoding="utf-8")
+        (d / "etl" / "R0001.sql").write_text("SELECT 1 AS x", encoding="utf-8")
+        (d / "ddl" / "create_table_t1.sql").write_text(
+            f"CREATE TABLE t1 (\n  id varchar(50),\n  amt {amt_type}\n);", encoding="utf-8")
+        return golden.fingerprint(d)
+
+    def test_precision_diff_nonfatal_label(self, tmp_path):
+        a = self._fp(tmp_path, "a", "decimal(18,2)")
+        b = self._fp(tmp_path, "b", "decimal(20,6)")
+        hit, diffs = golden.compare(a, b)
+        assert not hit
+        assert any("DDL(类型精度)" in d for d in diffs)
+        assert not any("DDL(基类型)" in d for d in diffs)
+
+    def test_base_type_diff_fatal_label(self, tmp_path):
+        a = self._fp(tmp_path, "a", "decimal(18,2)")
+        b = self._fp(tmp_path, "b", "int")
+        hit, diffs = golden.compare(a, b)
+        assert not hit and any("DDL(基类型)" in d for d in diffs)
+
+    def test_same_base_hit(self, tmp_path):
+        """基类型相同（精度不同）不拦及格——但仍是差异（扣分项）。"""
+        a = self._fp(tmp_path, "a", "varchar(50)")
+        b = self._fp(tmp_path, "b", "varchar(100)")
+        hit, diffs = golden.compare(a, b)
+        assert not hit and len([d for d in diffs if "DDL" in d]) == 1  # 只有精度差异

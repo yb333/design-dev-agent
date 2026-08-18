@@ -49,7 +49,8 @@ class BaselineSnapshot:
     layer_stats: dict  # {layer: {pass, fail, skip}}
     checks: list[CheckRecord]
     pipeline_steps: list[dict] = field(default_factory=list)
-    score: int | None = None  # 扣分制总分（跨轮可比）
+    score: int | None = None  # 两级评分总分（跨轮可比）
+    passed: bool | None = None  # 及格门（致命项零失败）
     deductions: list[dict] = field(default_factory=list)  # [{cat,weight,desc}]
     stage_times: dict[str, float] = field(default_factory=dict)  # {阶段:秒}（真实=流锚点时间线/重放=步骤耗时）
     stage_loops: dict[str, int] = field(default_factory=dict)  # {阶段:出现次数}（>1=执行回路）
@@ -137,6 +138,7 @@ def save_snapshot(snapshot: BaselineSnapshot) -> Path:
         "pipeline_steps": snapshot.pipeline_steps,
         "checks": [asdict(c) for c in snapshot.checks],
         "score": snapshot.score,
+        "passed": snapshot.passed,
         "deductions": snapshot.deductions,
         "stage_times": snapshot.stage_times,
         "stage_loops": snapshot.stage_loops,
@@ -177,6 +179,7 @@ def _load_snapshot(path: Path) -> BaselineSnapshot | None:
         checks=checks,
         pipeline_steps=data.get("pipeline_steps", []),
         score=data.get("score"),
+        passed=data.get("passed"),
         deductions=data.get("deductions", []),
         stage_times=data.get("stage_times", {}),
         stage_loops=data.get("stage_loops", {}),
