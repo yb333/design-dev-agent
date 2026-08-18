@@ -77,6 +77,22 @@
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样） | ut_precheck / ut_execute | design-dev-shared/scripts |
 | `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / extract_select_aliases / extract_from_tables） | run_ut / check_sql | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
+| `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline（建设中） / tests/test_baseline_v1_contract | design-dev-shared/scripts |
+
+---
+
+## ⑤ 优化场景 opt-pipe 调用（建设中专用节，住 design-dev-shared）
+
+> 设计定稿见 `docs/specs/opt/00-08` + `docs/architecture/opt-架构设计.md`。分阶段实施（08 §七）：阶段一零存量接触，阶段二动四个接触点（评测闸门后）。本节随实施进度登记。
+
+| 工具 | 干啥 | opt-pipe 阶段 | 输入 → 输出 | 状态 |
+|------|------|--------------|------------|------|
+| `schemas/baseline_v1.schema.json` | 契约 vendor 拷贝（权威在 analyzer 仓） | 步骤 0 入料 | baseline_v1.json 的校验基准 | ✅ 阶段一 |
+| `baseline_contract.py` | 契约校验（schema+版本+语义条件） | 步骤 0 入料 | baseline_v1.json → 违规清单 | ✅ 阶段一 |
+| `assemble_ts_baseline.py` | json → ts_baseline + etl_baseline + baseline_view + 豁免表 | 步骤 0 入料建档 | baseline_v1.json → baseline 包 | 🔨 阶段一待建 |
+| `preprocess_opt.py` | 标注解析 → change_request + 一致性校验 + 类型风险复用 | 步骤 1 | marked mapping + RS + baseline → change_request.json | 🔨 阶段一待建 |
+| `fence_check.py` | ts 级围栏（声明驱动的冻结层比对引擎） | 步骤 3 | ts_v2 + ts_baseline + change → 越界/漏改报告 | 🔨 阶段一待建 |
+| `sql_fence.py` | SQL 围栏判定纯函数库（AST 级老列不动+仅追加） | 步骤 4（pipe 独立跑；check_sql 可选自测共用） | 新旧 SQL + change → 违规清单 | 🔨 阶段一待建 |
 
 ---
 

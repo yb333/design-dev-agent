@@ -13,5 +13,8 @@ pyyaml>=6.0
 # SQL 语法检查
 sqlglot>=20.0.0
 
+# JSON Schema 校验（baseline_v1 契约双端校验）
+jsonschema>=4.0.0
+
 # 可选：类型检查
 # mypy>=1.0.0
