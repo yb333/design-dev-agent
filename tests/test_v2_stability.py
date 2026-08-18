@@ -106,3 +106,28 @@ class TestRender:
         report = stability.render_stability("t", snaps)
         assert "每轮结果" in report
         assert "preprocess 2/2" in report
+
+
+class TestStageTimeStats:
+    def test_stage_duration_distribution(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(baseline, "RESULTS_DIR", tmp_path)
+        case_dir = tmp_path / "t"
+        _write_snap(case_dir, "2026-08-15T10:00:00", [_chk("artifacts", "ts.json", "pass")],
+                    steps=[{"step": "preprocess", "status": "pass", "duration": 10}])
+        # 手动补 stage_times
+        import json as j
+        d = case_dir / "2026-08-15T10-00-00" / "result.json"
+        data = j.loads(d.read_text(encoding="utf-8"))
+        data["stage_times"] = {"预处理": 10.0, "设计决策": 300.0}
+        d.write_text(j.dumps(data, ensure_ascii=False), encoding="utf-8")
+        _write_snap(case_dir, "2026-08-15T11:00:00", [_chk("artifacts", "ts.json", "pass")])
+        d2 = case_dir / "2026-08-15T11-00-00" / "result.json"
+        data2 = j.loads(d2.read_text(encoding="utf-8"))
+        data2["stage_times"] = {"预处理": 20.0, "设计决策": 400.0}
+        d2.write_text(j.dumps(data2, ensure_ascii=False), encoding="utf-8")
+
+        snaps = stability.load_recent_snapshots("t", 2)
+        report = stability.render_stability("t", snaps)
+        assert "阶段耗时分布" in report
+        assert "预处理" in report and "设计决策" in report
+        assert "avg" in report and "(2轮)" in report

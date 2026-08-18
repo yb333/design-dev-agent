@@ -158,6 +158,24 @@ def render_stability(case_name: str, snaps: list[dict]) -> str:
         lines.append("  ⚠️ 有越界轮（未命中任何 golden）——待人工裁决：")
         lines.append("     认可为新方案 → promote.py 手工沉淀新 golden；视为回归 → 去修")
 
+    # 阶段耗时分布（真实=marker 估算 / 重放=步骤实测；跨轮 avg/min/max）
+    stage_samples: dict[str, list[float]] = defaultdict(list)
+    for snap in snaps:
+        for stage, secs in (snap.get("stage_times") or {}).items():
+            stage_samples[stage].append(float(secs))
+    if stage_samples:
+        lines.append("")
+        lines.append("── 阶段耗时分布 ─────────────────────────────────────")
+        order = [st for st, _ in __import__("real_pipe")._STAGE_MARKERS]
+        known = [st for st in order if st in stage_samples]
+        others = sorted(set(stage_samples) - set(known))
+        for stage in known + others:
+            vals = stage_samples[stage]
+            avg = sum(vals) / len(vals)
+            lines.append(
+                f"  {stage:<8} avg {avg:7.1f}s  min {min(vals):7.1f}s  max {max(vals):7.1f}s  ({len(vals)}轮)"
+            )
+
     # 流程阶段稳定性
     lines.append("")
     lines.append("── 流程阶段稳定性 ──────────────────────────────────")

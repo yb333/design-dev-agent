@@ -111,7 +111,7 @@ class TestRunRealPipe:
 
         calls = {}
 
-        def fake_stream(cmd, timeout, cwd=None, label=""):
+        def fake_stream(cmd, timeout, cwd=None, label="", stage_provider=None):
             calls["cmd"] = cmd
             return 0, ""
 
@@ -122,8 +122,9 @@ class TestRunRealPipe:
         monkeypatch.setattr(real_pipe, "find_deliver", fake_find)
 
         case_dir = tmp_path / "dwb_x"
-        steps = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
+        steps, stage_times = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert len(steps) == 1
+        assert isinstance(stage_times, dict)
         assert steps[0].step == "new-pipe(真实流程)"
         assert steps[0].status.value == "pass"
         # 调用形态：--command new-pipe + 消息含 mapping 路径与非交互声明
@@ -134,10 +135,10 @@ class TestRunRealPipe:
     def test_fail_step_when_no_artifacts(self, tmp_path, monkeypatch):
         (tmp_path / "dwb_x").mkdir(exist_ok=True)
         (tmp_path / "dwb_x" / "mapping.xlsx").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="": (0, "ran ok"))
+        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="", stage_provider=None: (0, "ran ok"))
         monkeypatch.setattr(real_pipe, "find_deliver", lambda base, name: None)
         case_dir = tmp_path / "dwb_x"
-        steps = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
+        steps, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert steps[0].status.value == "fail"
 
 
@@ -220,3 +221,45 @@ class TestReplayDeliverResolve:
             lambda c, n, t: tmp_path / "APP1" / "sch1" / n / "ddlc_design_dev")
         out = run_mod._prepare_deliver_for(None, "replay", case, "dwb_x", 5)
         assert out.exists()
+
+
+class TestStageWatcher:
+    """产出文件观察器：阶段反推 + 耗时推导。"""
+
+    def test_find_deliver_loose_without_ts(self, tmp_path):
+        """宽松定位：目录存在即可（ts.json 未生成也能找到）。"""
+        d = tmp_path / "app" / "sch" / "dwb_x" / "ddlc_design_dev"
+        d.mkdir(parents=True)
+        assert real_pipe._find_deliver_loose(tmp_path, "dwb_x") == d
+
+    def test_stage_text_follows_latest_marker(self, tmp_path):
+        w = real_pipe._StageWatcher("dwb_x", tmp_path)
+        try:
+            deliver = tmp_path / "app" / "sch" / "dwb_x" / "ddlc_design_dev"
+            (deliver / "_internal").mkdir(parents=True)
+            (deliver / "_internal" / "rs_input.json").write_text("{}", encoding="utf-8")
+            w._poll_once()
+            assert "预处理" in w.stage_text()
+            (deliver / "ts.json").write_text("{}", encoding="utf-8")
+            w._poll_once()
+            assert w.stage_text() == "TS组装"
+            (deliver / "etl").mkdir()
+            (deliver / "etl" / "R0001.sql").write_text("SELECT 1", encoding="utf-8")
+            w._poll_once()
+            assert w.stage_text() == "规则编码(1个SQL)"
+        finally:
+            w.finish()
+
+    def test_finish_derives_durations(self, tmp_path):
+        import time as _t
+        w = real_pipe._StageWatcher("dwb_x", tmp_path)
+        deliver = tmp_path / "app" / "sch" / "dwb_x" / "ddlc_design_dev"
+        (deliver / "_internal").mkdir(parents=True)
+        (deliver / "_internal" / "rs_input.json").write_text("{}", encoding="utf-8")
+        w._poll_once()
+        _t.sleep(0.05)
+        (deliver / "ts.json").write_text("{}", encoding="utf-8")
+        w._poll_once()
+        times = w.finish()
+        assert "预处理" in times and "TS组装" in times
+        assert times["预处理"] >= 0.03  # 两个 marker 之间的间隔成了预处理阶段耗时

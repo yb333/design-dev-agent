@@ -104,7 +104,8 @@ def opencode_cmd() -> list[str]:
 
 
 def _run_stream(
-    cmd: list[str], timeout: float, cwd: Path | None = None, label: str = ""
+    cmd: list[str], timeout: float, cwd: Path | None = None, label: str = "",
+    stage_provider=None,
 ) -> tuple[int, str]:
     """运行命令：全量缓存输出；超时 kill 并标记。
 
@@ -189,7 +190,15 @@ def _run_stream(
             # 输出静默超阈值 → ⚠：可能是模型长思考，也可能真卡了（区分不了就如实说）
             frame = "⚠" if quiet_s >= _QUIET_WARN_SECONDS else _SPIN_FRAMES[spin_idx % len(_SPIN_FRAMES)]
             spin_idx += 1
-            stats = f" · {len(buf)}行/{out_bytes // 1024}KB · 静默{quiet_s}s"
+            stage_txt = ""
+            if stage_provider is not None:
+                try:
+                    st = stage_provider()
+                    if st:
+                        stage_txt = f" · 阶段:{st}"
+                except Exception:
+                    pass
+            stats = f"{stage_txt} · {len(buf)}行/{out_bytes // 1024}KB · 静默{quiet_s}s"
             warn = f"（可能卡住或长思考，超时上限{int(timeout)}s）" if quiet_s >= _QUIET_WARN_SECONDS else ""
             sys.stdout.write(f"\r    {frame} {label or '执行中'} {int(now - start)}s{stats}{warn}   ")
             sys.stdout.flush()
