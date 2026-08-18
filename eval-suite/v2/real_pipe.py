@@ -94,8 +94,11 @@ def run_real_pipe(
     """
     args = build_command_args(case_dir)
     message = " ".join(args + [NON_INTERACTIVE_CLAUSE])
-    watcher = _StageWatcher(case_dir, deliver_base)  # L3 兜底：流锚点失明时给粗粒度
-    tracker = _StageTracker(watcher)  # L2 主力：输出流锚点匹配 + 回路计数
+    # 双信号：流锚点（顶层 pipe 活动）+ 文件 marker（subagent 写产出的内层活动，
+    # 顶层流看不到 designer/coder 内部——设计/编码阶段靠文件事件补）
+    tracker = _StageTracker()
+    watcher = _StageWatcher(case_dir, deliver_base, on_marker=tracker.feed_file)
+    tracker._fallback = watcher  # 全盲兜底 + etl 计数
 
     def _do() -> tuple[bool, str]:
         # 不带 --format json：降低内网包壳启动器的旗标兼容面，默认格式流式输出更适合看进度
@@ -121,7 +124,7 @@ def run_real_pipe(
 # marker 按流水线顺序：文件/目录首现 → 该阶段完成的信号
 _STAGE_MARKERS: list[tuple[str, str]] = [
     ("预处理", "_internal/rs_input.json"),
-    ("设计决策", "_internal/design_decisions.yaml"),
+    ("设计", "_internal/design_decisions.yaml"),
     ("TS组装", "ts.json"),
     ("DDL生成", "ddl"),
     ("规则编码", "etl"),
@@ -200,12 +203,28 @@ class _StageTracker:
         self._totals: dict[str, float] = {}
 
     def feed(self, line: str) -> None:
+        """流锚点事件（顶层 pipe 的脚本/agent 调用）——可回退（真实回路）。"""
         stage = self._match(line)
-        if stage is None:
+        if stage is not None:
+            self._enter(stage)
+
+    def feed_file(self, stage: str) -> None:
+        """文件 marker 事件（subagent 写产出——设计/编码等内层活动顶层流看不到，
+        靠文件观察器补）。文件事件天然滞后：秩守卫只许前进不许回退，
+        防晚到文件（如预处理阶段写的 rs_input 在预检后才轮询到）把阶段拖回去。
+        """
+        rank = _STAGE_RANK.get(stage)
+        if rank is None:
             return
+        cur_max = max((_STAGE_RANK.get(st, -1) for st in self._active), default=-1)
+        if rank <= cur_max:
+            return  # 滞后事件，忽略
+        self._enter(stage)
+
+    def _enter(self, stage: str) -> None:
         now = time.monotonic()
         if stage in self._active:
-            return  # 已在活动集（并行组内重复行）
+            return  # 已在活动集（并行组内重复）
         if stage in _PARALLEL_GROUP:
             # 只清组外旧阶段，组内共存
             for st in [k for k in self._active if k not in _PARALLEL_GROUP]:
@@ -255,9 +274,10 @@ class _StageTracker:
 class _StageWatcher:
     """轮询产出目录，按 marker 首现时间反推当前阶段与各阶段耗时。"""
 
-    def __init__(self, case_name: str, base: Path):
+    def __init__(self, case_name: str, base: Path, on_marker=None):
         self._base = base
         self._asset = case_name
+        self._on_marker = on_marker  # marker 首现回调（喂给 StageTracker 补内层阶段）
         self._start = time.monotonic()
         self._seen: dict[str, float] = {}  # 阶段名 → 首现耗时
         self._etl_count = 0
@@ -285,6 +305,11 @@ class _StageWatcher:
             target = self._deliver / rel
             if target.exists() and (target.is_file() or any(target.iterdir())):
                 self._seen[stage] = time.monotonic() - self._start
+                if self._on_marker:
+                    try:
+                        self._on_marker(stage)
+                    except Exception:
+                        pass
         etl_dir = self._deliver / "etl"
         if etl_dir.exists():
             self._etl_count = sum(1 for f in etl_dir.iterdir() if f.suffix == ".sql")

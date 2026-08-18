@@ -367,3 +367,48 @@ class TestParallelGroupStages:
         t = real_pipe._StageTracker()
         t.feed("dq_rules 非空，调 dws-coder 产出 DQ SQL 到 deliver/dq/\n")
         assert "DQ生成" in t.stage_text()
+
+
+class TestDualSignalStages:
+    """双信号合并回归：subagent 内层活动（设计/编码）顶层流不可见，靠文件 marker 补。
+
+    用户实测症状：流锚点只命中顶层脚本（预检→执行计划→DDL），设计和编码被吞。
+    """
+
+    def test_design_recovered_by_file_marker(self):
+        t = real_pipe._StageTracker()
+        t.feed("python precheck.py\n")                       # 顶层流：预检
+        assert t.stage_text() == "预检"
+        t.feed_file("设计")                                    # designer 写了 decisions（流里看不到）
+        assert t.stage_text() == "设计"                        # 不再被吞
+        t.feed_file("TS组装")                                  # designer 内部跑了 assemble_ts
+        assert t.stage_text() == "TS组装"
+        t.feed("python dispatch_plan.py\n")                  # 顶层流推进
+        assert t.stage_text() == "执行计划"
+
+    def test_parallel_via_stream_ddl_plus_file_coder(self):
+        t = real_pipe._StageTracker()
+        t.feed("python dispatch_plan.py\n")
+        t.feed("python assemble_ddl.py\n")                   # 顶层流：DDL（4a）
+        assert t.stage_text() == "DDL生成"
+        t.feed_file("规则编码")                                 # coder 写了 etl（流里看不到）
+        text = t.stage_text()
+        assert "DDL生成" in text and "规则编码" in text and "(并行)" in text
+
+    def test_late_file_marker_no_regression(self):
+        """滞后文件事件不许回退：预检阶段轮询到晚到的 rs_input 忽略。"""
+        t = real_pipe._StageTracker()
+        t.feed("python precheck.py\n")
+        t.feed_file("预处理")   # rank 0 ≤ 预检 rank 1 → 忽略
+        assert t.stage_text() == "预检"
+        assert t.finish()[1].get("预处理", 0) == 0  # 没进活动集
+
+    def test_stream_regression_counts_loop_but_file_cannot(self):
+        """真实回路（类型风险重跑 precheck）由流锚点计数；文件事件永不制造假回路。"""
+        t = real_pipe._StageTracker()
+        t.feed("python precheck.py\n")
+        t.feed("TYPE_RISK_PENDING {...}\n")          # 类型风险决策
+        t.feed("python precheck.py\n")               # 剧本1b重跑=真实回路
+        assert t.stage_text() == "预检(第2次·回路)"
+        t.feed_file("设计")                            # 文件事件只前进
+        assert t.stage_text() == "设计"
