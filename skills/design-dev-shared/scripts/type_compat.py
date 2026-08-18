@@ -7,6 +7,8 @@
 - 同家族 + 目标长度≥源 → 兼容
 - integer → numeric 安全跨类（整数可精确表示为数值）
 - 整数家族互转（int/bigint/smallint）兼容
+- 字符类型互跨（nvarchar↔varchar / varchar↔varchar2 等）不自动判兼容——长度口径
+  （字节 vs 字符）取决于集群兼容模式，同长度也可能装不下中文，报 charset_semantics 人工决策
 - 其他跨大类（int↔varchar↔date）不兼容
 
 对外暴露：
@@ -29,6 +31,25 @@ _TYPE_FAMILY_MAP = {
     "datetime": "datetime",
     "boolean": "boolean", "bool": "boolean",
 }
+
+# 国家字符集类型（长度按字符/国家字符集计）；与 varchar/varchar2/char（兼容模式决定字节/字符）口径可能不同
+_N_CHAR_BASES = {"nvarchar", "nvarchar2", "nchar"}
+
+
+def _length_semantics_differ(base1: str, base2: str) -> bool:
+    """字符类型 base 不同时，长度口径（字节 vs 字符）是否可能不同。
+
+    - nvarchar/nvarchar2/nchar：字符/国家字符集口径
+    - varchar/varchar2：不同兼容模式下可能按字节（Gauss ORA 模式 varchar2 按字节）
+    同长度不保证装得下（中文 UTF-8 3字节/字）；到底哪个方向装不下取决于集群口径——
+    脚本不猜，报风险走人工决策（红线：语义判断不自主）。
+    """
+    if base1 == base2:
+        return False
+    n1, n2 = base1 in _N_CHAR_BASES, base2 in _N_CHAR_BASES
+    if n1 != n2:
+        return True  # N 系 ↔ 非 N 系
+    return {base1, base2} == {"varchar", "varchar2"}  # 字节/字符口径经典差异对
 
 
 def normalize_type_simple(type_str: str) -> str:
@@ -59,12 +80,13 @@ def parse_type_info(type_str: str) -> dict:
     """解析类型字符串为结构化信息：{family, raw, length, scale}。
 
     family: 归一化大类（integer/varchar/numeric/datetime/boolean/unknown）
+    base: 归一前的 base 名（如 nvarchar2/varchar2，语义闸用它区分字符类型口径）
     length: 长度（varchar 的 n，或 numeric 的 precision）
     scale: 小数位数（numeric 的 scale）
     """
     import re
     if not type_str:
-        return {"family": "unknown", "raw": "", "length": None, "scale": None}
+        return {"family": "unknown", "raw": "", "base": "", "length": None, "scale": None}
 
     raw = type_str.strip()
     lower = raw.lower()
@@ -97,7 +119,7 @@ def parse_type_info(type_str: str) -> dict:
             except (ValueError, TypeError):
                 pass
 
-    return {"family": family, "raw": raw, "length": length, "scale": scale}
+    return {"family": family, "raw": raw, "base": base_name, "length": length, "scale": scale}
 
 
 def is_type_compatible(source_type: str, target_type: str) -> bool:
@@ -135,6 +157,10 @@ def is_type_compatible(source_type: str, target_type: str) -> bool:
             return False
         # varchar 比长度
         if src["family"] == "varchar":
+            # 长度口径不同的字符类型互跨（nvarchar↔varchar 等）：同长度也不保证装得下
+            # （中文 UTF-8 3字节/字），不自动放行——由 assess_type_risk 报 charset_semantics 人工决策
+            if _length_semantics_differ(src["base"], tgt["base"]):
+                return False
             return tgt["length"] >= src["length"]
         # numeric 比精度+标度
         if src["family"] == "numeric":
@@ -163,6 +189,7 @@ RISK_LABEL_CN = {
     "length_overflow": "长度超长",
     "precision_loss": "精度收窄",
     "type_incompatible": "跨大类不兼容",
+    "charset_semantics": "字符长度语义差异（nvarchar/varchar 字节/字符口径不同，同长度也可能装不下）",
 }
 
 
@@ -173,6 +200,7 @@ def assess_type_risk(source_type: str, target_type: str) -> str | None:
         "length_overflow"     长度超长（varchar 同家族目标更窄）
         "precision_loss"      精度丢失（numeric 精度/标度收窄）
         "type_incompatible"   跨大类不兼容（int↔varchar↔date 等）
+        "charset_semantics"   字符长度语义差异（nvarchar↔varchar 等口径互跨，同长度也可能装不下）
     """
     if not source_type or not target_type:
         return None
@@ -195,6 +223,9 @@ def assess_type_risk(source_type: str, target_type: str) -> str | None:
     # 同家族但目标更窄 → 精度/长度问题
     if src["family"] == tgt["family"]:
         if src["family"] == "varchar":
+            # 字符类型口径互跨（nvarchar↔varchar 等）：不是长度数字问题，是字节/字符语义问题
+            if _length_semantics_differ(src["base"], tgt["base"]):
+                return "charset_semantics"
             # varchar 同家族目标更窄 → 长度超长
             if tgt["length"] is not None and src["length"] is not None and tgt["length"] < src["length"]:
                 return "length_overflow"

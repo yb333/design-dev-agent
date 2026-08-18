@@ -73,7 +73,7 @@
 | 模块 | 干啥 | 被谁 import | 所在 |
 |------|------|------------|------|
 | `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
-| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info） | precheck / ut_diagnose | design-dev-shared/scripts |
+| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行） | precheck / ut_diagnose | design-dev-shared/scripts |
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样） | ut_precheck / ut_execute | design-dev-shared/scripts |
 | `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / extract_select_aliases / extract_from_tables） | run_ut / check_sql | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |

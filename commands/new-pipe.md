@@ -115,11 +115,11 @@ python SHARED_SCRIPTS/precheck.py \
 
 ### 类型风险决策流程（stdout 含 TYPE_RISK_PENDING 时）
 
-precheck 检测到"直接复制"字段有源→目标类型转换风险时阻断，输出 `TYPE_RISK_PENDING {JSON}` 摘要行（含 batch 常规风险字段 + individual 跨大类风险字段 + decision_file 路径）。
+precheck 检测到"直接复制"字段有源→目标类型转换风险时阻断，输出 `TYPE_RISK_PENDING {JSON}` 摘要行（含 batch 常规风险字段 + individual 跨大类/字符语义差异风险字段 + decision_file 路径）。
 
 **用 question 收集决策**（不让用户手填 YAML），两类分别问：
 - **batch（常规风险：长度超长/精度收窄）**：是否批量加安全处理？选项 `加安全处理`（ETL 截取/转换保不出错）/ `不加`（接受风险，数据问题以报错暴露）。
-- **individual（跨大类不兼容，逐字段问）**：怎么处理？选项 `转换`（ETL SELECT 加 TO_DATE/TO_CHAR/CAST）/ `不加`（接受风险）/ `返源端`（源端改类型更合适，追问原因）。
+- **individual（跨大类不兼容/字符语义差异，逐字段问）**：怎么处理？选项 `转换`（ETL SELECT 加 TO_DATE/TO_CHAR/CAST）/ `不加`（接受风险）/ `返源端`（源端改类型更合适，追问原因）。字符语义差异 = nvarchar↔varchar 等口径互跨（字节/字符），同长度也可能装不下中文——装不装得下取决于集群口径和字段实际数据，脚本不猜，人定。
 
 > ★ **所有处置都是改 ETL（SELECT 加转换），DDL 目标类型一律不变**——不要理解为改 DDL 的目标类型。
 > 决策通过后 precheck 自动回写 rs_input（转换字段改"数据加工"），designer/coder 按加工字段走转换逻辑。

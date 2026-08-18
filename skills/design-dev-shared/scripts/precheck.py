@@ -427,7 +427,9 @@ def _generate_type_risk_skeleton(decision_path: Path, batch: list, individual: l
 
     if individual:
         lines += [
-            "# === 逐个决策（跨大类不兼容，风险高，需单独看每个字段）===",
+            "# === 逐个决策（跨大类不兼容/字符长度语义差异，风险高，需单独看每个字段）===",
+            "# 字符语义差异 = nvarchar↔varchar 等口径互跨（字节/字符），同长度也可能装不下中文；",
+            "# 到底装不装得下取决于字段实际数据——批量定策略不合适，逐个定。",
             "跨大类风险字段:",
         ]
         for item in individual:

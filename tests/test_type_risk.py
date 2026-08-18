@@ -81,6 +81,48 @@ class TestAssessTypeRisk:
         assert assess_type_risk("", "varchar(50)") is None
         assert assess_type_risk("varchar(50)", "") is None
 
+
+class TestCharsetSemantics:
+    """字符类型互跨（nvarchar↔varchar 等）：长度口径（字节/字符）取决于集群兼容模式，
+    同长度也可能装不下中文——不自动判兼容，报 charset_semantics 走人工决策。
+    两个方向都报（哪个方向装不下脚本不猜）。
+    """
+
+    def test_n_to_non_n_same_length_is_risk(self):
+        """N 系 → 非 N 系同长度：中文 UTF-8 3字节/字，字节口径目标装不下。"""
+        assert assess_type_risk("nvarchar(4000)", "varchar(4000)") == "charset_semantics"
+        assert assess_type_risk("nvarchar2(4000)", "varchar(4000)") == "charset_semantics"
+        assert assess_type_risk("nvarchar2(4000)", "varchar2(4000)") == "charset_semantics"
+
+    def test_reverse_direction_also_risk(self):
+        """反向同样报：方向对错取决于集群口径，语义判断不自主。"""
+        assert assess_type_risk("varchar(4000)", "nvarchar(4000)") == "charset_semantics"
+        assert assess_type_risk("varchar2(4000)", "nvarchar2(4000)") == "charset_semantics"
+
+    def test_varchar_vs_varchar2_is_risk(self):
+        """varchar↔varchar2：字节/字符口径经典差异对。"""
+        assert assess_type_risk("varchar2(4000)", "varchar(4000)") == "charset_semantics"
+        assert assess_type_risk("varchar(4000)", "varchar2(4000)") == "charset_semantics"
+
+    def test_same_base_keeps_length_logic(self):
+        """同 base 不涉口径问题，维持长度比较。"""
+        assert assess_type_risk("nvarchar2(50)", "nvarchar2(100)") is None
+        assert assess_type_risk("nvarchar2(200)", "nvarchar2(50)") == "length_overflow"
+        assert assess_type_risk("varchar2(50)", "varchar2(100)") is None
+        assert assess_type_risk("varchar2(200)", "varchar2(50)") == "length_overflow"
+
+    def test_target_unlimited_safe(self):
+        """目标 text 无长度限制，任何口径都装得下 → 无风险。"""
+        assert assess_type_risk("nvarchar2(4000)", "text") is None
+
+    def test_is_type_compatible_not_auto_pass(self):
+        from type_compat import is_type_compatible
+        assert is_type_compatible("nvarchar2(4000)", "varchar(4000)") is False
+        assert is_type_compatible("nvarchar2(50)", "nvarchar2(100)") is True
+
+    def test_label_registered(self):
+        assert "charset_semantics" in RISK_LABEL_CN
+
     def test_risk_label_cn(self):
         assert RISK_LABEL_CN["length_overflow"] == "长度超长"
         assert RISK_LABEL_CN["precision_loss"] == "精度收窄"
