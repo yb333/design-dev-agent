@@ -81,6 +81,10 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
   支持的入口并反馈，评测侧可切换为消息内 `/new-pipe` 前缀方式。
 - **UT 连库属于真实流程**：真实入口跑的是完整 new-pipe（含 check_db 探活 + UT），
   评测不干预——测的就是真实行为；`--replay` 重放模式不含 UT。
+- **重复跑清场（★稳定性前提）**：同资产重跑前默认**清空**其 `ddlc_design_dev`
+  （旧产出会被 AI"看到直接复用"，--repeat 10 就只有第 1 轮是真跑）。仅删
+  DELIVER_BASE 下名为 ddlc_design_dev 的目录（护栏防误删）；`--keep-artifacts`
+  跳过清场——留给将来迭代/优化场景复用旧产出的钩子。eval-only 不清。
 - **输入文件发现**：案例目录的业务文件就两类——唯一的 *.xlsx/xls 即 mapping，
   唯一的 *.md/txt 即 RS（可选，无则无RS模式）；评测自己的 yaml/json 不占这两个
   后缀不干扰。多个时名字含 mapping/rs/需求 的优先。真实入口提示词、重放预处理、

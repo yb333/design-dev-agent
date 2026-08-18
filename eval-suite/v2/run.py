@@ -225,6 +225,25 @@ def _resolve_replay_deliver(case_dir: Path, case_name: str, timeout_script: floa
     return deliver
 
 
+def _clean_deliver(deliver: Path | None) -> None:
+    """跑前清空该资产的产出目录，保证每轮干净起点。
+
+    重复跑同资产时，旧产出会被 AI"看到已有结果直接复用"，污染稳定性测量
+    （--repeat 10 实际只有第 1 轮是真跑）。默认每轮清空；--keep-artifacts
+    跳过（留给将来迭代/优化场景复用旧产出的钩子）。
+    删除带路径护栏：只删 .../{资产}/ddlc_design_dev，且必须位于 DELIVER_BASE 之下。
+    """
+    if not deliver or not deliver.exists():
+        return
+    resolved = deliver.resolve()
+    base = DELIVER_BASE.resolve()
+    if resolved.name != "ddlc_design_dev" or base not in resolved.parents:
+        print(f"  ⚠️ 跳过清理（路径护栏不满足，只删 DELIVER_BASE 下的 ddlc_design_dev）: {resolved}")
+        return
+    shutil.rmtree(resolved)
+    print(f"  🧹 已清空上一轮产出: {resolved}")
+
+
 def _prepare_deliver_for(deliver: Path | None, executor: str, case_dir: Path, case_name: str,
                          timeout_script: float) -> Path:
     """跑流程前确保 deliver 就绪：重放无产出时推导三层路径并建目录；真实入口不动。"""
@@ -246,11 +265,14 @@ def _run_repeat(
     timeout_ai: float,
     timeout_script: float,
     timeout_pipe: float,
+    keep_artifacts: bool = False,
 ) -> tuple[int, str]:
     """稳定性模式：连跑 N 次，聚合稳定性报告。评测零交互，不问任何问题。"""
     pipeline_ok_runs = 0
     for i in range(1, repeat + 1):
         print(f"\n{'=' * 60}\n  [重复 {i}/{repeat}] {case_name}（{executor}）\n{'=' * 60}")
+        if not keep_artifacts:
+            _clean_deliver(deliver)  # 每轮清场：旧产出会让 AI 复用，污染稳定性
         deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
         pipeline_steps = _run_pipeline_for(
             case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
@@ -296,6 +318,7 @@ def run_one_case(
     timeout_ai: float = DEFAULT_TIMEOUT_AI,
     timeout_script: float = DEFAULT_TIMEOUT_SCRIPT,
     timeout_pipe: float = DEFAULT_TIMEOUT_PIPE,
+    keep_artifacts: bool = False,
 ) -> tuple[int, str]:
     """跑单个用例。返回 (退出码, 失败摘要行——全过时为空)。"""
     case_name = case_dir.name
@@ -317,11 +340,13 @@ def run_one_case(
             return 1, "参数冲突"
         return _run_repeat(
             case_dir, case_name, deliver, config, executor, skip_ai, repeat,
-            timeout_ai, timeout_script, timeout_pipe,
+            timeout_ai, timeout_script, timeout_pipe, keep_artifacts,
         )
 
     pipeline_steps = None
     if not eval_only:
+        if not keep_artifacts:
+            _clean_deliver(deliver)  # 清上一轮：旧产出会让 AI 复用（eval-only 不清）
         deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
         mode_desc = "真实入口 /new-pipe" if executor == "real" else "重放诊断 --replay"
         print(f"[v2] 跑流水线（{mode_desc}）: {case_name}")
@@ -383,6 +408,9 @@ def main() -> int:
                         help=f"重放模式 AI 阶段超时秒数（默认 {DEFAULT_TIMEOUT_AI}）")
     parser.add_argument("--timeout-script", type=int, default=DEFAULT_TIMEOUT_SCRIPT,
                         help=f"重放模式脚本阶段超时秒数（默认 {DEFAULT_TIMEOUT_SCRIPT}）")
+    parser.add_argument("--keep-artifacts", action="store_true",
+                        help="跑前不清空该资产旧产出（默认清空防 AI 复用旧结果；"
+                             "留给迭代/优化场景复用旧产出的钩子）")
     parser.add_argument("--opencode", default="",
                         help="agent 启动器完整路径（默认先找 nga 再找 opencode；"
                              "解析不到时显式指定，如内网 nga 或 Windows 的 "
@@ -417,6 +445,7 @@ def main() -> int:
                 timeout_ai=args.timeout_ai,
                 timeout_script=args.timeout_script,
                 timeout_pipe=args.timeout_pipe,
+                keep_artifacts=args.keep_artifacts,
             )
             exit_code = exit_code or rc
             if rc:
@@ -444,6 +473,7 @@ def main() -> int:
         timeout_ai=args.timeout_ai,
         timeout_script=args.timeout_script,
         timeout_pipe=args.timeout_pipe,
+        keep_artifacts=args.keep_artifacts,
     )
     return rc
 
