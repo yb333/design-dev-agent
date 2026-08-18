@@ -214,25 +214,20 @@ def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: d
     return "\n".join(lines)
 
 
-# 类型归一化：mapping 可能写非标准类型（int8(64)/number(10,2)/datetime），
-# 归一化到高斯支持的写法。加新映射 = 在此列表追加一行。
+# 类型归一化：只转「mapping 合法但 Gauss 非法」的写法——int 家族带精度后缀（int4(32) 是
+# Oracle 合法写法，Gauss 拒绝）。类型本身 Gauss 认的（nvarchar2/varchar2/number/datetime/
+# tinyint/裸 int8 等）一律原样透传：mapping 是目标类型的 source of truth，写错了改 mapping
+# （precheck 源头提示），DDL 不代改。加新映射 = 在此列表追加一行。
 _TYPE_NORMALIZE = [
-    (re.compile(r"^int8(\(\d+\))?$", re.I), "bigint"),       # int8 / int8(64) → bigint
-    (re.compile(r"^int4(\(\d+\))?$", re.I), "integer"),      # int4 / int4(10) → integer
-    (re.compile(r"^int2(\(\d+\))?$", re.I), "smallint"),
-    (re.compile(r"^int(\(\d+\))?$", re.I), "integer"),       # int / int(11) → integer
-    (re.compile(r"^number\((\d+),\s*(\d+)\)$", re.I), r"numeric(\1,\2)"),  # number(10,2) → numeric(10,2)
-    (re.compile(r"^number\((\d+)\)$", re.I), r"numeric(\1)"),
-    (re.compile(r"^datetime$", re.I), "timestamp"),
-    (re.compile(r"^nvarchar2?\((\d+)\)$", re.I), r"varchar(\1)"),   # nvarchar(N)/nvarchar2(N) → varchar(N)
-    (re.compile(r"^varchar2\((\d+)\)$", re.I), r"varchar(\1)"),     # Oracle varchar2 → varchar
-    (re.compile(r"^tinyint$", re.I), "smallint"),
-    # varchar(N) / numeric(N,M) / decimal / char(N) / text / date 等保留
+    (re.compile(r"^int8\(\d+\)$", re.I), "bigint"),       # int8(64) → bigint（裸 int8 Gauss 认，不动）
+    (re.compile(r"^int4\(\d+\)$", re.I), "integer"),      # int4(32) → integer
+    (re.compile(r"^int2\(\d+\)$", re.I), "smallint"),     # int2(16) → smallint
+    (re.compile(r"^int\(\d+\)$", re.I), "integer"),       # int(11) → integer
 ]
 
 
 def normalize_type(t: str) -> str:
-    """归一化字段类型到高斯支持的写法（mapping 可能写 int8(64) 等非标准形式）。"""
+    """归一化字段类型：只处理「带精度后缀的 int 家族」这类 mapping 合法但 Gauss 非法的写法，其余原样透传。"""
     if not t:
         return ""
     t = t.strip()
@@ -243,7 +238,7 @@ def normalize_type(t: str) -> str:
 
 
 def type_or_empty(t: str) -> str:
-    """字段类型（归一化到高斯写法），空则返回空"""
+    """字段类型（带精度 int 家族归一，其余原样），空则返回空"""
     return normalize_type(t) if t else ""
 
 

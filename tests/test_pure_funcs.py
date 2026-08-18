@@ -137,25 +137,23 @@ class TestTypeOrEmpty:
 
 
 class TestNormalizeType:
+    """归一化只处理「mapping 合法但 Gauss 非法」的带精度 int 家族；其余类型原样透传（mapping 是 source of truth）。"""
+
     def test_int8_with_precision(self):
         from assemble_ddl import normalize_type
         assert normalize_type("int8(64)") == "bigint"
 
-    def test_int8_bare(self):
+    def test_int8_bare_passthrough(self):
         from assemble_ddl import normalize_type
-        assert normalize_type("int8") == "bigint"
+        assert normalize_type("int8") == "int8"  # 裸 int8 Gauss 认，不动
 
     def test_int4_to_integer(self):
         from assemble_ddl import normalize_type
         assert normalize_type("int4(10)") == "integer"
 
-    def test_number_to_numeric(self):
-        from assemble_ddl import normalize_type
-        assert normalize_type("number(10,2)") == "numeric(10,2)"
-
     def test_varchar_kept(self):
         from assemble_ddl import normalize_type
-        assert normalize_type("varchar(100)") == "varchar(100)"  # 保留
+        assert normalize_type("varchar(100)") == "varchar(100)"
 
     def test_case_insensitive(self):
         from assemble_ddl import normalize_type
@@ -165,17 +163,20 @@ class TestNormalizeType:
         from assemble_ddl import normalize_type
         assert normalize_type("") == ""
 
-    def test_nvarchar_to_varchar(self):
+    def test_nvarchar_passthrough(self):
         from assemble_ddl import normalize_type
-        assert normalize_type("nvarchar(50)") == "varchar(50)"
+        assert normalize_type("nvarchar(50)") == "nvarchar(50)"
+        assert normalize_type("nvarchar2(1)") == "nvarchar2(1)"  # 审计 del_flag 标准写法
 
-    def test_varchar2_to_varchar(self):
+    def test_varchar2_passthrough(self):
         from assemble_ddl import normalize_type
-        assert normalize_type("varchar2(100)") == "varchar(100)"
+        assert normalize_type("varchar2(100)") == "varchar2(100)"
 
-    def test_tinyint_to_smallint(self):
+    def test_number_datetime_tinyint_passthrough(self):
         from assemble_ddl import normalize_type
-        assert normalize_type("tinyint") == "smallint"
+        assert normalize_type("number(10,2)") == "number(10,2)"
+        assert normalize_type("datetime") == "datetime"
+        assert normalize_type("tinyint") == "tinyint"
 
 
 class TestGenerateRollback:

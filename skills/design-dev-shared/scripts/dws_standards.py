@@ -8,7 +8,7 @@
 """
 
 # 标准审计字段模板（4个固定字段，用于补充缺失的审计字段）
-# 源端标准写法；DDL 侧 assemble_ddl.normalize_type 转 varchar(1)
+# 源端标准写法，DDL 原样透传（normalize_type 只归一带精度 int 家族，不改字符类型）
 STANDARD_AUDIT_TEMPLATE = {
     "del_flag":            {"type": "nvarchar2(1)",                   "default": "'N'"},
     "crt_cycle_id":        {"type": "bigint",                         "default": "'${P_CYCLE_ID}'"},
