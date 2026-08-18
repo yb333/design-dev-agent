@@ -110,7 +110,9 @@ class EvalReport:
 def run_cmd(cmd: list[str], timeout: int = 600) -> tuple[int, str, str]:
     """运行命令，返回 (退出码, stdout, stderr)"""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(ROOT))
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
+                           timeout=timeout, cwd=str(ROOT))
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         return -1, "", f"超时({timeout}s)"

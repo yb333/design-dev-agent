@@ -106,6 +106,10 @@ def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tupl
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            # 强制 UTF-8 解码：子进程（opencode/nga）输出 UTF-8，中文 Windows 的
+            # Popen(text=True) 默认按 locale(GBK) 解 → UnicodeDecodeError 崩读线程
+            encoding="utf-8",
+            errors="replace",
             cwd=str(cwd or ROOT),
         )
     except Exception as e:
@@ -147,7 +151,13 @@ def _run_stream(cmd: list[str], timeout: float, cwd: Path | None = None) -> tupl
         combined = "".join(buf) + f"\n[TIMEOUT] 超时({timeout:.0f}s)已终止: {' '.join(cmd[:3])}..."
         print(f"    {combined.rsplit(chr(10), 1)[-1]}", flush=True)
         return -1, combined
-    proc.wait()
+    # EOF 后有界等待：读线程若异常退出（等编码问题），子进程可能还卡在写管道，
+    # 无界 wait 会死锁——给 30s 宽限后 kill 收割
+    try:
+        proc.wait(timeout=30)
+    except Exception:
+        proc.kill()
+        proc.wait()
     return proc.returncode or 0, "".join(buf)
 
 

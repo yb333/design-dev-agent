@@ -44,3 +44,11 @@ class TestRunStream:
     def test_nonzero_exit_propagates(self):
         code, out = _run_stream([sys.executable, "-c", "import sys; sys.exit(3)"], timeout=10)
         assert code == 3
+
+
+class TestUtf8Passthrough:
+    def test_chinese_output_decoded(self):
+        """子进程 UTF-8 中文输出完整解码（Windows GBK 崩溃回归）。"""
+        code, out = _run_stream([sys.executable, "-c", "print('中文输出测试✅')"], timeout=10)
+        assert code == 0
+        assert "中文输出测试" in out
