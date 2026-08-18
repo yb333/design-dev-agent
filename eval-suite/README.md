@@ -46,7 +46,7 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
 | 层 | 判什么 | 失败归因 |
 |---|---|---|
 | 流程层 | preprocess/precheck/designer/coder/DDL/export 各阶段 | 脚本/契约/案例数据 |
-| 产物层 | ts.json 结构/文件齐全/DDL回退成对 | assemble_* 脚本 |
+| 产物层 | ts.json 结构/文件齐全/DDL回退成对/**DDL自洽（列/类型/分布键/视图列/回退DROP）** | assemble_ddl 脚本（不一致即其锅） |
 | design 质量 | business_key/field_targets/load_mode/join_safety | designer 角色 |
 | code 质量 | 字段完整/JOIN 覆盖/GROUP BY 粒度/CASE ELSE | coder 角色 |
 | **golden 命中** | 产出指纹 vs 人审 golden 集合 | **待人工裁决**（新方案→promote；回归→修） |
@@ -61,20 +61,44 @@ python3 eval-suite/v2/promote.py --case X [--name 方案A] [--from <deliver路�
    口径签名 = 每字段引用的源列+聚合函数+常量（CAST/COALESCE 包裹不改签名；
    SUM vs 裸列、引用错列、常量变了都会 diff）——映射忠实度（L3）靠它比对。
 3. **多解兼容**：golden 集合可存多个方案（方案A/B/C），命中任一即 PASS；
-   全不中 = 越界 → FAIL 标出与最接近方案的差异，待人工裁决。
+   全不中 = 越界 → FAIL 并**逐维度并排给出证据**（`business_key: golden=[..] | 实际=[..]`），
+   待人工裁决——命中不了自己就能看出差在哪。
+4. **严格命中不归一化**：表命名/常量/参数化写法都算差异（命名有标准，不合标准就是要暴露）；
+   指纹维度含 DDL（每表列+类型）。
 4. 典型循环：实际调测出认可产出 → promote 沉淀 → `--repeat N` 批量测 →
    报告里出现"未命中"轮 → 人裁决（新方案再 promote 一个 / 视为回归去修）。
 
-## 五、稳定性报告怎么读
+## 五、评分体系（扣分制）
 
-- **每轮结果**：N 轮各自通过/失败 + golden 命中状态；异常轮产出已留档
+**命中 golden = 100 分基准，按差异/断言失败扣分**——分数进 baseline 快照，
+跨轮可比；稳定性报告有每轮分数和趋势。
+
+| 扣分类别 | 单项扣分 | 触发 |
+|---|---|---|
+| design_contract | -20 | business_key/规则集/load_mode 契约不符 |
+| self_consistency | -15 | DDL列≠ts列 / 类型不符 / SELECT漏字段 / 回退缺DROP / 视图列缺 |
+| field_caliber | -10 | golden 字段口径差异（SUM vs 裸列/引用错列/常量变值） |
+| pipeline_stage | -10 | 流程阶段挂 |
+| artifact | -8 | 其他产物层断言失败 |
+| design_default | -6 | 其他 design 层断言失败 |
+| code_default | -6 | 其他 code 层断言失败 |
+| structure_std | -5 | golden 结构差异（表结构/数据流/JOIN/GROUP_BY） |
+
+- 无 golden 案例：只按断言层扣分（报告标注"无golden（仅断言层计分）"）
+- 权重按案例覆盖：checks.yaml 加 `scoring: {design_contract: 30}`（只写要改的键）
+- 报告呈现：总分（带上轮分数）+ 扣分明细（类别/扣分/描述）
+
+## 六、稳定性报告怎么读
+
+- **每轮结果**：N 轮各自通过/失败 + **分数** + golden 命中状态；异常轮产出已留档
+- **分数趋势**：一行分数序列 + 波动统计（min/max/首末）——`92 95 92 40` 一眼看出第4轮炸了
 - **断言稳定性**：`稳定过`（N/N 全过）/ `稳定挂`（0/N 全挂，系统性问题）/
   `摇摆`（时过时挂——agent 非确定性的直接信号，看失败那几轮差在哪）
 - **golden 命中分布**：方案A 6/10 + 方案B 3/10 = 正常波动（都审过）；
   `未命中 1/10` = 越界轮，待裁决
 - **流程阶段稳定性**：某阶段偶发挂（如 precheck 9/10）也是摇摆信号
 
-## 六、其他约定
+## 七、其他约定
 
 - **执行方式**：默认**真实入口**（`<启动器> run --command new-pipe` + 显式非交互声明，
   编排 100% 走 commands/new-pipe.md，评测零编排拷贝）；`--replay` 为分阶段重放诊断模式。

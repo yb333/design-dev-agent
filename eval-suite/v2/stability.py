@@ -116,7 +116,18 @@ def render_stability(case_name: str, snaps: list[dict]) -> str:
         case_dir = baseline.RESULTS_DIR / baseline._safe_name(case_name) / ts_dir
         if (case_dir / "artifacts").exists():
             archived = f"  [产出已留档: .../{ts_dir}/artifacts]"
-        lines.append(f"  #{i:<2} {icon} {p}通过/{f}失败  golden: {gs}{archived}")
+        sc = snap.get("score")
+        score_part = f"  分数 {sc}" if sc is not None else ""
+        lines.append(f"  #{i:<2} {icon} {p}通过/{f}失败{score_part}  golden: {gs}{archived}")
+
+    # 分数趋势
+    scores = [s.get("score") for s in snaps if s.get("score") is not None]
+    if scores:
+        lines.append("")
+        lines.append("── 分数趋势 ─────────────────────────────────────────")
+        lines.append("  " + " ".join(str(x) for x in scores))
+        if len(scores) > 1:
+            lines.append(f"  波动: min {min(scores)} / max {max(scores)} / 首末 {scores[0]}→{scores[-1]}")
 
     # 断言稳定性
     rows = classify_assertions(snaps)["rows"]

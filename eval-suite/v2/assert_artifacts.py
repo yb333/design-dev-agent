@@ -24,6 +24,8 @@ from validators.base import CheckResult, CheckStatus  # type: ignore
 
 from checks_schema import DEFAULT_ARTIFACT_CHECKS
 from _paths import find_select_file, find_ts_md
+import assert_sql
+from golden import parse_ddl_columns
 
 
 def run_artifact_checks(
@@ -74,6 +76,117 @@ def run_artifact_checks(
     # 7. I 视图无 SELECT *
     if cfg.get("no_select_star_in_view", True):
         results.extend(_check_no_select_star(output_dir, ts))
+
+    # 8. DDL 自洽（零配置默认）：DDL↔ts 列/类型/分布键 + 视图列 + 回退内容
+    results.extend(_check_ddl_consistency(output_dir, ts))
+
+    return results
+
+
+# ============================================================
+# DDL 自洽断言（生成环节 bug 的探测器，归因精确：不一致=对应生成脚本问题）
+# ============================================================
+
+
+def _norm_type(t: str) -> str:
+    """类型归一：小写去空格；返回 (基类型, 精度或空)。"""
+    t = (t or "").strip().lower().replace(" ", "")
+    base, _, prec = t.partition("(")
+    return base, prec.rstrip(")") if prec else ""
+
+
+def _check_ddl_consistency(output_dir: Path, ts: dict) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    audit = {k.lower() for k in ts.get("design", {}).get("audit_fields", {})}
+    ddl_dir = output_dir / "ddl"
+
+    for tname, tdef in (ts.get("tables") or {}).items():
+        ddl_file = ddl_dir / f"create_table_{tname}.sql"
+        if not ddl_file.exists():
+            continue  # 文件缺失由文件齐全检查负责
+        ddl_cols = parse_ddl_columns(ddl_file)
+
+        # 8a. 列集合：DDL ⊇ ts fields；DDL 多出的列必须属于审计字段
+        ts_fields = {f.get("target_field", "").lower(): (f.get("field_type") or "")
+                     for f in tdef.get("fields", [])}
+        missing = set(ts_fields) - set(ddl_cols)
+        extra = set(ddl_cols) - set(ts_fields) - audit
+        if missing or extra:
+            parts = []
+            if missing:
+                parts.append(f"DDL缺列 {sorted(missing)}")
+            if extra:
+                parts.append(f"DDL多出非审计列 {sorted(extra)}")
+            results.append(CheckResult(
+                check_type="artifacts", status=CheckStatus.FAIL,
+                detail=f"DDL列≠ts列[{tname}]: {'; '.join(parts)}（→ assemble_ddl）",
+            ))
+        else:
+            results.append(CheckResult(
+                check_type="artifacts", status=CheckStatus.PASS,
+                detail=f"DDL列自洽[{tname}] ({len(ddl_cols)}列)",
+            ))
+
+        # 8b. 类型一致：基类型必须相等；双方都有精度时精度也须相等
+        bad_types = []
+        for col, ts_type in ts_fields.items():
+            ddl_type = ddl_cols.get(col, "")
+            if not ddl_type:
+                continue
+            b1, p1 = _norm_type(ts_type)
+            b2, p2 = _norm_type(ddl_type)
+            if b1 != b2 or (p1 and p2 and p1 != p2):
+                bad_types.append(f"{col}: ts={ts_type} ddl={ddl_type}")
+        if bad_types:
+            results.append(CheckResult(
+                check_type="artifacts", status=CheckStatus.FAIL,
+                detail=f"DDL类型≠ts类型[{tname}]: {bad_types[:4]}（→ assemble_ddl）",
+            ))
+
+        # 8c. 分布键：ts 声明了 distribution_key → DDL 必须真有 DISTRIBUTE BY 且含键列
+        dist_keys = [k.lower() for k in (tdef.get("distribution_key") or [])]
+        if dist_keys:
+            content = ddl_file.read_text(encoding="utf-8").lower()
+            if "distribute by" not in content:
+                results.append(CheckResult(
+                    check_type="artifacts", status=CheckStatus.FAIL,
+                    detail=f"DDL缺DISTRIBUTE BY[{tname}]（ts声明分布键{dist_keys}）（→ assemble_ddl）",
+                ))
+            else:
+                absent = [k for k in dist_keys if k not in content]
+                if absent:
+                    results.append(CheckResult(
+                        check_type="artifacts", status=CheckStatus.FAIL,
+                        detail=f"DDL分布键缺列[{tname}]: {absent}（→ assemble_ddl）",
+                    ))
+
+    # 8d. I 视图列 == F 表 DDL 列
+    meta = ts.get("meta", {}).get("target", {})
+    i_view = meta.get("i_view", {}).get("table", "")
+    f_table = meta.get("f_table", {}).get("table", "")
+    view_file = output_dir / "ddl" / f"create_view_{i_view}.sql" if i_view else None
+    f_ddl = output_dir / "ddl" / f"create_table_{f_table}.sql" if f_table else None
+    if view_file and view_file.exists() and f_ddl and f_ddl.exists():
+        view_cols = {c.lower() for c in assert_sql._extract_select_columns(
+            view_file.read_text(encoding="utf-8"))}
+        f_cols = set(parse_ddl_columns(f_ddl))
+        miss = f_cols - view_cols
+        if miss:
+            results.append(CheckResult(
+                check_type="artifacts", status=CheckStatus.FAIL,
+                detail=f"I视图列缺F表列[{i_view}]: {sorted(miss)[:6]}（→ assemble_ddl）",
+            ))
+
+    # 8e. 回退 SQL 必须含 DROP（成对性已有检查，这里查内容）
+    rb_dir = output_dir / "ddl_rollback"
+    if rb_dir.exists():
+        no_drop = [f.name for f in sorted(rb_dir.iterdir())
+                   if f.suffix == ".sql" and "drop" not in f.read_text(encoding="utf-8").lower()]
+        if no_drop:
+            results.append(CheckResult(
+                check_type="artifacts", status=CheckStatus.FAIL,
+                detail=f"回退SQL缺DROP语句: {no_drop[:4]}（→ assemble_ddl）",
+            ))
 
     return results
 

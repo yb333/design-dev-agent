@@ -44,6 +44,7 @@ from report_v2 import render_report  # noqa: E402
 from _paths import find_deliver, find_mapping_file, find_rs_file  # noqa: E402
 import baseline  # noqa: E402
 import golden  # noqa: E402
+import scoring  # noqa: E402
 import stability  # noqa: E402
 
 
@@ -290,8 +291,11 @@ def _run_repeat(
             result = run_evaluation(deliver, config, pipeline_steps)
             _attach_golden(result, deliver, case_dir)
 
+            score = scoring.score_result(result, deliver, case_dir, weights_override=config.scoring)
             snapshot = baseline.snapshot_from_result(result)
             snapshot.case_name = case_name
+            snapshot.score = score["total"]
+            snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d in score["deductions"]]
             baseline.save_snapshot(snapshot)
 
             stats = result.summary()
@@ -299,7 +303,7 @@ def _run_repeat(
             f = sum(v["fail"] for v in stats.values())
             golden_results = result.layer_results.get("golden", [])
             gs = golden_results[0].detail.split("\n")[0] if golden_results else "无golden"
-            print(f"  ▸ 本轮: ✅{p} ❌{f}  golden: {gs}")
+            print(f"  ▸ 本轮: ✅{p} ❌{f}  分数 {score['total']}/100  golden: {gs}")
 
             if pipeline_failed or _result_has_fail(result):
                 dest = _archive_anomalous_artifacts(case_name, snapshot, deliver)
@@ -392,13 +396,17 @@ def run_one_case(
     prev = baseline.find_latest_baseline(case_name)
     diff = baseline.diff_against_baseline(result, prev)
 
-    # 存档：snapshot 用目录名，保证查找一致
+    # 存档：snapshot 用目录名，保证查找一致（带分数，跨轮可比）
+    score = scoring.score_result(result, deliver, case_dir, weights_override=config.scoring)
     snapshot = baseline.snapshot_from_result(result)
     snapshot.case_name = case_name
+    snapshot.score = score["total"]
+    snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d in score["deductions"]]
     saved_path = baseline.save_snapshot(snapshot)
     print(f"[v2] baseline 已存档: {saved_path.name}")
 
     print(render_report(result, diff))
+    print(scoring.render_score(score, prev_total=diff.baseline_score if diff.has_baseline else None))
 
     has_fail = _result_has_fail(result)
     return (1 if has_fail else 0), _fail_summary_line(result, pipeline_steps)

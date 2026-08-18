@@ -49,6 +49,8 @@ class BaselineSnapshot:
     layer_stats: dict  # {layer: {pass, fail, skip}}
     checks: list[CheckRecord]
     pipeline_steps: list[dict] = field(default_factory=list)
+    score: int | None = None  # 扣分制总分（跨轮可比）
+    deductions: list[dict] = field(default_factory=list)  # [{cat,weight,desc}]
 
 
 def _git_sha() -> str:
@@ -132,6 +134,8 @@ def save_snapshot(snapshot: BaselineSnapshot) -> Path:
         "layer_stats": snapshot.layer_stats,
         "pipeline_steps": snapshot.pipeline_steps,
         "checks": [asdict(c) for c in snapshot.checks],
+        "score": snapshot.score,
+        "deductions": snapshot.deductions,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -168,6 +172,8 @@ def _load_snapshot(path: Path) -> BaselineSnapshot | None:
         layer_stats=data.get("layer_stats", {}),
         checks=checks,
         pipeline_steps=data.get("pipeline_steps", []),
+        score=data.get("score"),
+        deductions=data.get("deductions", []),
     )
 
 
@@ -181,6 +187,7 @@ class BaselineDiff:
     has_baseline: bool = False
     baseline_timestamp: str = ""
     baseline_git_sha: str = ""
+    baseline_score: int | None = None
 
 
 def diff_against_baseline(
@@ -193,6 +200,7 @@ def diff_against_baseline(
     d.has_baseline = True
     d.baseline_timestamp = baseline.timestamp
     d.baseline_git_sha = baseline.git_sha
+    d.baseline_score = baseline.score
 
     # 建 baseline 的 (layer, key) → status 索引
     base_map: dict[tuple[str, str], str] = {}

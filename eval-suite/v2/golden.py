@@ -14,6 +14,7 @@ golden 纪律（对齐红线"语义判断不自主"）：
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -38,6 +39,7 @@ def fingerprint(deliver: Path) -> dict:
         "field_targets": [],
         "tables": {},
         "rule_flow": {},
+        "ddl": {},
         "selects": {},
     }
     ts_path = deliver / "ts.json"
@@ -85,6 +87,16 @@ def fingerprint(deliver: Path) -> dict:
         except Exception:
             pass
 
+    # DDL 维度：每表列集合 {列:类型}（ts 有表定义且 ddl 文件存在才采）
+    ddl: dict[str, dict] = {}
+    ddl_dir = deliver / "ddl"
+    for tname in (ts.get("tables") or {}):
+        ddl_file = ddl_dir / f"create_table_{tname}.sql"
+        parsed = parse_ddl_columns(ddl_file)
+        if parsed:
+            ddl[tname] = parsed
+    fp["ddl"] = ddl
+
     for code in rules:
         sql_file = find_select_file(deliver, code)
         if not sql_file:
@@ -118,6 +130,8 @@ def compare(fp_a: dict, fp_b: dict) -> tuple[bool, list[str]]:
         diffs.append("表结构(类型/分布键/build_mode)")
     if fp_a.get("rule_flow") != fp_b.get("rule_flow"):
         diffs.append("规则数据流(源表/目标表)")
+    if fp_a.get("ddl") != fp_b.get("ddl"):
+        diffs.append("DDL(列/类型)")
     codes = sorted(set(fp_a.get("selects", {})) | set(fp_b.get("selects", {})))
     for code in codes:
         sa, sb = fp_a.get("selects", {}).get(code), fp_b.get("selects", {}).get(code)
@@ -137,6 +151,34 @@ def compare(fp_a: dict, fp_b: dict) -> tuple[bool, list[str]]:
         if diff_fields:
             diffs.append(f"{code}:字段口径({','.join(diff_fields[:4])})")
     return (not diffs, diffs)
+
+
+def parse_ddl_columns(ddl_path: Path) -> dict[str, str]:
+    """解析 CREATE TABLE 的列定义：{列名: 原始类型}（自洽断言与 golden 指纹共用）。
+
+    行式解析 assemble_ddl 生成的标准 DDL：列行在 CREATE TABLE ( 与 ) 之间，
+    形如 `  col_name varchar(50) COMMENT '..'`。解析不了的行跳过（容错）。
+    """
+    cols: dict[str, str] = {}
+    if not ddl_path.exists():
+        return cols
+    try:
+        in_cols = False
+        for line in ddl_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not in_cols:
+                if "create table" in stripped.lower() and "(" in stripped:
+                    in_cols = True
+                continue
+            if stripped.startswith(")"):
+                break
+            m = re.match(r'^"?\s*([A-Za-z_][\w]*)"?\s+([A-Za-z_][\w]*(?:\s*\([^)]*\))?)',
+                         stripped, re.IGNORECASE)
+            if m:
+                cols[m.group(1).lower()] = m.group(2).strip().lower()
+        return cols
+    except Exception:
+        return {}
 
 
 def load_goldens(case_dir: Path) -> dict[str, dict]:
@@ -183,17 +225,48 @@ def golden_check(deliver: Path, case_dir: Path) -> list[CheckResult]:
                     check_type="golden", status=CheckStatus.PASS, detail=f"命中 golden: {name}"
                 )
             ]
-    # 越界：找差异点最少的 golden 给参照
+    # 越界：找差异点最少的 golden 给参照，差异给自解释证据（golden vs 实际并排）
     best_name, best_diffs = min(
         ((n, compare(fp, g)[1]) for n, g in goldens.items()), key=lambda x: len(x[1])
     )
+    evidence = _diff_evidence(fp, goldens[best_name])
     return [
         CheckResult(
             check_type="golden",
             status=CheckStatus.FAIL,
             detail=(
-                f"未命中任何 golden（越界，待人工裁决）— "
-                f"与最接近的 {best_name} 差异: {best_diffs[:6]}"
+                f"未命中任何 golden（越界，待人工裁决）— 与 {best_name} 的差异证据:\n"
+                + "\n".join(evidence[:10])
+                + (f"\n（其余 {max(0, len(evidence) - 10)} 项略，全文见 scoring 明细）" if len(evidence) > 10 else "")
             ),
         )
     ]
+
+
+def _diff_evidence(fp: dict, gfp: dict) -> list[str]:
+    """逐维度生成自解释差异证据：维度名: golden=[...] vs 实际=[...]。"""
+    import json as _json
+
+    def _short(v, n=90):
+        return _json.dumps(v, ensure_ascii=False, sort_keys=True)[:n]
+
+    lines: list[str] = []
+    for dim in ("business_key", "rules", "load_modes", "field_targets", "tables",
+                "rule_flow", "ddl"):
+        a, b = fp.get(dim), gfp.get(dim)
+        if a != b:
+            lines.append(f"  {dim}: golden={_short(b)} | 实际={_short(a)}")
+    codes = sorted(set(fp.get("selects", {})) | set(gfp.get("selects", {})))
+    for code in codes:
+        sa, sb = fp.get("selects", {}).get(code), gfp.get("selects", {}).get(code)
+        if sa is None or sb is None:
+            lines.append(f"  {code}.SELECT: golden={'有' if sb else '无'} | 实际={'有' if sa else '无'}")
+            continue
+        for k in ("fields", "joins", "group_by"):
+            if sa.get(k) != sb.get(k):
+                lines.append(f"  {code}.{k}: golden={_short(sb.get(k))} | 实际={_short(sa.get(k))}")
+        fa, fb = sa.get("field_sigs", {}), sb.get("field_sigs", {})
+        for f in sorted(set(fa) | set(fb)):
+            if fa.get(f) != fb.get(f):
+                lines.append(f"  {code}.口径[{f}]: golden={_short(fb.get(f), 70)} | 实际={_short(fa.get(f), 70)}")
+    return lines

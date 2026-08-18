@@ -36,6 +36,16 @@ DESIGN_KEYS = {
     "field_not_mapped_from",
     "load_mode_expected",
 }
+SCORING_KEYS = {  # 扣分类别（scoring.py DEFAULT_WEIGHTS 的键），值=该类单项扣分
+    "design_contract",
+    "self_consistency",
+    "field_caliber",
+    "structure_std",
+    "pipeline_stage",
+    "artifact",
+    "design_default",
+    "code_default",
+}
 CODE_RULE_KEYS = {
     "fields_required",
     "join_tables",
@@ -56,6 +66,7 @@ class ChecksConfig:
     artifacts: dict[str, Any] = field(default_factory=dict)
     design: dict[str, Any] = field(default_factory=dict)
     code: dict[str, Any] = field(default_factory=dict)
+    scoring: dict[str, Any] = field(default_factory=dict)
 
 
 def _validate_section(section: str, data: dict, allowed: set[str]) -> None:
@@ -96,12 +107,16 @@ def load_checks(checks_path: Path) -> ChecksConfig:
             raise ValueError(f"checks.yaml code.{rule_code} 必须是映射，当前: {type(rule_cfg).__name__}")
         _validate_section(f"code.{rule_code}", rule_cfg, CODE_RULE_KEYS)
 
+    scoring = raw.get("scoring", {})
+    _validate_section("scoring", scoring, SCORING_KEYS)
+
     return ChecksConfig(
         case_name=case.get("name", ""),
         rules_expected=case.get("rules_expected", []),
         artifacts=artifacts,
         design=design,
         code=code,
+        scoring=scoring,
     )
 
 
