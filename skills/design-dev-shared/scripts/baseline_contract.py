@@ -15,7 +15,9 @@ from typing import Dict, List, Optional
 from jsonschema import Draft202012Validator
 
 # 本仓支持的契约版本（与 vendor schema 同步维护）
-SUPPORTED_VERSIONS = {"1.0"}
+# "1.0"：初版（09-契约 交接基线）；"1.1"：write_plan 增量（analyzer 仓主导，
+#   权威契约见 dws-analyzer-skill/docs/baseline_v1-契约.md §二）
+SUPPORTED_VERSIONS = {"1.0", "1.1"}
 
 # vendor schema 路径：design-dev-shared/schemas/baseline_v1.schema.json
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schemas" / "baseline_v1.schema.json"

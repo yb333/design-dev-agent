@@ -6,7 +6,20 @@ depends_on: [./01-逆向契约.md]
 
 # baseline_v1 契约（正式版）
 
-> 面向 dws-analyzer-skill 侧实施的接口规格。立场与推导过程见 [01-逆向契约.md](./01-逆向契约.md)；本文件是可执行的约定。**schema 文档与 JSON Schema 文件以 analyzer 仓为准**（与投影代码同仓维护），本仓 vendor 一份带版本拷贝做消费端校验。
+> 面向 dws-analyzer-skill 侧实施的接口规格。立场与推导过程见 [01-逆向契约.md](./01-逆向契约.md)；本文件是可执行的约定。**v1.1 起权威侧在 analyzer 仓**（`dws-analyzer-skill/docs/baseline_v1-契约.md` + 其仓内 schema），本仓 vendor 拷贝 + 消费端校验器跟随同步；本文件保留 v1.0 交接基线并记录同步纪要。
+
+---
+
+## ⓪ v1.1 同步纪要（2026-08-18，analyzer 侧主导的增量）
+
+analyzer 侧完成 `--export baseline_v1` 实施并主导 v1.1 增量（write_plan）。我方已完成同步：
+
+- vendor schema 已覆盖为权威版（v1.1）；`SUPPORTED_VERSIONS = {"1.0","1.1"}`；v1.1 案例产物已 vendor 为第二 fixture（`baseline_v1_case_merge_upsert.json`）；向后兼容经我方校验器复验（v1.0 产物过 v1.1 schema）。
+- **枚举映射权责两层化（修订原"映射归消费方"立场）**：`delete_mode → write_plan.kind` 归 analyzer 侧按 platform_generation 维护（解析语料权威在解析侧）；`kind → load_mode` 归我方（load_mode 是本体系概念）。平台迁移时代次机制不变。
+- **语义分级扩展为四层**：事实（逐字）/ **结构化（write_plan——确定性文法翻译，非推断，新增层）** / hint / 语义（永不进契约）。分界线从"事实 vs 语义"修正为"**文法解析 vs 业务推断**"。
+- **围栏锚点纪律补充**：围栏比对继续锚逐字原文（query_sql / delete_condition / raw_expr）；`write_plan.condition_expr` 在 `condition_source=query_sql` 时为等价重排版**非逐字**，只作消费便利不作比对锚。
+- 认知修正：delete_mode 全枚举 1-9（此前只见 1-6；7=rpt_item 语义未定、8=update、9=交换分区）；tables[].fields = DDL ∪ 血缘字段名；warnings 新增 write_plan_gap 类。
+- 我方待办（挂 ts_baseline 组装）：`kind → load_mode` 映射表需覆盖 subpartition_truncate / rpt_item / exchange_partition（现有 load_mode 词表可能不够，缺的在 baseline_view 显式报"写入类型待定"而非硬映射）。
 
 ---
 

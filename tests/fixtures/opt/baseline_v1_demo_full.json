@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "asset": {
     "schema": "dws",
     "table": "dwb_trade_order_d",
@@ -11,11 +11,26 @@
     "platform_generation": "1.0"
   },
   "provenance": [
-    { "type": "execution_tasks", "path": "demo_repo/execution_tasks_DWB_TRADE_ORDER_D.xlsx" },
-    { "type": "lts", "path": "demo_repo/LTS/BCNB_DAILY/GROUP_TRADE/TASK_TRADE_ORDER_F.yml" },
-    { "type": "lts", "path": "demo_repo/LTS/BCNB_DAILY/GROUP_TRADE/TASK_TRADE_ORDER_I.yml" },
-    { "type": "dq", "path": "demo_repo/DQ/FIN_DWB/FIN_DWB_COMMEN/dwb_trade_order_d/DQ_000001.yml" },
-    { "type": "dq", "path": "demo_repo/DQ/FIN_DWB/FIN_DWB_COMMEN/dwb_trade_order_d/DQ_000002.yml" }
+    {
+      "type": "execution_tasks",
+      "path": "demo_repo/execution_tasks_DWB_TRADE_ORDER_D.xlsx"
+    },
+    {
+      "type": "lts",
+      "path": "demo_repo/LTS/BCNB_DAILY/GROUP_TRADE/TASK_TRADE_ORDER_F.yml"
+    },
+    {
+      "type": "lts",
+      "path": "demo_repo/LTS/BCNB_DAILY/GROUP_TRADE/TASK_TRADE_ORDER_I.yml"
+    },
+    {
+      "type": "dq",
+      "path": "demo_repo/DQ/FIN_DWB/FIN_DWB_COMMEN/dwb_trade_order_d/DQ_000001.yml"
+    },
+    {
+      "type": "dq",
+      "path": "demo_repo/DQ/FIN_DWB/FIN_DWB_COMMEN/dwb_trade_order_d/DQ_000002.yml"
+    }
   ],
   "rules": [
     {
@@ -29,13 +44,27 @@
       "delete_mode": "1",
       "delete_condition": "",
       "query_sql": "SELECT a.order_id, a.cust_id, a.amount FROM ods.ods_trade_order_di a WHERE a.del='N'",
-      "source_tables": ["ods.ods_trade_order_di"],
+      "source_tables": [
+        "ods.ods_trade_order_di"
+      ],
       "joins": [
-        { "source_table": "ods.ods_trade_order_di", "alias": "a", "join_type": "FROM", "join_condition": "" }
+        {
+          "source_table": "ods.ods_trade_order_di",
+          "alias": "a",
+          "join_type": "FROM",
+          "join_condition": ""
+        }
       ],
       "where_clause": "WHERE a.del = 'N'",
       "group_by": [],
-      "is_view_step": false
+      "is_view_step": false,
+      "write_plan": {
+        "kind": "full_truncate",
+        "condition_role": "none",
+        "condition_expr": null,
+        "condition_columns": [],
+        "condition_source": "none"
+      }
     },
     {
       "rule_code": "R0002",
@@ -48,35 +77,154 @@
       "delete_mode": "5",
       "delete_condition": "",
       "query_sql": "SELECT t.order_id, t.cust_id, SUM(t.amount) AS total_amount FROM dws.tmp_trade_order t GROUP BY t.order_id, t.cust_id",
-      "source_tables": ["dws.tmp_trade_order"],
+      "source_tables": [
+        "dws.tmp_trade_order"
+      ],
       "joins": [
-        { "source_table": "dws.tmp_trade_order", "alias": "t", "join_type": "FROM", "join_condition": "" }
+        {
+          "source_table": "dws.tmp_trade_order",
+          "alias": "t",
+          "join_type": "FROM",
+          "join_condition": ""
+        }
       ],
       "where_clause": "",
-      "group_by": ["t.order_id", "t.cust_id"],
-      "is_view_step": false
+      "group_by": [
+        "t.order_id",
+        "t.cust_id"
+      ],
+      "is_view_step": false,
+      "write_plan": {
+        "kind": "partition_truncate",
+        "condition_role": "partition_expr",
+        "condition_expr": "",
+        "condition_columns": [],
+        "condition_source": "none"
+      }
     }
   ],
   "tables": [
-    { "schema": "ods", "name": "ods_trade_order_di", "fields": [] },
-    { "schema": "dws", "name": "tmp_trade_order", "fields": [
-      { "name": "order_id", "type": "", "comment": "" },
-      { "name": "cust_id", "type": "", "comment": "" },
-      { "name": "amount", "type": "", "comment": "" }
-    ] },
-    { "schema": "dws", "name": "dwb_trade_order_d", "fields": [
-      { "name": "order_id", "type": "VARCHAR(64)", "comment": "订单ID" },
-      { "name": "cust_id", "type": "VARCHAR(64)", "comment": "客户ID" },
-      { "name": "total_amount", "type": "DECIMAL(18,2)", "comment": "订单总额" }
-    ] }
+    {
+      "schema": "ods",
+      "name": "ods_trade_order_di",
+      "fields": []
+    },
+    {
+      "schema": "dws",
+      "name": "tmp_trade_order",
+      "fields": [
+        {
+          "name": "order_id",
+          "type": "",
+          "comment": ""
+        },
+        {
+          "name": "cust_id",
+          "type": "",
+          "comment": ""
+        },
+        {
+          "name": "amount",
+          "type": "",
+          "comment": ""
+        }
+      ]
+    },
+    {
+      "schema": "dws",
+      "name": "dwb_trade_order_d",
+      "fields": [
+        {
+          "name": "order_id",
+          "type": "VARCHAR(64)",
+          "comment": "订单ID"
+        },
+        {
+          "name": "cust_id",
+          "type": "VARCHAR(64)",
+          "comment": "客户ID"
+        },
+        {
+          "name": "total_amount",
+          "type": "DECIMAL(18,2)",
+          "comment": "订单总额"
+        }
+      ]
+    }
   ],
   "lineage": [
-    { "rule_code": "R0001", "target_field": "order_id", "transform_type": "direct", "raw_expr": "a.order_id", "physical_sources": [ { "table": "ods.ods_trade_order_di", "field": "order_id" } ] },
-    { "rule_code": "R0001", "target_field": "cust_id", "transform_type": "direct", "raw_expr": "a.cust_id", "physical_sources": [ { "table": "ods.ods_trade_order_di", "field": "cust_id" } ] },
-    { "rule_code": "R0001", "target_field": "amount", "transform_type": "direct", "raw_expr": "a.amount", "physical_sources": [ { "table": "ods.ods_trade_order_di", "field": "amount" } ] },
-    { "rule_code": "R0002", "target_field": "order_id", "transform_type": "direct", "raw_expr": "t.order_id", "physical_sources": [ { "table": "ods.ods_trade_order_di", "field": "order_id" } ] },
-    { "rule_code": "R0002", "target_field": "cust_id", "transform_type": "direct", "raw_expr": "t.cust_id", "physical_sources": [ { "table": "ods.ods_trade_order_di", "field": "cust_id" } ] },
-    { "rule_code": "R0002", "target_field": "total_amount", "transform_type": "aggregate", "raw_expr": "SUM(t.amount) AS total_amount", "physical_sources": [ { "table": "ods.ods_trade_order_di", "field": "amount" } ] }
+    {
+      "rule_code": "R0001",
+      "target_field": "order_id",
+      "transform_type": "direct",
+      "raw_expr": "a.order_id",
+      "physical_sources": [
+        {
+          "table": "ods.ods_trade_order_di",
+          "field": "order_id"
+        }
+      ]
+    },
+    {
+      "rule_code": "R0001",
+      "target_field": "cust_id",
+      "transform_type": "direct",
+      "raw_expr": "a.cust_id",
+      "physical_sources": [
+        {
+          "table": "ods.ods_trade_order_di",
+          "field": "cust_id"
+        }
+      ]
+    },
+    {
+      "rule_code": "R0001",
+      "target_field": "amount",
+      "transform_type": "direct",
+      "raw_expr": "a.amount",
+      "physical_sources": [
+        {
+          "table": "ods.ods_trade_order_di",
+          "field": "amount"
+        }
+      ]
+    },
+    {
+      "rule_code": "R0002",
+      "target_field": "order_id",
+      "transform_type": "direct",
+      "raw_expr": "t.order_id",
+      "physical_sources": [
+        {
+          "table": "ods.ods_trade_order_di",
+          "field": "order_id"
+        }
+      ]
+    },
+    {
+      "rule_code": "R0002",
+      "target_field": "cust_id",
+      "transform_type": "direct",
+      "raw_expr": "t.cust_id",
+      "physical_sources": [
+        {
+          "table": "ods.ods_trade_order_di",
+          "field": "cust_id"
+        }
+      ]
+    },
+    {
+      "rule_code": "R0002",
+      "target_field": "total_amount",
+      "transform_type": "aggregate",
+      "raw_expr": "SUM(t.amount) AS total_amount",
+      "physical_sources": [
+        {
+          "table": "ods.ods_trade_order_di",
+          "field": "amount"
+        }
+      ]
+    }
   ],
   "schedule": {
     "f_tasks": [
@@ -88,12 +236,29 @@
         "task_group": "GROUP_TRADE",
         "project": "BCNB_DAILY",
         "jobs": [
-          { "name": "Pjob_trade_f", "type": "url", "parent": "start", "retry_count": "3", "retry_interval": "60", "timeout": "60" },
-          { "name": "Pjob_dep_f", "type": "tskdep", "parent": "Pjob_trade_f" }
+          {
+            "name": "Pjob_trade_f",
+            "type": "url",
+            "parent": "start",
+            "retry_count": "3",
+            "retry_interval": "60",
+            "timeout": "60"
+          },
+          {
+            "name": "Pjob_dep_f",
+            "type": "tskdep",
+            "parent": "Pjob_trade_f"
+          }
         ],
         "params": [
-          { "name": "END_TIMES", "value": "'20260101" },
-          { "name": "V_GROUP_CODE", "value": "GR_TRADE_ORDER" }
+          {
+            "name": "END_TIMES",
+            "value": "'20260101"
+          },
+          {
+            "name": "V_GROUP_CODE",
+            "value": "GR_TRADE_ORDER"
+          }
         ]
       }
     ],
@@ -106,10 +271,19 @@
         "task_group": "GROUP_TRADE",
         "project": "BCNB_DAILY",
         "jobs": [
-          { "name": "Pjob_trade_i", "type": "database", "parent": "start", "retry_count": "1", "retry_interval": "60" }
+          {
+            "name": "Pjob_trade_i",
+            "type": "database",
+            "parent": "start",
+            "retry_count": "1",
+            "retry_interval": "60"
+          }
         ],
         "params": [
-          { "name": "V_SUCCESS_VALUE", "value": "v_code==0" }
+          {
+            "name": "V_SUCCESS_VALUE",
+            "value": "v_code==0"
+          }
         ]
       }
     ]
@@ -142,8 +316,16 @@
     "delete_mode_label": "TRUNCATE PARTITION"
   },
   "patterns": [
-    { "label": "聚合汇总", "category": "transform", "detail": "SUM/COUNT/AVG 聚合" },
-    { "label": "多步骤串行", "category": "structure", "detail": "2 个步骤，有跨步骤数据依赖" }
+    {
+      "label": "聚合汇总",
+      "category": "transform",
+      "detail": "SUM/COUNT/AVG 聚合"
+    },
+    {
+      "label": "多步骤串行",
+      "category": "structure",
+      "detail": "2 个步骤，有跨步骤数据依赖"
+    }
   ],
   "warnings": [
     {
@@ -151,14 +333,18 @@
       "severity": "info",
       "rule_code": "R0001",
       "title": "规则 R0001 存在 0 个 TargetFields 字段和 1 个 SQL 列无法通过别名精确匹配",
-      "only_in_sql": ["amount"]
+      "only_in_sql": [
+        "amount"
+      ]
     },
     {
       "type": "field_name_mismatch",
       "severity": "info",
       "rule_code": "R0002",
       "title": "规则 R0002 存在 0 个 TargetFields 字段和 1 个 SQL 列无法通过别名精确匹配",
-      "only_in_sql": ["cust_id"]
+      "only_in_sql": [
+        "cust_id"
+      ]
     }
   ]
 }
