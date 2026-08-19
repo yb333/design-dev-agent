@@ -1,100 +1,198 @@
 ---
 status: active
-last_reviewed: 2026-08-17
+last_reviewed: 2026-08-19
 depends_on: [../specs/opt/00-总纲与范围.md]
+edition: 实现版（v2，2026-08-19 建成后重写；设计过程版见 git 历史与 specs/opt 系列）
 ---
 
-# 优化场景架构设计（opt）
+# 优化场景架构与操作手册（opt，实现版）
 
-> 设计开发 agent 的第二场景：存量资产之上的精确变更交付。本文是**成品视角的总览**；过程性讨论与逐章细节见 `docs/specs/opt/00-08`（母文档 00 含十条原则与完整修订记录）。第一刀 = 新增字段（add_field）。
+> 本文是优化场景的**单一现状参考**：架构、流程（含真实命令）、组件清单、目录约定、机制说明——全部以已建成并通过测试（1001 pytest）的代码为准。设计推演过程与原则全文在 `docs/specs/opt/00-08`；端到端测试入口在 `11-测试指引`。
+> **定位**：实测优化场景期间的权威手册；实测通过后与 `architecture.md`（新建）做融合整理、架构归一（见 §九融合预留）。
 
 ---
 
-## 一、定位与范围
+## 一、这是什么
 
-- **新建场景**（new-pipe）：RS + mapping → 设计 → 编码 → UT → 全量制品。
-- **优化场景**（opt-pipe）：存量资产 + 变更需求 → 精确修改 → 回归验证 → 变更制品。
-- 第一刀范围：单规则组资产内的新增字段（同源直挂 / 新 JOIN / 跨中间表全覆盖）；全量与增量基线；增量基线支持回刷。排除：删字段、改口径、结构变更、跨资产、多规则组。
+存量资产之上的**精确变更交付**：外部或自建的 ETL 资产 + 变更需求（新增字段）→ 精确修改 → 回归验证 → 变更制品 → 档案推进。与新建场景（new-pipe：从 RS 到全新资产）并列，共用 designer / coder 两个 agent 岗位与全部设计知识。
+
+**三条红线的落法**：围栏三段机器审计 = 重写不自主；闸口①'/②' + 输出对比人审 = 语义判断不自主；制品只生成 patch 副本不执行 = 推生产不自主。
 
 ## 二、总体架构
 
 ```
 【上游（体系外，责任在供方）】
-  逆向agent（dws-analyzer-skill，peer agent，文件交接）
-    └─ 产出 baseline_v1.json（外部资产首次，或声明"线上被改过"时）
-  业务侧（业务/上游 agent）
-    └─ 产出 RS + 已标注 mapping（含"变更标识"列，格式按我方发布规格）
+  逆向侧（dws-analyzer-skill，peer agent）
+    └─ /export-baseline → baseline_v1.json（v1.1，文件交接——本体系不调它的脚本）
+  业务侧（业务 / 上游 agent）
+    └─ RS.md + 已标注 mapping.xlsx（"变更标识"列，格式按我方发布的 mapping-format 规格）
 
 【本体系】
-  archives/{appid}/{schema}/{资产}/{NNN_日期}/   ← ★唯一锚点：资产档案（入 git，文本小件）
-        ▲ 写回（交付时推进当前态）                      │ 读（baseline = 档案当前态）
-        │                                              ▼
-  opt-pipe：入口检查 → 输入校验 → designer(ts_v2) → 围栏 → 闸口①'
-            → coder(SQL) → SQL围栏 → UT+输出对比 → 闸口②' → 制品patch → 写回档案
+  archives/{schema}/{资产表}/{NNN_日期}/        ← ★唯一锚点：资产档案（入 git，文本小件）
+        ▲ 交付写回（archive_writer；new-pipe 步骤9 也写）         │ 读（有档零组装）
+        │                                                        ▼
+  opt-pipe 七步：入口基线 → 输入校验 → designer(ts_v2) → ts围栏 → 闸口①'
+                → coder(SQL) → SQL围栏 → ut_opt → 闸口②' → 制品patch → 归档
 
-【下游（体系外）】人/平台执行交付物（ALTER 变更单 / patch 副本 / 回刷脚本）——我们不执行
+【下游（体系外）】人/平台执行交付物：ALTER 变更单 / patched 制品副本 / patch 说明——我们不执行
 ```
 
-## 三、设计原则（十条，全文见 00）
+**两条基线路径**（入口处分岔，之后完全同构）：
+- **档案路径**：`archives/` 有该资产 → 最新目录直接当 baseline（零组装、语义全在、豁免表为空）；
+- **json 路径**：无档案 → 收 baseline_v1.json → `assemble_ts_baseline` 入料建档（语义空位 + 自动豁免）。
 
-1. 独立编排剧本（opt-pipe），器官共享；第一刀 add_field。
-2. 逆向边界三段式：物理事实在逆向侧收口 / 语义不出门（两边都不许脚本伪造）/ 形状各回各家（ts 组装永远在院内）。
-3. baseline 真理观：baseline 是**认定的**唯一真理（供方交 json 是唯一推翻通道，不验真）；语义层只对增量建立。
-4. 红线落法：围栏 = 重写不自主；输出对比+人审 = 语义不自主；制品只生成不执行 = 推生产不自主。
-5. 资产单元：第一刀单规则组，资产内全管、资产外不管。
-6. 变更模型可扩展：change_type 枚举贯穿 ts.change / 围栏 / patch / 报告，无 add_field 硬编码。
-7. 回刷原则：增量加字段支持回刷；回刷脚本必须进交付并归档。
-8. 制品精确修改：patch 原始制品不从 ts 再生；provenance 必带；缺口显式化。
-9. 审查收敛：机器防线独立（人全通过也拦得住）；人审只收语义判断、具体可回答；防确认疲劳。
-10. 段间职责分离：开发只管开发、测试归 UT；章节不越界设计。
+## 三、流程详解（真实命令，{deliver} = `10_project_deliver/{appid}/{schema}/{资产}/ddlc_opt/`）
 
-## 四、核心机制
+### 步骤 0 · 入口与基线
+查 `archives/{schema}/{资产表}/`：有档 → 直接用；无档 → 用户交 baseline_v1.json：
 
-**档案模型与循环链**：所有资产在体系内只有一个表示（档案）。写档案只有两个动作（new-pipe 交付 / json 入料）；优化 = 读档案 → 增量设计 → ts_v2 → 交付写回。历史 = 按次交付目录序列，ts 文件不含历史。资产入体系后逆向退场。
+```bash
+python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --outdir {deliver}/_internal
+```
+产出四件：`ts_baseline.json` / `etl_baseline/{规则}.sql`（逐字原文）/ `baseline_view.md`（designer 读）/ `exemptions.json`（语义空位清单）。exit 2 = 契约违约（版本/必填/dm=6 缺 merge_on），停线报逆向侧。`kind→load_mode` 词表外的写入类型报"待定"不硬映射。
 
-**两级声明与三段审计链**：业务声明（change_request，不含落位）→ 设计落位（ts.change，designer 产、闸口①'确认）→ 审计三段：意图→落位（对账，不夹带不漏接）、落位→结构（fence_check，声明驱动的冻结层比对）、结构→代码（SQL 围栏，AST 级老列不动+仅追加）。判定笨标准：文本/AST 不等价就拦，不看语义等价。**回路铁律：产物变 → pipe 重跑对应层围栏 → 才进 UT**。
+### 步骤 1 · 输入校验
+```bash
+python SHARED_SCRIPTS/preprocess_opt.py \
+  --mapping {标注mapping.xlsx} --ts-baseline {deliver}/_internal/ts_baseline.json \
+  --outdir {deliver}/_internal --rs {RS.md}
+```
+产出 `change_request.json`（**只装业务说了什么**：字段/含义/源意图/`new_source_table` 信号 + RS 优化章节原文；不含落位）。exit 0/1/2 对齐 precheck 分级：冲突/别名悬空/资产不一致/不支持的标识 = 2 阻断；漏标/RS 未提及 = 1 问人。
 
-**冻结/自由矩阵**：每份变更声明自带矩阵（冻结层逐项等价 / 自由层放开 / 枚举许可），比对粒度跟冻结层走。add_field = 冻结一切+新增清单；性能重构 = 冻结对外可观察层、放开内部结构（矩阵已为未来类型预留）。
+### 步骤 2 · designer（优化模式，prompt 显式声明）
+dws-designer 加载 **dws-design-opt** skill：读 baseline_view + change_request → 落位决策（opt-playbook 取舍树）→ 新 JOIN 声明 join_safety（强制）→ 回刷判断 → 写增量 decisions（模板 `dws-design-opt/assets/opt-decisions-template.yaml`）→ 组装：
 
-**patch 引擎**：编辑原语（单元格替换/行追加/行更新/行删除/文件新增/文件删除）× 变更声明。严格 patch（存量声明漂移不碰，报告提示）；交付副本模式（人不拼 diff、我们不碰仓）；稳定标识定位 + 保真铁律。
+```bash
+python DESIGN_SCRIPTS/assemble_ts_opt.py \
+  --ts-baseline {deliver}/_internal/ts_baseline.json \
+  --decisions {deliver}/_internal/design_decisions_opt.yaml --output {deliver}/ts_v2.json
+```
+确定性应用（decisions 说的才落、存量一字节不动），产出**完整 ts_v2 + change 段**（下游工具零改造可消费）。
 
-**输出对比（双跑落地）**：UT 的一类检查项。双向 MINUS 一条 SQL，新老 SELECT 同数据同时点；冻结列双向差集必须为空；SELECT 对比 + 全量 INSERT 互补。主键检查豁免（双跑更强）、空值只查新列。
+### 步骤 3 · ts 级围栏 → 闸口①'
+```bash
+python SHARED_SCRIPTS/fence_check.py \
+  --ts-baseline {deliver}/_internal/ts_baseline.json --ts-v2 {deliver}/ts_v2.json \
+  --change-request {deliver}/_internal/change_request.json
+```
+**恰好等于双向判定**：diff 的每项必须被声明罩住（越界硬拦：偷加字段/改存量/动冻结槽位/未声明 JOIN…），声明的每条必须有落点（漏改/漏接/夹带硬拦）。过 → **闸口①'三问**（落位确认 / 回刷选择 / 建议追加变更）。
 
-**回刷**：增量基线人选拿（闸口①'）；derive 复用 init 双管道；自建资产可直接复用档案 init 段；UT 按 init→增量两阶段。
+### 步骤 4 · 编码 + SQL 围栏（闸门单点在 pipe）
+对 placed_rules 每规则并行发起 coder（dws-coding-opt：以 baseline SQL 为底稿**只加列**，切片带 `--baseline-sql` 与四条硬约束）。全部落盘后 pipe 独立跑：
 
-## 五、opt-pipe 流程（七步）
+```bash
+python SHARED_SCRIPTS/sql_fence_check.py \
+  --ts-v2 {deliver}/ts_v2.json --etl-dir {deliver}/etl \
+  --baseline-dir {deliver}/_internal/etl_baseline
+```
+AST 级：老列投影逐列结构等价（**等价改写也拦**）、仅追加声明列、JOIN/WHERE/GROUP BY/CTE 冻结；UNION/SELECT * 显式转人工。
 
-0 入口检查（查档案/入料）→ 1 输入校验（标注解析→change_request+一致性+类型风险复用）→ 2 designer（dws-design-opt）→ 3 围栏+闸口①'（三问：落位/回刷/建议追加）→ 4 coder（dws-coding-opt，组内并行）+SQL 围栏 → 5 UT（check_db→6a 预检 ALTER→6b 执行+输出对比；失败三类分流）→ 6 制品（变更单/patch 副本/回刷/DQ 条件）→ 7 闸口②'（两问+健康提示+交付清单）→ 写回档案。
+### 步骤 5 · UT（需要数据库；无库跳过）
+```bash
+python SHARED_SCRIPTS/check_db.py --ts {deliver}/ts_v2.json     # DB_OK / NO_DB_SOURCE
+python SHARED_SCRIPTS/ut_opt.py \
+  --ts {deliver}/ts_v2.json --etl-dir {deliver}/etl \
+  --baseline-dir {deliver}/_internal/etl_baseline --ddl-dir {deliver}/ddl \
+  --report {deliver}/ut_report_opt.md
+```
+独立入口（零触碰 ut_precheck/ut_execute）：ALTER 应用（表不存在=环境归人）→ **双向 MINUS 输出对比**（老/新 SELECT 同库同时执行；冻结列差集必须为空）→ INSERT 全量执行（写路径类型转换靠它，两道缺一不可）。主键检查豁免（双跑更强）、空值只查新列。对比失败 → 人定根因：新 JOIN 发散=设计问题回 designer→回闸口①'；源数据=环境归人。
 
-## 六、组件清单
+### 步骤 6 · 制品
+```bash
+python SHARED_SCRIPTS/assemble_ddl_opt.py \
+  --ts-v2 {deliver}/ts_v2.json --ts-baseline {deliver}/_internal/ts_baseline.json --outdir {deliver}
+python SHARED_SCRIPTS/artifact_patcher.py \
+  --ts-v2 {deliver}/ts_v2.json --etl-dir {deliver}/etl \
+  --source {原始制品：xlsx 或代码仓规则组目录，按 provenance 定位} \
+  --outdir {deliver}/export
+```
+产出：`ddl/alter_table_{表}.sql`（变更单）+ `ddl_full/`（全量 DDL，档案用，生成后过字段差异审计）+ `export/patched/`（更新后制品**副本**）+ `export/patch_notes.md`。严格 patch：存量声明漂移不碰只报告；xlsx 稳定标识定位+未知列不动；yml round-trip（注释丢失为已知限制）。
 
-| 类别 | 内容 |
+### 步骤 7 · 闸口②' → 归档
+闸口②'呈现：新列合理性一屏（NULL 率/差集样例）+ 资产健康提示（逆向 warnings 摘要）+ 交付物清单。确认后：
+
+```bash
+python SHARED_SCRIPTS/archive_writer.py \
+  --ts {deliver}/ts_v2.json --etl-dir {deliver}/etl --ddl-dir {deliver}/ddl_full \
+  --decisions {deliver}/_internal/design_decisions_opt.yaml --archives-root archives
+```
+档案当前态推进（循环链闭合），流程结束。
+
+## 四、核心机制（六件）
+
+1. **档案锚点**：所有资产在体系内只有一个表示。写档案只有两个动作（new-pipe 交付 / json 入料）；json 出场仅两时机（无档入料、有档供方交 json=声明线上被改→覆盖重入料）；历史=按次目录序列，ts 不含历史。
+2. **两级声明**：change_request（业务，脚本产）+ ts.change（落位，designer 声明）——围栏许可 = 合体；落位是设计判断，不是输入的事。
+3. **三段审计 + 回路铁律**：意图→落位（fence 内含对账）→结构（fence_check）→代码（sql_fence）。**产物变 → pipe 重跑对应层围栏 → 才进 UT**。
+4. **冻结/自由矩阵**：变更声明自带冻结层（逐项等价）/自由层/枚举许可，比对粒度跟冻结层走；第一刀实现 add_field 矩阵，未来类型（modify_field/drop_field/add_source/重构）只加映射不加机制。
+5. **输出对比**：双向 MINUS 同数据同时点，oracle 按声明参数化（冻结列零差异、差异只许新列）；与全量 INSERT 互补。
+6. **严格 patch**：编辑原语（单元格替换/行追加…）× 变更声明；交付副本模式；存量漂移走变更清单扩充经人，不做 patch 副产品。
+
+## 五、组件清单
+
+**command**：`commands/opt-pipe.md`（编排剧本；编排者铁律沿用 new-pipe）。
+
+**skills**：`dws-design-opt`（薄：增量决策五步 + opt-playbook 落位/回刷决策树 + decisions 模板）、`dws-coding-opt`（薄：底稿加列四步）。references/scripts **不搬家**——路径引用 dws-design / dws-coding 的知识与工具。
+
+**agents**：dws-designer.md / dws-coder.md 各加 opt skill 指针 + `ddlc_opt/` 写权限；岗位/权限/角色认知零改动。
+
+**脚本**（shared 十件中 opt 专属九件 + 纯函数库；dws-design 一件）：
+
+| 脚本 | 职责 | 调用方 |
+|------|------|--------|
+| baseline_contract.py | 契约校验（schema+版本 1.0/1.1+dm=6 语义） | assemble_ts_baseline / 测试 |
+| assemble_ts_baseline.py | json → baseline 包四件 | pipe 步骤 0 |
+| preprocess_opt.py | 标注 → change_request + 七项校验 | pipe 步骤 1 |
+| assemble_ts_opt.py（dws-design） | 增量 decisions → ts_v2+change 段 | designer |
+| fence_check.py | ts 级围栏 | pipe 步骤 3 |
+| sql_fence.py / sql_fence_check.py | SQL 围栏（库 + CLI） | pipe 步骤 4（check_sql 自测可选） |
+| ut_opt.py | ALTER + 输出对比 + INSERT 全量 | pipe 步骤 5 |
+| assemble_ddl_opt.py | ALTER 变更单 + 全量 DDL + 差异审计 | pipe 步骤 6 |
+| artifact_patcher.py | xlsx/yml 严格 patch + 副本 + 说明 | pipe 步骤 6 |
+| archive_writer.py | 档案写回（NNN 序号） | pipe 步骤 7 / new-pipe 步骤 9 |
+
+**契约**：baseline_v1（权威在 analyzer 仓 v1.1；本仓 vendor schema + 校验器；含 write_plan 结构化写入计划——文法翻译非推断）。
+
+## 六、目录约定
+
+```
+10_project_deliver/{appid}/{schema}/{资产}/ddlc_opt/     ← 运行时交付目录（gitignore）
+├── ts_v2.json / ut_report_opt.md
+├── etl/            ← coder 新 SQL（{编号}_{简称}_{写入方式}.sql）
+├── ddl/            ← ALTER 变更单（交付）
+├── ddl_full/       ← 全量 DDL（档案用）
+├── export/         ← patched/ 副本 + patch_notes.md
+└── _internal/      ├── baseline_v1.json / ts_baseline.json / etl_baseline/（生产原文，只读）
+                    ├── baseline_view.md / exemptions.json / change_request.json
+                    ├── design_decisions_opt.yaml └── diagnose/
+
+archives/{schema}/{资产表}/{NNN_日期}/    ← 资产档案（入 git：ts + etl + ddl + decisions）
+```
+
+## 七、与新建场景的共享与隔离
+
+**共享**：两个 agent 岗位与权限体系；全部设计知识（references/playbooks）；dws-design/coding 的工具（explore/check_sql 等，路径引用）；precheck 的类型风险交互模式；编排者铁律与闸口纪律。
+
+**隔离（对存量的全部接触只有三处，均加法式）**：agents 各加两行（skill 指针 + opt 目录权限）；slice_ts 加 `--baseline-sql` 参数（不带参数路径逐字节同行为）；new-pipe 加步骤 9 归档（纯新增动作）。**assemble_ts / ut_precheck / ut_execute / assemble_ddl / preprocess 本体零改动**——1001 个测试（含新建全部既有用例）全绿为证。
+
+## 八、测试与验收
+
+- 单测：1001 passed / 2 skipped（不连库；契约 16 + 组装 13 + 预处理 14 + ts 围栏 21 + SQL 围栏 14 + opt 组装 11 + 切片 4 + DDL 6 + UT 5 + patch 4 + 归档 3，及新建全部）；
+- 端到端：见 `docs/specs/opt/11-测试指引.md`（输入怎么造 / 每步看什么 / 六个故意踩坑 / 已知限制）；验收三案例（外部全量 / 外部增量+回刷 / 自建档案路径）待实测跑通。
+
+## 九、融合预留（实测后的架构归一）
+
+实测通过后与新建场景归一时的合并点：双 pipe 的入口段统一（资产定位/档案查询成为公共前置）；assemble_ts 与 assemble_ts_opt 的校验/组装函数共享（豁免按位机制接入 N 码）；UT 两入口（ut_precheck+ut_execute / ut_opt）合并为模式分岔的单入口；制品链（assemble_export / artifact_patcher）的编辑原语层共用；AGENTS.md 与 architecture.md 吸收本文。**归一时以本文的实现事实为基准，设计过程的 specs/opt 系列转归档参考。**
+
+## 十、已知限制
+
+1. 回刷窗口老列对比搁置（闸口②'如实提示）；2. `load_mode_pending` 三类 kind（subpartition/rpt_item/exchange）待词表扩展或人工认定；3. yml patch round-trip 丢注释（patch_notes 说明）；4. baseline 语义位空缺 by design（存量不补，双跑兜底）；5. DQ 变更声明位（change.dq）预留未接（DQ 完全跟随输入，第一刀无 DQ 场景）。
+
+## 文档地图
+
+| 文档 | 角色 |
 |------|------|
-| skill 新增 | dws-design-opt / dws-coding-opt（薄 SKILL 单线工作流；references/scripts 路径引用不搬家） |
-| agent 改动 | dws-designer.md / dws-coder.md 各加一个 skill 指针，岗位权限零改动 |
-| command 新增 | opt-pipe.md（编排者铁律沿用） |
-| shared 新增脚本 | assemble_ts_baseline / fence_check / preprocess_opt / sql_fence（纯函数库）/ assemble_ddl 优化模式 / artifact_patcher / archive_writer / ut_* 扩展 |
-| 文档 | AGENTS.md / tool-registry / mapping-format（变更标识列）/ opt-playbook / 09-契约（发逆向侧） |
-
-## 七、验收标准（三案例）
-
-1. **外部全量两步链路**（A/B/C 血缘全覆盖）：双跑老列逐值一致；ts diff 恰好等于变更清单；目标+中间表各一条 ALTER；闸口真实停下。
-2. **外部增量+回刷**：回刷脚本进交付并归档；UT init→增量通过；闸口呈现回刷选项及代价。
-3. **自建档案路径**：零 json 零组装；豁免表空；init 复用生效。
-三案例均 fixture 化进 tests/（不连库），eval 增优化用例。
-
-## 八、已知限制与搁置项（显式记录）
-
-1. **回刷窗口老列对比搁置**（真实运行后评估）：回刷场景回归验证弱于增量窗口场景，闸口如实提示。
-2. 语义位第一刀不补（json 路径）：存量语义（主键/粒度/口径）不消费，双跑兜底；继承机制延后。
-3. 调度"不变"断言条件化：baseline 无调度信息时降级为"无法断言"。
-4. 多规则组资产（analyze-chain）、跨资产影响：远期。
-5. 开发环境数据代表性：闸口报告声明置信度。
-
-## 九、扩展路线（change_type 路线图）
-
-`modify_field / drop_field / add_source`：冻结/自由矩阵与 patch 动作表已预留行，接入 = 新矩阵映射 + 可能的新比对键，不加新机制。性能重构：围栏守对外壳、双跑升主裁判（数据等价为唯一硬标准）——模型可表达，实现后置。
-
-## 文档索引
-
-`docs/specs/opt/`：00 总纲与范围（母文档，原则+修订史）· 01 逆向契约（立场版）· 02 baseline 组装与接入 · 03 输入与围栏 · 04 设计段 · 05 编码段 · 06 验证段 · 07 制品与收尾 · 08 工程与治理 · 09 契约-baseline_v1（正式版，发逆向侧）。
+| 本文（architecture/opt-架构设计.md） | **现状手册**：建成事实的单一参考 |
+| specs/opt/00-08 | 设计定稿过程（原则/推导/修订史——归一时转参考） |
+| specs/opt/09 + 10 | 契约正式版（消费侧）/ 逆向侧实施需求 |
+| specs/opt/11-测试指引 | 端到端测试入口 |
+| specs/opt/01/02/03… | 各环节设计细节（立场与理由） |
