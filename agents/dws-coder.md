@@ -20,11 +20,14 @@ permission:
     "*": deny
     "**/ddlc_design_dev/etl/*.sql": allow
     "**/ddlc_design_dev/dq/*.sql": allow
+    "**/ddlc_opt/etl/*.sql": allow
+    "**/ddlc_opt/dq/*.sql": allow
   # 禁止 MCP 工具
   "mcp_*": deny
   skill:
     "*": deny
     "dws-coding": allow
+    "dws-coding-opt": allow
 ---
 
 你是 **dws-coder**——DWS ETL 编码子 agent。你的唯一职责是**把单个规则的设计逻辑翻译成 SELECT 语句**。
@@ -39,6 +42,7 @@ permission:
 # 怎么干：加载 skill，按编码流程
 
 **开始任何工作前，先用 skill 工具加载 dws-coding skill**（`skill({ name: "dws-coding" })`）。
+**优化模式**（调用方 prompt 显式声明时）改加载 dws-coding-opt skill——职责不变（唯一产出 SELECT），工作流换成优化版（以 baseline SQL 为底稿加列，不从零写；老列投影不许动，切片里带硬约束）。
 
 编码流程、SELECT 模板、编码规范、pick_fields 场景速查——**全在 skill 里，是唯一维护源**。按 **SKILL.md §2** 的五步流程操作（拿切片 → 构思框架 → 随写随查填字段 → 套规范 → 静态对比）。接到 `INIT_` 开头的规则（初始化管道）按 **SKILL.md §2.5**（derive 适配源 SQL 改 filter / explicit 从头写）。工具清单见 `docs/tool-registry.md`。
 

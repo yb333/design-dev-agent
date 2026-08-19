@@ -32,7 +32,7 @@
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `assemble_ddl.py` | ts → DDL（CREATE TABLE/VIEW + COMMENT + 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables（init 复用 tmp 无新 DDL；Chunk 2 确认不重复建） |
-| `assemble_export.py` | ts + ETL + DDL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ + ddl/ → `export/*.xlsx` | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；计数含 init） |
+| `assemble_export.py` | ts + ETL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ → `export/*.xlsx`（视图走 ddl/ 通道部署，不发术加规则行） | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；计数含 init；RULE 行带执行序列，TargetFields 来源字段 s.字段 形态，参数变量行每规则组一条） |
 
 ### UT（需数据库，住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
@@ -54,6 +54,7 @@
 |------|------|--------|------------|-------------------|
 | `assemble_ts.py` | rs_input + design_decisions → ts.json + ts.md；跑 ~40 条校验（五层+LI） | designer 写完 decisions 后组装 | rs_input.json + design_decisions.yaml → ts.json / ts.md | 读 decisions.rules **+ decisions.init**（Chunk 1 已接通 init 段） |
 | `explore.py` | JOIN 键唯一性探查（count vs count distinct，只读单表，不 JOIN） | designer 第4层关联安全 | ts.json + 表/键 → 结论 | ts.rules / ts.tables |
+| `assemble_ts_opt.py` ★opt | 优化模式组装：ts_baseline + 增量 decisions（opt-decisions-template.yaml）→ ts_v2 + change 段；新 JOIN 必须声明 join_safety；确定性应用不动存量 | 优化模式 designer 写完 decisions 后 | ts_baseline.json + decisions.yaml → ts_v2.json | 读 ts_baseline 全部 + 写 change 段 |
 | `schema_query.py`（住 design-dev-shared，**designer/coder 公共**） | 查 schema_cache 字段存在性（--column 单查/列全表；只读缓存不连库，与 explore 连库互补） | designer 写 design_logic 引用 mapping 外字段前（设计时验证一次，coder 信任 design_logic；coder 不确定时兜底直调） | ts.json + schema.table → 存在性/字段清单 | 不读 ts（读 `_internal/schema_cache.json`） |
 
 ---
@@ -62,7 +63,7 @@
 
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
-| `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸） | coder 每规则起手 | ts.json + rule_code → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter） |
+| `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸）；`--baseline-sql` 切**优化模式**（带 baseline SQL 原文+落位声明+硬约束，加法扩展零动存量路径） | coder 每规则起手 | ts.json + rule_code [+baseline-sql] → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter；opt 模式读 ts.change） |
 | `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule；`--table-fields` 的查缓存能力来自 shared/schema_query 库 | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **ts.rules + ts.init.rules**（随 slice_ts 接通 init） |
 | `check_sql.py` | coder 的 SELECT vs ts 切片静态对比（字段覆盖/FROM 表/括号引号/无 SELECT *） | coder 写完自检 | SELECT.sql + ts.json + rule_code → PASS/FAIL | **仅 ts.rules**（Chunk 2） |
 
@@ -77,7 +78,7 @@
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样） | ut_precheck / ut_execute | design-dev-shared/scripts |
 | `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / extract_select_aliases / extract_from_tables） | run_ut / check_sql | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
-| `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline（建设中） / tests/test_baseline_v1_contract | design-dev-shared/scripts |
+| `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline / tests/test_baseline_v1_contract | design-dev-shared/scripts |
 
 ---
 
@@ -89,10 +90,15 @@
 |------|------|--------------|------------|------|
 | `schemas/baseline_v1.schema.json` | 契约 vendor 拷贝（权威在 analyzer 仓） | 步骤 0 入料 | baseline_v1.json 的校验基准 | ✅ 阶段一 |
 | `baseline_contract.py` | 契约校验（schema+版本+语义条件） | 步骤 0 入料 | baseline_v1.json → 违规清单 | ✅ 阶段一 |
-| `assemble_ts_baseline.py` | json → ts_baseline + etl_baseline + baseline_view + 豁免表 | 步骤 0 入料建档 | baseline_v1.json → baseline 包 | 🔨 阶段一待建 |
-| `preprocess_opt.py` | 标注解析 → change_request + 一致性校验 + 类型风险复用 | 步骤 1 | marked mapping + RS + baseline → change_request.json | 🔨 阶段一待建 |
-| `fence_check.py` | ts 级围栏（声明驱动的冻结层比对引擎） | 步骤 3 | ts_v2 + ts_baseline + change → 越界/漏改报告 | 🔨 阶段一待建 |
-| `sql_fence.py` | SQL 围栏判定纯函数库（AST 级老列不动+仅追加） | 步骤 4（pipe 独立跑；check_sql 可选自测共用） | 新旧 SQL + change → 违规清单 | 🔨 阶段一待建 |
+| `assemble_ts_baseline.py` | json → ts_baseline + etl_baseline + baseline_view + 语义空位清单（exemptions）；kind→load_mode 映射、词表外待定不硬映射 | 步骤 0 入料建档 | baseline_v1.json → baseline 包 | ✅ 阶段一 |
+| `preprocess_opt.py` | 标注解析 → change_request + 一致性校验（冲突/漏标/配对/资产一致/标识枚举 + RS 对账 warn） | 步骤 1 | marked mapping + ts_baseline [+RS] → change_request.json | ✅ 阶段一 |
+| `sql_fence_check.py` | SQL 围栏 CLI（pipe 独立跑；逐 placed_rule 比对，read_select 兼容带后缀命名） | 步骤 4 后 | ts_v2 + etl/ + etl_baseline/ → FENCE_PASS/违规清单 | ✅ |
+| `ut_opt.py` | 优化 UT 独立入口（ALTER 应用 + 双向 MINUS 输出对比 + INSERT 全量；零触碰 ut_precheck/ut_execute） | 步骤 5 | ts_v2 + etl + etl_baseline + ddl → ut_report_opt.md | ✅ |
+| `assemble_ddl_opt.py` | ALTER 变更单 + 全量 DDL 推进（复用 generate_ddl）+ 字段差异审计 | 步骤 6 | ts_v2 + ts_baseline → ddl/ + ddl_full/ | ✅ |
+| `artifact_patcher.py` | 制品 patch 引擎（xlsx TargetFields 行追加+SQL 单元格替换 / yml 组 round-trip；严格 patch 不碰漂移；patch 说明） | 步骤 6 | ts_v2 + etl + 原始制品 → export/patched + patch_notes | ✅ |
+| `archive_writer.py` | 交付写回档案（archives/{schema}/{资产}/{NNN_日期}/；new-pipe 步骤9 与 opt-pipe 步骤7 共用） | 步骤 7 / new-pipe 9 | ts + etl + ddl + decisions → archives/ | ✅ |
+| `fence_check.py` | ts 级围栏（声明驱动比对：diff 分解 + add_field 冻结/许可矩阵 + 恰好等于双向判定；定义 ts.change 段消费形状） | 步骤 3 | ts_baseline + ts_v2 + change_request → FENCE_PASS / 越界+漏改清单 | ✅ 阶段一 |
+| `sql_fence.py` | SQL 围栏判定纯函数库（AST 老列逐列结构等价/仅追加声明列/JOIN·WHERE·GROUP BY 冻结/不支持形态转人工；rule_declaration 从 change 段派生单规则许可） | 步骤 4（pipe 独立跑；check_sql 可选自测共用） | baseline SQL + 新 SQL + 规则声明 → 违规清单 | ✅ |
 
 ---
 

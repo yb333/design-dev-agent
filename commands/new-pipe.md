@@ -365,7 +365,6 @@ question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，�
 python SHARED_SCRIPTS/assemble_export.py \
   --ts {deliver}/ts.json \
   --etl-dir {deliver}/etl/ \
-  --ddl-dir {deliver}/ddl \
   --outdir {deliver}
 ```
 
@@ -373,6 +372,9 @@ python SHARED_SCRIPTS/assemble_export.py \
 - `shujia_{表名}.xlsx`（术加执行平台导入，10 sheet）
 - `lts_{表名}.xlsx`（LTS 调度平台导入，3 sheet）
 - `export_manifest_{表名}.json`（元数据清单）
+
+> ⚠️ 视图不发术加规则行（视图是 DDL 对象，`ddl/create_view_*.sql` 由部署侧
+> 执行；术加 RULE 行只表达"SELECT 取数写入目标表"）。调度侧的 view 任务照常生成。
 
 > ⚠️ 规则编码留空。部署时内网 skill 先获取编码回填 Excel 再导入。
 > 后续导入平台是可选的（由内网 skill 执行），但制品包必须生成。
@@ -388,6 +390,22 @@ python SHARED_SCRIPTS/assemble_export.py \
 - 用户选"放弃" → 结束
 
 > **非交互的例外只有一个**：用户/调用方**显式声明**了非交互（同闸口①）。没有显式声明就必须 question。
+
+---
+
+## 步骤 9：归档（交付写回资产档案）
+
+闸口②确认后，把交付物写进资产档案——**新建交付即建档**（优化场景档案路径的输入来源，优化循环链的起点）：
+
+```bash
+python SHARED_SCRIPTS/archive_writer.py \
+  --ts {deliver}/ts.json --etl-dir {deliver}/etl --ddl-dir {deliver}/ddl \
+  --decisions {deliver}/_internal/design_decisions.yaml \
+  --archives-root archives
+```
+
+> 档案 = 文本小件（ts / etl / ddl / decisions）入 git；xlsx 大件不进（运行时产物可再生）。
+> 非交互评测模式也归档（幂等，重跑产生新序号目录）。
 
 ---
 

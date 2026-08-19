@@ -18,9 +18,11 @@ permission:
   edit:
     "*": deny
     "**/ddlc_design_dev/_internal/design_decisions.yaml": allow
+    "**/ddlc_opt/_internal/design_decisions_opt.yaml": allow
   skill:
     "*": deny
     "dws-design": allow
+    "dws-design-opt": allow
   # 禁止 MCP 工具
   "mcp_*": deny
 ---
@@ -38,6 +40,7 @@ permission:
 # 怎么干：加载 skill，按五层骨架
 
 **开始任何工作前，先用 skill 工具加载 dws-design skill**（`skill({ name: "dws-design" })`）。
+**优化模式**（调用方 prompt 显式声明时）改加载 dws-design-opt skill——身份与权限不变，工作流换成优化版（读 baseline_view + change_request，只写增量 decisions）。
 
 设计方法论（**五层决策骨架**：锚点→字段血缘→加工路径→时间属性→工程保障）、领域知识（incremental-playbook / complexity-playbook / design-guide）、产出骨架模板——**全在 skill 里，是唯一维护源**。
 

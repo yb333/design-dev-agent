@@ -1,0 +1,51 @@
+# ============================================================================
+# 优化模式增量 decisions 模板（designer 产出格式，add_field）
+# 只写增量，不写存量——存量重写 = 红线禁止。每个新增字段一条。
+# 组装器：assemble_ts_opt.py（ts_baseline + 本文件 → ts_v2 + change 段）
+# ============================================================================
+change_type: add_field
+
+# 回刷意向（增量基线才有意义；RS 有意向填之，否则 pending 到闸口①'人选拿）
+backfill: pending
+
+fields:
+  # ---- 示例 1：同源直挂（A 形态，源表已在 baseline 源表清单）----
+  - field: pay_channel              # 新增字段名（不得与存量重名）
+    target_table: dwb_trade_order_d # 落到哪张表（目标表）
+    placed_rules: ["R0002"]         # 落位：哪些规则产出/携带该字段（设计判断）
+    intermediate_tables: []         # 穿中间表时列出（C 形态），否则 []
+    field_type: VARCHAR(64)
+    field_comment: 支付渠道
+    design_logic: 支付渠道编码直取    # 自然语言口径（不含 SQL）
+    transform_type: direct          # direct | aggregate | ...
+    source:                         # 血缘（来自 change_request 的 source）
+      table: ods.ods_trade_order_di
+      alias: a
+      field: pay_channel
+    new_joins: []                   # 同源直挂无新 JOIN
+
+  # ---- 示例 2：新 JOIN（B 形态）----
+  - field: channel_name
+    target_table: dwb_trade_order_d
+    placed_rules: ["R0002"]
+    intermediate_tables: []
+    field_type: VARCHAR(64)
+    field_comment: 渠道名称
+    design_logic: 按订单关联渠道维表取渠道名称
+    transform_type: direct
+    source:
+      table: dws.dim_channel
+      alias: c
+      field: channel_name
+    new_joins:
+      - rule: R0002                 # 只能挂 placed_rules 内的规则
+        schema: dws
+        table: dim_channel
+        alias: c
+        join_type: LEFT
+        on: t.order_id = c.order_id
+        join_safety:                # ★ 新 JOIN 必须声明关联安全性（04 §一第3步）
+          join_key_unique: true     # 渠道维表按 order_id 唯一
+          strategy: 直接关联
+          join_filter: ""
+          reason: dim_channel 主键即 order_id，关联不发散

@@ -36,7 +36,11 @@ skills/
                          #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import dws-design/dws-coding；
                          #     design/coding 只能向下 import shared（箭头单向）
 agents/                  # dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
-commands/new-pipe.md     # ★ 唯一编排剧本（设计→闸口①→编码→UT→闸口② 全流程）
+commands/new-pipe.md     # ★ 新建编排剧本（设计→闸口①→编码→UT→闸口②→归档 全流程）
+commands/opt-pipe.md     # ★ 优化编排剧本（入口→输入校验→设计→围栏→闸口①'→编码→SQL围栏→UT→闸口②'→制品patch→归档）
+skills/dws-design-opt/   # 优化设计 skill（薄：读 baseline_view+change_request→增量 decisions→assemble_ts_opt）
+skills/dws-coding-opt/   # 优化编码 skill（薄：以 baseline SQL 为底稿加列，老列不动）
+archives/                # ★ 资产档案（唯一锚点：{schema}/{资产}/{NNN_日期}/，文本小件入 git）
 install.py               # 装 skill/agent/command 到 ~/.config/opencode/
 eval-suite/              # 评测套件（v1 + v2，独立工程）
 tests/                   # pytest（conftest.py 把三个 scripts 目录加进 sys.path）
@@ -245,3 +249,16 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 - **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**（新 ts.json 不用 lts 兜底，可清理）——待讨论。
 - **闲时任务六**（assemble_dq 退役 + run_ut 去 legacy）**已完成 2026-08**：assemble_dq.py 已删（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 main() 成纯函数库。
 - **函数库下沉消依赖环（2026-08）**：闲时任务四挪了 pipe 入口但库留在 skill 目录，造成 shared↔design / shared↔coding 两个依赖环（lazy import + 3-目录 sys.path bootstrap 掩盖）。修复：run_ut / ut_diagnose / type_compat 整文件下沉 shared；STANDARD_AUDIT_TEMPLATE 抽出 `dws_standards.py`；SQL 解析原语抽出 `sql_parse.py`（check_sql 反向 import 保旧名）；删全部跨目录 bootstrap；顺手删零引用的 `lib/dws_preprocessor.py`。**分层铁律入册 + `tests/test_layering.py` AST 守护**（含函数内 lazy import——上翻正是靠它藏的）。测试 730→732。
+
+---
+
+## 优化场景（opt-pipe，2026-08 第一刀 add_field 已建成）
+
+存量资产精确变更交付。设计全集见 `docs/specs/opt/00-08` + 总览 `docs/architecture/opt-架构设计.md`；测试指引见 `docs/specs/opt/11-测试指引.md`。要点：
+
+- **唯一锚点 = 资产档案**（archives/）：有档零组装直接当 baseline；无档收 baseline_v1.json（逆向侧 peer agent 文件交接，**不调它的脚本**）入料建档；交付写回档案（循环链）。**不验真输入**（默认准确，压力给供方）。
+- **两级声明 + 三段审计**：change_request（业务说了什么，preprocess_opt 产）+ ts.change 段（落位，designer 声明、assemble_ts_opt 组装）→ fence_check（ts 级围栏，恰好等于双向）→ sql_fence_check（SQL 级围栏，**闸门单点在 pipe**）。回路铁律：产物变→围栏重跑→才进 UT。
+- **存量语义不补**（主键/粒度/关联安全留空+豁免，双跑兜底）；新 JOIN 必须 join_safety（opt-playbook）。
+- **UT = ut_opt.py**（独立入口零触碰 ut_precheck/ut_execute）：ALTER 应用（表不存在=环境归人）+ 双向 MINUS 输出对比（冻结列零差异）+ INSERT 全量；主键豁免、空值只查新列。
+- **制品 = 严格 patch**：assemble_ddl_opt（ALTER 变更单+全量 DDL+差异审计）+ artifact_patcher（xlsx/yml 交付副本+patch 说明，存量声明漂移不碰）；ts 不是制品再生源（原则8）。
+- **对存量零接触**：全部新脚本（shared 7 个 + dws-design 1 个 + slice_ts 加法扩展 --baseline-sql）；assemble_ts/ut_*/assemble_ddl 本体未动。
