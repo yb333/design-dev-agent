@@ -242,7 +242,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 - **config 集中隔离**：新建 `design-dev-shared/scripts/config_paths.py`（`config_dir()` + 各 config 路径，改基址只动一处）。4 个 config（db-sources / platform_config / schedule_config / schema_apps）统一放 `~/.config/opencode/_references/rules/dws-design-dev/`（与其他项目隔离）。7 个脚本的默认路径全部改用 config_paths。install.py 拷到新位置。
 - **产出目录加 appid/schema 层**：`10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。appid 单源 = 新建 `schema_apps.json`（**appid 打头，1 appid 多 schema**，跟源数据方向一致；按 schema 反查所属 appid）+ `resolve_appid.py` helper。platform_config 去掉 appid（单源不重复）。assemble_export 的 appid 改从 resolve_appid(schema) 读。⚠️ 部署：老位置不兼容，已装机器重跑 install.py + 手搬老 db-sources.json 到新位置。
-- **编排者铁律**（new-pipe.md 顶部）：跑 pipe 的子 agent 故意不定义（免得 designer/coder 变第三层），边界靠 new-pipe.md 扛——显式忽略 caller 传入的"自动修正/重试"垃圾指令（不 author 脚本、校验失败按路由不自动修、诊断进 _internal/diagnose）。我们管不着 caller 怎么写，管自己内容的规矩。
+- **编排者铁律**（new-pipe.md 顶部）：跑 pipe 的子 agent 故意不定义（免得 designer/coder 变第三层），边界靠 new-pipe.md 扛——显式忽略 caller 传入的"自动修正/重试"垃圾指令（不 author 脚本、校验失败按路由不自动修、诊断进 _internal/diagnose）；**输入原文一律不 Read**（mapping/RS 由脚本消化，编排者只消费脚本产出——rs_input_view 传给 designer、ts.json、各报告）。我们管不着 caller 怎么写，管自己内容的规矩。pipe 正文只留操作性指令（2026-08 已清一轮注释性内容：历史沿革/脚本内部机制/并行论证全删，知识归 AGENTS.md/tool-registry）。
 
 ### 待讨论 / 闲时
 

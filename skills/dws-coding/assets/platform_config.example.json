@@ -1,6 +1,13 @@
 {
   "_comment": "平台部署配置。按 schema 映射两个平台的项目/任务组。exporter 读取。",
-  "_structure": "schema_mappings: schema → { shujia(术加执行平台), lts(调度平台) }。未命中的 schema 用 default。",
+  "_structure": "schema_mappings: schema → { shujia(术加执行平台), lts(调度平台) }。未命中的 schema 用 default。shujia_tenants: appid → { org_abbr, datasource }（术加租户属性，appid 键；appid 从 schema_apps.json 反查；租户级取值覆盖 schema 级——数据源是租户属性）。subproject_* 已废弃留空：schema 与子项目 N:M 无映射，交付时人工填 Excel。",
+
+  "shujia_tenants": {
+    "APP001": {
+      "org_abbr": "crm_tenant",
+      "datasource": "SRP_DWS"
+    }
+  },
 
   "default": {
     "shujia": {

@@ -11,6 +11,8 @@ agent: build
 
 本 pipe **不 author 脚本**（只调下面列出的脚本）；**校验失败按路由走，不自动修**——设计/输入问题回 designer 或回报 caller，环境报告 caller，绝不自己写脚本绕（掩盖根因）。诊断用 explore / run_ut_check，临时查询进 `{deliver}/_internal/diagnose/`。
 
+**输入原文一律不 Read**：mapping.xlsx / RS 等输入由脚本消化（preprocess → rs_input 双文件），xlsx 用 Read 也读不出内容，纯烧上下文。你只消费**脚本产出**（把 rs_input_view.json 路径传给 designer、ts.json、各报告/摘要/执行计划）。
+
 ---
 
 ## 产出目录结构
@@ -50,8 +52,6 @@ agent: build
 - `design-dev-shared/scripts`（SHARED_SCRIPTS）：pipe 编排调的管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan/resolve_appid/schema_query）+ 公共库（dws_db/config_paths/run_ut/ut_diagnose/type_compat/sql_parse/dws_standards）。
 - `dws-design/scripts`（DESIGN_SCRIPTS）：designer 调的（assemble_ts/explore/fill_type_risk_decision）。
 - `dws-coding/scripts`（CODING_SCRIPTS）：coder 调的（slice_ts/check_sql/pick_fields）。
-
-> 历史：pipe 脚本原按"阶段"散在 design/coding 下，2026-08 归位到 shared（按调用方归类，消除"agent skill 目录里混着 pipe 脚本"的混淆）。随后把被 shared 消费的函数库（run_ut/ut_diagnose/type_compat + 抽出的 sql_parse/dws_standards）一并下沉到 shared——**分层铁律：shared 绝不 import dws-design/dws-coding，箭头单向**。
 
 **先定位路径再开工**——调 Skill tool 加载 `design-dev-shared` skill，opencode 会注入它的 `location`（SKILL.md 绝对路径）。从 location 推算三个脚本目录：
 
@@ -93,8 +93,8 @@ python SHARED_SCRIPTS/preprocess.py \
   --output {deliver}/_internal/rs_input.json
 ```
 
-> 产出两个文件：`rs_input.json`（完整，给脚本读）+ `rs_input_view.json`（compact 紧凑视图，给 designer 读，约省 70%）。
-> **`--rs` 可选**：无 RS 时进入"无RS模式"，调度/增量/DQ 用默认值兜底（全量调度/T+1/无DQ），mapping 独立驱动核心链路。90% 场景建议有 RS。
+> 产出：`rs_input.json`（完整，给脚本读）+ `rs_input_view.json`（紧凑视图，路径传给 designer）。
+> `--rs` 可选：无 RS 时调度/增量/DQ 用默认值兜底，mapping 独立驱动核心链路。
 
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 
@@ -119,7 +119,7 @@ precheck 检测到"直接复制"字段有源→目标类型转换风险时阻断
 
 **用 question 收集决策**（不让用户手填 YAML），两类分别问：
 - **batch（常规风险：长度超长/精度收窄）**：是否批量加安全处理？选项 `加安全处理`（ETL 截取/转换保不出错）/ `不加`（接受风险，数据问题以报错暴露）。
-- **individual（跨大类不兼容/字符语义差异，逐字段问）**：怎么处理？选项 `转换`（ETL SELECT 加 TO_DATE/TO_CHAR/CAST）/ `不加`（接受风险）/ `返源端`（源端改类型更合适，追问原因）。字符语义差异 = nvarchar↔varchar 等口径互跨（字节/字符），同长度也可能装不下中文——装不装得下取决于集群口径和字段实际数据，脚本不猜，人定。
+- **individual（跨大类不兼容/字符语义差异，逐字段问）**：怎么处理？选项 `转换`（ETL SELECT 加 TO_DATE/TO_CHAR/CAST）/ `不加`（接受风险）/ `返源端`（源端改类型更合适，追问原因）。字符语义差异（nvarchar↔varchar 口径互跨）装不装得下人定，脚本不猜。
 
 > ★ **所有处置都是改 ETL（SELECT 加转换），DDL 目标类型一律不变**——不要理解为改 DDL 的目标类型。
 > 决策通过后 precheck 自动回写 rs_input（转换字段改"数据加工"），designer/coder 按加工字段走转换逻辑。
@@ -189,17 +189,13 @@ python SHARED_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
 输出执行计划 JSON：`ddl` / `dq`（含条数）/ `etl_rules` / `init_rules` / `groups` / `summary`。
 **发起哪些任务一律以计划为准**——`dq=false` 不发 DQ coder，`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起，避免逐个判断把 DQ/init 拖到 ETL 后面串行跑。**
 
-闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）：
-
-> 并行编排是本步核心：DDL/规则 coder/DQ 各自只依赖 ts.json（闸口①前已就绪），互不读对方产出，可同时发起。coder 按规则组编排，init 因依赖增量 SQL 需等。
+闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。
 
 ### 4a：生成 DDL（脚本）
 
 ```bash
 python SHARED_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}
 ```
-
-> **I 视图自动推导**：mapping 目标表写 `_i` 后缀（如 `dwb_xxx_i`），脚本自动推导 F 表并先建 F 表再建 I 视图。
 
 ### 4b：规则 coder（按计划 groups 组内并行）
 
@@ -216,9 +212,6 @@ Task(
 
 **task_id 由 Task 调用返回后你自己记录**（规则→会话映射，步骤 6 执行回路用）——这是你的记账，**不写进 coder 的 prompt**。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
-> coder 内部：slice_ts 拿切片 → 写 SELECT → check_sql 静态对比 → 落盘。静态对比不过记为失败规则，不阻塞同组其他规则。
-> 组内并行安全：每个 coder 写自己的 `{rule_code}.sql`（文件名不冲突），切片独立互不读对方产出。
-
 ### 4c：DQ coder（计划 dq=true 时，与 4a/4b 同消息并行）
 
 执行计划 `dq=true`（RS 有 DQ 需求，designer 已翻译；**以计划为准，不自己解析 ts.json**）→ 调 coder 产 DQ（与 4a/4b **同消息**并行发起）：
@@ -233,9 +226,7 @@ Task(
 )
 ```
 
-计划 `dq=false` → **跳过**：不调 coder，`dq/` 目录不建。无"标准三项系统兜底"。
-
-> DQ 只依赖 dq_rules（不依赖 DDL/coder 的 SELECT），故可与 4a/4b 并行。DQ 执行（UT 阶段）才依赖目标表存在。DQ 全部由 coder 按 dq_rules 产出（无脚本兜底，无"标准三项"系统生成）。
+计划 `dq=false` → **跳过**：不调 coder，`dq/` 目录不建。
 
 ### 4d：init coder（计划 init_rules 非空时，等 4b 完成）
 
@@ -250,9 +241,6 @@ Task(
 ```
 
 计划 `init_rules` 为空（非增量资产）→ 跳过。
-
-> init 规则在 `ts.init.rules`（与 `ts.rules` 平行）。coder 的 slice_ts 会从 init 段找到 `INIT_` 规则。
-> ★ **硬约束：4d 必须等 4b 增量规则完成**——derive 模式 init SQL = 增量 SQL 改 filter，源 .sql 得先在。4d 不等 4a/4c（init 不依赖 DDL/DQ）。
 
 **4a/4b/4c/4d 全部完成 → 步骤 5 UT。**
 
@@ -297,7 +285,7 @@ python SHARED_SCRIPTS/ut_execute.py \
 ```
 
 > ⚠️ `--precheck-result` 路径与 5a 的 `--result` 一致（都在 `_internal/` 下）。读不到直接退出（避免预检未通过误灌数据）。
-> **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms。数据库端 statement_timeout（默认600秒）会自动 cancel 超时查询，不留僵尸进程。
+> **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms（数据库端 statement_timeout 自动兜底）。
 > ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**——符合现实部署顺序。无需分开调，脚本内部有序两阶段。init 挂了基线就废，后续增量自动跳过。
 
 ---
@@ -373,11 +361,9 @@ python SHARED_SCRIPTS/assemble_export.py \
 - `lts_{表名}.xlsx`（LTS 调度平台导入，3 sheet）
 - `export_manifest_{表名}.json`（元数据清单）
 
-> ⚠️ 视图不发术加规则行（视图是 DDL 对象，`ddl/create_view_*.sql` 由部署侧
-> 执行；术加 RULE 行只表达"SELECT 取数写入目标表"）。调度侧的 view 任务照常生成。
-
-> ⚠️ 规则编码留空。部署时内网 skill 先获取编码回填 Excel 再导入。
-> 后续导入平台是可选的（由内网 skill 执行），但制品包必须生成。
+> 编码列为占位符（组码 `GR_*`、规则码 ts 码、pv 行 `PV000N`），出厂已做三处闭合校验；子项目中文名留空人填。
+> **交付流程（闸口②确认后）**：收集 项目中文名 + 子项目中文名 → 调 `SHARED_SCRIPTS/local/backfill_rule_codes.py`
+> （内网本地扩展区，脚本就位后接线）取码替换占位符、按中文名补齐项目/子项目编码及英文名 → 用户拿终版 Excel 直接导入。
 
 ---
 
@@ -404,7 +390,6 @@ python SHARED_SCRIPTS/archive_writer.py \
   --archives-root archives
 ```
 
-> 档案 = 文本小件（ts / etl / ddl / decisions）入 git；xlsx 大件不进（运行时产物可再生）。
 > 非交互评测模式也归档（幂等，重跑产生新序号目录）。
 
 ---

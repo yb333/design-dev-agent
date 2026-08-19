@@ -12,12 +12,16 @@ UT 通过后调用。把验证过的 ts.json + ETL SQL 翻译成
   - schedule_tasks.xlsx    调度平台导入（3 sheet）
   - export_manifest.json   元数据清单（给内网 skill 读）
 
-规则编码策略：全部留空，内网部署 skill 回填。
-  新建场景：内网先获取编码 → 回填 Excel 三处 → 导入
-  优化场景（将来）：编码已有，直接从平台拿
+规则编码策略：占位符出厂，内网脚本查表替换（Excel 自描述，脚本零配置）。
+  规则组编码 = GR_{组英文名}；规则编码 = ts 规则码；参数变量行 = PV000N。
+  TargetFields/GroupVariables 按占位码挂引用，生成阶段做三处闭合校验。
+  交接流程：人填子项目三件套（N:M 无映射，留空人填）→ 内网脚本登录平台
+  取码、替换占位符 → 人工上传。
+  租户ID = appid（schema_apps 反查）；组织英文简称/数据源 = 术加租户属性
+  （platform_config 的 shujia_tenants[appid]，租户级覆盖 schema 级）。
 
 用法:
-  python assemble_export.py --ts ts.json --etl-dir etl/ --ddl-dir ddl/ --outdir .
+  python assemble_export.py --ts ts.json --etl-dir etl/ --outdir .
 
 退出码: 0=成功, 1=参数/数据错误, 2=依赖缺失
 """
@@ -147,19 +151,25 @@ def load_platform_config(config_path: str = "") -> dict:
     return {k: v for k, v in raw.items() if not k.startswith("_")}
 
 
-def resolve_config_by_schema(raw_config: dict, schema: str) -> dict:
+def resolve_config_by_schema(raw_config: dict, schema: str, appid: str = "") -> dict:
     """按 schema 从 platform_config 取两套平台配置。
 
-    查找顺序：schema_mappings[schema] → default
-    返回 {shujia: {...}, lts: {...}}
+    查找顺序：schema_mappings[schema] → default。
+    术加租户块 shujia_tenants[appid]（org_abbr/datasource）是租户级属性，
+    覆盖 schema 级取值（数据源是术加租户属性，单一归属）。
+    appid 由调用方传入（main 用 resolve_appid 反查 schema_apps）。
+    返回 {shujia: {...含 appid/org_abbr}, lts: {...}}
     """
     if not raw_config:
-        return {"shujia": {}, "lts": {}}
+        return {"shujia": {"appid": appid}, "lts": {}}
     default_cfg = raw_config.get("default", {})
     mappings = raw_config.get("schema_mappings", {})
     schema_cfg = mappings.get(schema, {})
-    # schema 没配的字段用 default 兜底
     shujia = {**default_cfg.get("shujia", {}), **schema_cfg.get("shujia", {})}
+    if appid:
+        tenant = (raw_config.get("shujia_tenants") or {}).get(appid) or {}
+        shujia = {**shujia, **{k: v for k, v in tenant.items() if v}}
+    shujia["appid"] = appid
     lts = {**default_cfg.get("lts", {}), **schema_cfg.get("lts", {})}
     return {"shujia": shujia, "lts": lts}
 
@@ -182,13 +192,49 @@ def _split_schema_table(full: str) -> tuple[str, str]:
     return "", full
 
 
+# 查询单列安全长度：Excel 单元格上限 32767，留余量
+MAX_SQL_CHUNK = 30000
+
+
+def _fill_query_columns(row: list, sql: str):
+    """查询语句分列：超长 SQL 按 MAX_SQL_CHUNK 切到「查询语句1~9」。
+
+    下游按列号顺序原样拼接非空列（不做 strip/美化），因此任意边界直切即可，
+    拼接后逐字还原。
+    """
+    if len(sql) <= MAX_SQL_CHUNK:
+        row[_RULE_COL["(生成的）查询语句1"]] = sql
+        return
+    chunks = [sql[i:i + MAX_SQL_CHUNK] for i in range(0, len(sql), MAX_SQL_CHUNK)]
+    if len(chunks) > 9:
+        raise ValueError(
+            f"SQL 超长：{len(sql)} 字符，超过 9 列 × {MAX_SQL_CHUNK} 上限，无法装入制品包"
+        )
+    for n, chunk in enumerate(chunks, start=1):
+        row[_RULE_COL[f"(生成的）查询语句{n}"]] = chunk
+
+
+def _has_separate_init(ts: dict) -> bool:
+    """是否发独立的 init 规则组（group_mode=separate 且 init 段有数据规则）。"""
+    section = ts.get("init") or {}
+    if not isinstance(section, dict) or section.get("group_mode") != "separate":
+        return False
+    return any(not r.get("is_view_step") for r in (section.get("rules") or {}).values())
+
+
+def _pv_codes(ts: dict) -> list[str]:
+    """参数变量规则的占位编码：主组 PV0001；separate init 组追加 PV0002。"""
+    return ["PV0001"] + (["PV0002"] if _has_separate_init(ts) else [])
+
+
 def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
     """构建 RULE sheet 行。顺序：取数规则 → 参数变量规则（每规则组一行）。
 
     config: resolve_config_by_schema 返回的 {shujia, lts} 结构。
-    术加执行平台配置从 config["shujia"] 取。
-    编码（规则组编码/规则编码）全部留空，内网回填。
-    子项目编码留空（schema 对不齐，人工填）。
+    术加执行平台配置从 config["shujia"] 取（含租户块解析的 appid/org_abbr）。
+    编码为占位符（内网脚本查表替换）：规则组编码 GR_{组英文名}、
+    规则编码 = ts 规则码、参数变量行 PV000N。
+    子项目编码留空（schema 与子项目 N:M，人工填）。
     视图不发术加规则行：RULE 行规则类型 1 的查询语句列必须是可执行的
     SELECT（平台当取数语句跑），视图 DDL 走 ddl/ 通道部署，不进术加。
     """
@@ -200,6 +246,8 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
     group_desc = f_table.get("cn", "") or target_short
 
     shujia = config.get("shujia", {})
+    appid = shujia.get("appid", "")
+    org_abbr = shujia.get("org_abbr", "")
     data_source = _cfg(shujia, "datasource")
     business_owner = _cfg(shujia, "business_owner", "")
     project_code = _cfg(shujia, "project_code")
@@ -219,9 +267,14 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
     merged += [(c, r, True) for c, r in init_rules.items()]
 
     rows = []
+    group_code = f"GR_{target_short}"
+    init_group_name = f"{target_short}_init"
+    init_group_code = f"GR_{init_group_name}"
 
     # 公共列填充（每行都要填的项目）
     def _fill_common(row):
+        row[_RULE_COL["租户ID"]] = appid                # 租户ID = appid（schema_apps 反查）
+        row[_RULE_COL["组织英文简称"]] = org_abbr        # 术加租户名（shujia_tenants[appid]）
         row[_RULE_COL["类型"]] = "3"
         row[_RULE_COL["项目编码"]] = project_code
         row[_RULE_COL["项目中文名"]] = project_cn
@@ -229,13 +282,12 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
         row[_RULE_COL["子项目编码"]] = sub_code
         row[_RULE_COL["子项目中文名"]] = sub_cn
         row[_RULE_COL["子项目英文名"]] = sub_en
-        # 规则组编码留空（内网回填）
+        row[_RULE_COL["规则组编码"]] = group_code        # 占位符，内网脚本替换
         row[_RULE_COL["规则组中文名称"]] = target_short
         row[_RULE_COL["规则组英文名称"]] = target_short
         row[_RULE_COL["规则组描述"]] = group_desc
         row[_RULE_COL["规则组数据源"]] = data_source
         row[_RULE_COL["规则组业务责任人"]] = business_owner
-        # 规则编码留空（内网回填）
 
     # --- 取数规则（每条 ETL SQL 一行）---
     for code, rule, is_init in merged:
@@ -256,15 +308,17 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
         _fill_common(row)
         # separate 模式：init 规则进独立规则组（_init 后缀），跟增量区分（init 任务跑这个组）
         if is_init and init_group_mode == "separate":
-            row[_RULE_COL["规则组中文名称"]] = f"{target_short}_init"
-            row[_RULE_COL["规则组英文名称"]] = f"{target_short}_init"
+            row[_RULE_COL["规则组编码"]] = init_group_code
+            row[_RULE_COL["规则组中文名称"]] = init_group_name
+            row[_RULE_COL["规则组英文名称"]] = init_group_name
+        row[_RULE_COL["规则编码"]] = code                # 占位符 = ts 规则码，内网脚本替换
         row[_RULE_COL["规则中文名称"]] = tbl or target
         row[_RULE_COL["规则英文名称"]] = tbl or target
         row[_RULE_COL["创建方式"]] = "2"
         row[_RULE_COL["规则类型"]] = "1"
         row[_RULE_COL["数据源"]] = data_source
-        row[_RULE_COL["备注"]] = "简要描述"
-        row[_RULE_COL["(生成的）查询语句1"]] = query_sql
+        _fill_query_columns(row, query_sql)
+        row[_RULE_COL["规则描述"]] = rule.get("design_intent", "")
         # 执行序列决定加工拓扑（中间表步骤必须先于消费步骤），从 ts 透传
         row[_RULE_COL["执行序列"]] = str(rule.get("exec_sequence", 1))
         # 运行条件：inline 靠 P_FLAG 选 init/增量管道；separate/无 init → "0"
@@ -295,17 +349,14 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
     # --- 参数变量规则（每规则组一行；主组恒有，separate init 组有规则时加一行）---
     # 形态：中文名"参数变量规则"/英文名"Parameter Variable Rule"、创建方式 1、
     # 规则类型 12、执行序列 -1；查询语句/运行条件等留空。变量本身登记在
-    # GroupVariables sheet，不占用 RULE 行。
-    has_separate_init = init_group_mode == "separate" and any(
-        not r.get("is_view_step") for r in init_rules.values()
-    )
-
-    def _pv_row(group_name: str = "") -> list:
+    # GroupVariables sheet（按本行占位码挂引用），不占 RULE 行。
+    def _pv_row(group_name: str, group_code_: str, pv_code: str) -> list:
         row = [""] * len(RULE_COLUMNS)
         _fill_common(row)
-        if group_name:
-            row[_RULE_COL["规则组中文名称"]] = group_name
-            row[_RULE_COL["规则组英文名称"]] = group_name
+        row[_RULE_COL["规则组编码"]] = group_code_
+        row[_RULE_COL["规则组中文名称"]] = group_name
+        row[_RULE_COL["规则组英文名称"]] = group_name
+        row[_RULE_COL["规则编码"]] = pv_code              # 占位符，内网脚本替换
         row[_RULE_COL["规则中文名称"]] = "参数变量规则"
         row[_RULE_COL["规则英文名称"]] = "Parameter Variable Rule"
         row[_RULE_COL["创建方式"]] = "1"
@@ -318,50 +369,53 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
         row[_RULE_COL["调度类型"]] = "0"
         return row
 
-    rows.append(_pv_row())
-    if has_separate_init:
-        rows.append(_pv_row(f"{target_short}_init"))
+    rows.append(_pv_row(target_short, group_code, "PV0001"))
+    if _has_separate_init(ts):
+        rows.append(_pv_row(init_group_name, init_group_code, "PV0002"))
 
     return rows
 
 
 def build_group_variables(ts: dict) -> list[list]:
-    """构建 GroupVariables sheet 行。规则编码留空。
+    """构建 GroupVariables sheet 行。按参数变量规则的占位码挂引用。
 
-    参数来源：ts.json meta.schedule.exec_params
+    参数来源：ts.json meta.schedule.exec_params。separate init 模式下
+    每个规则组各挂一份（组自含），分别指向该组 pv 行的占位码。
     """
     exec_params = ts.get("meta", {}).get("schedule", {}).get("exec_params", {})
     rows = []
-    for pname in sorted(exec_params.keys()):
-        # 默认值从 ts.default_value 读（static 给值；dynamic 留空让平台运行时注入）
-        pdecl = exec_params.get(pname) or {}
-        dv = pdecl.get("default_value")
-        if isinstance(dv, dict):
-            default_val = dv.get("value", "") if dv.get("type") == "static" else ""
-        elif dv is not None and dv != "":
-            default_val = str(dv)
-        else:
-            default_val = ""
-        rows.append([
-            "",           # 规则编码（留空）
-            pname,        # 动态参数/变量名
-            "1",          # 字段类型
-            "1",          # 字段定义类型
-            "1",          # 字段值类型
-            default_val,  # 变量默认值
-            "1",          # 是否校验通过
-            "",           # 数据类型
-            "",           # 描述
-            "",           # 是否必填
-        ])
+    for pv_code in _pv_codes(ts):
+        for pname in sorted(exec_params.keys()):
+            # 默认值从 ts.default_value 读（static 给值；dynamic 留空让平台运行时注入）
+            pdecl = exec_params.get(pname) or {}
+            dv = pdecl.get("default_value")
+            if isinstance(dv, dict):
+                default_val = dv.get("value", "") if dv.get("type") == "static" else ""
+            elif dv is not None and dv != "":
+                default_val = str(dv)
+            else:
+                default_val = ""
+            desc = pdecl.get("desc", "") if isinstance(pdecl, dict) else ""
+            rows.append([
+                pv_code,      # 规则编码（占位 = 参数变量规则行）
+                pname,        # 动态参数/变量名
+                "1",          # 字段类型
+                "1",          # 字段定义类型
+                "1",          # 字段值类型
+                default_val,  # 变量默认值
+                "1",          # 是否校验通过
+                "",           # 数据类型
+                desc,         # 描述（ts exec_params.desc）
+                "",           # 是否必填
+            ])
     return rows
 
 
 def build_target_fields(ts: dict) -> list[list]:
     """构建 TargetFields sheet 行。从 tables 段取字段定义，过滤审计字段。
 
-    字段来源优先级：tables[target_table].fields → rule.fields（旧格式兼容）
-    规则编码留空。
+    字段来源优先级：tables[target_table].fields → rule.fields（旧格式兼容）。
+    规则编码 = ts 规则码（占位符，与 RULE 行对应）。
     """
     rules = ts.get("rules", {})
     tables = ts.get("tables", {})
@@ -388,9 +442,9 @@ def build_target_fields(ts: dict) -> list[list]:
                 if f:
                     src_field = f"s.{f}"
             rows.append([
-                "",                 # 规则编码（留空）
+                code,               # 规则编码（占位 = ts 规则码）
                 target_field,       # 目标字段名称
-                src_field,          # 来源字段名称
+                src_field,          # 来源字段名称（s.字段 / 空）
                 "0",                # 加密方式
                 "",                 # Merge模式数据源字段值
                 "",                 # 别名（不填）
@@ -400,27 +454,62 @@ def build_target_fields(ts: dict) -> list[list]:
     return rows
 
 
+def validate_code_closure(rule_rows: list[list], gv_rows: list[list], tf_rows: list[list]) -> list[str]:
+    """出厂校验：占位编码三处引用闭合（这是"Excel 出厂即标准"的硬约束）。
+
+    - RULE 规则编码非空且不重复；规则组编码非空
+    - TargetFields / GroupVariables 的规则编码必须在 RULE 行能找到（不悬挂）
+    返回问题列表（空 = 通过）。
+    """
+    problems = []
+    codes = [r[_RULE_COL["规则编码"]] for r in rule_rows]
+    for r, c in zip(rule_rows, codes):
+        if not c:
+            problems.append("RULE 行规则编码为空")
+        if not r[_RULE_COL["规则组编码"]]:
+            problems.append(f"规则 {c or '?'} 的规则组编码为空")
+    dups = sorted({c for c in codes if c and codes.count(c) > 1})
+    if dups:
+        problems.append(f"RULE 规则编码重复: {dups}")
+    code_set = set(codes)
+    for row in tf_rows:
+        if row[0] not in code_set:
+            problems.append(f"TargetFields 规则编码悬挂: {row[0]!r}")
+    for row in gv_rows:
+        if row[0] not in code_set:
+            problems.append(f"GroupVariables 规则编码悬挂: {row[0]!r}")
+    return problems
+
+
 def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, output_path: Path):
-    """生成 execution_tasks.xlsx（10 sheet）。"""
+    """生成 execution_tasks.xlsx（10 sheet）。出厂前做占位编码闭合校验。"""
+    rule_rows = build_rule_rows(ts, config, etl_dir)
+    gv_rows = build_group_variables(ts)
+    tf_rows = build_target_fields(ts)
+
+    problems = validate_code_closure(rule_rows, gv_rows, tf_rows)
+    if problems:
+        raise ValueError("制品包占位编码校验失败:\n  " + "\n  ".join(problems))
+
     wb = openpyxl.Workbook()
 
     # Sheet 1: RULE
     ws = wb.active
     ws.title = "RULE"
     ws.append(RULE_COLUMNS)
-    for row in build_rule_rows(ts, config, etl_dir):
+    for row in rule_rows:
         ws.append(row)
 
     # Sheet 2: GroupVariables
     ws = wb.create_sheet("GroupVariables")
     ws.append(GROUPVARS_COLUMNS)
-    for row in build_group_variables(ts):
+    for row in gv_rows:
         ws.append(row)
 
     # Sheet 3: TargetFields
     ws = wb.create_sheet("TargetFields")
     ws.append(TARGETFIELDS_COLUMNS)
-    for row in build_target_fields(ts):
+    for row in tf_rows:
         ws.append(row)
 
     # Sheet 4-10: 空 sheet（保留表头，跟 legacy 一致）
@@ -463,9 +552,8 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     # 兜底默认值（platform_config 的 lts 段，给旧 ts.json 没有 project/task_group 时用）
     fallback_project = _cfg(lts, "project_name")
     fallback_group = _cfg(lts, "task_group")
-    # appid 从 schema_apps.json 读（schema↔appid 标准源，不再从 platform_config 读）
-    target_schema = meta.get("target", {}).get("f_table", {}).get("schema", "")
-    appid = resolve_appid(target_schema)
+    # appid 由 main 统一从 schema_apps 反查、经 resolve_config_by_schema 注入 shujia 段
+    appid = (config.get("shujia") or {}).get("appid", "")
     owner = _cfg(config.get("shujia", {}), "business_owner", "")
 
     def _resolve_path(task_info):
@@ -619,7 +707,6 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
     rules = ts.get("rules", {})
     init_section = ts.get("init") or {}
     init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
-    init_group_mode = (init_section.get("group_mode") or "") if isinstance(init_section, dict) else ""
 
     target_short = f_table.get("table", "")
     target_full = f"{f_table.get('schema', '')}.{target_short}" if f_table.get("schema") else target_short
@@ -628,9 +715,7 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
     # 需要的规则编码数 = 取数规则数(增量+init) + 参数变量规则行（每规则组一行）
     etl_count = sum(1 for r in rules.values() if not r.get("is_view_step"))
     etl_count += sum(1 for r in init_rules.values() if not r.get("is_view_step"))
-    pv_count = 1
-    if init_group_mode == "separate" and init_rules:
-        pv_count += 1
+    pv_count = 1 + (1 if _has_separate_init(ts) else 0)
     rule_codes_needed = etl_count + pv_count
 
     upstream_tasks = []
@@ -702,10 +787,12 @@ def main():
         sys.exit(1)
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
-    # 读配置（按目标表 schema 映射两套平台配置）
+    # 读配置（按目标表 schema 映射两套平台配置；appid 从 schema_apps 反查，
+    # 注入 shujia 段 → 租户ID 列 + shujia_tenants 租户块解析）
     raw_config = load_platform_config(args.config)
     target_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
-    config = resolve_config_by_schema(raw_config, target_schema)
+    appid = resolve_appid(target_schema)
+    config = resolve_config_by_schema(raw_config, target_schema, appid)
 
     # 产出（文件名带平台标识 + 表名，便于多资产区分）
     target_short = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "unknown")
@@ -722,7 +809,7 @@ def main():
     print(f"  {exec_path}")
     print(f"  {sched_path}")
     print(f"  {manifest_path}")
-    print(f"  规则编码需求: {manifest_path and json.loads(manifest_path.read_text(encoding='utf-8'))['rule_codes_needed']} 个（留空，内网回填）")
+    print(f"  规则编码: {json.loads(manifest_path.read_text(encoding='utf-8'))['rule_codes_needed']} 个占位符（内网脚本取码替换）")
     print(f"  目标表: {ts.get('meta', {}).get('target', {}).get('f_table', {}).get('table', '')}")
 
 

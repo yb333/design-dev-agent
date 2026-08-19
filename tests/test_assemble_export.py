@@ -23,6 +23,7 @@ from assemble_export import (
     generate_execution_excel,
     generate_schedule_excel,
     generate_manifest,
+    validate_code_closure,
     AUDIT_FIELDS,
     RULE_COLUMNS,
     GROUPVARS_COLUMNS,
@@ -88,6 +89,7 @@ def sample_ts():
                 "target_table": "dwb_xxx_f",
                 "exec_sequence": 1,
                 "is_view_step": False,
+                "design_intent": "以订单事实表为主表左关联用户表装配宽表",
                 "source_tables": [{"schema": "ods", "table": "ods_order_f", "alias": "a"}],
                 "fields": [
                     {"target_field": "order_id", "source_fields": [{"table": "ods_order_f", "field": "order_id", "alias": "a"}]},
@@ -102,9 +104,11 @@ def sample_ts():
 
 @pytest.fixture
 def sample_config():
-    """resolve_config_by_schema 返回的结构"""
+    """resolve_config_by_schema 返回的结构（含租户块解析结果）"""
     return {
         "shujia": {
+            "appid": "APP001",
+            "org_abbr": "crm_tenant",
             "project_code": "SRP_ETL",
             "project_cn": "ETL项目",
             "project_en": "ETL_Project",
@@ -187,9 +191,33 @@ class TestResolveConfigBySchema:
         assert result["shujia"]["datasource"] == "DWS"  # default 兜底
 
     def test_empty_config(self):
-        """空配置返回空结构"""
-        result = resolve_config_by_schema({}, "slprd")
-        assert result == {"shujia": {}, "lts": {}}
+        """空配置返回空结构（appid 由调用方注入）"""
+        result = resolve_config_by_schema({}, "slas")
+        assert result == {"shujia": {"appid": ""}, "lts": {}}
+
+    def test_tenant_block_overrides(self):
+        """★ 租户块：shujia_tenants[appid] 的 org_abbr/datasource 覆盖 schema 级"""
+        raw = {
+            "default": {"shujia": {"datasource": "SCHEMA_LEVEL_DS", "project_code": "P1"}},
+            "shujia_tenants": {
+                "APP001": {"org_abbr": "crm_tenant", "datasource": "TENANT_DS"},
+            },
+        }
+        result = resolve_config_by_schema(raw, "slprd", appid="APP001")
+        assert result["shujia"]["org_abbr"] == "crm_tenant"
+        assert result["shujia"]["datasource"] == "TENANT_DS"   # 租户级覆盖 schema 级
+        assert result["shujia"]["project_code"] == "P1"        # 非租户属性不受影响
+        assert result["shujia"]["appid"] == "APP001"
+
+    def test_no_appid_no_tenant_merge(self):
+        """没传 appid → 不做租户合并，datasource 走 schema 级"""
+        raw = {
+            "default": {"shujia": {"datasource": "SCHEMA_LEVEL_DS"}},
+            "shujia_tenants": {"APP001": {"org_abbr": "crm_tenant"}},
+        }
+        result = resolve_config_by_schema(raw, "slprd")
+        assert result["shujia"]["datasource"] == "SCHEMA_LEVEL_DS"
+        assert "org_abbr" not in result["shujia"]
 
 
 # ============================================================
@@ -212,12 +240,41 @@ class TestBuildRuleRows:
             assert "CREATE VIEW" not in sql and "CREATE OR REPLACE VIEW" not in sql
             assert row[_RULE_COL["目标表"]] != sample_ts["meta"]["target"]["i_view"]["table"]
 
-    def test_codes_left_empty(self, sample_ts, sample_config, etl_dir):
-        """规则组编码和规则编码留空（关键约束）"""
+    def test_placeholder_codes(self, sample_ts, sample_config, etl_dir):
+        """★ 编码为占位符：规则编码 = ts 规则码 / PV000N；规则组编码 = GR_{组英文名}"""
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        etl_row, pv_row = rows[0], rows[1]
+        assert etl_row[_RULE_COL["规则编码"]] == "R0001"
+        assert etl_row[_RULE_COL["规则组编码"]] == "GR_dwb_xxx_f"
+        assert pv_row[_RULE_COL["规则编码"]] == "PV0001"
+        assert pv_row[_RULE_COL["规则组编码"]] == "GR_dwb_xxx_f"
+
+    def test_tenant_columns(self, sample_ts, sample_config, etl_dir):
+        """★ 租户ID = appid、组织英文简称 = 租户名（shujia_tenants 解析）"""
         rows = build_rule_rows(sample_ts, sample_config, etl_dir)
         for row in rows:
-            assert row[_RULE_COL["规则组编码"]] == ""
-            assert row[_RULE_COL["规则编码"]] == ""
+            assert row[_RULE_COL["租户ID"]] == "APP001"
+            assert row[_RULE_COL["组织英文简称"]] == "crm_tenant"
+
+    def test_rule_desc_from_design_intent(self, sample_ts, sample_config, etl_dir):
+        """规则描述 ← design_intent；备注留空"""
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        etl_row = rows[0]
+        assert etl_row[_RULE_COL["规则描述"]] == "以订单事实表为主表左关联用户表装配宽表"
+        assert etl_row[_RULE_COL["备注"]] == ""
+
+    def test_long_sql_split_columns(self, sample_ts, sample_config, tmp_path):
+        """★ 超长 SQL 分列到查询语句1~N，拼接逐字还原"""
+        etl_dir = tmp_path / "etl"
+        etl_dir.mkdir()
+        long_sql = "SELECT " + ", ".join(f"col_{i} AS c{i}" for i in range(3000))  # > 30000
+        (etl_dir / "R0001.sql").write_text(long_sql, encoding="utf-8")
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        row = rows[0]
+        parts = [row[_RULE_COL[f"(生成的）查询语句{n}"]] for n in range(1, 10)]
+        non_empty = [p for p in parts if p]
+        assert len(non_empty) >= 2                        # 确实分列了
+        assert "".join(non_empty) == long_sql             # 拼接逐字还原
 
     def test_etl_query_in_statement(self, sample_ts, sample_config, etl_dir):
         """取数规则的查询语句列含 SQL 内容"""
@@ -244,7 +301,7 @@ class TestBuildRuleRows:
         assert pv_row[_RULE_COL["(生成的）查询语句1"]] == ""
 
     def test_separate_init_group_gets_own_pv_row(self, sample_ts, sample_config, etl_dir):
-        """separate init 规则组有自己的参数变量行（每规则组一条）"""
+        """separate init 规则组有自己的参数变量行（每规则组一条，占位码独立）"""
         (etl_dir / "INIT_R0001.sql").write_text(
             "SELECT 1 AS order_id, 100 AS order_amt WHERE dt <= '20260101'", encoding="utf-8"
         )
@@ -259,10 +316,16 @@ class TestBuildRuleRows:
         rows = build_rule_rows(sample_ts, sample_config, etl_dir)
         # 1 取数 + 1 init 取数 + 主组 pv + init 组 pv = 4
         assert len(rows) == 4
+        init_row = rows[1]
+        assert init_row[_RULE_COL["规则编码"]] == "INIT_R0001"
+        assert init_row[_RULE_COL["规则组编码"]] == "GR_dwb_xxx_f_init"
+        assert init_row[_RULE_COL["规则组英文名称"]] == "dwb_xxx_f_init"
         pv_rows = [r for r in rows if r[_RULE_COL["规则类型"]] == "12"]
         assert len(pv_rows) == 2
-        group_names = {r[_RULE_COL["规则组英文名称"]] for r in pv_rows}
-        assert group_names == {"dwb_xxx_f", "dwb_xxx_f_init"}
+        by_code = {r[_RULE_COL["规则编码"]]: r for r in pv_rows}
+        assert set(by_code) == {"PV0001", "PV0002"}
+        assert by_code["PV0001"][_RULE_COL["规则组编码"]] == "GR_dwb_xxx_f"
+        assert by_code["PV0002"][_RULE_COL["规则组编码"]] == "GR_dwb_xxx_f_init"
 
     def test_constants_filled(self, sample_ts, sample_config, etl_dir):
         """固定常量正确"""
@@ -302,11 +365,29 @@ class TestBuildGroupVariables:
         assert vals["P_CYCLE_ID"] == ""       # dynamic → 空，平台运行时注入
         assert vals["BIZ_CODE"] == "STATIC1"  # static 裸串 → 给值
 
-    def test_rule_code_empty(self, sample_ts):
-        """规则编码留空"""
+    def test_rule_code_is_pv_placeholder(self, sample_ts):
+        """★ 规则编码挂参数变量规则行的占位码 PV0001"""
         rows = build_group_variables(sample_ts)
         for row in rows:
-            assert row[0] == ""
+            assert row[0] == "PV0001"
+
+    def test_desc_filled(self, sample_ts):
+        """描述 ← exec_params.desc"""
+        rows = build_group_variables(sample_ts)
+        assert rows[0][8] == "批次号"
+
+    def test_gv_per_group_separate_init(self, sample_ts):
+        """separate init：每个规则组各挂一份变量（分别指向该组 pv 行占位码）"""
+        sample_ts["init"] = {
+            "mode": "derive", "group_mode": "separate",
+            "rules": {"INIT_R0001": {
+                "rule_name": "XXX汇总(初始化)", "exec_sequence": 1,
+                "target_table": "dwb_xxx_f", "is_view_step": False,
+            }},
+        }
+        rows = build_group_variables(sample_ts)
+        codes = {row[0] for row in rows}
+        assert codes == {"PV0001", "PV0002"}
 
     def test_no_params_empty_rows(self):
         """无 exec_params → 空列表"""
@@ -344,11 +425,11 @@ class TestBuildTargetFields:
         rows = build_target_fields(ts)
         assert rows[0][2] == ""
 
-    def test_rule_code_empty(self, sample_ts):
-        """规则编码留空"""
+    def test_rule_code_is_ts_code(self, sample_ts):
+        """★ 规则编码 = ts 规则码（占位，与 RULE 行对应）"""
         rows = build_target_fields(sample_ts)
         for row in rows:
-            assert row[0] == ""
+            assert row[0] == "R0001"
 
 
 # ============================================================
@@ -382,6 +463,31 @@ class TestGenerateExecutionExcel:
         wb = openpyxl.load_workbook(out)
         ws = wb["RULE"]
         assert ws.max_row == 3  # 表头 + 1 取数 + 1 参数变量（无视图行）
+
+    def test_closure_ok(self, sample_ts, sample_config, etl_dir):
+        """★ 三处占位编码闭合：正常数据无问题"""
+        rule_rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        gv_rows = build_group_variables(sample_ts)
+        tf_rows = build_target_fields(sample_ts)
+        assert validate_code_closure(rule_rows, gv_rows, tf_rows) == []
+
+    def test_closure_catches_dangling(self, sample_ts, sample_config, etl_dir):
+        """★ 悬挂引用被抓住：GV/TF 引用了 RULE 没有的编码"""
+        rule_rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        gv_rows = build_group_variables(sample_ts)
+        tf_rows = build_target_fields(sample_ts)
+        tf_rows.append(["R9999", "ghost_field", "s.ghost", "0", "", "", "", ""])
+        problems = validate_code_closure(rule_rows, gv_rows, tf_rows)
+        assert any("R9999" in p for p in problems)
+
+    def test_closure_blocks_generation(self, sample_ts, sample_config, etl_dir, tmp_path, monkeypatch):
+        """★ 闭合校验失败阻断生成（fail loud）"""
+        import assemble_export
+        monkeypatch.setattr(assemble_export, "build_target_fields",
+                            lambda ts: [["R9999", "ghost", "s.ghost", "0", "", "", "", ""]])
+        out = tmp_path / "execution_tasks.xlsx"
+        with pytest.raises(ValueError, match="R9999"):
+            generate_execution_excel(sample_ts, sample_config, etl_dir, out)
 
 
 class TestGenerateScheduleExcel:
@@ -457,12 +563,14 @@ class TestGenerateScheduleExcel:
         assert dep_rows[0][proj_idx] == "SRP_DAILY", \
             f"同项目应兜底用当前表project，实际={dep_rows[0][proj_idx]}"
 
-    def test_appid_injected_from_config(self, sample_ts, sample_config, tmp_path, monkeypatch):
-        """appid 从 schema_apps.json（resolve_appid 按 schema 查）注入到 job 参数。"""
-        # appid 不再从 platform_config 的 lts.appid 读——改从 schema_apps（resolve_appid）
-        monkeypatch.setattr("assemble_export.resolve_appid", lambda schema, config_path="": "MY_APP_123")
+    def test_appid_injected_from_config(self, sample_ts, sample_config, tmp_path):
+        """appid 经 resolve_config_by_schema 注入 shujia 段，exporter 直接用（不再自查 schema_apps）。"""
+        cfg = {
+            "shujia": {"appid": "MY_APP_123", "business_owner": "zhangsan"},
+            "lts": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
+        }
         out = tmp_path / "schedule_tasks.xlsx"
-        generate_schedule_excel(sample_ts, sample_config, out)
+        generate_schedule_excel(sample_ts, cfg, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["jobs"]
         header = [c.value for c in ws[1]]

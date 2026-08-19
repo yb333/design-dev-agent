@@ -19,6 +19,12 @@ dist/
 # 评测：真实用例目录（内网本地放真实业务数据，不进仓库）
 eval-suite/cases_real/
 
+# 内网本地扩展区（pull-only 仓免冲突）：内网机器在此自由添加/修改脚本，
+# git 永不跟踪、pull 永不冲突；install.py 按磁盘内容整目录拷贝，照样安装到
+# ~/.config/opencode/。交付取码脚本 backfill_rule_codes.py 放这里（new-pipe 7b）。
+# ★ 铁律：外网侧永远不要往这个路径提交被跟踪文件（否则内网 pull 因同名碰撞拒绝合并）。
+skills/design-dev-shared/scripts/local/
+
 # 评测：baseline 存档（每次跑评测生成，本地对比用，不进仓库）
 eval-suite/results/
 
