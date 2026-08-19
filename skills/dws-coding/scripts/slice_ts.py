@@ -204,6 +204,39 @@ def to_compact_view(sliced: dict) -> dict:
     return view
 
 
+def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
+    """优化模式切片（docs/specs/opt/05 §一）：常规切片 + baseline SQL 原文 + 落位声明 + 硬约束。
+
+    coder 在优化场景的输入——以 baseline SQL 为底稿加列，不从零写 SELECT。
+    硬约束即 SQL 围栏的判定标准（sql_fence 机器执行，此处给人读）。
+    """
+    sliced = slice_rule(ts, rule_code)
+    change = ts.get("change") or {}
+    fields, joins = [], []
+    for f in change.get("fields", []):
+        if rule_code in f.get("placed_rules", []):
+            fields.append({
+                "field": f["field"], "target_table": f.get("target_table", ""),
+                "backfill": f.get("backfill", "pending"),
+            })
+            joins.extend([{k: j[k] for k in ("table", "alias", "on") if k in j}
+                          for j in f.get("new_joins", []) if j.get("rule") == rule_code])
+    sliced["opt"] = {
+        "mode": "optimization",
+        "change_type": change.get("change_type", "add_field"),
+        "declared_new_fields": fields,
+        "declared_new_joins": joins,
+        "baseline_sql": baseline_sql,
+        "hard_constraints": [
+            "老列投影一个字符都不许动（AST 级结构等价比对；格式差异可，等价改写如 ='N' 改 <>'Y' 也算越界）",
+            "只许追加 change 段声明的新列；声明的新列必须出现",
+            "FROM/JOIN/WHERE/GROUP BY/CTE 冻结；新 JOIN 只允许声明过的（别名+表名）",
+            "改法：以 baseline_sql 为底稿加列，不从零重写；产出走 pipe 的 SQL 围栏闸门",
+        ],
+    }
+    return sliced
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="TS 规则切片: 从 ts.json 切出单个规则的 YAML（给 coder 读）"
@@ -213,6 +246,8 @@ def main():
     parser.add_argument("--output", default="", help="输出 YAML 路径（默认打印到 stdout）")
     parser.add_argument("--verbose", action="store_true",
                         help="完整模式：direct 字段逐个展开（默认 compact 压一行省 70% 体积；需逐字段细节时用）")
+    parser.add_argument("--baseline-sql", default="",
+                        help="优化模式：baseline SQL 文件路径（etl_baseline/{rule}.sql）——给定时切优化模式")
     args = parser.parse_args()
 
     # 读 ts.json
@@ -227,7 +262,11 @@ def main():
 
     # 切片
     try:
-        sliced = slice_rule(ts, args.rule, etl_dir=etl_dir)
+        if args.baseline_sql:
+            bsql = Path(args.baseline_sql).read_text(encoding="utf-8")
+            sliced = slice_rule_opt(ts, args.rule, baseline_sql=bsql)
+        else:
+            sliced = slice_rule(ts, args.rule, etl_dir=etl_dir)
     except ValueError as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
