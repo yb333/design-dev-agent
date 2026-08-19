@@ -2,8 +2,10 @@
 """
 平台制品包 exporter
 
-UT 通过后调用。把验证过的 ts.json + ETL SQL + 视图 DDL 翻译成
+UT 通过后调用。把验证过的 ts.json + ETL SQL 翻译成
 内网平台消费的 Excel 格式（execution_tasks.xlsx + schedule_tasks.xlsx）。
+视图不发术加规则行（视图是 DDL 对象，走 ddl/ 通道部署；RULE 行只表达
+"SELECT 取数写入目标表"）。
 
 产出目录：{outdir}/export/
   - execution_tasks.xlsx   执行平台导入（10 sheet）
@@ -180,21 +182,21 @@ def _split_schema_table(full: str) -> tuple[str, str]:
     return "", full
 
 
-def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> list[list]:
-    """构建 RULE sheet 行。顺序：取数规则 → 视图规则 → 参数变量规则。
+def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
+    """构建 RULE sheet 行。顺序：取数规则 → 参数变量规则（每规则组一行）。
 
     config: resolve_config_by_schema 返回的 {shujia, lts} 结构。
     术加执行平台配置从 config["shujia"] 取。
     编码（规则组编码/规则编码）全部留空，内网回填。
     子项目编码留空（schema 对不齐，人工填）。
+    视图不发术加规则行：RULE 行规则类型 1 的查询语句列必须是可执行的
+    SELECT（平台当取数语句跑），视图 DDL 走 ddl/ 通道部署，不进术加。
     """
     rules = ts.get("rules", {})
     meta = ts.get("meta", {})
     f_table = meta.get("target", {}).get("f_table", {})
-    i_view = meta.get("target", {}).get("i_view", {})
 
     target_short = f_table.get("table", "")
-    target_full = f"{f_table.get('schema', '')}.{target_short}" if f_table.get("schema") else target_short
     group_desc = f_table.get("cn", "") or target_short
 
     shujia = config.get("shujia", {})
@@ -263,6 +265,8 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
         row[_RULE_COL["数据源"]] = data_source
         row[_RULE_COL["备注"]] = "简要描述"
         row[_RULE_COL["(生成的）查询语句1"]] = query_sql
+        # 执行序列决定加工拓扑（中间表步骤必须先于消费步骤），从 ts 透传
+        row[_RULE_COL["执行序列"]] = str(rule.get("exec_sequence", 1))
         # 运行条件：inline 靠 P_FLAG 选 init/增量管道；separate/无 init → "0"
         if init_group_mode == "inline":
             row[_RULE_COL["运行条件"]] = "${P_FLAG}='2'" if is_init else "${P_FLAG}='1'"
@@ -288,52 +292,35 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path) -> lis
         row[_RULE_COL["来源表统计分析收集"]] = "0"
         rows.append(row)
 
-    # --- 视图规则（每个视图 DDL 一行）---
-    if i_view and i_view.get("table"):
-        # 读视图 DDL
-        view_files = list(ddl_dir.glob("create_view_*.sql")) if ddl_dir.exists() else []
-        view_ddl = ""
-        if view_files:
-            view_ddl = view_files[0].read_text(encoding="utf-8").strip()
+    # --- 参数变量规则（每规则组一行；主组恒有，separate init 组有规则时加一行）---
+    # 形态：中文名"参数变量规则"/英文名"Parameter Variable Rule"、创建方式 1、
+    # 规则类型 12、执行序列 -1；查询语句/运行条件等留空。变量本身登记在
+    # GroupVariables sheet，不占用 RULE 行。
+    has_separate_init = init_group_mode == "separate" and any(
+        not r.get("is_view_step") for r in init_rules.values()
+    )
 
-        view_full = f"{i_view.get('schema', '')}.{i_view.get('table', '')}"
-        sch, tbl = _split_schema_table(view_full)
-
+    def _pv_row(group_name: str = "") -> list:
         row = [""] * len(RULE_COLUMNS)
         _fill_common(row)
-        row[_RULE_COL["规则中文名称"]] = i_view.get("table", "")
-        row[_RULE_COL["规则英文名称"]] = i_view.get("table", "")
-        row[_RULE_COL["创建方式"]] = "2"
-        row[_RULE_COL["规则类型"]] = "1"
-        row[_RULE_COL["数据源"]] = data_source
-        row[_RULE_COL["备注"]] = "消费视图封装"
-        row[_RULE_COL["(生成的）查询语句1"]] = view_ddl
-        row[_RULE_COL["运行条件"]] = "0"
-        row[_RULE_COL["目标Schema"]] = sch
-        row[_RULE_COL["目标表"]] = tbl
-        row[_RULE_COL["删除模式"]] = "0"
+        if group_name:
+            row[_RULE_COL["规则组中文名称"]] = group_name
+            row[_RULE_COL["规则组英文名称"]] = group_name
+        row[_RULE_COL["规则中文名称"]] = "参数变量规则"
+        row[_RULE_COL["规则英文名称"]] = "Parameter Variable Rule"
+        row[_RULE_COL["创建方式"]] = "1"
+        row[_RULE_COL["规则类型"]] = "12"
+        row[_RULE_COL["执行序列"]] = "-1"
         row[_RULE_COL["业务责任人"]] = business_owner
         row[_RULE_COL["行迁移开关"]] = "0"
         row[_RULE_COL["并行开关"]] = "0"
         row[_RULE_COL["数据库类型"]] = "GaussDB"
         row[_RULE_COL["调度类型"]] = "0"
-        row[_RULE_COL["来源表统计分析收集"]] = "0"
-        rows.append(row)
+        return row
 
-    # --- 参数变量规则（固定 1 行）---
-    pv_row = [""] * len(RULE_COLUMNS)
-    _fill_common(pv_row)
-    pv_row[_RULE_COL["规则中文名称"]] = "参数变量规则"
-    pv_row[_RULE_COL["规则英文名称"]] = "Parameter Variable Rule"
-    pv_row[_RULE_COL["创建方式"]] = "1"
-    pv_row[_RULE_COL["规则类型"]] = "12"
-    pv_row[_RULE_COL["运行条件"]] = "-1"
-    pv_row[_RULE_COL["业务责任人"]] = business_owner
-    pv_row[_RULE_COL["行迁移开关"]] = "0"
-    pv_row[_RULE_COL["并行开关"]] = "0"
-    pv_row[_RULE_COL["数据库类型"]] = "GaussDB"
-    pv_row[_RULE_COL["调度类型"]] = "0"
-    rows.append(pv_row)
+    rows.append(_pv_row())
+    if has_separate_init:
+        rows.append(_pv_row(f"{target_short}_init"))
 
     return rows
 
@@ -392,14 +379,14 @@ def build_target_fields(ts: dict) -> list[list]:
             target_field = field.get("target_field", "")
             if not target_field or target_field.lower() in AUDIT_FIELDS:
                 continue
-            # 来源字段：取 source_fields 第一个
+            # 来源字段：取 source_fields 第一个；登记形态固定 s.字段（s 是平台
+            # 标准别名，与该规则 SQL 内表别名无关）；无源（表达式派生）留空
             source_fields = field.get("source_fields", [])
             src_field = ""
-            src_alias = ""
             if source_fields:
-                sf = source_fields[0]
-                src_field = sf.get("field", "")
-                src_alias = sf.get("alias", "")
+                f = source_fields[0].get("field", "")
+                if f:
+                    src_field = f"s.{f}"
             rows.append([
                 "",                 # 规则编码（留空）
                 target_field,       # 目标字段名称
@@ -413,7 +400,7 @@ def build_target_fields(ts: dict) -> list[list]:
     return rows
 
 
-def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, ddl_dir: Path, output_path: Path):
+def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, output_path: Path):
     """生成 execution_tasks.xlsx（10 sheet）。"""
     wb = openpyxl.Workbook()
 
@@ -421,7 +408,7 @@ def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, ddl_dir: Pat
     ws = wb.active
     ws.title = "RULE"
     ws.append(RULE_COLUMNS)
-    for row in build_rule_rows(ts, config, etl_dir, ddl_dir):
+    for row in build_rule_rows(ts, config, etl_dir):
         ws.append(row)
 
     # Sheet 2: GroupVariables
@@ -632,16 +619,19 @@ def generate_manifest(ts: dict, config: dict, output_path: Path):
     rules = ts.get("rules", {})
     init_section = ts.get("init") or {}
     init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
+    init_group_mode = (init_section.get("group_mode") or "") if isinstance(init_section, dict) else ""
 
     target_short = f_table.get("table", "")
     target_full = f"{f_table.get('schema', '')}.{target_short}" if f_table.get("schema") else target_short
     has_view = bool(i_view and i_view.get("table"))
 
-    # 需要的规则编码数 = 取数规则数(增量+init) + 视图规则数 + 1(参数变量)
+    # 需要的规则编码数 = 取数规则数(增量+init) + 参数变量规则行（每规则组一行）
     etl_count = sum(1 for r in rules.values() if not r.get("is_view_step"))
     etl_count += sum(1 for r in init_rules.values() if not r.get("is_view_step"))
-    view_count = 1 if has_view else 0
-    rule_codes_needed = etl_count + view_count + 1
+    pv_count = 1
+    if init_group_mode == "separate" and init_rules:
+        pv_count += 1
+    rule_codes_needed = etl_count + pv_count
 
     upstream_tasks = []
     tasks_sched = sched.get("tasks", {})
@@ -697,14 +687,13 @@ def main():
     parser = argparse.ArgumentParser(description="平台制品包 exporter（UT 通过后调用）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--etl-dir", required=True, help="ETL SQL 目录（etl/）")
-    parser.add_argument("--ddl-dir", required=True, help="DDL 目录（ddl/）")
+    parser.add_argument("--ddl-dir", default="", help="（兼容保留，已不使用：视图不发术加规则行）")
     parser.add_argument("--outdir", required=True, help="产出根目录（export/ 建在此下）")
     parser.add_argument("--config", default="", help="platform_config.json 路径")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
     etl_dir = Path(args.etl_dir)
-    ddl_dir = Path(args.ddl_dir)
     export_dir = Path(args.outdir) / "export"
 
     # 读 ts.json
@@ -724,7 +713,7 @@ def main():
     sched_path = export_dir / f"lts_{target_short}.xlsx"
     manifest_path = export_dir / f"export_manifest_{target_short}.json"
 
-    generate_execution_excel(ts, config, etl_dir, ddl_dir, exec_path)
+    generate_execution_excel(ts, config, etl_dir, exec_path)
     generate_schedule_excel(ts, config, sched_path)
     generate_manifest(ts, config, manifest_path)
 

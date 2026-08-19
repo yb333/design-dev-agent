@@ -127,17 +127,6 @@ def etl_dir(tmp_path, sample_ts):
     return d
 
 
-@pytest.fixture
-def ddl_dir(tmp_path):
-    """造一个视图 DDL 文件"""
-    d = tmp_path / "ddl"
-    d.mkdir()
-    (d / "create_view_dwb_xxx_i.sql").write_text(
-        "CREATE OR REPLACE VIEW dws.dwb_xxx_i AS SELECT * FROM dws.dwb_xxx_f;", encoding="utf-8"
-    )
-    return d
-
-
 # ============================================================
 # 配置加载
 # ============================================================
@@ -209,56 +198,83 @@ class TestResolveConfigBySchema:
 
 class TestBuildRuleRows:
 
-    def test_rule_row_count(self, sample_ts, sample_config, etl_dir, ddl_dir):
-        """RULE 行数 = 取数规则 + 视图规则 + 参数变量"""
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
-        # 1 取数 + 1 视图 + 1 参数变量 = 3
-        assert len(rows) == 3
-
-    def test_no_view_one_less_row(self, sample_ts, sample_config, etl_dir, ddl_dir):
-        """无视图时少一行"""
-        sample_ts["meta"]["target"]["i_view"] = {"schema": "", "table": ""}
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
-        # 1 取数 + 0 视图 + 1 参数变量 = 2
+    def test_rule_row_count(self, sample_ts, sample_config, etl_dir):
+        """RULE 行数 = 取数规则 + 参数变量（视图不发术加规则行）"""
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        # 1 取数 + 1 参数变量 = 2
         assert len(rows) == 2
 
-    def test_codes_left_empty(self, sample_ts, sample_config, etl_dir, ddl_dir):
+    def test_view_does_not_create_rule_row(self, sample_ts, sample_config, etl_dir):
+        """★ 回归守护：有 i_view 时不产生视图术加规则行（视图 DDL 走 ddl/ 通道部署）"""
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        for row in rows:
+            sql = row[_RULE_COL["(生成的）查询语句1"]]
+            assert "CREATE VIEW" not in sql and "CREATE OR REPLACE VIEW" not in sql
+            assert row[_RULE_COL["目标表"]] != sample_ts["meta"]["target"]["i_view"]["table"]
+
+    def test_codes_left_empty(self, sample_ts, sample_config, etl_dir):
         """规则组编码和规则编码留空（关键约束）"""
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
         for row in rows:
             assert row[_RULE_COL["规则组编码"]] == ""
             assert row[_RULE_COL["规则编码"]] == ""
 
-    def test_etl_query_in_statement(self, sample_ts, sample_config, etl_dir, ddl_dir):
+    def test_etl_query_in_statement(self, sample_ts, sample_config, etl_dir):
         """取数规则的查询语句列含 SQL 内容"""
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
         etl_row = rows[0]
         assert "SELECT 1 AS order_id" in etl_row[_RULE_COL["(生成的）查询语句1"]]
 
-    def test_view_ddl_in_statement(self, sample_ts, sample_config, etl_dir, ddl_dir):
-        """视图规则的查询语句列含 DDL"""
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
-        view_row = rows[1]
-        assert "CREATE OR REPLACE VIEW" in view_row[_RULE_COL["(生成的）查询语句1"]]
+    def test_exec_sequence_filled(self, sample_ts, sample_config, etl_dir):
+        """执行序列从 ts 透传（决定加工拓扑）"""
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        etl_row = rows[0]
+        assert etl_row[_RULE_COL["执行序列"]] == "1"  # sample_ts R0001 exec_sequence=1
 
-    def test_param_rule_is_type_12(self, sample_ts, sample_config, etl_dir, ddl_dir):
-        """参数变量规则类型=12"""
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
+    def test_param_rule_form(self, sample_ts, sample_config, etl_dir):
+        """参数变量规则形态：类型 12、执行序列 -1、查询语句/运行条件留空"""
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
         pv_row = rows[-1]
         assert pv_row[_RULE_COL["规则类型"]] == "12"
         assert pv_row[_RULE_COL["规则中文名称"]] == "参数变量规则"
+        assert pv_row[_RULE_COL["规则英文名称"]] == "Parameter Variable Rule"
+        assert pv_row[_RULE_COL["创建方式"]] == "1"
+        assert pv_row[_RULE_COL["执行序列"]] == "-1"
+        assert pv_row[_RULE_COL["运行条件"]] == ""
+        assert pv_row[_RULE_COL["(生成的）查询语句1"]] == ""
 
-    def test_constants_filled(self, sample_ts, sample_config, etl_dir, ddl_dir):
+    def test_separate_init_group_gets_own_pv_row(self, sample_ts, sample_config, etl_dir):
+        """separate init 规则组有自己的参数变量行（每规则组一条）"""
+        (etl_dir / "INIT_R0001.sql").write_text(
+            "SELECT 1 AS order_id, 100 AS order_amt WHERE dt <= '20260101'", encoding="utf-8"
+        )
+        sample_ts["init"] = {
+            "mode": "derive", "group_mode": "separate",
+            "rules": {"INIT_R0001": {
+                "rule_name": "XXX汇总(初始化)", "exec_sequence": 1,
+                "target_table": "dwb_xxx_f", "is_view_step": False,
+                "load_mode": "truncate_table",
+            }},
+        }
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        # 1 取数 + 1 init 取数 + 主组 pv + init 组 pv = 4
+        assert len(rows) == 4
+        pv_rows = [r for r in rows if r[_RULE_COL["规则类型"]] == "12"]
+        assert len(pv_rows) == 2
+        group_names = {r[_RULE_COL["规则组英文名称"]] for r in pv_rows}
+        assert group_names == {"dwb_xxx_f", "dwb_xxx_f_init"}
+
+    def test_constants_filled(self, sample_ts, sample_config, etl_dir):
         """固定常量正确"""
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
         etl_row = rows[0]
         assert etl_row[_RULE_COL["数据库类型"]] == "GaussDB"
         assert etl_row[_RULE_COL["删除模式"]] == "1"
         assert etl_row[_RULE_COL["调度类型"]] == "0"
 
-    def test_column_count_is_82(self, sample_ts, sample_config, etl_dir, ddl_dir):
+    def test_column_count_is_82(self, sample_ts, sample_config, etl_dir):
         """RULE 每行 82 列"""
-        rows = build_rule_rows(sample_ts, sample_config, etl_dir, ddl_dir)
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
         for row in rows:
             assert len(row) == 82
 
@@ -313,12 +329,20 @@ class TestBuildTargetFields:
         assert "crt_cycle_id" not in target_fields
 
     def test_source_field_extracted(self, sample_ts):
-        """来源字段正确提取，别名不填"""
+        """来源字段固定 s.字段 形态（s 是平台标准别名）；无源留空"""
         rows = build_target_fields(sample_ts)
-        for row in rows:
-            if row[1] == "order_amt":
-                assert row[2] == "amount"
-                assert row[5] == ""  # 别名不填
+        by_field = {row[1]: row for row in rows}
+        assert by_field["order_amt"][2] == "s.amount"
+        assert by_field["order_id"][2] == "s.order_id"
+        assert by_field["order_amt"][5] == ""  # 别名不填
+
+    def test_no_source_field_empty(self):
+        """无源（COUNT(1) 等表达式派生）来源字段留空"""
+        ts = {"rules": {"R0001": {"target_table": "dwb_xxx_f", "fields": [
+            {"target_field": "record_cnt", "source_fields": []},
+        ]}}}
+        rows = build_target_fields(ts)
+        assert rows[0][2] == ""
 
     def test_rule_code_empty(self, sample_ts):
         """规则编码留空"""
@@ -333,31 +357,31 @@ class TestBuildTargetFields:
 
 class TestGenerateExecutionExcel:
 
-    def test_10_sheets(self, sample_ts, sample_config, etl_dir, ddl_dir, tmp_path):
+    def test_10_sheets(self, sample_ts, sample_config, etl_dir, tmp_path):
         """execution Excel 有 10 个 sheet"""
         out = tmp_path / "execution_tasks.xlsx"
-        generate_execution_excel(sample_ts, sample_config, etl_dir, ddl_dir, out)
+        generate_execution_excel(sample_ts, sample_config, etl_dir, out)
         wb = openpyxl.load_workbook(out)
         assert len(wb.sheetnames) == 10
         assert "RULE" in wb.sheetnames
         assert "GroupVariables" in wb.sheetnames
         assert "TargetFields" in wb.sheetnames
 
-    def test_empty_sheets_have_headers_only(self, sample_ts, sample_config, etl_dir, ddl_dir, tmp_path):
+    def test_empty_sheets_have_headers_only(self, sample_ts, sample_config, etl_dir, tmp_path):
         """空 sheet 只有表头"""
         out = tmp_path / "execution_tasks.xlsx"
-        generate_execution_excel(sample_ts, sample_config, etl_dir, ddl_dir, out)
+        generate_execution_excel(sample_ts, sample_config, etl_dir, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["ModelRelations"]
         assert ws.max_row == 1  # 只有表头行
 
-    def test_rule_sheet_has_data(self, sample_ts, sample_config, etl_dir, ddl_dir, tmp_path):
+    def test_rule_sheet_has_data(self, sample_ts, sample_config, etl_dir, tmp_path):
         """RULE sheet 有数据行"""
         out = tmp_path / "execution_tasks.xlsx"
-        generate_execution_excel(sample_ts, sample_config, etl_dir, ddl_dir, out)
+        generate_execution_excel(sample_ts, sample_config, etl_dir, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["RULE"]
-        assert ws.max_row == 4  # 表头 + 3 数据行
+        assert ws.max_row == 3  # 表头 + 1 取数 + 1 参数变量（无视图行）
 
 
 class TestGenerateScheduleExcel:
@@ -536,11 +560,26 @@ class TestGenerateScheduleExcel:
 class TestGenerateManifest:
 
     def test_rule_codes_needed(self, sample_ts, sample_config, tmp_path):
-        """rule_codes_needed = 取数 + 视图 + 参数变量"""
+        """rule_codes_needed = 取数 + 参数变量（视图不计）"""
         out = tmp_path / "export_manifest.json"
         generate_manifest(sample_ts, sample_config, out)
         m = json.loads(out.read_text(encoding="utf-8"))
-        assert m["rule_codes_needed"] == 3  # 1 取数 + 1 视图 + 1 参数
+        assert m["rule_codes_needed"] == 2  # 1 取数 + 1 参数变量（无视图行）
+
+    def test_rule_codes_needed_separate_init(self, sample_ts, sample_config, tmp_path):
+        """separate init 规则组的参数变量行也计入编码需求"""
+        sample_ts["init"] = {
+            "mode": "derive", "group_mode": "separate",
+            "rules": {"INIT_R0001": {
+                "rule_name": "XXX汇总(初始化)", "exec_sequence": 1,
+                "target_table": "dwb_xxx_f", "is_view_step": False,
+                "load_mode": "truncate_table",
+            }},
+        }
+        out = tmp_path / "export_manifest.json"
+        generate_manifest(sample_ts, sample_config, out)
+        m = json.loads(out.read_text(encoding="utf-8"))
+        assert m["rule_codes_needed"] == 4  # 1 取数 + 1 init + 主组 pv + init 组 pv
 
     def test_codes_filled_false(self, sample_ts, sample_config, tmp_path):
         """codes_filled 初始为 false"""
