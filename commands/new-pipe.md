@@ -11,7 +11,7 @@ agent: build
 
 本 pipe **不 author 脚本**（只调下面列出的脚本）；**校验失败按路由走，不自动修**——设计/输入问题回 designer 或回报 caller，环境报告 caller，绝不自己写脚本绕（掩盖根因）。诊断用 explore / run_ut_check，临时查询进 `{deliver}/_internal/diagnose/`。
 
-**输入原文一律不 Read**：mapping.xlsx / RS 等输入由脚本消化（preprocess → rs_input 双文件），xlsx 用 Read 也读不出内容，纯烧上下文。你只消费**脚本产出**（把 rs_input_view.json 路径传给 designer、ts.json、各报告/摘要/执行计划）。
+**输入原文一律不 Read**：mapping/RS 由脚本消化（preprocess → rs_input 双文件）。你只消费**脚本产出**（rs_input_view.json 路径传给 designer、ts.json、各报告/摘要/执行计划）。
 
 ---
 
@@ -35,7 +35,7 @@ agent: build
     │   └── lts_{表名}.xlsx               ← LTS 调度平台导入（3 sheet）
     └── _internal/                        ← 过程产物
         ├── rs_input.json                 ← 预处理产出（完整，给脚本读）
-        ├── rs_input_view.json            ← 预处理产出（compact 紧凑视图，给 designer 读，省70%）
+        ├── rs_input_view.json            ← 预处理产出（紧凑视图，给 designer 读）
         ├── schema_cache.json             ← 表结构缓存（precheck 连库刷，类型对账用）
         ├── type_risk_decision.yaml       ← 字段类型风险决策（precheck 检出时生成）
         ├── join_type_decision.yaml       ← 关联键类型决策（precheck 检出跨大类时生成）
@@ -111,10 +111,34 @@ python SHARED_SCRIPTS/precheck.py \
 - 1（WARNING）→ 显示警告，问用户是否继续
 - 2（INCOMPLETE）→ 看阻断原因分三种：
   - **普通阻断**（schema/字段缺失等，stdout 不含任何 `_PENDING`）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
-  - **★ 决策类阻断**（stdout 含 `TYPE_RISK_PENDING` 和/或 `JOIN_TYPE_RISK_PENDING`——
-    **两类同轮全爆，一次问完不剥洋葱**）→ 分别走字段类型决策 / 关联键决策流程（见下）
+  - **★ 决策类阻断**（stdout 含 `TYPE_RISK_PENDING` 和/或 `JOIN_TYPE_RISK_PENDING`——检测同轮全爆）→ 按下方流程分域提问
 
 > ⚠️ 用户修改的是 mapping.xlsx 或 RS.md（源文件），不是 rs_input.json（产物）。
+>
+> **提问规则（同域打包、跨域串行、改键剪枝）**：
+> 1. 先问**关联键域**（≤4 对时一个 question 打包，逐对一个 question 项）；
+> 2. **任一对选"改关联键" → 立即剪枝**：不再问类型域、不填任何值，指引用户修
+>    mapping.xlsx 后重跑 1a+1b（输入变了，本轮所有决策作废，precheck 一致性校验
+>    会重建骨架重问）；
+> 3. 无改关联键才问**类型域**（batch + 逐字段，一个 call 打包）。
+
+### 关联键类型决策流程（stdout 含 JOIN_TYPE_RISK_PENDING 时）
+
+precheck 检出关联键类型跨大类（如字符↔数值），输出 `JOIN_TYPE_RISK_PENDING {JSON}`（含双侧类型 + 键值采样 + decision_file 路径）。**用 question 逐对问**（采样值给用户看——内容能否对上，人一眼判断）：
+- `转换`（内容实际兼容，如 '123' 对 123 → designer 在 joins 声明 cast，N_JOIN1 校验兜底）
+- `改关联键`（关联字段选错了 → 改 mapping.xlsx 源文件后重跑 1a+1b，precheck 会持续阻断到改完）
+- `接受`（业务确认豁免，闸口①可见）
+
+**调脚本填值**（不手写 yaml）：
+
+```bash
+python DESIGN_SCRIPTS/fill_join_risk_decision.py \
+  --decision {deliver}/_internal/join_type_decision.yaml \
+  --pair-decisions 'a.prod_code = b.prod_id=>接受' \
+  --reasons 'a.prod_code = b.prod_id=>业务确认就这么关联'
+```
+
+（--pair-decisions/--reasons 可重复传多对，分隔符 `=>`。）填完**重跑步骤 1b** → 放行（决策回写 rs_input，designer 紧凑视图可见）。
 
 ### 类型风险决策流程（stdout 含 TYPE_RISK_PENDING 时）
 
@@ -138,24 +162,6 @@ python DESIGN_SCRIPTS/fill_type_risk_decision.py \
 ```
 
 参数细节见 `fill_type_risk_decision.py --help`（脚本校验枚举值和字段名，错了 exit 1）。填完**重跑步骤 1b** → 放行继续。
-
-### 关联键类型决策流程（stdout 含 JOIN_TYPE_RISK_PENDING 时）
-
-precheck 检出关联键类型跨大类（如字符↔数值），输出 `JOIN_TYPE_RISK_PENDING {JSON}`（含双侧类型 + 键值采样 + decision_file 路径）。**用 question 逐对问**（采样值给用户看——内容能否对上，人一眼判断）：
-- `转换`（内容实际兼容，如 '123' 对 123 → designer 在 joins 声明 cast，N_JOIN1 校验兜底）
-- `改关联键`（关联字段选错了 → 改 mapping.xlsx 源文件后重跑 1a+1b，precheck 会持续阻断到改完）
-- `接受`（业务确认豁免，闸口①可见）
-
-**调脚本填值**（不手写 yaml）：
-
-```bash
-python DESIGN_SCRIPTS/fill_join_risk_decision.py \
-  --decision {deliver}/_internal/join_type_decision.yaml \
-  --pair-decisions 'a.prod_code = b.prod_id=>接受' \
-  --reasons 'a.prod_code = b.prod_id=>业务确认就这么关联'
-```
-
-（--pair-decisions/--reasons 可重复传多对，分隔符 `=>`。）填完**重跑步骤 1b** → 放行（决策回写 rs_input，designer 紧凑视图可见）。
 
 ---
 
@@ -187,13 +193,13 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
 python SHARED_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
 ```
 
-拿到摘要后，**立即调 question 停下等用户确认**——不允许跑完摘要脚本直接进编码段，那不叫闸口：
+拿到摘要后，**立即调 question 停下等用户确认**（不允许跑完摘要直接进编码段）：
 
 - 用户选"确认设计，进入编码" → 进入步骤 4
 - 用户选"需要修改"（说明哪里改）→ 回步骤 2 重新调 designer
 - 用户选"放弃" → 结束
 
-> **非交互的例外只有一个**：用户/调用方**显式声明**了非交互（如 `opencode run` 批量评测、或用户明说"自动跑别停")。**你不得自行判定"我像是在非交互环境"就跳过 question**——没有显式声明就必须 question 停下。
+> **非交互例外只有一个**：用户/调用方**显式声明**非交互（如 `opencode run` 批量评测）。不得自行判定环境非交互而跳过 question。
 
 ---
 
@@ -208,7 +214,7 @@ python SHARED_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
 ```
 
 输出执行计划 JSON：`ddl` / `dq`（含条数）/ `etl_rules` / `init_rules` / `groups` / `summary`。
-**发起哪些任务一律以计划为准**——`dq=false` 不发 DQ coder，`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起，避免逐个判断把 DQ/init 拖到 ETL 后面串行跑。**
+**发起哪些任务一律以计划为准**——`dq=false` 不发 DQ coder，`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起。**
 
 闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。
 
@@ -222,7 +228,7 @@ python SHARED_SCRIPTS/assemble_ddl.py --ts {deliver}/ts.json --outdir {deliver}
 
 按执行计划的 `groups` 编排：**组内规则的 coder 在同一消息并行发起（一个消息多个 Task），组间串行（上一组完成再发下一组）**。规则清单以计划 `etl_rules` 为准。
 
-**对每个规则**（★ prompt 只含 ETL 编码任务本身——不提 DDL/DQ/init，那些是独立任务不是本 coder 的事）：
+**对每个规则**（★ prompt 只含 ETL 编码任务本身，不提 DDL/DQ/init）：
 ```
 Task(
   subagent_type="dws-coder",
@@ -231,7 +237,7 @@ Task(
 )
 ```
 
-**task_id 由 Task 调用返回后你自己记录**（规则→会话映射，步骤 6 执行回路用）——这是你的记账，**不写进 coder 的 prompt**。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
+**task_id 由 Task 调用返回后你自己记录**（规则→会话映射，步骤 6 用），**不写进 coder 的 prompt**。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
 ### 4c：DQ coder（计划 dq=true 时，与 4a/4b 同消息并行）
 
@@ -307,7 +313,7 @@ python SHARED_SCRIPTS/ut_execute.py \
 
 > ⚠️ `--precheck-result` 路径与 5a 的 `--result` 一致（都在 `_internal/` 下）。读不到直接退出（避免预检未通过误灌数据）。
 > **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms（数据库端 statement_timeout 自动兜底）。
-> ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**——符合现实部署顺序。无需分开调，脚本内部有序两阶段。init 挂了基线就废，后续增量自动跳过。
+> ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**。无需分开调，脚本内部有序两阶段；init 挂了基线就废，后续增量自动跳过。
 
 ---
 
@@ -343,7 +349,7 @@ question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，�
          "  - coder 实现与设计不符（如漏了 GROUP BY）",
          options=["关联设计问题", "源表数据问题", "业务粒度问题", "coder实现不符"])
 ```
-> 人看重复样例往往一眼就能判断根因（比 designer 猜快得多）。开发环境数据量/质量与生产不一致，不能仅凭 UT 结果下结论。
+> 开发环境数据量/质量与生产不一致，不能仅凭 UT 结果下结论。
 
 ② **按人定的根因分流**：
 - **源表数据问题** → 不改设计，闸口②报告给人（环境问题归 6c）
@@ -367,8 +373,7 @@ question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，�
 
 ## 步骤 7：生成平台制品包（UT 通过后必跑）
 
-> **前提**：步骤5的 UT 全部通过（SQL 验证稳定后才生成制品包，避免反复改）。
-> UT 未执行（无数据库）时，闸口②人工确认通过后再生成。
+> **前提**：步骤5 UT 全部通过；UT 未执行（无数据库）时，闸口②人工确认通过后再生成。
 
 调 assemble_export.py 生成平台消费的 Excel：
 
@@ -392,19 +397,19 @@ python SHARED_SCRIPTS/assemble_export.py \
 
 ## 步骤 8：闸口②（人确认编码质量）
 
-**必须调 question 展示结果摘要等用户确认**——结果摘要含 UT 通过/失败数 + 产出文件清单（见顶部目录结构）。和闸口①一样，跑完必须 question 停下，不允许自己结束流程：
+**必须调 question 展示结果摘要等用户确认**（摘要含 UT 通过/失败数 + 产出文件清单），跑完必须停下，不允许自己结束流程：
 
 - 用户选"确认" → 结束流程
 - 用户选"修改"（说明哪里改）→ 回对应步骤（编码问题回 coder / 设计问题回 designer）
 - 用户选"放弃" → 结束
 
-> **非交互的例外只有一个**：用户/调用方**显式声明**了非交互（同闸口①）。没有显式声明就必须 question。
+> 非交互例外同闸口①：仅用户/调用方**显式声明**时跳过。
 
 ---
 
 # 硬性规则
 
-- 闸口①确认后**自动进编码段**（设计→编码是一连贯流程，中间不交接）
+- 闸口①确认后**自动进编码段**，中间不交接
 - **步骤4 编码段并行发起**：4a/4b/4c 同消息并行（互不依赖），4d 等 4b 增量规则完成
 - 记住每个 coder 的 task_id（步骤6 执行回路靠 task_id 恢复会话，不新开）
 - **未经用户确认不结束流程**；全程中文

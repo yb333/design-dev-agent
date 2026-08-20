@@ -128,7 +128,7 @@ description: >-
 **想清楚**：
 - **分布键**：按业务主键 / 关联使用频率（减少重分布）/ 离散程度选，与数据量无关。多表 JOIN 时各表分布键必须一致。
   → 详见 `references/design-guide.md` §1.1
-- **关联安全（三维判断，每个声明的 JOIN 都要有结论——签下 JOIN 就是签下这三个维度的判断）**：
+- **关联安全（三维判断，每个声明的 JOIN 都要对三维度有结论）**：
   - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一。不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行）。
     不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique；连不上库静默跳过）：
     ```
@@ -141,14 +141,14 @@ description: >-
     不可比且内容对不上 → 关联键选错了，回 mapping/人确认。紧凑视图 `join_type_risk` 段是 precheck 的
     前置检出（处置=转换的必须声明 cast，N_JOIN1 校验核对）；**precheck 没检出的（自然语言条件等）
     靠这一维判断兜住——不写 cast 就是签了"可比"**。
-  - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'、编码 vs 名称——不报错只静默空关联，
-    比报错更隐蔽）。存疑时调 explore.py 重叠率试算取证：
+  - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'、编码 vs 名称——不报错只静默空关联）。
+    存疑时调 explore.py 重叠率试算取证：
     ```
     python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
         --check-overlap --schema-a {sch1} --table-a {t1} --key-a {k1} \
         --schema-b {sch2} --table-b {t2} --key-b {k2}
     ```
-  结论必答、取证按需：判断是设计职责，工具（schema_query/explore）只是拿证据的手段。
+  结论必答、取证按需（工具按需调，不逐 JOIN 机械跑）。
 - **调度**：schedule_type（从 RS 调度频率推导）、cron（Quartz 6 段标准表达式）、依赖类型（默认宽依赖）
   → 依赖类型选择见 `references/design-guide.md` §二
 
