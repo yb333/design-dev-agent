@@ -760,6 +760,60 @@ class TestLayer3Incremental:
         vr = _run(dd, rs)
         assert "N14" not in _codes(vr, "L3"), "有增量处理就不该报 N14（模式自由）"
 
+    def test_single_full_rule_on_incremental_asset_blocked(self):
+        """回归：单规则 full 直灌增量资产（规则 source 就是驱动表、无 incremental 段）。
+
+        真实案例：designer 拿全量心智装增量数据——单规则 + step_type=full +
+        truncate_table。旧版 N14 的第三个析取（source 涉驱动表恒为真）让它
+        形同虚设；现在 N14/N28/N_INIT2 三道硬闸全部拦截。
+        """
+        rs = make_incremental_rs_input()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "全量直灌", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target", "load_mode": "truncate_table",
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+            "source_aliases": ["t"],  # ★ 恰是驱动表（旧 N14 的死析取）
+        }])
+        vr = _run(dd, rs)
+        codes = _codes(vr, "L3")
+        assert "N14" in codes, "source 涉驱动表不该再让 N14 失明（死析取已删）"
+        assert "N28" in codes, "单规则增量资产必须被 N28 拦"
+        assert "N_INIT2" in codes, "RS 锚定的终态 truncate 必须被 N_INIT2 拦"
+        init2_msgs = [i["msg"] for i in vr.items if i["code"] == "N_INIT2"]
+        assert any("RS 标了增量" in m for m in init2_msgs), \
+            f"N_INIT2 报错应说明锚点是 RS 增量声明: {init2_msgs}"
+
+    def test_n28_single_incremental_rule_blocked_even_wellformed(self):
+        """单规则即使形态'正确'（带 incremental 段 + merge 写入）也拦——至少两个规则是结构铁律。"""
+        rs = make_incremental_rs_input()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "单规则增量", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target", "load_mode": "merge_into",
+            "write_condition": "T.id=T1.id",
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+            "incremental": {"key": "update_time",
+                            "filter": "update_time >= '${P_START_DATE}' AND update_time < '${P_END_DATE}'",
+                            "init_filter": "1=1", "init_time_range": "ALL"},
+        }])
+        vr = _run(dd, rs)
+        codes = _codes(vr, "L3")
+        assert "N28" in codes, "增量资产单规则（即使带增量段）必须被拦"
+        assert "N14" not in codes, "有 incremental 段，N14 不该报"
+
+    def test_two_rule_form_passes_new_checks(self):
+        """标准两规则形态（extract→tmp + merge→目标）过 N28/N_INIT2。"""
+        rs = make_incremental_rs_input()
+        dd = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        dd["params"] = [{"name": "BIZ_DATE_START", "value_type": "date"}, {"name": "BIZ_DATE_END", "value_type": "date"}]
+        vr = _run(dd, rs)
+        codes = _codes(vr, "L3")
+        assert "N28" not in codes
+        assert "N_INIT2" not in codes
+
     def test_n15_extract_missing_key_reports(self):
         rs = make_incremental_rs_input()
         dd = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f"}])

@@ -811,34 +811,31 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
     is_incremental_asset = bool(incremental_tables) or n_extracts > 0
 
     if is_incremental_asset:
-        # N14（松绑后语义）：资产标了增量但"完全没管增量"才硬阻断。
-        # "完全没管" = 没有 extract 规则 + 没有任何规则的 incremental 段非空 + 没有规则的 source 涉及驱动表。
-        # 至于用几个规则、extract 数和驱动表数关系——是 designer 的设计自由（见 incremental-playbook 三种模式）。
+        # N14（判据收紧）：资产标了增量但"完全没管增量"才硬阻断。
+        # "完全没管" = 没有 extract 规则 + 没有任何规则的 incremental 段非空。
+        # （旧版第三个析取"规则 source 涉驱动表"已删——规则读驱动表是数据来源的必然，
+        #  恒为真，会让 N14 形同虚设。）
         has_extract = n_extracts > 0
         has_incremental_section = any(
             (r.get("incremental") or {}) and
             any((r.get("incremental", {}) or {}).get(f) for f in ("key", "filter"))
             for r in rules
         )
-        # 规则的 source_aliases 涉及任一驱动表
-        driver_table_shorts = {_table_short((dt.get("source_table") or "")).lower() for dt in incremental_tables}
-        rs_source_shorts = {
-            (st.get("source_table") or "").split(".")[-1].lower()
-            for st in (rs_input.get("source_tables") or [])
-        }
-        rules_touch_driver = False
-        for r in rules:
-            r_aliases = r.get("source_aliases") or []
-            # 别名映射到表名（从 rs_input source_tables 找），看是否涉及驱动表
-            for st in (rs_input.get("source_tables") or []):
-                if (st.get("source_alias") or "") in (r_aliases or []):
-                    if (st.get("source_table") or "").split(".")[-1].lower() in driver_table_shorts:
-                        rules_touch_driver = True
-            # source_aliases 留空 = 用全部源表（build_rule 兜底逻辑），涉及驱动表即算
-            if not r_aliases and driver_table_shorts & rs_source_shorts:
-                rules_touch_driver = True
-        if not has_extract and not has_incremental_section and not rules_touch_driver:
-            vr.add_hard("L3", "N14", f"资产标了增量（{n_drivers} 张驱动表）但完全没增量处理（无 extract 规则、无 incremental 段、规则 source 不涉驱动表）——增量变化完全没被覆盖")
+        if not has_extract and not has_incremental_section:
+            vr.add_hard("L3", "N14",
+                f"资产标了增量（{n_drivers} 张驱动表）但完全没增量处理（无 extract 规则、无 incremental 段）"
+                f"——增量数据被当全量装载。增量资产的标准形态：增量取数（incremental_extract→tmp，"
+                f"加工可并入此步）+ 终态规则增量更新目标表（merge_into 等），至少两个规则，"
+                f"见 incremental-playbook §二")
+
+        # N28（hard）：增量资产至少两个规则，终态必须是独立的增量更新规则——杜绝单规则直灌。
+        # 不论单规则是 full（全量心智错装增量）还是带 incremental 段的直灌，都不被支持：
+        # 取数与写目标分离是平台调度/重跑/排错的稳定结构。
+        if len(rules) < 2:
+            vr.add_hard("L3", "N28",
+                f"增量资产只有 {len(rules)} 个规则——至少两个：增量取数（incremental_extract→tmp，"
+                f"加工可并入此步）+ 终态规则以增量写入方式更新目标表（merge_into/no_delete/delete/"
+                f"truncate_partition）。单规则直灌目标表不被支持（见 incremental-playbook §二铁律）")
 
         # N15 extract 的 incremental{} 填全（仅在存在 extract 规则时查）
         for rule in extract_rules:
@@ -867,9 +864,11 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
 
     # N_INIT2（hard）：增量目标规则 load_mode 不能是 truncate_table（全删全插 与增量矛盾）。
     # init/增量双管道模型的兜底：load_mode 是"增量写入方式"，init 的先删全插由 init 管道承担。
-    # 触发：target_role=target 且（有 incremental.filter 或 step_type=merge）且 load_mode=truncate_table。
-    # 不误伤：中间 tmp（intermediate）的 truncate 合法；非增量 full 规则的 truncate 合法；
-    #        init.rules 不在 rules 里（独立 init 段），不触发。
+    # 触发锚点两个（任一）：规则自身声明了增量（incremental.filter / step_type=merge），
+    # 或 RS 说了增量（incremental_tables 非空）——后者专抓"designer 什么都不标、按全量心智
+    # 直灌增量数据"的低级错误（规则没声明增量时，规则锚定的判据全部失明）。
+    # 不误伤：中间 tmp（intermediate）的 truncate 合法（tmp 每次重建）；非增量资产的 full 规则
+    # truncate 合法；init.rules 不在 rules 里（独立 init 段），不触发。
     for rule in rules:
         code = rule.get("rule_code", "?")
         if rule.get("target_role") != "target":
@@ -877,10 +876,13 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
         inc = rule.get("incremental") or {}
         has_inc_filter = isinstance(inc, dict) and bool((inc.get("filter") or "").strip())
         is_merge = rule.get("step_type") == "merge"
-        if (has_inc_filter or is_merge) and rule.get("load_mode", "truncate_table") == "truncate_table":
-            why = "incremental.filter" if has_inc_filter else "step_type=merge"
+        rs_says_incremental = bool(incremental_tables)
+        if (has_inc_filter or is_merge or rs_says_incremental) and rule.get("load_mode", "truncate_table") == "truncate_table":
+            why = ("incremental.filter" if has_inc_filter
+                   else "step_type=merge" if is_merge
+                   else "RS 标了增量（增量驱动表非空）")
             vr.add_hard("L3", "N_INIT2",
-                f"规则 {code} 是增量目标（target_role=target + {why}）但 load_mode=truncate_table"
+                f"规则 {code} 是增量目标（{why}）但 load_mode=truncate_table"
                 f"（全删全插），与增量语义矛盾：每次增量会清空历史。load_mode 应为增量写入方式"
                 f"（merge_into/no_delete/delete/truncate_partition）；init 的先删全插由 init 管道承担"
                 f"（见 incremental-playbook §八）")

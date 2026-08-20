@@ -1204,7 +1204,19 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             entry["logic"] = detail
         proc_section.append(entry)
 
-    compact = {"tables": table_list, "direct": direct_section, "processed": proc_section}
+    # 增量资产置顶横幅（designer 第一眼要看到的资产级事实：非空 = 增量资产，
+    # 设计必须走增量管道 extract+merge，全量直灌不在选项里——incremental-playbook §二第一铁律）
+    banner = {}
+    if incremental_tables:
+        banner["增量资产提示"] = {
+            "incremental_tables": incremental_tables,
+            "说明": ("RS 标了增量（L07 增量驱动表非空）——本资产是增量资产。"
+                     "设计必须走增量管道：增量取数（incremental_extract→tmp）+ 终态规则增量更新"
+                     "目标表（merge_into 等），至少两个规则；full+truncate 直灌会清空历史（校验硬阻断）。"
+                     "详见 dws-design/references/incremental-playbook.md §二。"),
+        }
+
+    compact = {**banner, "tables": table_list, "direct": direct_section, "processed": proc_section}
 
     # 目标表信息（告知 designer：设计目标是 F 表，I 视图由 assemble_ddl 按 i_view 生成）
     meta_target = rs_input.get("meta", {}).get("target", {})
@@ -1220,8 +1232,6 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
 
     if null_fields:
         compact["null_in_scene"] = sorted(set(null_fields))
-    if incremental_tables:
-        compact["incremental_tables"] = incremental_tables
 
     # 关联键类型对账（precheck 检出+决策后写进 rs_input，designer 必须看到：
     # 转换对要在 joins 声明 cast，接受对是业务豁免）

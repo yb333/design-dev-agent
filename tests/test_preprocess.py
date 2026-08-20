@@ -806,16 +806,20 @@ class TestBuildCompact:
         assert "processed" in c
 
     def test_compact_includes_incremental_tables(self):
-        """incremental_tables 非空时 compact 体现它（designer 读 view 能看到驱动表）。"""
+        """incremental_tables 非空时 compact 置顶横幅（designer 读 view 第一眼看到）。"""
         from preprocess import build_compact
         rs = _rs_input_with([_direct("id", "id")])
         rs["schedule"] = {"incremental_tables": [
             {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
         ]}
         c = build_compact(rs)
-        assert c["incremental_tables"] == [
+        banner = c["增量资产提示"]
+        assert banner["incremental_tables"] == [
             {"source_table": "ods.ods_order_f", "incremental_key": "update_time"},
         ]
+        assert "增量管道" in banner["说明"]
+        assert "至少两个规则" in banner["说明"]
+        assert list(c.keys())[0] == "增量资产提示"  # 置顶
 
     def test_compact_no_incremental_when_empty(self):
         """incremental_tables 为空时 compact 不含该键（全量资产）。"""
