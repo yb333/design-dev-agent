@@ -96,7 +96,7 @@
 | `ut_opt.py` | 优化 UT 独立入口（ALTER 应用 + 双向 MINUS 输出对比 + INSERT 全量；零触碰 ut_precheck/ut_execute） | 步骤 5 | ts_v2 + etl + etl_baseline + ddl → ut_report_opt.md | ✅ |
 | `assemble_ddl_opt.py` | ALTER 变更单 + 全量 DDL 推进（复用 generate_ddl）+ 字段差异审计 | 步骤 6 | ts_v2 + ts_baseline → ddl/ + ddl_full/ | ✅ |
 | `artifact_patcher.py` | 制品 patch 引擎（xlsx TargetFields 行追加+SQL 单元格替换 / yml 组 round-trip；严格 patch 不碰漂移；patch 说明） | 步骤 6 | ts_v2 + etl + 原始制品 → export/patched + patch_notes | ✅ |
-| `archive_writer.py` | 交付写回档案（archives/{schema}/{资产}/{NNN_日期}/；new-pipe 步骤9 与 opt-pipe 步骤7 共用） | 步骤 7 / new-pipe 9 | ts + etl + ddl + decisions → archives/ | ✅ |
+| `archive_writer.py` | 交付写回档案（archives/{schema}/{资产}/{NNN_日期}/；opt-pipe 步骤0 懒归档 + 步骤7 交付写回——new-pipe 无归档步骤，v2.5） | opt-pipe 步骤 0/7 | ts + etl + ddl + decisions → archives/ | ✅ |
 | `fence_check.py` | ts 级围栏（声明驱动比对：diff 分解 + add_field 冻结/许可矩阵 + 恰好等于双向判定；定义 ts.change 段消费形状） | 步骤 3 | ts_baseline + ts_v2 + change_request → FENCE_PASS / 越界+漏改清单 | ✅ 阶段一 |
 | `sql_fence.py` | SQL 围栏判定纯函数库（AST 老列逐列结构等价/仅追加声明列/JOIN·WHERE·GROUP BY 冻结/不支持形态转人工；rule_declaration 从 change 段派生单规则许可） | 步骤 4（pipe 独立跑；check_sql 可选自测共用） | baseline SQL + 新 SQL + 规则声明 → 违规清单 | ✅ |
 
