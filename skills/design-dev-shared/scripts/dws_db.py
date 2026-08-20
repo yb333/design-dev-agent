@@ -331,16 +331,14 @@ class PsycopgExecutor(DBExecutor):
 
             cur.execute(sql_stripped)
 
-            # 判断是查询还是写操作
-            is_select = sql_stripped.upper().startswith("SELECT") or \
-                        sql_stripped.upper().startswith("WITH") or \
-                        sql_stripped.upper().startswith("SHOW")
-
             rows = []
             columns = []
             rowcount = cur.rowcount
 
-            if is_select and cur.description:
+            # 用 description 判定是否查询（不能用前缀 startswith 判定——
+            # coder 产的 SQL 常以块注释开头，前缀判定会失灵导致 SELECT
+            # 结果永不取出，调用方看到"0行0列"的假象，查询像没跑过一样）
+            if cur.description is not None:
                 columns = [desc[0] for desc in cur.description]
                 rows = [dict(r) for r in cur.fetchmany(self._security.max_rows)]
 

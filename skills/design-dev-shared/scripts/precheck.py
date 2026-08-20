@@ -343,14 +343,12 @@ def precheck(
     if not result.errors:
         _check_db_schema(rs_input, result, cache_path, refresh_schema)
 
-    # 10. 类型转换风险检测（仅"直接复制"字段，DB 校验之后）
-    # ★ 短路：有 error 就不检测类型风险（先解决前面的错）
-    if not result.errors and decision_path is not None:
+    # 10+11. 类型转换风险 + 关联键类型对账：**同一轮全爆**（都是"待人决策"类问题，
+    # 一轮问完不剥洋葱）。仅在结构性错误（静态/DB）存在时短路——那些错误意味着
+    # 元数据不可信，基于它的风险判定会产垃圾决策。
+    structural_errors = bool(result.errors)
+    if not structural_errors and decision_path is not None:
         _check_type_risk(rs_input, result, decision_path, rs_input_path)
-
-    # 11. 关联键类型对账（宁放过不误报：只拦跨大类；解析不了/查不到类型 → warn 放行）
-    # ★ 短路：同上；决策文件与类型风险同目录（join_type_decision.yaml）
-    if not result.errors and decision_path is not None:
         _check_join_type_risk(rs_input, result, decision_path, rs_input_path, cache_path)
 
     return result

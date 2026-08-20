@@ -109,9 +109,10 @@ python SHARED_SCRIPTS/precheck.py \
 **校验返回码**：
 - 0（PASS）→ 继续
 - 1（WARNING）→ 显示警告，问用户是否继续
-- 2（INCOMPLETE）→ 看阻断原因分两种：
-  - **普通阻断**（schema/字段缺失等，stdout 不含 `TYPE_RISK_PENDING`）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
-  - **★ 类型风险阻断**（stdout 含 `TYPE_RISK_PENDING`）→ 走类型风险决策流程（见下）
+- 2（INCOMPLETE）→ 看阻断原因分三种：
+  - **普通阻断**（schema/字段缺失等，stdout 不含任何 `_PENDING`）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
+  - **★ 决策类阻断**（stdout 含 `TYPE_RISK_PENDING` 和/或 `JOIN_TYPE_RISK_PENDING`——
+    **两类同轮全爆，一次问完不剥洋葱**）→ 分别走字段类型决策 / 关联键决策流程（见下）
 
 > ⚠️ 用户修改的是 mapping.xlsx 或 RS.md（源文件），不是 rs_input.json（产物）。
 
@@ -137,6 +138,24 @@ python DESIGN_SCRIPTS/fill_type_risk_decision.py \
 ```
 
 参数细节见 `fill_type_risk_decision.py --help`（脚本校验枚举值和字段名，错了 exit 1）。填完**重跑步骤 1b** → 放行继续。
+
+### 关联键类型决策流程（stdout 含 JOIN_TYPE_RISK_PENDING 时）
+
+precheck 检出关联键类型跨大类（如字符↔数值），输出 `JOIN_TYPE_RISK_PENDING {JSON}`（含双侧类型 + 键值采样 + decision_file 路径）。**用 question 逐对问**（采样值给用户看——内容能否对上，人一眼判断）：
+- `转换`（内容实际兼容，如 '123' 对 123 → designer 在 joins 声明 cast，N_JOIN1 校验兜底）
+- `改关联键`（关联字段选错了 → 改 mapping.xlsx 源文件后重跑 1a+1b，precheck 会持续阻断到改完）
+- `接受`（业务确认豁免，闸口①可见）
+
+**调脚本填值**（不手写 yaml）：
+
+```bash
+python DESIGN_SCRIPTS/fill_join_risk_decision.py \
+  --decision {deliver}/_internal/join_type_decision.yaml \
+  --pair-decisions 'a.prod_code = b.prod_id=>接受' \
+  --reasons 'a.prod_code = b.prod_id=>业务确认就这么关联'
+```
+
+（--pair-decisions/--reasons 可重复传多对，分隔符 `=>`。）填完**重跑步骤 1b** → 放行（决策回写 rs_input，designer 紧凑视图可见）。
 
 ---
 

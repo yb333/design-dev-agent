@@ -21,6 +21,7 @@
 | `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本）+ rs_input_view.json（compact，给 designer） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
 | `precheck.py` | 输入完整性 + **连库类型检查**（pg_catalog 批量查，24h schema 缓存）+ 类型风险决策骨架 + **关联键类型对账**（join_condition × schema_cache，跨大类→JOIN_TYPE_RISK_PENDING 三选决策：转换/改关联键/接受，双侧采样证据，宁放过不误报） | 步骤 1 | rs_input.json → precheck_report.md / `_internal/schema_cache.json` / `_internal/type_risk_decision.yaml` / `_internal/join_type_decision.yaml`（决策回写 rs_input._join_type_risks/_join_type_decisions） | 不读 ts |
 | `fill_type_risk_decision.py` | 把人的类型风险决策填进 precheck 的骨架（免手写嵌套 YAML） | 步骤 1 | 决策参数 → 改 type_risk_decision.yaml | 不读 ts |
+| `fill_join_risk_decision.py` | 把人的关联键类型决策填进 precheck 的骨架（--pair-decisions '条件=>处置'，免手写 YAML；与类型风险同轮全爆一次问完） | 步骤 1 | 决策参数 → 改 join_type_decision.yaml | 不读 ts |
 | `gate_summary.py` | 闸口①设计摘要（表/规则数/场景/字段统计，确定性） | 闸口① | ts.json → 摘要 | ts.rules / ts.tables / ts.meta |
 
 ### 执行计划（编码前，住 design-dev-shared）

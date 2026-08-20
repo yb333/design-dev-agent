@@ -106,6 +106,95 @@ def _mk_cache(tmp_path, tables=None):
     return cache_file
 
 
+class TestPrecheckEruptTogether:
+
+    def test_type_and_join_risks_erupt_same_round(self, tmp_path, capsys):
+        """★ 同轮全爆：字段类型风险 + 关联键风险一次性都出来（不剥洋葱）"""
+        from precheck import precheck
+        rs = _mk_rs_input()
+        # 字段类型风险：order_id 直接复制 varchar→numeric（跨大类）
+        rs["field_mappings"][0]["source_type"] = "varchar(50)"
+        rs["field_mappings"][0]["target_type"] = "numeric(18,2)"
+        # 关联键风险已在实体级条件里（a.prod_code varchar ↔ b.prod_id bigint）
+        cache = _mk_cache(tmp_path, tables={
+            "ods.t_order": {"prod_code": "varchar(32)", "order_id": "varchar(50)"},
+            "ods.t_prod": {"prod_id": "bigint"},
+        })
+        decision = tmp_path / "type_risk_decision.yaml"
+        result = precheck(rs, cache, False, decision, None)
+        assert any("类型风险" in e for e in result.errors)                      # 字段风险在
+        assert any("关联键类型跨大类" in e for e in result.errors)               # ★ 同一轮关联风险也在
+        out = capsys.readouterr().out
+        assert "TYPE_RISK_PENDING" in out and "JOIN_TYPE_RISK_PENDING" in out   # 双标记同轮
+
+    def test_structural_errors_still_short_circuit(self, tmp_path):
+        """结构性错误（字段不存在）仍短路风险检测——元数据不可信时判定是垃圾"""
+        from precheck import precheck
+        rs = _mk_rs_input()
+        rs["field_mappings"][0]["source_type"] = "varchar(50)"
+        rs["field_mappings"][0]["target_type"] = "numeric(18,2)"
+        cache = _mk_cache(tmp_path, tables={
+            "ods.t_order": {"prod_code": "varchar(32)"},   # order_id 不在 → [字段不存在]
+            "ods.t_prod": {"prod_id": "bigint"},
+        })
+        decision = tmp_path / "type_risk_decision.yaml"
+        result = precheck(rs, cache, False, decision, None)
+        assert any("字段不存在" in e for e in result.errors)
+        assert not any("关联键类型跨大类" in e for e in result.errors)
+
+
+class TestFillJoinRiskDecision:
+
+    def _write_skeleton(self, tmp_path):
+        from precheck import _generate_join_risk_skeleton
+        p = tmp_path / "join_type_decision.yaml"
+        _generate_join_risk_skeleton(p, [{
+            "condition": "a.prod_code = b.prod_id",
+            "left": "ods.t_order.prod_code", "left_type": "varchar(32)",
+            "right": "ods.t_prod.prod_id", "right_type": "bigint",
+            "left_samples": "P001", "right_samples": "1001",
+        }])
+        return p
+
+    def test_fill_and_validate(self, tmp_path):
+        import subprocess, sys as _sys
+        p = self._write_skeleton(tmp_path)
+        rc = subprocess.run([
+            _sys.executable, "skills/dws-design/scripts/fill_join_risk_decision.py",
+            "--decision", str(p),
+            "--pair-decisions", "a.prod_code = b.prod_id=>接受",
+            "--reasons", "a.prod_code = b.prod_id=>业务确认",
+        ], capture_output=True, text=True)
+        assert rc.returncode == 0, rc.stderr
+        import yaml
+        dec = yaml.safe_load(p.read_text(encoding="utf-8"))
+        entry = dec["关联风险对"][0]
+        assert entry["处置"] == "接受"
+        assert entry["原因"] == "业务确认"
+
+    def test_bad_enum_rejected(self, tmp_path):
+        import subprocess, sys as _sys
+        p = self._write_skeleton(tmp_path)
+        rc = subprocess.run([
+            _sys.executable, "skills/dws-design/scripts/fill_join_risk_decision.py",
+            "--decision", str(p),
+            "--pair-decisions", "a.prod_code = b.prod_id=>随便填",
+        ], capture_output=True, text=True)
+        assert rc.returncode == 1
+        assert "枚举值非法" in rc.stderr
+
+    def test_unknown_condition_rejected(self, tmp_path):
+        import subprocess, sys as _sys
+        p = self._write_skeleton(tmp_path)
+        rc = subprocess.run([
+            _sys.executable, "skills/dws-design/scripts/fill_join_risk_decision.py",
+            "--decision", str(p),
+            "--pair-decisions", "a.x = b.y=>接受",
+        ], capture_output=True, text=True)
+        assert rc.returncode == 1
+        assert "不在骨架里" in rc.stderr
+
+
 class TestPrecheckJoinTypeRisk:
 
     def test_entity_level_condition_detected(self, tmp_path, capsys):

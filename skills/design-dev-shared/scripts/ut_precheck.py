@@ -194,9 +194,16 @@ def main():
             pre_rows = len(r_pre.rows) if r_pre.rows else 0
             r_result["status"] = "PASS"
             r_result["detail"] = f"SELECT预检通过: {pre_rows}行, {pre_cols}列"
+            # 真 0 行 = 静默空关联的最强信号（关联类型/内容对不上不报错，只 0 匹配）。
+            # 不阻断（过滤条件当天无数据也可能是合理 0 行；采样过小同此），给排查方向。
+            if pre_rows == 0:
+                zero_note = "⚠ 0行——源表有数据却查不出：疑似关联/过滤条件全灭或采样过小，核对关联条件"
+                r_result["detail"] += f"（{zero_note}）"
+                print(f"  ⚠️ SELECT预检 0 行: 疑似关联/过滤全灭，核对关联条件")
+            else:
+                print(f"  ✅ SELECT预检: {pre_rows}行, {pre_cols}列")
             r_result["pre_cols"] = pre_cols
             r_result["pre_rows"] = pre_rows
-            print(f"  ✅ SELECT预检: {pre_rows}行, {pre_cols}列")
             results.append(r_result)
 
     # 输出结果
