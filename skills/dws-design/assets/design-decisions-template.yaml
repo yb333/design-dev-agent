@@ -104,6 +104,9 @@ rules:
         type: ""                        # main / LEFT JOIN / INNER JOIN ...
         condition: ""
         filter: ""
+        cast: ""                        # ★ 关联键类型跨大类且决策=转换时必填：显式转换表达式
+                                        # （如 "a.prod_code::numeric"）。来源：紧凑视图 join_type_risk 段
+                                        # （precheck 关联键对账检出的跨大类对）。coder 按声明写 SQL，不自己发挥。
 
     # 关联安全分析（JOIN键唯一性 → 对齐策略）
     join_safety:

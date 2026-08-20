@@ -1223,6 +1223,21 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     if incremental_tables:
         compact["incremental_tables"] = incremental_tables
 
+    # 关联键类型对账（precheck 检出+决策后写进 rs_input，designer 必须看到：
+    # 转换对要在 joins 声明 cast，接受对是业务豁免）
+    join_risks = rs_input.get("_join_type_risks") or []
+    if join_risks:
+        join_decs = {d.get("condition", ""): d.get("decision", "")
+                     for d in (rs_input.get("_join_type_decisions") or [])}
+        compact["join_type_risk"] = {
+            "risks": join_risks,
+            "decisions": rs_input.get("_join_type_decisions") or [],
+            "说明": ("关联键类型跨大类（如字符↔数值），已人工决策。处置=转换的对 "
+                     "★必须在对应 joins 里声明 cast（写显式转换表达式，如 "
+                     "a.prod_code::numeric），coder 按声明写 SQL 不自己发挥；"
+                     "处置=接受的是业务豁免，无需 cast。"),
+        }
+
     # DQ 需求（来自 RS L06，告知 designer 该不该产 DQ + 需要翻译的需求内容）
     # DQ 完全跟随 RS：有需求 designer 翻译产 dq_rules，无需求 dq_rules 留空
     dq_reqs = rs_input.get("dq_requirements", [])

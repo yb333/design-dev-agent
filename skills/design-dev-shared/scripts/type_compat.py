@@ -184,6 +184,31 @@ def is_precision_change(type1: str, type2: str) -> bool:
     return base1 == base2 and type1 != type2
 
 
+def join_key_pair_risky(type_a: str, type_b: str) -> bool:
+    """JOIN 键对是否类型风险（保守判定：宁放过不误报）。
+
+    用途：关联键对账（precheck/诊断）。与字段血缘的 assess_type_risk 不同——
+    JOIN 等值比较关注的是"这个等式在数据库能不能成立/语义上说不说得通"：
+    - 同 family（含 varchar 家族内部 nvarchar/varchar2 互跨）：等值成立，放行
+    - integer↔numeric：数字家族互跨，PG 等值原生支持，放行
+    - 其余跨 family（varchar↔numeric、varchar↔integer、varchar↔datetime 等）：
+      裸等值直接报 operator does not exist；加了 cast 则执行期看内容
+      （'abc'::numeric 报 invalid input syntax）——判定风险，交人决策
+    """
+    if not type_a or not type_b:
+        return False
+    fa = parse_type_info(type_a).get("family", "unknown")
+    fb = parse_type_info(type_b).get("family", "unknown")
+    if fa == fb:
+        return False
+    if {fa, fb} <= {"integer", "numeric"}:
+        return False
+    # unknown family（认不出的类型）放行——判不了的不硬判
+    if "unknown" in (fa, fb):
+        return False
+    return True
+
+
 # 风险类型 → 中文标签（给决策文件用）
 RISK_LABEL_CN = {
     "length_overflow": "长度超长",

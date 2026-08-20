@@ -900,6 +900,48 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
         for cerr in validate_quartz_cron(cron):
             vr.add_hard("L4", "N19", cerr)
 
+    # N_JOIN1 关联键类型对账闭合（rs_input._join_type_risks × designer joins）
+    # 只在 precheck 检出跨大类风险对时启用（宁放过：无对账事实不硬判）。
+    # 风险对要么在 joins 里显式声明 cast（coder 按声明写转换），要么业务豁免
+    # （决策=接受）——不兼容必须变成设计产物里看得见的决策。
+    join_risks = rs_input.get("_join_type_risks") or []
+    if join_risks:
+        from sql_parse import parse_join_pairs
+
+        risky_quals = {}
+        for rk in join_risks:
+            key = frozenset(((rk.get("left") or "").lower(), (rk.get("right") or "").lower()))
+            risky_quals[key] = rk
+        exempt_conds = {
+            (d.get("condition") or "").strip()
+            for d in (rs_input.get("_join_type_decisions") or [])
+            if (d.get("decision") or "").strip() == "接受"
+        }
+        # 别名 → schema.table（designer joins 用 rs_input 全局别名）
+        alias_map = {}
+        for st in rs_input.get("source_tables") or []:
+            al = (st.get("source_alias") or "").strip().lower()
+            if al:
+                alias_map[al] = f"{(st.get('source_schema') or '').strip()}.{(st.get('source_table') or '').strip()}"
+        for rule in rules:
+            code = rule.get("rule_code", "?")
+            for j in rule.get("joins") or []:
+                cond = (j.get("condition") or "").strip()
+                for (la, lc), (ra, rc) in parse_join_pairs(cond):
+                    lq = f"{alias_map.get(la, '')}.{lc}".lower()
+                    rq = f"{alias_map.get(ra, '')}.{rc}".lower()
+                    hit = risky_quals.get(frozenset((lq, rq)))
+                    if not hit:
+                        continue
+                    has_cast = bool((j.get("cast") or "").strip())
+                    if not has_cast and cond not in exempt_conds:
+                        vr.add_hard("L4", "N_JOIN1",
+                            f"规则 {code} 的关联 {j.get('alias', '?')}（{cond}）键类型跨大类"
+                            f"（{hit.get('left')} {hit.get('left_type')} ↔ "
+                            f"{hit.get('right')} {hit.get('right_type')}）但未声明 cast 也未豁免"
+                            f"——在 joins 里补 cast（显式转换表达式，如 a.x::numeric），"
+                            f"或到 precheck 关联类型决策里选'接受'（业务豁免，需人确认）")
+
     # N20/N21 distribution_key（per-table，校验字段在所属表存在）
     dec_tables = decisions.get("tables") or {}
     # 构建每张表的字段集合（从 rules 的 field_targets 按表聚合）

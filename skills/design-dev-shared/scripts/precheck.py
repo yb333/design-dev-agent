@@ -348,6 +348,11 @@ def precheck(
     if not result.errors and decision_path is not None:
         _check_type_risk(rs_input, result, decision_path, rs_input_path)
 
+    # 11. 关联键类型对账（宁放过不误报：只拦跨大类；解析不了/查不到类型 → warn 放行）
+    # ★ 短路：同上；决策文件与类型风险同目录（join_type_decision.yaml）
+    if not result.errors and decision_path is not None:
+        _check_join_type_risk(rs_input, result, decision_path, rs_input_path, cache_path)
+
     return result
 
 
@@ -622,6 +627,283 @@ def _check_type_risk(rs_input: dict, result: PrecheckResult, decision_path: Path
 
 # 标准审计字段（4个固定字段）
 STANDARD_AUDIT_FIELDS = ["del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"]
+
+
+# ============================================================
+# 关联键类型对账（宁放过不误报：只拦跨大类）
+# ============================================================
+
+# 关联风险处置选项（中文，给决策文件校验用）
+JOIN_RISK_OPTIONS = {"转换", "改关联键", "接受"}
+
+
+def _collect_join_pairs(rs_input: dict) -> tuple[list[dict], int]:
+    """从 field_mappings 的 join_condition 文本收集关联键对（去重）。
+
+    返回 (键对列表, 未解析条件数)。每项:
+      {condition, left: "schema.table.col", right: "schema.table.col",
+       l_alias, l_col, r_alias, r_col}
+    别名解析不了的（条件里出现未定义别名）并入未解析计数。
+    """
+    from sql_parse import parse_join_pairs
+
+    # 别名 → (schema, table)
+    alias_map = {}
+    for st in rs_input.get("source_tables", []):
+        al = (st.get("source_alias") or "").strip().lower()
+        if al:
+            alias_map[al] = ((st.get("source_schema") or "").strip(),
+                             (st.get("source_table") or "").strip())
+
+    seen_conditions: set[str] = set()
+    pairs: list[dict] = []
+    unresolved = 0
+    for fm in rs_input.get("field_mappings", []):
+        cond = (fm.get("join_condition") or "").strip()
+        if not cond or cond in seen_conditions:
+            continue
+        seen_conditions.add(cond)
+        parsed = parse_join_pairs(cond)
+        if not parsed:
+            unresolved += 1
+            continue
+        for (la, lc), (ra, rc) in parsed:
+            l_tbl = alias_map.get(la)
+            r_tbl = alias_map.get(ra)
+            if not l_tbl or not r_tbl:
+                unresolved += 1
+                continue
+            pairs.append({
+                "condition": cond,
+                "l_schema": l_tbl[0], "l_table": l_tbl[1], "l_col": lc,
+                "r_schema": r_tbl[0], "r_table": r_tbl[1], "r_col": rc,
+            })
+    return pairs, unresolved
+
+
+def _join_pair_qual(p: dict, side: str) -> str:
+    """键对单侧的限定名（schema.table.col，小写归一）。side: 'l' / 'r'。"""
+    return f"{p[f'{side}_schema']}.{p[f'{side}_table']}.{p[f'{side}_col']}".lower()
+
+
+def _sample_join_key_values(executor, schema: str, table: str, col: str, limit: int = 5) -> list[str]:
+    """连库采样键值（DISTINCT + LIMIT，给人决策当证据）。异常/失败返回空。"""
+    import re as _re
+    ident = f"{schema}.{table}.{col}"
+    if not _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", ident):
+        return []
+    try:
+        sql = (f"SELECT DISTINCT {col}::text AS v FROM {schema}.{table} "
+               f"WHERE {col} IS NOT NULL LIMIT {limit}")
+        r = executor.execute(sql)
+        if r.success and r.rows:
+            return [str(row.get("v")) for row in r.rows]
+    except Exception:
+        pass
+    return []
+
+
+def _generate_join_risk_skeleton(decision_path: Path, risks: list[dict]):
+    """生成关联键类型决策骨架（全中文 key，处置留空待人/agent 填）。"""
+    lines = [
+        "# 关联键类型对账决策（预检自动生成，编排层 agent 会用 question 问用户填写）",
+        "# 只拦跨大类（如字符↔数值、字符↔日期）；灰色地带（同族/整数↔数值）已放行。",
+        "# 采样值是双侧键值证据——内容能不能对上，人看样例一眼判断。",
+        "",
+        "关联风险对:",
+    ]
+    for rk in risks:
+        lines.append(f'  - 关联条件: "{rk["condition"]}"')
+        lines.append(f'    左侧: "{rk["left"]} ({rk["left_type"]})"')
+        lines.append(f'    右侧: "{rk["right"]} ({rk["right_type"]})"')
+        lines.append(f'    左采样: "{rk.get("left_samples", "")}"')
+        lines.append(f'    右采样: "{rk.get("right_samples", "")}"')
+        lines.append('    处置: ""          # ★ 填：转换 | 改关联键 | 接受')
+        lines.append('                      # 转换 = 内容实际兼容（如 \'123\' 对 123），designer 在 joins 里声明 cast')
+        lines.append('                      # 改关联键 = 关联字段选错了，改 mapping.xlsx 源文件后重跑 preprocess')
+        lines.append('                      # 接受 = 业务确认就这么关联（豁免，闸口①可见）')
+        lines.append('    原因: ""          # 选"改关联键/接受"时建议填')
+    decision_path.parent.mkdir(parents=True, exist_ok=True)
+    decision_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _validate_join_risk_decision(decision_path: Path, risks: list[dict],
+                                 result: PrecheckResult) -> bool:
+    """校验关联键决策文件填全。返回 True=通过。"""
+    import yaml
+    try:
+        dec = yaml.safe_load(decision_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        result.add_error(f"关联键决策文件解析失败({decision_path}): {e}")
+        return False
+    if not isinstance(dec, dict):
+        result.add_error("关联键决策文件格式错误（顶层应为字典）")
+        return False
+
+    ok = True
+    entries = [it for it in (dec.get("关联风险对") or []) if isinstance(it, dict)]
+    dec_conds = {it.get("关联条件", "") for it in entries}
+    detected = {rk["condition"] for rk in risks}
+    if dec_conds != detected:
+        result.add_error(
+            f"关联风险对清单与决策不一致（缺: {sorted(detected - dec_conds)} / "
+            f"多余: {sorted(dec_conds - detected)}），已重新生成骨架，请填后重跑")
+        return False
+    for it in entries:
+        cond = it.get("关联条件", "")
+        action = (it.get("处置") or "").strip()
+        if not action:
+            result.add_error(f"关联键决策未填：'{cond}' 的处置")
+            ok = False
+        elif action not in JOIN_RISK_OPTIONS:
+            result.add_error(f"关联键 '{cond}' 的处置 '{action}' 不合法（应为：转换/改关联键/接受）")
+            ok = False
+    return ok
+
+
+def _apply_join_decision(rs_input: dict, risks: list[dict], decision_path: Path) -> bool:
+    """决策通过后把事实+决策写进 rs_input（designer 经 compact 视图可见）。
+
+    返回是否放行（全为 转换/接受 放行；含 改关联键 → False，等 mapping 修正重跑）。
+    """
+    import yaml
+    try:
+        dec = yaml.safe_load(decision_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    entries = {it.get("关联条件", ""): it for it in (dec.get("关联风险对") or [])
+               if isinstance(it, dict)}
+
+    released = True
+    decisions_out = []
+    for rk in risks:
+        entry = entries.get(rk["condition"]) or {}
+        action = (entry.get("处置") or "").strip()
+        decisions_out.append({
+            "condition": rk["condition"],
+            "decision": action,
+            "reason": (entry.get("原因") or "").strip(),
+        })
+        if action == "改关联键":
+            released = False
+
+    # 事实（带类型）+ 决策 落 rs_input，designer 读 compact 视图时可见
+    rs_input["_join_type_risks"] = [
+        {"condition": rk["condition"],
+         "left": rk["left"], "left_type": rk["left_type"],
+         "right": rk["right"], "right_type": rk["right_type"]}
+        for rk in risks
+    ]
+    rs_input["_join_type_decisions"] = decisions_out
+    return released
+
+
+def _check_join_type_risk(rs_input: dict, result: PrecheckResult,
+                          decision_path: Path, rs_input_path: Path | None,
+                          cache_path: Path | None):
+    """关联键类型对账：mapping 关联条件 × schema_cache 实际类型，跨大类 → 人决策。
+
+    保守原则（宁放过不误报）：只拦 type_compat.join_key_pair_risky 判 risky 的对；
+    解析不了的关联文本 warn 提示；查不到类型的对放行。决策复用 TYPE_RISK 的
+    骨架→人填→重跑放行机制。
+    """
+    import json
+
+    pairs, unresolved = _collect_join_pairs(rs_input)
+    if unresolved:
+        result.add_warn(
+            f"有 {unresolved} 条关联条件无法自动对账（自然语言/复杂表达式）"
+            f"——precheck 只覆盖 a.x=b.y 等值形态，其余由 designer 关联安全分析兜底"
+        )
+    if not pairs:
+        return
+
+    # 类型来自 schema_cache（步骤9 刚刷新/命中；没有缓存 → 放行）
+    if not cache_path or not cache_path.exists():
+        result.add_warn("关联键类型对账跳过：无 schema_cache（未连库）")
+        return
+    cache = _load_schema_cache(cache_path)
+    if not cache.get("tables"):
+        result.add_warn("关联键类型对账跳过：schema_cache 为空")
+        return
+
+    from type_compat import join_key_pair_risky
+
+    risks: list[dict] = []
+    checked = 0
+    for p in pairs:
+        l_key = f"{p['l_schema'].lower()}.{p['l_table'].lower()}"
+        r_key = f"{p['r_schema'].lower()}.{p['r_table'].lower()}"
+        l_cols = cache.get("tables", {}).get(l_key) or {}
+        r_cols = cache.get("tables", {}).get(r_key) or {}
+        l_type = l_cols.get(p["l_col"], "")
+        r_type = r_cols.get(p["r_col"], "")
+        if not l_type or not r_type:
+            continue  # 查不到类型判不了，放行
+        checked += 1
+        if not join_key_pair_risky(l_type, r_type):
+            continue
+        risks.append({
+            "condition": p["condition"],
+            "left": _join_pair_qual(p, "l"), "left_type": l_type,
+            "right": _join_pair_qual(p, "r"), "right_type": r_type,
+        })
+
+    if not risks:
+        if checked:
+            result.add_pass(f"关联键类型对账: {checked} 对全部同族/兼容")
+        return
+
+    # 双侧采样值（连得上库才采；采不到照样问人，只是证据少）
+    executor = None
+    try:
+        from dws_db import create_executor_for_schema
+        target_schema = rs_input.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
+        executor = create_executor_for_schema(target_schema, role="etl")
+        if not executor.test_connection():
+            executor.close()
+            executor = None
+    except Exception:
+        executor = None
+    if executor is not None:
+        for rk in risks:
+            l_sch, l_tbl, l_col = rk["left"].rsplit(".", 2)
+            r_sch, r_tbl, r_col = rk["right"].rsplit(".", 2)
+            rk["left_samples"] = ", ".join(_sample_join_key_values(executor, l_sch, l_tbl, l_col))
+            rk["right_samples"] = ", ".join(_sample_join_key_values(executor, r_sch, r_tbl, r_col))
+        try:
+            executor.close()
+        except Exception:
+            pass
+
+    join_decision = decision_path.with_name("join_type_decision.yaml")
+
+    # 决策已填全 → 放行 + 回写 rs_input（事实+决策，designer 可见）
+    if join_decision.exists():
+        if _validate_join_risk_decision(join_decision, risks, result):
+            released = _apply_join_decision(rs_input, risks, join_decision)
+            if not released:
+                result.add_error(
+                    "关联键决策含'改关联键'——请修正 mapping.xlsx 的关联条件后"
+                    "重跑 preprocess+precheck（rs_input 仍检测到该关联对）")
+            else:
+                if rs_input_path is not None:
+                    rs_input_path.write_text(
+                        json.dumps(rs_input, ensure_ascii=False, indent=2), encoding="utf-8")
+                    _sync_compact_view(rs_input, rs_input_path)
+                result.add_pass(
+                    f"关联键类型决策已通过并回写 rs_input（{len(risks)} 对，"
+                    "designer 在紧凑视图可见，转换对需在 joins 声明 cast）")
+            return
+        # 决策没填全/不一致 → 重新生成骨架，下面阻断
+        result.add_error("关联键类型决策文件未填全或清单不一致，已重新生成骨架，请填后重跑")
+    else:
+        result.add_error(
+            f"检测到关联键类型跨大类（{len(risks)} 对，双侧类型见下），待人工决策"
+            f"（决策文件将生成于：{join_decision}）")
+
+    _generate_join_risk_skeleton(join_decision, risks)
+    print(f"JOIN_TYPE_RISK_PENDING {json.dumps({'pairs': risks, 'decision_file': str(join_decision)}, ensure_ascii=False)}")
 
 
 def _is_audit_field(fm: dict) -> bool:

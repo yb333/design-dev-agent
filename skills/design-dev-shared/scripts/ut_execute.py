@@ -80,9 +80,10 @@ def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-# 类型转换类报错的关键字（DB 报错通常英文：invalid input syntax for type numeric）
+# 类型转换类报错的关键字（DB 报错通常英文）。
+# operator does not exist = 裸 JOIN 跨类型（解析期报，自带两侧类型）——也是 conversion 类
 _TYPE_ERROR_KEYWORDS = ("invalid input syntax", "for type", "cast", "could not convert",
-                        "failed to convert", "invalid value")
+                        "failed to convert", "invalid value", "operator does not exist")
 
 
 def _is_type_conversion_error(error_msg: str) -> bool:
@@ -91,17 +92,28 @@ def _is_type_conversion_error(error_msg: str) -> bool:
     return any(k in low for k in _TYPE_ERROR_KEYWORDS)
 
 
-def _diagnose_insert_failure(executor, rule: dict, ts: dict, ts_path: Path) -> str:
-    """INSERT 失败的类型转换类报错 → 自动诊断嫌疑脏数据字段，返回人读文本。
+def _diagnose_insert_failure(executor, rule: dict, ts: dict, ts_path: Path,
+                             error_msg: str = "") -> str:
+    """conversion 类报错 → 嫌疑报告（报错分类 + 关联键 ts 反查 + 字段脏数据探测）。
 
     设计为增益不是依赖：诊断异常/无缓存都诚实返回提示，绝不抛出影响主流程。
-    schema_cache 不存在 → 诊断返回"未连库无缓存"（diagnose_type_error 内部处理）。
+    路由建议是漏斗不是证明——有关联嫌疑优先退 designer/人，禁止改字段类型。
     """
     try:
-        from ut_diagnose import diagnose_type_error, format_diagnosis
+        from ut_diagnose import (
+            diagnose_type_error, format_diagnosis, _load_schema_cache,
+            classify_db_error, diagnose_join_suspicion, format_suspicion_report,
+        )
         cache_path = ts_path.parent / "_internal" / "schema_cache.json"
         entries = diagnose_type_error(executor, rule, ts, cache_path)
-        return format_diagnosis(entries)
+        field_diag = format_diagnosis(entries)
+        cls = classify_db_error(error_msg)
+        suspects = []
+        if cls is not None:
+            cache = _load_schema_cache(cache_path)
+            if cache:
+                suspects = diagnose_join_suspicion(rule, ts, cache, executor)
+        return format_suspicion_report(error_msg, cls, suspects, field_diag)
     except Exception as e:
         return f"自动诊断异常（无法定位，附原始报错请人排查）: {e}"
 
@@ -274,7 +286,7 @@ def main():
                     print(f"  ❌ 试跑失败({error_type}): {error_msg}")
                     # 类型转换类报错 → 自动诊断嫌疑脏数据（增益，不阻断）
                     if _is_type_conversion_error(error_msg):
-                        diag = _diagnose_insert_failure(executor, rule, ts, ts_path)
+                        diag = _diagnose_insert_failure(executor, rule, ts, ts_path, error_msg)
                         if diag:
                             rule_result["diagnosis"] = diag
                             print(f"  🔍 {diag.splitlines()[0]}")
@@ -300,7 +312,7 @@ def main():
                 print(f"  ❌ INSERT失败({error_type}): {error_msg}")
                 # 类型转换类报错 → 自动诊断嫌疑脏数据（增益，不阻断）
                 if _is_type_conversion_error(error_msg):
-                    diag = _diagnose_insert_failure(executor, rule, ts, ts_path)
+                    diag = _diagnose_insert_failure(executor, rule, ts, ts_path, error_msg)
                     if diag:
                         rule_result["diagnosis"] = diag
                         print(f"  🔍 {diag.splitlines()[0]}")

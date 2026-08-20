@@ -19,7 +19,7 @@
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本）+ rs_input_view.json（compact，给 designer） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
-| `precheck.py` | 输入完整性 + **连库类型检查**（pg_catalog 批量查，24h schema 缓存）+ 类型风险决策骨架 | 步骤 1 | rs_input.json → precheck_report.md / `_internal/schema_cache.json` / `_internal/type_risk_decision.yaml` | 不读 ts |
+| `precheck.py` | 输入完整性 + **连库类型检查**（pg_catalog 批量查，24h schema 缓存）+ 类型风险决策骨架 + **关联键类型对账**（join_condition × schema_cache，跨大类→JOIN_TYPE_RISK_PENDING 三选决策：转换/改关联键/接受，双侧采样证据，宁放过不误报） | 步骤 1 | rs_input.json → precheck_report.md / `_internal/schema_cache.json` / `_internal/type_risk_decision.yaml` / `_internal/join_type_decision.yaml`（决策回写 rs_input._join_type_risks/_join_type_decisions） | 不读 ts |
 | `fill_type_risk_decision.py` | 把人的类型风险决策填进 precheck 的骨架（免手写嵌套 YAML） | 步骤 1 | 决策参数 → 改 type_risk_decision.yaml | 不读 ts |
 | `gate_summary.py` | 闸口①设计摘要（表/规则数/场景/字段统计，确定性） | 闸口① | ts.json → 摘要 | ts.rules / ts.tables / ts.meta |
 
@@ -41,7 +41,7 @@
 | `ut_precheck.py` | 快速 UT 预检（回退 + DDL + SELECT 跑通，秒级，不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
 | `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **ts.rules + ts.init.rules**（init 先建基线→增量在基线上 merge；prev_failed 跨阶段级联） |
 | `run_ut.py` | **UT 函数库**（wrap_insert / wrap_write / run_ut_check / inject_tablesample / substitute_params / resolve_all_params 等，被 ut_precheck/ut_execute import）。纯函数库无 CLI 入口——UT 执行走 ut_precheck（6a）+ ut_execute（6b）两阶段 | 函数库：ut_precheck/ut_execute 用 | （由调用方读 ts） | 由调用方决定（ut_execute 读 ts.rules + ts.init.rules） |
-| `ut_diagnose.py` | UT 类型转换失败自动诊断（`diagnose_type_error`：圈跨类型字段→探测源表脏值+样例）。ut_execute INSERT 失败钩子调用（类型报错才触发）；也有 CLI 供 designer/coder 回退分析复跑（`--ts --rule`） | ut_execute 钩子调用 / designer·coder 复跑 | ts.json → 嫌疑字段诊断文本 | ts.tables[].fields + ts.rules[].source_tables + `_internal/schema_cache.json` |
+| `ut_diagnose.py` | UT 类型转换失败自动诊断（`diagnose_type_error`：圈跨类型字段→探测源表脏值+样例）+ **报错分类 + 关联键嫌疑反查 + 嫌疑报告**（classify_db_error 只认高置信模式宁漏诊不误诊；diagnose_join_suspicion 用 ts joins×schema_cache 列跨大类对；路由建议：有 join 嫌疑退 designer/人禁改类型）。ut_execute 钩子调用；CLI 供复跑（`--ts --rule`） | ut_execute 钩子调用 / designer·coder 复跑 | ts.json → 嫌疑报告文本 | ts.tables[].fields + ts.rules[].joins + ts.rules[].source_tables + `_internal/schema_cache.json` |
 
 ### legacy 校验
 > 已删除（2026-08 清理）：`sql_validator.py` / `validate_ddl.py` / `verify_files.py` / `lib/dws_preprocessor.py`（仅被已删的 validate_sql 引用，零生产引用零测试）。`CLAUDE.md` / `eval-suite/idle-task-prompt.md` 里还有提及，那两份是已知滞后文档，不再同步。
@@ -52,8 +52,8 @@
 
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
-| `assemble_ts.py` | rs_input + design_decisions → ts.json + ts.md；跑 ~40 条校验（五层+LI） | designer 写完 decisions 后组装 | rs_input.json + design_decisions.yaml → ts.json / ts.md | 读 decisions.rules **+ decisions.init**（Chunk 1 已接通 init 段） |
-| `explore.py` | JOIN 键唯一性探查（count vs count distinct，只读单表，不 JOIN） | designer 第4层关联安全 | ts.json + 表/键 → 结论 | ts.rules / ts.tables |
+| `assemble_ts.py` | rs_input + design_decisions → ts.json + ts.md；跑 ~40 条校验（五层+LI，含 **N_JOIN1 关联键类型闭合**：rs_input._join_type_risks 检出对必须 joins.cast 或豁免） | designer 写完 decisions 后组装 | rs_input.json + design_decisions.yaml → ts.json / ts.md | 读 decisions.rules **+ decisions.init**（Chunk 1 已接通 init 段） |
+| `explore.py` | JOIN 键唯一性探查（count vs count distinct，只读单表，不 JOIN）+ **键值重叠率试算**（--check-overlap：双侧 DISTINCT 采样500 算交集，探测同类型不同内容的静默空关联） | designer 第4层关联安全/内容语义 | ts.json + 表/键 → 结论 | ts.rules / ts.tables |
 | `assemble_ts_opt.py` ★opt | 优化模式组装：ts_baseline + 增量 decisions（opt-decisions-template.yaml）→ ts_v2 + change 段；新 JOIN 必须声明 join_safety；确定性应用不动存量 | 优化模式 designer 写完 decisions 后 | ts_baseline.json + decisions.yaml → ts_v2.json | 读 ts_baseline 全部 + 写 change 段 |
 | `schema_query.py`（住 design-dev-shared，**designer/coder 公共**） | 查 schema_cache 字段存在性（--column 单查/列全表；只读缓存不连库，与 explore 连库互补） | designer 写 design_logic 引用 mapping 外字段前（设计时验证一次，coder 信任 design_logic；coder 不确定时兜底直调） | ts.json + schema.table → 存在性/字段清单 | 不读 ts（读 `_internal/schema_cache.json`） |
 
@@ -74,7 +74,7 @@
 | 模块 | 干啥 | 被谁 import | 所在 |
 |------|------|------------|------|
 | `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
-| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行） | precheck / ut_diagnose | design-dev-shared/scripts |
+| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行）+ **join_key_pair_risky**（JOIN 键对保守谓词：跨大类风险，integer↔numeric/同族放行） | precheck / ut_diagnose | design-dev-shared/scripts |
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样） | ut_precheck / ut_execute | design-dev-shared/scripts |
 | `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / extract_select_aliases / extract_from_tables） | run_ut / check_sql | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |

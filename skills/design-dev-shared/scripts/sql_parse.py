@@ -147,3 +147,25 @@ def extract_from_tables(sql: str) -> list[str]:
             tables.append(table_name)
 
     return tables
+
+
+def parse_join_pairs(text: str) -> list[tuple[tuple[str, str], tuple[str, str]]]:
+    """解析关联条件文本里的等值对：a.x = b.y 形态。
+
+    返回 [((alias, col), (alias, col)), ...]。大小写归一（alias/col 都 lower）。
+    解析不出的文本（自然语言描述/复杂表达式）直接跳过——宁放过不误报，
+    由调用方决定对未覆盖文本的处理（precheck 会 warn 提示无法自动对账）。
+
+    支持一段文本含多个条件（"a.x=b.x and a.y=b.y"）；
+    不等值（!=/<）和函数包装（TO_CHAR(a.x)=b.y）不匹配——只认裸等值。
+    """
+    if not text:
+        return []
+    pairs = []
+    pat = re.compile(
+        r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
+    for m in pat.finditer(text):
+        left = (m.group(1).lower(), m.group(2).lower())
+        right = (m.group(3).lower(), m.group(4).lower())
+        pairs.append((left, right))
+    return pairs

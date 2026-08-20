@@ -198,13 +198,13 @@ def format_diagnosis(entries: list[dict]) -> str:
     """
     # 无缓存（未连库）：诚实提示
     if entries and all(e.get("__no_cache") for e in entries):
-        return "自动诊断：未连库无 schema_cache，无法定位嫌疑字段（附原始报错请人排查）"
+        return "未连库无 schema_cache，无法定位嫌疑字段（附原始报错请人排查）"
     # 过滤掉诊断出但无脏数据的空结果
     real = [e for e in entries if not e.get("__no_cache")]
     if not real:
-        return "自动诊断：未识别到嫌疑字段（schema_cache 无对应源类型，或无跨类型字段）"
+        return "未识别到嫌疑字段（schema_cache 无对应源类型，或无跨类型字段）"
 
-    lines = ["自动诊断（类型转换类报错，圈定嫌疑字段+脏数据样例）："]
+    lines = []
     for e in real:
         samples = "、".join(f"'{s}'" for s in e.get("samples", [])[:3]) or "（未抓到样例）"
         lines.append(
@@ -213,6 +213,150 @@ def format_diagnosis(entries: list[dict]) -> str:
             f"有 {e['dirty_count']} 行脏数据，样例：{samples}"
         )
     lines.append("（根因判断：源脏 → 清源；设计缺 cast → designer/coder 加转换；其他 → 人排查）")
+    return "\n".join(lines)
+
+
+# ============================================================
+# 报错分类 + 关联键嫌疑（conversion 类报错的 ts 反查）
+# ============================================================
+
+# 高置信报错模式（宁漏诊不误诊：匹配不到不归类，走现有三分流）
+_ERROR_PATTERNS: list[tuple[str, str]] = [
+    ("比较算子缺失", "operator does not exist"),      # 裸 JOIN 跨类型，解析期报，自带两侧类型
+    ("值转换失败", "invalid input syntax"),             # 执行期，报错只带值+目标类型，不带位置
+    ("值转换失败", "invalid number"),                   # ORA 兼容模式（ORA-01722 同义）
+    ("值转换失败", "could not convert"),
+]
+
+
+def classify_db_error(error_msg: str) -> dict | None:
+    """数据库报错分类（只认高置信模式）。
+
+    返回 {class: 类别名, keyword: 命中关键字} 或 None（未匹配 → 不归类）。
+    """
+    low = (error_msg or "").lower()
+    for cls, kw in _ERROR_PATTERNS:
+        if kw in low:
+            return {"class": cls, "keyword": kw}
+    return None
+
+
+def diagnose_join_suspicion(rule: dict, ts: dict, cache: dict,
+                            executor=None) -> list[dict]:
+    """关联键嫌疑：ts 结构化 joins × schema_cache 类型，反查类型跨大类的 JOIN 对。
+
+    纯元数据事实查询（零误报），不连库也能出嫌疑清单；executor 可用时
+    顺带双侧采样键值（证据）。返回 [{condition, left, left_type, right, right_type,
+    left_samples, right_samples}]。
+    """
+    from sql_parse import parse_join_pairs
+    from type_compat import join_key_pair_risky
+
+    alias_map = {}
+    for st in rule.get("source_tables", []):
+        al = (st.get("alias") or "").strip().lower()
+        if al:
+            alias_map[al] = (st.get("schema") or "", st.get("table") or "")
+
+    suspects = []
+    seen: set[frozenset] = set()
+    for j in rule.get("joins") or []:
+        cond = (j.get("condition") or "").strip()
+        for (la, lc), (ra, rc) in parse_join_pairs(cond):
+            l_tbl = alias_map.get(la)
+            r_tbl = alias_map.get(ra)
+            if not l_tbl or not r_tbl:
+                continue
+            lq = f"{l_tbl[0].lower()}.{l_tbl[1].lower()}.{lc}"
+            rq = f"{r_tbl[0].lower()}.{r_tbl[1].lower()}.{rc}"
+            key = frozenset((lq, rq))
+            if key in seen:
+                continue
+            seen.add(key)
+            l_type = cache.get(f"{l_tbl[0].lower()}.{l_tbl[1].lower()}", {}).get(lc, "")
+            r_type = cache.get(f"{r_tbl[0].lower()}.{r_tbl[1].lower()}", {}).get(rc, "")
+            if not l_type or not r_type:
+                continue
+            if not join_key_pair_risky(l_type, r_type):
+                continue
+            entry = {
+                "condition": cond,
+                "left": lq, "left_type": l_type,
+                "right": rq, "right_type": r_type,
+                "left_samples": [], "right_samples": [],
+            }
+            if executor is not None:
+                entry["left_samples"] = _sample_values(executor, l_tbl[0], l_tbl[1], lc)
+                entry["right_samples"] = _sample_values(executor, r_tbl[0], r_tbl[1], rc)
+            suspects.append(entry)
+    return suspects
+
+
+def _sample_values(executor, schema: str, table: str, col: str, limit: int = 3) -> list[str]:
+    """双侧键值采样（DISTINCT LIMIT，给嫌疑报告当证据）。异常返回空。"""
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", f"{schema}.{table}.{col}"):
+        return []
+    try:
+        sql = (f"SELECT DISTINCT {col}::text AS v FROM {schema}.{table} "
+               f"WHERE {col} IS NOT NULL LIMIT {limit}")
+        r = executor.execute(sql)
+        if r.success and r.rows:
+            return [str(row.get("v")) for row in r.rows]
+    except Exception:
+        pass
+    return []
+
+
+def format_suspicion_report(error_msg: str, cls: dict | None,
+                            suspects: list[dict], field_diag: str) -> str:
+    """渲染嫌疑报告（UT 报告 FAIL detail 下的诊断段，给主控/人做路由依据）。
+
+    结构：报错分类 → 关联键嫌疑（带类型+采样证据）→ 字段脏数据嫌疑 → 路由建议。
+    路由建议是漏斗不是证明：有关联嫌疑 → 优先退 designer/人核对关联逻辑、
+    禁止改字段类型（掩盖根因）；无关联嫌疑才走字段类型链路。
+    """
+    lines = ["🔍 嫌疑报告（conversion 类报错自动定位）"]
+
+    if cls:
+        note = {
+            "比较算子缺失": "报错自带两侧类型，嫌疑基本坐实",
+            "值转换失败": "报错只带值和目标类型不带字段位置，靠 ts 元数据反查",
+        }.get(cls["class"], "")
+        lines.append(f"报错分类: {cls['class']}（命中 '{cls['keyword']}'）{('——' + note) if note else ''}")
+    else:
+        lines.append("报错分类: 未匹配已知模式（不归类，按现有分流处理）")
+
+    if suspects:
+        lines.append("■ 关联键嫌疑（ts 反查：类型跨大类的 JOIN 等值对）:")
+        for s in suspects:
+            lines.append(
+                f"  - {s['condition']}: {s['left']} ({s['left_type']}) ↔ "
+                f"{s['right']} ({s['right_type']})"
+            )
+            if s.get("left_samples") or s.get("right_samples"):
+                ls = "、".join(f"'{v}'" for v in s["left_samples"]) or "（空）"
+                rs = "、".join(f"'{v}'" for v in s["right_samples"]) or "（空）"
+                lines.append(f"    键值采样  左: {ls} | 右: {rs}")
+            lines.append("    → 疑似关联逻辑错误（拿不相干的两个字段做等值）")
+    else:
+        lines.append("■ 关联键嫌疑: 无（ts joins 里未发现类型跨大类的等值对）")
+
+    if field_diag:
+        lines.append("■ 字段脏数据嫌疑（源列含不可转换值）:")
+        lines.append(field_diag if field_diag.startswith("-") else f"  {field_diag}")
+
+    if suspects:
+        lines.append(
+            "路由建议: ★存在关联键嫌疑——退 designer/人核对关联逻辑，"
+            "禁止用改字段类型来'修复'（掩盖根因，同 ROW_NUMBER 去重反模式）。"
+            "确需转换应回设计层声明 cast（precheck 关联键对账流程）。"
+        )
+    else:
+        lines.append(
+            "路由建议: 无关联嫌疑——走字段类型链路（源脏清源 / 设计缺 cast 补转换 / "
+            "其余按现有 SQL-数据质量-环境三分流）。"
+        )
     return "\n".join(lines)
 
 
