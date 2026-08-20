@@ -383,21 +383,6 @@ python SHARED_SCRIPTS/assemble_export.py \
 
 ---
 
-## 步骤 9：归档（交付写回资产档案）
-
-闸口②确认后，把交付物写进资产档案——**新建交付即建档**（优化场景档案路径的输入来源，优化循环链的起点）：
-
-```bash
-python SHARED_SCRIPTS/archive_writer.py \
-  --ts {deliver}/ts.json --etl-dir {deliver}/etl --ddl-dir {deliver}/ddl \
-  --decisions {deliver}/_internal/design_decisions.yaml \
-  --archives-root archives
-```
-
-> 非交互评测模式也归档（幂等，重跑产生新序号目录）。
-
----
-
 # 硬性规则
 
 - 闸口①确认后**自动进编码段**（设计→编码是一连贯流程，中间不交接）

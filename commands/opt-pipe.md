@@ -24,9 +24,19 @@ agent: build
 ## 步骤 0：入口与基线
 
 1. 按资产定位 `{deliver}`（同 new-pipe 的 resolve_appid 流程）。
-2. **查档案** `archives/{schema}/{资产表}/`：
+2. **查基线（三段式）** `archives/{schema}/{资产表}/`：
    - **有档案** → 最新目录即基线：`ts_baseline.json` = 档案 ts，`etl_baseline/` = 档案 etl/。跳到步骤 1。
-   - **无档案** → 要求 baseline_v1.json（用户给路径；没有则停：指引"先由逆向侧产出"）。然后入料建档：
+   - **无档案，但 `10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/` 有 new-pipe 产出** → **懒归档**（建档案的成本只在真正优化时付，new-pipe 不做归档步骤）：
+
+```bash
+python SHARED_SCRIPTS/archive_writer.py \
+  --ts {new-pipe交付目录}/ts.json --etl-dir {new-pipe交付目录}/etl \
+  --ddl-dir {new-pipe交付目录}/ddl \
+  --decisions {new-pipe交付目录}/_internal/design_decisions.yaml \
+  --archives-root archives
+```
+     然后按"有档案"处理。
+   - **都没有** → 要求 baseline_v1.json（用户给路径；没有则停：指引"先由逆向侧产出"）。然后入料建档：
 
 ```bash
 python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --outdir {deliver}/_internal

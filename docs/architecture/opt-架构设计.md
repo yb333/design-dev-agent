@@ -29,7 +29,7 @@ edition: 实现版（v2，2026-08-19 建成后重写；设计过程版见 git �
 
 【本体系】
   archives/{schema}/{资产表}/{NNN_日期}/        ← ★唯一锚点：资产档案（入 git，文本小件）
-        ▲ 交付写回（archive_writer；new-pipe 步骤9 也写）         │ 读（有档零组装）
+        ▲ 优化交付写回 + 懒归档（首优时从 10_project_deliver 拉入） │ 读（有档零组装）
         │                                                        ▼
   opt-pipe 七步：入口基线 → 输入校验 → designer(ts_v2) → ts围栏 → 闸口①'
                 → coder(SQL) → SQL围栏 → ut_opt → 闸口②' → 制品patch → 归档
@@ -37,14 +37,15 @@ edition: 实现版（v2，2026-08-19 建成后重写；设计过程版见 git �
 【下游（体系外）】人/平台执行交付物：ALTER 变更单 / patched 制品副本 / patch 说明——我们不执行
 ```
 
-**两条基线路径**（入口处分岔，之后完全同构）：
+**入口三段式查基线**（分岔只在入口，之后完全同构）：
 - **档案路径**：`archives/` 有该资产 → 最新目录直接当 baseline（零组装、语义全在、豁免表为空）；
-- **json 路径**：无档案 → 收 baseline_v1.json → `assemble_ts_baseline` 入料建档（语义空位 + 自动豁免）。
+- **懒归档路径**：无档案但 `10_project_deliver/` 有 new-pipe 产出 → 当场 archive_writer 拉一份进档案再用（**建档案的成本只在真正优化时付**；new-pipe 无归档步骤——YAGNI）；
+- **json 路径**：都没有 → 收 baseline_v1.json → `assemble_ts_baseline` 入料建档（语义空位 + 自动豁免）。
 
 ## 三、流程详解（真实命令，{deliver} = `10_project_deliver/{appid}/{schema}/{资产}/ddlc_opt/`）
 
 ### 步骤 0 · 入口与基线
-查 `archives/{schema}/{资产表}/`：有档 → 直接用；无档 → 用户交 baseline_v1.json：
+三段式查基线：① `archives/{schema}/{资产表}/` 有档直接用；② 无档但 10_project_deliver 有 new-pipe 产出 → **懒归档**（archive_writer 当场拉档，new-pipe 不做归档步骤）；③ 都没有 → 用户交 baseline_v1.json：
 
 ```bash
 python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --outdir {deliver}/_internal
@@ -120,7 +121,7 @@ python SHARED_SCRIPTS/archive_writer.py \
 
 ## 四、核心机制（六件）
 
-1. **档案锚点**：所有资产在体系内只有一个表示。写档案只有两个动作（new-pipe 交付 / json 入料）；json 出场仅两时机（无档入料、有档供方交 json=声明线上被改→覆盖重入料）；历史=按次目录序列，ts 不含历史。
+1. **档案锚点**：所有资产在体系内只有一个表示。写档案只有两个动作（json 入料 / 懒归档——首优时从标准交付目录拉取；new-pipe 不做归档步骤，YAGNI）；json 出场仅两时机（无档入料、有档供方交 json=声明线上被改→覆盖重入料）；历史=按次目录序列（从首次优化起积累），ts 不含历史。
 2. **两级声明**：change_request（业务，脚本产）+ ts.change（落位，designer 声明）——围栏许可 = 合体；落位是设计判断，不是输入的事。
 3. **三段审计 + 回路铁律**：意图→落位（fence 内含对账）→结构（fence_check）→代码（sql_fence）。**产物变 → pipe 重跑对应层围栏 → 才进 UT**。
 4. **冻结/自由矩阵**：变更声明自带冻结层（逐项等价）/自由层/枚举许可，比对粒度跟冻结层走；第一刀实现 add_field 矩阵，未来类型（modify_field/drop_field/add_source/重构）只加映射不加机制。
@@ -148,7 +149,7 @@ python SHARED_SCRIPTS/archive_writer.py \
 | ut_opt.py | ALTER + 输出对比 + INSERT 全量 | pipe 步骤 5 |
 | assemble_ddl_opt.py | ALTER 变更单 + 全量 DDL + 差异审计 | pipe 步骤 6 |
 | artifact_patcher.py | xlsx/yml 严格 patch + 副本 + 说明 | pipe 步骤 6 |
-| archive_writer.py | 档案写回（NNN 序号） | pipe 步骤 7 / new-pipe 步骤 9 |
+| archive_writer.py | 档案写回（NNN 序号；懒归档共用） | opt-pipe 步骤 0/7 |
 
 **契约**：baseline_v1（权威在 analyzer 仓 v1.1；本仓 vendor schema + 校验器；含 write_plan 结构化写入计划——文法翻译非推断）。
 
@@ -172,7 +173,7 @@ archives/{schema}/{资产表}/{NNN_日期}/    ← 资产档案（入 git：ts +
 
 **共享**：两个 agent 岗位与权限体系；全部设计知识（references/playbooks）；dws-design/coding 的工具（explore/check_sql 等，路径引用）；precheck 的类型风险交互模式；编排者铁律与闸口纪律。
 
-**隔离（对存量的全部接触只有三处，均加法式）**：agents 各加两行（skill 指针 + opt 目录权限）；slice_ts 加 `--baseline-sql` 参数（不带参数路径逐字节同行为）；new-pipe 加步骤 9 归档（纯新增动作）。**assemble_ts / ut_precheck / ut_execute / assemble_ddl / preprocess 本体零改动**——1001 个测试（含新建全部既有用例）全绿为证。
+**隔离（对存量的全部接触只有两处，均加法式）**：agents 各加两行（skill 指针 + opt 目录权限）；slice_ts 加 `--baseline-sql` 参数（不带参数路径逐字节同行为）。**assemble_ts / ut_precheck / ut_execute / assemble_ddl / preprocess 本体零改动**——1001 个测试（含新建全部既有用例）全绿为证。
 
 ## 八、测试与验收
 

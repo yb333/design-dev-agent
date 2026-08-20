@@ -256,7 +256,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 存量资产精确变更交付。设计全集见 `docs/specs/opt/00-08` + 总览 `docs/architecture/opt-架构设计.md`；测试指引见 `docs/specs/opt/11-测试指引.md`。要点：
 
-- **唯一锚点 = 资产档案**（archives/）：有档零组装直接当 baseline；无档收 baseline_v1.json（逆向侧 peer agent 文件交接，**不调它的脚本**）入料建档；交付写回档案（循环链）。**不验真输入**（默认准确，压力给供方）。
+- **唯一锚点 = 资产档案**（archives/）：有档零组装直接当 baseline；无档但有 new-pipe 标准产出 → **懒归档**（优化时才拉档，new-pipe 不做归档步骤——YAGNI）；都没有 → 收 baseline_v1.json（逆向侧 peer agent 文件交接，**不调它的脚本**）入料建档；优化交付写回档案（循环链）。**不验真输入**（默认准确，压力给供方）。
 - **两级声明 + 三段审计**：change_request（业务说了什么，preprocess_opt 产）+ ts.change 段（落位，designer 声明、assemble_ts_opt 组装）→ fence_check（ts 级围栏，恰好等于双向）→ sql_fence_check（SQL 级围栏，**闸门单点在 pipe**）。回路铁律：产物变→围栏重跑→才进 UT。
 - **存量语义不补**（主键/粒度/关联安全留空+豁免，双跑兜底）；新 JOIN 必须 join_safety（opt-playbook）。
 - **UT = ut_opt.py**（独立入口零触碰 ut_precheck/ut_execute）：ALTER 应用（表不存在=环境归人）+ 双向 MINUS 输出对比（冻结列零差异）+ INSERT 全量；主键豁免、空值只查新列。
