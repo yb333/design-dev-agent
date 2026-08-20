@@ -15,8 +15,10 @@ UT 通过后调用。把验证过的 ts.json + ETL SQL 翻译成
 规则编码策略：占位符出厂，内网脚本查表替换（Excel 自描述，脚本零配置）。
   规则组编码 = GR_{组英文名}；规则编码 = ts 规则码；参数变量行 = PV000N。
   TargetFields/GroupVariables 按占位码挂引用，生成阶段做三处闭合校验。
-  交接流程：人填子项目三件套（N:M 无映射，留空人填）→ 内网脚本登录平台
-  取码、替换占位符 → 人工上传。
+  项目只填中文名（人可确认的锚点）；项目编码/英文名、子项目全套留空——
+  内网脚本按中文名从平台补齐。
+  交接流程：闸口②收集 项目中文名（配置预填可改）+ 子项目中文名 → 内网
+  脚本补齐编码/英文名、取码替换占位符 → 人工上传。
   租户ID = appid（schema_apps 反查）；组织英文简称/数据源 = 术加租户属性
   （platform_config 的 shujia_tenants[appid]，租户级覆盖 schema 级）。
 
@@ -250,10 +252,11 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
     org_abbr = shujia.get("org_abbr", "")
     data_source = _cfg(shujia, "datasource")
     business_owner = _cfg(shujia, "business_owner", "")
-    project_code = _cfg(shujia, "project_code")
-    project_cn = _cfg(shujia, "project_cn", project_code)
-    project_en = _cfg(shujia, "project_en", project_code)
-    # 子项目编码留空（schema 对不齐，人工填）
+    # 项目只填中文名（人可确认的锚点）；编码/英文名由内网脚本按中文名从平台补齐
+    project_cn = _cfg(shujia, "project_cn")
+    project_code = ""
+    project_en = ""
+    # 子项目三件套留空（schema 与子项目 N:M；中文名闸口②人填，编码/英文名脚本补）
     sub_code = ""
     sub_cn = ""
     sub_en = ""

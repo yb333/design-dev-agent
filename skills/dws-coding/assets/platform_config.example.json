@@ -1,6 +1,6 @@
 {
   "_comment": "平台部署配置。按 schema 映射两个平台的项目/任务组。exporter 读取。",
-  "_structure": "schema_mappings: schema → { shujia(术加执行平台), lts(调度平台) }。未命中的 schema 用 default。shujia_tenants: appid → { org_abbr, datasource }（术加租户属性，appid 键；appid 从 schema_apps.json 反查；租户级取值覆盖 schema 级——数据源是租户属性）。subproject_* 已废弃留空：schema 与子项目 N:M 无映射，交付时人工填 Excel。",
+  "_structure": "shujia_tenants: appid → { org_abbr, datasource }（术加租户属性，appid 键，appid 从 schema_apps.json 反查）。schema_mappings: schema → { shujia(项目中文名/责任人), lts(调度) }，未命中用 default。术加的 Excel 出厂口径：租户ID=appid、组织英文简称/数据源走租户块、项目只填中文名——项目编码/英文名、子项目全套由内网取码脚本按中文名从平台补齐。",
 
   "shujia_tenants": {
     "APP001": {
@@ -11,13 +11,7 @@
 
   "default": {
     "shujia": {
-      "project_code": "SRP_ETL",
       "project_cn": "ETL项目",
-      "project_en": "ETL_Project",
-      "subproject_code": "",
-      "subproject_cn": "",
-      "subproject_en": "",
-      "datasource": "SRP_DWS",
       "business_owner": ""
     },
     "lts": {
@@ -29,11 +23,7 @@
   "schema_mappings": {
     "slprd": {
       "shujia": {
-        "project_code": "SRP_ETL",
         "project_cn": "售配ETL",
-        "project_en": "SLPRD_ETL",
-        "subproject_code": "",
-        "datasource": "SRP_DWS",
         "business_owner": ""
       },
       "lts": {
@@ -43,11 +33,7 @@
     },
     "fin": {
       "shujia": {
-        "project_code": "FIN_ETL",
         "project_cn": "财务ETL",
-        "project_en": "FIN_ETL",
-        "subproject_code": "",
-        "datasource": "FIN_DWS",
         "business_owner": ""
       },
       "lts": {

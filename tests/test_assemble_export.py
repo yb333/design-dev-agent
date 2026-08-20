@@ -256,6 +256,18 @@ class TestBuildRuleRows:
             assert row[_RULE_COL["租户ID"]] == "APP001"
             assert row[_RULE_COL["组织英文简称"]] == "crm_tenant"
 
+    def test_project_only_cn_filled(self, sample_ts, sample_config, etl_dir):
+        """★ 项目只填中文名；编码/英文名出厂留空（内网脚本按中文名补齐）。
+        sample_config 故意带 project_code/project_en（旧配置兼容）——验证被忽略不进产物。"""
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir)
+        for row in rows:
+            assert row[_RULE_COL["项目中文名"]] == "ETL项目"
+            assert row[_RULE_COL["项目编码"]] == ""
+            assert row[_RULE_COL["项目英文名"]] == ""
+            assert row[_RULE_COL["子项目编码"]] == ""
+            assert row[_RULE_COL["子项目中文名"]] == ""
+            assert row[_RULE_COL["子项目英文名"]] == ""
+
     def test_rule_desc_from_design_intent(self, sample_ts, sample_config, etl_dir):
         """规则描述 ← design_intent；备注留空"""
         rows = build_rule_rows(sample_ts, sample_config, etl_dir)

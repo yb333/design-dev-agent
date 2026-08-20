@@ -32,7 +32,7 @@
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `assemble_ddl.py` | ts → DDL（CREATE TABLE/VIEW + COMMENT + 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables（init 复用 tmp 无新 DDL；Chunk 2 确认不重复建） |
-| `assemble_export.py` | ts + ETL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ → `export/*.xlsx`（视图走 ddl/ 通道部署，不发术加规则行） | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；编码占位符出厂 GR_*/规则码/PV000N 三处闭合校验；租户ID=appid、组织简称走 shujia_tenants；RULE 行带执行序列，TargetFields 来源字段 s.字段 形态，参数变量行每规则组一条） |
+| `assemble_export.py` | ts + ETL → execution_tasks.xlsx（10 sheet）+ schedule_tasks.xlsx + manifest | 步骤 7.5 | ts.json + etl/ → `export/*.xlsx`（视图走 ddl/ 通道部署，不发术加规则行） | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；编码占位符出厂 GR_*/规则码/PV000N 三处闭合校验；租户ID=appid、组织简称/数据源走 shujia_tenants，项目只填中文名——编码/英文名及子项目全套由内网取码脚本补；RULE 行带执行序列，TargetFields 来源字段 s.字段 形态，参数变量行每规则组一条） |
 
 ### UT（需数据库，住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
