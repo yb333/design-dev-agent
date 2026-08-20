@@ -4,7 +4,6 @@
 - platform_config 加载 + 兜底
 - execution_tasks.xlsx（RULE/GroupVariables/TargetFields/空sheet）
 - schedule_tasks.xlsx（tasks/jobs/taskParams）
-- export_manifest.json
 - 编码全部留空（关键约束）
 """
 import json
@@ -22,7 +21,6 @@ from assemble_export import (
     build_target_fields,
     generate_execution_excel,
     generate_schedule_excel,
-    generate_manifest,
     validate_code_closure,
     AUDIT_FIELDS,
     RULE_COLUMNS,
@@ -196,11 +194,13 @@ class TestResolveConfigBySchema:
         assert result == {"shujia": {"appid": ""}, "lts": {}}
 
     def test_tenant_block_overrides(self):
-        """★ 租户块：shujia_tenants[appid] 的 org_abbr/datasource 覆盖 schema 级"""
+        """★ 租户块：shujia_tenants[appid] 的 org_abbr/datasource 覆盖 schema 级；
+        project_cn/business_owner 也住租户块（appid→项目，不随 schema 变）"""
         raw = {
             "default": {"shujia": {"datasource": "SCHEMA_LEVEL_DS", "project_code": "P1"}},
             "shujia_tenants": {
-                "APP001": {"org_abbr": "crm_tenant", "datasource": "TENANT_DS"},
+                "APP001": {"org_abbr": "crm_tenant", "datasource": "TENANT_DS",
+                           "project_cn": "CRM域", "business_owner": "zhangsan"},
             },
         }
         result = resolve_config_by_schema(raw, "slprd", appid="APP001")
@@ -208,6 +208,20 @@ class TestResolveConfigBySchema:
         assert result["shujia"]["datasource"] == "TENANT_DS"   # 租户级覆盖 schema 级
         assert result["shujia"]["project_code"] == "P1"        # 非租户属性不受影响
         assert result["shujia"]["appid"] == "APP001"
+        assert result["shujia"]["project_cn"] == "CRM域"       # 租户块身份全集
+        assert result["shujia"]["business_owner"] == "zhangsan"
+
+    def test_tenant_only_config(self):
+        """★ 收敛形态：只有 shujia_tenants 一块（example 的最终形态）也能跑通"""
+        raw = {
+            "shujia_tenants": {
+                "APP001": {"org_abbr": "t1", "datasource": "DS1",
+                           "project_cn": "域A", "business_owner": "u1"},
+            },
+        }
+        result = resolve_config_by_schema(raw, "dws", appid="APP001")
+        assert result["shujia"]["project_cn"] == "域A"
+        assert result["lts"] == {}   # lts 无兜底（调度路径以 ts.tasks 为准）
 
     def test_no_appid_no_tenant_merge(self):
         """没传 appid → 不做租户合并，datasource 走 schema 级"""
@@ -671,58 +685,6 @@ class TestGenerateScheduleExcel:
         proj_idx = header.index("项目名称")
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         assert rows[0][proj_idx] == "SRP_DAILY", "旧 ts.json 应回退到 platform_config"
-
-
-# ============================================================
-# Manifest
-# ============================================================
-
-class TestGenerateManifest:
-
-    def test_rule_codes_needed(self, sample_ts, sample_config, tmp_path):
-        """rule_codes_needed = 取数 + 参数变量（视图不计）"""
-        out = tmp_path / "export_manifest.json"
-        generate_manifest(sample_ts, sample_config, out)
-        m = json.loads(out.read_text(encoding="utf-8"))
-        assert m["rule_codes_needed"] == 2  # 1 取数 + 1 参数变量（无视图行）
-
-    def test_rule_codes_needed_separate_init(self, sample_ts, sample_config, tmp_path):
-        """separate init 规则组的参数变量行也计入编码需求"""
-        sample_ts["init"] = {
-            "mode": "derive", "group_mode": "separate",
-            "rules": {"INIT_R0001": {
-                "rule_name": "XXX汇总(初始化)", "exec_sequence": 1,
-                "target_table": "dwb_xxx_f", "is_view_step": False,
-                "load_mode": "truncate_table",
-            }},
-        }
-        out = tmp_path / "export_manifest.json"
-        generate_manifest(sample_ts, sample_config, out)
-        m = json.loads(out.read_text(encoding="utf-8"))
-        assert m["rule_codes_needed"] == 4  # 1 取数 + 1 init + 主组 pv + init 组 pv
-
-    def test_codes_filled_false(self, sample_ts, sample_config, tmp_path):
-        """codes_filled 初始为 false"""
-        out = tmp_path / "export_manifest.json"
-        generate_manifest(sample_ts, sample_config, out)
-        m = json.loads(out.read_text(encoding="utf-8"))
-        assert m["codes_filled"] is False
-
-    def test_task_name_derived(self, sample_ts, sample_config, tmp_path):
-        """task_name 派生正确"""
-        out = tmp_path / "export_manifest.json"
-        generate_manifest(sample_ts, sample_config, out)
-        m = json.loads(out.read_text(encoding="utf-8"))
-        assert m["task_name"] == "task_dwb_xxx_f"
-        assert m["job_name"] == "Pjob_dwb_xxx_f"
-
-    def test_upstream_in_manifest(self, sample_ts, sample_config, tmp_path):
-        """upstream_tasks 存在"""
-        out = tmp_path / "export_manifest.json"
-        generate_manifest(sample_ts, sample_config, out)
-        m = json.loads(out.read_text(encoding="utf-8"))
-        assert len(m["upstream_tasks"]) == 2
-        assert m["upstream_tasks"][0]["schedule_task"] == "task_ods_order_f"
 
 
 # ============================================================

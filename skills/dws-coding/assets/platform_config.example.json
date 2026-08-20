@@ -1,45 +1,13 @@
 {
-  "_comment": "平台部署配置。按 schema 映射两个平台的项目/任务组。exporter 读取。",
-  "_structure": "shujia_tenants: appid → { org_abbr, datasource }（术加租户属性，appid 键，appid 从 schema_apps.json 反查）。schema_mappings: schema → { shujia(项目中文名/责任人), lts(调度) }，未命中用 default。术加的 Excel 出厂口径：租户ID=appid、组织英文简称/数据源走租户块、项目只填中文名——项目编码/英文名、子项目全套由内网取码脚本按中文名从平台补齐。",
+  "_comment": "术加执行平台租户配置。exporter 读取。",
+  "_structure": "shujia_tenants: appid → 术加租户身份全集 { org_abbr(租户名), datasource(租户数据源), project_cn(项目中文名锚点), business_owner(责任人) }。appid 从 schema_apps.json 按 schema 反查。项目/责任人都挂租户（appid→项目→子项目），不随 schema 变——如哪天真出现同 appid 不同 schema 要覆盖，再启用 schema_mappings 覆盖能力（exporter 代码保留支持）。调度(lts)路径不在本文件：设计期由 schedule_config.json 盖章进 ts.json tasks，export 直读（platform_config.lts 仅作旧 ts.json 兜底，代码保留但不再配置）。",
 
   "shujia_tenants": {
     "APP001": {
       "org_abbr": "crm_tenant",
-      "datasource": "SRP_DWS"
-    }
-  },
-
-  "default": {
-    "shujia": {
+      "datasource": "SRP_DWS",
       "project_cn": "ETL项目",
       "business_owner": ""
-    },
-    "lts": {
-      "project_name": "SRP_DAILY",
-      "task_group": "GROUP_SPRD"
-    }
-  },
-
-  "schema_mappings": {
-    "slprd": {
-      "shujia": {
-        "project_cn": "售配ETL",
-        "business_owner": ""
-      },
-      "lts": {
-        "project_name": "SLPRD_DAILY",
-        "task_group": "GROUP_SLPRD"
-      }
-    },
-    "fin": {
-      "shujia": {
-        "project_cn": "财务ETL",
-        "business_owner": ""
-      },
-      "lts": {
-        "project_name": "FIN_DAILY",
-        "task_group": "GROUP_FIN"
-      }
     }
   }
 }

@@ -128,25 +128,32 @@ description: >-
 **想清楚**：
 - **分布键**：按业务主键 / 关联使用频率（减少重分布）/ 离散程度选，与数据量无关。多表 JOIN 时各表分布键必须一致。
   → 详见 `references/design-guide.md` §1.1
-- **关联安全**：每个被关联表，JOIN 键在限定条件下是否唯一。不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行）。
-  不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散）：
-  ```
-  python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
-      --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
-  ```
-  看结果填 `join_key_unique`（✅ 唯一 / ❌ 不唯一）。连不上库会静默跳过，不阻断设计。
-- **关联内容语义**：类型全兼容但内容可能对不上（'1' vs '01'、编码 vs 名称——不报错只静默空关联，比报错更隐蔽）。不确定两侧键内容是否吻合时，调 explore.py 键值重叠率试算（服务不强制）：
-  ```
-  python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
-      --check-overlap --schema-a {sch1} --table-a {t1} --key-a {k1} \
-      --schema-b {sch2} --table-b {t2} --key-b {k2}
-  ```
-- **关联键类型跨大类**：JOIN 两边字段类型大类不匹配（如 a 字符 = b 数值），precheck 关联键对账已前置拦截（人决策）。紧凑视图 `join_type_risk` 段有检出时：处置=转换的对**必须在对应 joins 里声明 cast**（显式转换表达式，如 `a.prod_code::numeric`，coder 按声明写 SQL 不自己发挥）；处置=接受的是业务豁免不用 cast。assemble_ts N_JOIN1 硬校验兜底。
+- **关联安全（三维判断，每个声明的 JOIN 都要有结论——签下 JOIN 就是签下这三个维度的判断）**：
+  - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一。不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行）。
+    不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique；连不上库静默跳过）：
+    ```
+    python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
+        --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
+    ```
+  - ② **类型可比**：两边键类型大类必须可比（字符=数值这种等式本身就是错的）。视图里有类型直接判；
+    没有 → 用 schema_query 查双侧（`--table schema.table --column 列名`，返回类型，两边各查一次对比）。
+    不可比但内容兼容 → joins 里声明 cast（显式转换表达式，如 `a.prod_code::numeric`，coder 按声明写不自己发挥）；
+    不可比且内容对不上 → 关联键选错了，回 mapping/人确认。紧凑视图 `join_type_risk` 段是 precheck 的
+    前置检出（处置=转换的必须声明 cast，N_JOIN1 校验核对）；**precheck 没检出的（自然语言条件等）
+    靠这一维判断兜住——不写 cast 就是签了"可比"**。
+  - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'、编码 vs 名称——不报错只静默空关联，
+    比报错更隐蔽）。存疑时调 explore.py 重叠率试算取证：
+    ```
+    python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
+        --check-overlap --schema-a {sch1} --table-a {t1} --key-a {k1} \
+        --schema-b {sch2} --table-b {t2} --key-b {k2}
+    ```
+  结论必答、取证按需：判断是设计职责，工具（schema_query/explore）只是拿证据的手段。
 - **调度**：schedule_type（从 RS 调度频率推导）、cron（Quartz 6 段标准表达式）、依赖类型（默认宽依赖）
   → 依赖类型选择见 `references/design-guide.md` §二
 
 **产出**：`tables.{表}.distribution_key`、`join_safety`、`schedule`
-**闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在
+**闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在；join_type_risk 检出对的 cast/豁免核对（N_JOIN1）
 
 ### 字段加工逻辑（贯穿第1-2层）
 

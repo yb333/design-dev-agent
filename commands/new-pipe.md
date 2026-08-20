@@ -30,13 +30,15 @@ agent: build
     ├── ut_report.md                      ← UT 报告（执行验证后生成）
     ├── ddl/                              ← 编码产出（脚本生成的 DDL）
     │   └── create_table_xxx.sql
-    ├── export/                           ← 平台制品包（UT 通过后生成，可选）
-    │   ├── execution_tasks.xlsx          ← 执行平台导入（10 sheet）
-    │   ├── schedule_tasks.xlsx           ← 调度平台导入（3 sheet）
-    │   └── export_manifest.json          ← 元数据清单（给内网 skill 读）
+    ├── export/                           ← 平台制品包（UT 通过后生成）
+    │   ├── shujia_{表名}.xlsx            ← 术加执行平台导入（10 sheet）
+    │   └── lts_{表名}.xlsx               ← LTS 调度平台导入（3 sheet）
     └── _internal/                        ← 过程产物
         ├── rs_input.json                 ← 预处理产出（完整，给脚本读）
         ├── rs_input_view.json            ← 预处理产出（compact 紧凑视图，给 designer 读，省70%）
+        ├── schema_cache.json             ← 表结构缓存（precheck 连库刷，类型对账用）
+        ├── type_risk_decision.yaml       ← 字段类型风险决策（precheck 检出时生成）
+        ├── join_type_decision.yaml       ← 关联键类型决策（precheck 检出跨大类时生成）
         ├── design_decisions.yaml         ← 设计决策
         ├── ut_precheck_result.json       ← UT 预检结果（步骤5a 产，5b 读）
         ├── ut_report.txt                 ← UT 执行报告（如有数据库）
@@ -361,11 +363,11 @@ python SHARED_SCRIPTS/assemble_export.py \
 产出在 `{deliver}/export/` 下：
 - `shujia_{表名}.xlsx`（术加执行平台导入，10 sheet）
 - `lts_{表名}.xlsx`（LTS 调度平台导入，3 sheet）
-- `export_manifest_{表名}.json`（元数据清单）
 
 > 编码列为占位符（组码 `GR_*`、规则码 ts 码、pv 行 `PV000N`），出厂已做三处闭合校验；子项目中文名留空人填。
 > **交付流程（闸口②确认后）**：收集 项目中文名 + 子项目中文名 → 调 `SHARED_SCRIPTS/local/backfill_rule_codes.py`
-> （内网本地扩展区，脚本就位后接线）取码替换占位符、按中文名补齐项目/子项目编码及英文名 → 用户拿终版 Excel 直接导入。
+> 取码替换占位符、按中文名补齐项目/子项目编码及英文名 → 用户拿终版 Excel 直接导入。
+> （local/ 是本地扩展目录，脚本按需就位；脚本不存在时跳过此步，告知用户手工处理编码。）
 
 ---
 

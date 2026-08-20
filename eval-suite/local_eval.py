@@ -382,7 +382,7 @@ def step_ut(report, deliver):
 def step_assemble_export(report, deliver):
     """步骤7: 生成平台制品包（与 new-pipe 对齐，UT 通过后必跑）。
 
-    assemble_export.py 不依赖数据库，只做文件生成（Excel + manifest）。
+    assemble_export.py 不依赖数据库，只做文件生成（Excel）。
     规则编码留空（codes_filled=false），由内网 skill 回填。
     """
     export_dir = deliver / "export"
@@ -398,14 +398,6 @@ def step_assemble_export(report, deliver):
     lts = list(export_dir.glob("lts_*.xlsx")) if export_dir.exists() else []
     if code == 0 and shujia and lts:
         report.pass_step("制品包(export)", f"{len(shujia)}术加 + {len(lts)}LTS")
-        # manifest codes_filled 应为 false（规则编码留空）
-        for mf in export_dir.glob("export_manifest_*.json"):
-            try:
-                m = json.loads(mf.read_text(encoding="utf-8"))
-                if m.get("codes_filled") is not False:
-                    report.add_issue("制品包", f"{mf.name}: codes_filled 应为 false（实际 {m.get('codes_filled')}）")
-            except Exception:
-                pass
         return True
     else:
         report.fail_step("制品包(export)", out[:200])

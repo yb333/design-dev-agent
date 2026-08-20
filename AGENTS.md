@@ -246,7 +246,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 ### 待讨论 / 闲时
 
-- **platform_config.lts 的 project_name/task_group 跟 schedule_config 冗余**（新 ts.json 不用 lts 兜底，可清理）——待讨论。
+- **platform_config 收敛为单块 shujia_tenants（2026-08 完成，原 lts 冗余项）**：lts 的 project_name/task_group 单一来源是 schedule_config（设计期盖章进 ts.tasks），platform_config.lts 仅代码保留旧 ts.json 兜底、example 已删；schema_mappings/default 同步退役（project_cn/business_owner 是租户属性进 shujia_tenants[appid]，租户块合并是任意键覆盖故代码零改动；schema 级覆盖能力代码保留，真出现同 appid 不同 schema 差异再启用）。
 - **闲时任务六**（assemble_dq 退役 + run_ut 去 legacy）**已完成 2026-08**：assemble_dq.py 已删（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 main() 成纯函数库。
 - **函数库下沉消依赖环（2026-08）**：闲时任务四挪了 pipe 入口但库留在 skill 目录，造成 shared↔design / shared↔coding 两个依赖环（lazy import + 3-目录 sys.path bootstrap 掩盖）。修复：run_ut / ut_diagnose / type_compat 整文件下沉 shared；STANDARD_AUDIT_TEMPLATE 抽出 `dws_standards.py`；SQL 解析原语抽出 `sql_parse.py`（check_sql 反向 import 保旧名）；删全部跨目录 bootstrap；顺手删零引用的 `lib/dws_preprocessor.py`。**分层铁律入册 + `tests/test_layering.py` AST 守护**（含函数内 lazy import——上翻正是靠它藏的）。测试 730→732。
 

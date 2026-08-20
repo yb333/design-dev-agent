@@ -8,9 +8,8 @@ UT 通过后调用。把验证过的 ts.json + ETL SQL 翻译成
 "SELECT 取数写入目标表"）。
 
 产出目录：{outdir}/export/
-  - execution_tasks.xlsx   执行平台导入（10 sheet）
-  - schedule_tasks.xlsx    调度平台导入（3 sheet）
-  - export_manifest.json   元数据清单（给内网 skill 读）
+  - shujia_{表名}.xlsx    术加执行平台导入（10 sheet）
+  - lts_{表名}.xlsx       LTS 调度平台导入（3 sheet）
 
 规则编码策略：占位符出厂，内网脚本查表替换（Excel 自描述，脚本零配置）。
   规则组编码 = GR_{组英文名}；规则编码 = ts 规则码；参数变量行 = PV000N。
@@ -544,8 +543,10 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     虚拟依赖（dep_type=虚拟依赖）在 jobs sheet 额外生成 URL 类型 job 行。
 
     project_name/task_group 来源（★ 任务四）：
-    - 优先从 ts.json 每个 task 的 project_name/task_group 取（设计阶段确定）
-    - ts.json 没有（旧产出）→ fallback 到 platform_config 的 lts 段（兼容）
+    - 优先从 ts.json 每个 task 的 project_name/task_group 取（设计阶段确定：
+      assemble_ts 从 schedule_config.json 盖章）
+    - ts.json 没有（旧产出）→ fallback 到 platform_config 的 lts 段（兼容；
+      example 已不再包含 lts 段——单一来源是 schedule_config，缺路径返回"待配置"）
     """
     meta = ts.get("meta", {})
     sched = meta.get("schedule", {})
@@ -698,76 +699,6 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
 
 
 # ============================================================
-# export_manifest.json
-# ============================================================
-
-def generate_manifest(ts: dict, config: dict, output_path: Path):
-    """生成 export_manifest.json（给内网 skill 读的元数据清单）。"""
-    meta = ts.get("meta", {})
-    f_table = meta.get("target", {}).get("f_table", {})
-    i_view = meta.get("target", {}).get("i_view", {})
-    sched = meta.get("schedule", {})
-    rules = ts.get("rules", {})
-    init_section = ts.get("init") or {}
-    init_rules = (init_section.get("rules") or {}) if isinstance(init_section, dict) else {}
-
-    target_short = f_table.get("table", "")
-    target_full = f"{f_table.get('schema', '')}.{target_short}" if f_table.get("schema") else target_short
-    has_view = bool(i_view and i_view.get("table"))
-
-    # 需要的规则编码数 = 取数规则数(增量+init) + 参数变量规则行（每规则组一行）
-    etl_count = sum(1 for r in rules.values() if not r.get("is_view_step"))
-    etl_count += sum(1 for r in init_rules.values() if not r.get("is_view_step"))
-    pv_count = 1 + (1 if _has_separate_init(ts) else 0)
-    rule_codes_needed = etl_count + pv_count
-
-    upstream_tasks = []
-    tasks_sched = sched.get("tasks", {})
-    f_info = tasks_sched.get("f", {})
-    view_info = tasks_sched.get("view", {})
-    dq_info = tasks_sched.get("dq", {})
-    init_info = tasks_sched.get("init", {})
-    for u in f_info.get("upstream", []):
-        upstream_tasks.append({
-            "source_table": u.get("table", ""),
-            "schedule_task": u.get("task", ""),
-            "dep_type": u.get("dep_type", "宽依赖"),
-        })
-
-    # project_name/task_group 优先从 ts.json F 表 task 取（设计阶段确定），
-    # 旧产出没有则 fallback 到 platform_config 的 lts 段
-    lts = config.get("lts", {})
-    project_name = f_info.get("project_name") or _cfg(lts, "project_name")
-    task_group = f_info.get("task_group") or _cfg(lts, "task_group")
-
-    manifest = {
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "target_table": target_full,
-        "target_table_short": target_short,
-        "view_name": f"{i_view.get('schema', '')}.{i_view.get('table', '')}" if has_view else "",
-        "task_name": f_info.get("task_name", f"task_{target_short}"),
-        "job_name": f_info.get("job_name", f"Pjob_{target_short}"),
-        "view_task_name": view_info.get("task_name", ""),
-        "view_job_name": view_info.get("job_name", ""),
-        "dq_task_name": dq_info.get("task_name", ""),
-        "dq_job_name": dq_info.get("job_name", ""),
-        "init_task_name": init_info.get("task_name", ""),
-        "init_job_name": init_info.get("job_name", ""),
-        "cron_expr": sched.get("cron", ""),
-        "project_name": project_name,
-        "task_group": task_group,
-        "params": sorted(sched.get("exec_params", {}).keys()),
-        "upstream_tasks": upstream_tasks,
-        "rule_codes_needed": rule_codes_needed,
-        "codes_filled": False,
-        "files": [f"shujia_{target_short}.xlsx", f"lts_{target_short}.xlsx"],
-    }
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-# ============================================================
 # 主入口
 # ============================================================
 
@@ -801,18 +732,14 @@ def main():
     target_short = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "unknown")
     exec_path = export_dir / f"shujia_{target_short}.xlsx"
     sched_path = export_dir / f"lts_{target_short}.xlsx"
-    manifest_path = export_dir / f"export_manifest_{target_short}.json"
 
     generate_execution_excel(ts, config, etl_dir, exec_path)
     generate_schedule_excel(ts, config, sched_path)
-    generate_manifest(ts, config, manifest_path)
 
     print("=" * 50)
     print("平台制品包已生成:")
     print(f"  {exec_path}")
     print(f"  {sched_path}")
-    print(f"  {manifest_path}")
-    print(f"  规则编码: {json.loads(manifest_path.read_text(encoding='utf-8'))['rule_codes_needed']} 个占位符（内网脚本取码替换）")
     print(f"  目标表: {ts.get('meta', {}).get('target', {}).get('f_table', {}).get('table', '')}")
 
 

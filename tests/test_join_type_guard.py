@@ -108,6 +108,23 @@ def _mk_cache(tmp_path, tables=None):
 
 class TestPrecheckJoinTypeRisk:
 
+    def test_entity_level_condition_detected(self, tmp_path, capsys):
+        """★ 回归守护：关联&限定条件写在实体级 source_tables（mapping 的真实形态，
+        属性级模板无此列恒空）。条件带 left join on 前缀 + 字面量过滤混排。"""
+        from precheck import precheck
+        rs = _mk_rs_input()
+        # 清掉属性级（模拟真实：字段行不写），条件挂到实体级 b 表上
+        for fm in rs["field_mappings"]:
+            fm["join_condition"] = ""
+        rs["source_tables"][1]["join_condition"] = "left join on a.prod_code = b.prod_id and b.status = 'N'"
+        cache = _mk_cache(tmp_path)
+        decision = tmp_path / "type_risk_decision.yaml"
+        result = precheck(rs, cache, False, decision, None)
+        assert any("关联键类型跨大类" in e for e in result.errors)
+        out = capsys.readouterr().out
+        assert "JOIN_TYPE_RISK_PENDING" in out
+        assert "a.prod_code = b.prod_id" in out  # 等值对抽出，字面量条件不干扰
+
     def test_risky_pair_blocks_and_generates_skeleton(self, tmp_path, capsys):
         from precheck import precheck
         rs = _mk_rs_input()

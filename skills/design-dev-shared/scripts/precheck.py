@@ -638,11 +638,15 @@ JOIN_RISK_OPTIONS = {"转换", "改关联键", "接受"}
 
 
 def _collect_join_pairs(rs_input: dict) -> tuple[list[dict], int]:
-    """从 field_mappings 的 join_condition 文本收集关联键对（去重）。
+    """收集关联键对（去重），返回 (键对列表, 未解析条件数)。
 
-    返回 (键对列表, 未解析条件数)。每项:
-      {condition, left: "schema.table.col", right: "schema.table.col",
-       l_alias, l_col, r_alias, r_col}
+    关联条件来源两处：
+    - 实体级 source_tables[].join_condition（★ 主战场——mapping 的"关联&限定条件"
+      列在实体级，按源表行写，条件里的别名即各行的 source_alias）
+    - 属性级 field_mappings[].join_condition（模板无此列恒空，保留兜底防手改 rs_input）
+
+    每项: {condition, left: "schema.table.col", right: "schema.table.col",
+    l_alias, l_col, r_alias, r_col}
     别名解析不了的（条件里出现未定义别名）并入未解析计数。
     """
     from sql_parse import parse_join_pairs
@@ -658,15 +662,17 @@ def _collect_join_pairs(rs_input: dict) -> tuple[list[dict], int]:
     seen_conditions: set[str] = set()
     pairs: list[dict] = []
     unresolved = 0
-    for fm in rs_input.get("field_mappings", []):
-        cond = (fm.get("join_condition") or "").strip()
+
+    def _handle(cond_raw):
+        nonlocal unresolved
+        cond = (cond_raw or "").strip()
         if not cond or cond in seen_conditions:
-            continue
+            return
         seen_conditions.add(cond)
         parsed = parse_join_pairs(cond)
         if not parsed:
             unresolved += 1
-            continue
+            return
         for (la, lc), (ra, rc) in parsed:
             l_tbl = alias_map.get(la)
             r_tbl = alias_map.get(ra)
@@ -678,6 +684,11 @@ def _collect_join_pairs(rs_input: dict) -> tuple[list[dict], int]:
                 "l_schema": l_tbl[0], "l_table": l_tbl[1], "l_col": lc,
                 "r_schema": r_tbl[0], "r_table": r_tbl[1], "r_col": rc,
             })
+
+    for st in rs_input.get("source_tables", []):
+        _handle(st.get("join_condition"))
+    for fm in rs_input.get("field_mappings", []):
+        _handle(fm.get("join_condition"))
     return pairs, unresolved
 
 
