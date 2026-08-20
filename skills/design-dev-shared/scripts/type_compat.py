@@ -7,9 +7,13 @@
 - 同家族 + 目标长度≥源 → 兼容
 - integer → numeric 安全跨类（整数可精确表示为数值）
 - 整数家族互转（int/bigint/smallint）兼容
-- 字符类型互跨（nvarchar↔varchar / varchar↔varchar2 等）不自动判兼容——长度口径
-  （字节 vs 字符）取决于集群兼容模式，同长度也可能装不下中文，报 charset_semantics 人工决策
-- 其他跨大类（int↔varchar↔date）不兼容
+- 字符类型互跨分方向：非N系(字节计) → N系(字符计) 且长度不缩 = 安全（字符数 ≤ 字节数），
+  缩了报 length_overflow（常规档）；N系 → 非N系 / varchar↔varchar2 报 charset_semantics
+  人工决策（字节 vs 字符口径取决于集群兼容模式，同长度也可能装不下中文）
+- 日期时间 → varchar 是安全方向（确定性文本渲染，长度兜底）
+- 数值家族→varchar 是安全方向（任何数值都有文本表示，目标长度兜底位数）：
+  长度够=兼容放行；长度紧=报 length_overflow（常规档批量处理，不逐字段问人）
+- 其余跨大类（varchar→数值、int↔date 等）不兼容——varchar→数值是危险方向，逐字段人决策
 
 对外暴露：
 - assess_type_risk(source_type, target_type) → 风险类型 | None（高层 API）
@@ -146,6 +150,27 @@ def is_type_compatible(source_type: str, target_type: str) -> bool:
             return tgt["length"] >= src_len
         return True  # 目标 numeric 无精度限制（罕见），兼容
 
+    # datetime → varchar：安全方向（确定性文本渲染），长度兜底常见形态
+    if src["family"] == "datetime" and tgt["family"] == "varchar":
+        if tgt["length"] is None:
+            return True
+        needed = 10 if src["base"] == "date" else 30  # date=10；timestamp 带微秒/时区最宽约 30
+        return tgt["length"] >= needed
+
+    # 数值家族 → varchar：安全方向（任何数值都有完整文本表示），目标长度兜底位数即可
+    if src["family"] in ("integer", "numeric") and tgt["family"] == "varchar":
+        if tgt["length"] is None:
+            return True  # text 无长度限制
+        if src["family"] == "integer":
+            _INT_DIGITS = {"int": 10, "integer": 10, "bigint": 19, "smallint": 5, "tinyint": 3}
+            digits = src["length"] if src["length"] is not None else _INT_DIGITS.get(
+                normalize_type_simple(source_type).split("(")[0], 10)
+            return tgt["length"] >= digits + 1  # +1 符号位
+        # numeric(p,s)：p 位数字 + 小数点 + 符号
+        if src["length"] is None:
+            return False  # 无精度 numeric 值宽任意，保守不判兼容（报长度风险走批量档）
+        return tgt["length"] >= src["length"] + 2
+
     # 同家族比长度
     if src["family"] == tgt["family"]:
         # 目标无长度（如 text）→ 不限制
@@ -157,9 +182,15 @@ def is_type_compatible(source_type: str, target_type: str) -> bool:
             return False
         # varchar 比长度
         if src["family"] == "varchar":
-            # 长度口径不同的字符类型互跨（nvarchar↔varchar 等）：同长度也不保证装得下
-            # （中文 UTF-8 3字节/字），不自动放行——由 assess_type_risk 报 charset_semantics 人工决策
+            # 长度口径不同的字符类型互跨：方向定安全性——
+            # 非N系(字节计) → N系(字符计) 且长度不缩 = 安全（字符数 ≤ 字节数，必装得下）；
+            # N系 → 非N系 同长度也可能装不下（中文 UTF-8 3字节/字），不自动放行
             if _length_semantics_differ(src["base"], tgt["base"]):
+                if src["base"] not in _N_CHAR_BASES and tgt["base"] in _N_CHAR_BASES:
+                    if tgt["length"] is None:
+                        return True
+                    if src["length"] is not None and tgt["length"] >= src["length"]:
+                        return True
                 return False
             return tgt["length"] >= src["length"]
         # numeric 比精度+标度
@@ -248,8 +279,11 @@ def assess_type_risk(source_type: str, target_type: str) -> str | None:
     # 同家族但目标更窄 → 精度/长度问题
     if src["family"] == tgt["family"]:
         if src["family"] == "varchar":
-            # 字符类型口径互跨（nvarchar↔varchar 等）：不是长度数字问题，是字节/字符语义问题
+            # 字符类型口径互跨：非 N 系 → N 系是安全方向（不缩长度已在兼容层放行，
+            # 到这只是长度问题，归常规档）；N 系 → 非N系是字节/字符语义问题，人决策
             if _length_semantics_differ(src["base"], tgt["base"]):
+                if src["base"] not in _N_CHAR_BASES and tgt["base"] in _N_CHAR_BASES:
+                    return "length_overflow"
                 return "charset_semantics"
             # varchar 同家族目标更窄 → 长度超长
             if tgt["length"] is not None and src["length"] is not None and tgt["length"] < src["length"]:
@@ -260,6 +294,11 @@ def assess_type_risk(source_type: str, target_type: str) -> str | None:
             return "precision_loss"
         # integer/datetime/boolean 同家族不兼容极少见，归精度问题
         return "precision_loss"
+
+    # 安全方向（值域可完整表示）：数值→字符、日期时间→字符——到这只剩长度装不下，
+    # 降级常规档批量处理，不逐字段问人（与 varchar→数值 的真跨大类危险方向区分）
+    if tgt["family"] == "varchar" and src["family"] in ("integer", "numeric", "datetime"):
+        return "length_overflow"
 
     # 跨大类 → 类型不兼容
     return "type_incompatible"

@@ -41,8 +41,8 @@ class TestAssessTypeRisk:
         assert assess_type_risk("bigint", "numeric(20,2)") is None
 
     def test_int_cross_category_incompatible(self):
-        """整数类型跨大类（→varchar/date）仍报不兼容。"""
-        assert assess_type_risk("int8", "varchar(20)") == "type_incompatible"
+        """整数→varchar 是安全方向（长度兜底）；→date 仍报不兼容。"""
+        assert assess_type_risk("int8", "varchar(20)") is None  # bigint 20 字符恰装下
         assert assess_type_risk("int4", "date") == "type_incompatible"
 
     def test_length_overflow(self):
@@ -95,9 +95,10 @@ class TestCharsetSemantics:
         assert assess_type_risk("nvarchar2(4000)", "varchar2(4000)") == "charset_semantics"
 
     def test_reverse_direction_also_risk(self):
-        """反向同样报：方向对错取决于集群口径，语义判断不自主。"""
-        assert assess_type_risk("varchar(4000)", "nvarchar(4000)") == "charset_semantics"
-        assert assess_type_risk("varchar2(4000)", "nvarchar2(4000)") == "charset_semantics"
+        """非N→N 等长安全（字符数≤字节数）；N→非N 同长度仍报（口径取决于集群，人决策）。"""
+        assert assess_type_risk("varchar(4000)", "nvarchar(4000)") is None
+        assert assess_type_risk("varchar2(4000)", "nvarchar2(4000)") is None
+        assert assess_type_risk("nvarchar2(4000)", "varchar(4000)") == "charset_semantics"
 
     def test_varchar_vs_varchar2_is_risk(self):
         """varchar↔varchar2：字节/字符口径经典差异对。"""
@@ -275,3 +276,64 @@ def _check_type_risk_inner(rs_input, result, decision_path):
     """直接调 _check_type_risk（绕过 precheck 的短路，专测类型风险逻辑）。"""
     from precheck import _check_type_risk
     _check_type_risk(rs_input, result, decision_path)
+
+
+# ============================================================
+# 方向性：数值→字符是安全方向（不逐字段问人），字符→数值仍危险
+# ============================================================
+
+class TestDirectionalNumberToText:
+
+    def test_number_to_text_widening_pass(self):
+        """数值→字符且长度够 = 无风险（直接处理，不问人）"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("numeric(18,2)", "varchar(50)") is None
+        assert assess_type_risk("bigint", "varchar(50)") is None
+        assert assess_type_risk("integer", "text") is None
+
+    def test_number_to_text_tight_is_batch_risk(self):
+        """数值→字符长度紧 = 降级常规档（批量），不进跨大类逐字段档"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("numeric(18,2)", "varchar(10)") == "length_overflow"
+        assert assess_type_risk("bigint", "varchar(15)") == "length_overflow"
+        assert assess_type_risk("numeric", "varchar(50)") == "length_overflow"
+
+    def test_text_to_number_still_dangerous(self):
+        """字符→数值（真危险方向）仍是跨大类逐字段档"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("varchar(32)", "numeric(18,2)") == "type_incompatible"
+        assert assess_type_risk("varchar(32)", "bigint") == "type_incompatible"
+
+    def test_char_family_cases_unchanged(self):
+        """同字符扩长=放行；nvarchar 口径互跨=仍问人（回归守护）"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("varchar(30)", "varchar(50)") is None
+        assert assess_type_risk("nvarchar(30)", "varchar(50)") == "charset_semantics"
+
+
+class TestDirectionalCharsetAndDatetime:
+
+    def test_varchar_to_nvarchar_no_shrink_pass(self):
+        """varchar→nvarchar 不缩长度 = 安全（字符数 ≤ 字节数，必装下）"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("varchar(30)", "nvarchar(30)") is None
+        assert assess_type_risk("varchar(30)", "nvarchar(50)") is None
+
+    def test_varchar_to_nvarchar_shrink_is_batch(self):
+        """varchar→nvarchar 缩长度 = 常规档（安全方向只剩长度问题）"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("varchar(30)", "nvarchar(20)") == "length_overflow"
+
+    def test_n_to_non_n_still_asks(self):
+        """N系→非N系（字符→字节）仍人决策（回归守护）"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("nvarchar(30)", "varchar(50)") == "charset_semantics"
+        assert assess_type_risk("varchar(30)", "varchar2(64)") == "charset_semantics"
+
+    def test_datetime_to_text_pass_and_batch(self):
+        """日期时间→字符：长度够放行；不够归常规档；反方向仍跨大类"""
+        from type_compat import assess_type_risk
+        assert assess_type_risk("date", "varchar(32)") is None
+        assert assess_type_risk("timestamp(6)", "varchar(32)") is None
+        assert assess_type_risk("timestamp(6)", "varchar(20)") == "length_overflow"
+        assert assess_type_risk("varchar(32)", "timestamp(0)") == "type_incompatible"

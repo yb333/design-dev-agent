@@ -166,6 +166,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 
 ## 编码约定
 
+- **运行时提示零废话**：commands / SKILL.md / agent.md 是给 agent 消费的运行时提示——每个字要么改变行为（指令/条件/枚举/路由/边界），要么删；"为什么"的解释、口语注解、重复强调一律不进，知识归 AGENTS.md / tool-registry（维护者文档）。写的时候自问：删掉这句 agent 会做错吗？不会就是废话。
+- **类型风险判定唯一源 = type_compat.py**（三档：方向性安全放行 / 安全方向仅长度紧→常规档 / 其余问人），pipe 只按脚本分组提问不承载判定；判定口径变更只改 type_compat 一处。
 - **改工具同步注册表**：加/改/删任何脚本（skills/*/scripts 下的 .py），必须同步更新 `docs/tool-registry.md`（含"读 ts[rules/init]"列——init 下游物化的进度表）。agent 行为/工作流改动同步各自 SKILL.md（唯一源），agent.md 只管角色+权限+指针，不复述工作流（防双写漂移）。
 - **★ 工具是服务，不是枷锁**：agent 的辅助工具（explore / schema_query / pick_fields 等）是"遇到不确定时拿来用"的服务——SKILL 引导一律写"不确定 X 时可调 Y 确认"，**不写成"做 X 前必须先 Y"的强制前置步骤**（枷锁式引导会让 agent 每次机械跑一遍工具，丢掉自己的判断）。区分两类：command 调的管线脚本（preprocess / assemble_ts / ut_* 等）是**流程节点**，按步骤必跑；agent 内的辅助工具是**按需服务**，agent 自己判断要不要用。
 - **禁止 glob 通配匹配文件**（CLAUDE.md 红线）：文件名由生成脚本命名规则确定，查找用确定的文件名拼接（如 `f"create_table_{table}.sql"`）。命名约定变了就改查找代码，不靠通配兜底。
