@@ -908,3 +908,40 @@ class TestResolveAllParams:
         monkeypatch.delenv("NONEXISTENT_PW", raising=False)
         from dws_db import resolve_password
         assert resolve_password("${NONEXISTENT_PW}") == ""
+
+
+class TestSliceNewContract:
+    """切片契约补全：dedup_strategy / filter / data_volume / source_refs。"""
+
+    def test_slice_carries_new_fields(self, ts_data):
+        """切片带 dedup_strategy / filter / source_refs / _global.data_volume。"""
+        from slice_ts import slice_rule
+        r1 = ts_data["rules"]["R0001"]
+        r1["dedup_strategy"] = {"target": "tmp_a", "key": ["order_id"],
+                                "priority": "R0001 > R0002", "reason": "A是主数据"}
+        r1["filter"] = "ht.del_flag = 'N'"
+        r1["source_refs"] = {"user_name": "oub.user_name"}
+        ts_data.setdefault("design", {}).setdefault("complexity_analysis", {})["data_volume"] = "百万级"
+        result = slice_rule(ts_data, "R0001")
+        assert result["dedup_strategy"]["priority"] == "R0001 > R0002"
+        assert result["filter"] == "ht.del_flag = 'N'"
+        assert result["source_refs"]["user_name"] == "oub.user_name"
+        assert result["_global"]["data_volume"] == "百万级"
+
+    def test_compact_direct_uses_source_refs(self, ts_data):
+        """compact direct 行的引用优先取 rule 级 source_refs（accumulate 各归各的口径）。"""
+        from slice_ts import slice_rule, to_compact_view
+        r1 = ts_data["rules"]["R0001"]
+        r1["source_refs"] = {}
+        # 给第一个 direct 字段塞一个与 source_fields 不同的 rule 级引用（样例是旧格式，fields 在 rule 里）
+        _tbl = r1.get("target_table", "").rsplit(".", 1)[-1]
+        _fields = ts_data.get("tables", {}).get(_tbl, {}).get("fields") or r1.get("fields", [])
+        for f in _fields:
+            if f.get("transform_type") == "direct":
+                fname = f["target_field"]
+                r1["source_refs"][fname] = "t9." + fname
+                break
+        sliced = slice_rule(ts_data, "R0001")
+        compact = to_compact_view(sliced)
+        hit = [line for line in compact["fields_direct"] if "| t9." in line]
+        assert hit, f"direct 行应使用 source_refs 的引用: {compact['fields_direct'][:3]}"

@@ -1635,7 +1635,7 @@ class TestAssemblyFieldLineage:
         f_a = by_name["a"]
         assert f_a["design_logic"].startswith("直取 tmp1.a"), f_a["design_logic"]
         assert "ht" not in f_a["design_logic"]
-        assert f_a["source_fields"] == [{"table": "tmp1", "field": "a", "alias": ""}]
+        assert f_a["source_fields"] == [{"table": "tmp1", "field": "a", "alias": "tmp1"}]  # 字符串 reads 默认别名=表短名
         # 加工字段：同样搬运（前序已加工）
         f_amt = by_name["amt_cny"]
         assert f_amt["design_logic"].startswith("直取 tmp1.amt_cny"), f_amt["design_logic"]
@@ -1731,3 +1731,156 @@ class TestAssemblyFieldLineage:
         ts, _, _ = do_assemble(rs, dd)
         by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
         assert by_name["a"]["design_logic"] == "直取 t1.a（tmp1 别名 t1）"
+
+
+class TestReadsAliasForm:
+    """reads 对象形式 {table, alias}：tmp 别名贯通 design_logic/source_fields/伪源表/source_refs。"""
+
+    def _two_step(self, reads_form):
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "a", "target_column_cn": "字段A", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+        ], has_audit=True)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_ht_f", "source_table_cn": "合同",
+             "source_alias": "ht", "join_condition": ""}]
+        dd = make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
+             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "step_type": "aggregate", "target_role": "intermediate",
+             "produces_for": ["R0002"], "reads": [],
+             "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
+            {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+             "write_condition": "T.id=T1.id",
+             "produces_for": [], "reads": reads_form,
+             "joins": [{"alias": "t1", "type": "main"}],
+             "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "中间", "output": "目标", "change": "无"}},
+        ])
+        return rs, dd
+
+    def test_object_form_alias_threaded(self):
+        """对象形式 reads：t1 别名贯通（design_logic/source_fields/source_refs），ts.reads 仍表名。"""
+        rs, dd = self._two_step([{"table": "dws.tmp1", "alias": "t1"}])
+        ts, _, _ = do_assemble(rs, dd)
+        r2 = ts["rules"]["R0002"]
+        assert r2["reads"] == ["dws.tmp1"]  # DAG 语义不变
+        pseudo = [s for s in r2["source_tables"] if s.get("_from_reads")]
+        assert pseudo and pseudo[0]["alias"] == "t1"
+        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
+        assert by_name["a"]["design_logic"].startswith("直取 t1.a"), by_name["a"]["design_logic"]
+        assert by_name["a"]["source_fields"] == [{"table": "tmp1", "field": "a", "alias": "t1"}]
+        assert r2["source_refs"]["a"] == "t1.a"
+
+    def test_string_form_default_alias(self):
+        """字符串形式 reads：别名默认=表短名（向后兼容）。"""
+        rs, dd = self._two_step(["dws.tmp1"])
+        ts, _, _ = do_assemble(rs, dd)
+        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
+        assert by_name["a"]["design_logic"].startswith("直取 tmp1.a")
+        assert ts["rules"]["R0002"]["source_refs"]["a"] == "tmp1.a"
+
+
+class TestAliasBindingValidation:
+    """N31（别名一规则一表硬拦）/ N32（无绑定别名 warn）。"""
+
+    def _rs(self):
+        rs = make_rs_input(has_audit=True)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_ht_f", "source_table_cn": "合同",
+             "source_alias": "ht", "join_condition": ""}]
+        return rs
+
+    def test_n31_alias_bound_to_two_tables(self):
+        """tmp 别名撞 rs_input 源表别名（本规则引用了 ht）→ N31 hard。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "合并", "scenario": "default",
+            "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+            "write_condition": "T.id=T1.id",
+            "source_aliases": ["ht"], "reads": [{"table": "dws.tmp1", "alias": "ht"}],
+            "joins": [{"alias": "ht", "type": "main"}],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = _run(dd, rs)
+        assert "N31" in _codes(vr, "L4")
+
+    def test_n31_not_fired_when_alias_unused_in_rule(self):
+        """rs_input 有别名 ht 但本规则没引用，tmp 复用该名不冲突（规则内唯一即可）。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "合并", "scenario": "default",
+            "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+            "write_condition": "T.id=T1.id",
+            "source_aliases": [], "reads": [{"table": "dws.tmp1", "alias": "ht"}],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = _run(dd, rs)
+        assert "N31" not in _codes(vr, "L4")
+
+    def test_n32_unbound_join_alias_warns(self):
+        """joins 引用的别名既不在 rs_input 也不在 reads → N32 warn（提示 reads 对象声明）。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "joins": [{"alias": "t9", "type": "LEFT JOIN", "condition": "t9.a = ht.a"}],
+            "source_aliases": ["ht"],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = _run(dd, rs)
+        warns = [i for i in vr.items if i["code"] == "N32" and i["level"] == "warn"]
+        assert warns and "t9" in warns[0]["msg"]
+
+
+class TestAccumulateFieldUnion:
+    """accumulate 多规则写同表：字段并集入表（修首规则整表跳过丢字段 bug）+ source_refs 各归各。"""
+
+    def test_union_and_per_rule_refs(self):
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_a_f", "source_column": "x", "source_type": "varchar(10)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "x", "target_column_cn": "X", "target_type": "varchar(10)",
+             "source_alias": "ta", "remark": ""},
+            {"source_table": "ods_b_f", "source_column": "y", "source_type": "varchar(10)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "y", "target_column_cn": "Y", "target_type": "varchar(10)",
+             "source_alias": "tb", "remark": ""},
+        ], has_audit=False)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_a_f", "source_table_cn": "A",
+             "source_alias": "ta", "join_condition": ""},
+            {"source_schema": "ods", "source_table": "ods_b_f", "source_table_cn": "B",
+             "source_alias": "tb", "join_condition": ""},
+        ]
+        dd = make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "来源A", "scenario": "default",
+             "exec_sequence": 1, "target_table": "dws.tmp_c", "is_view_step": False,
+             "step_type": "full", "target_role": "intermediate",
+             "produces_for": ["R0003"], "reads": [], "source_aliases": ["ta"],
+             "field_targets": ["x"], "field_logics": {},
+             "grain": {"input": "源", "output": "中间", "change": "无"}},
+            {"rule_code": "R0002", "rule_name": "来源B", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.tmp_c", "is_view_step": False,
+             "step_type": "full", "target_role": "intermediate",
+             "produces_for": ["R0003"], "reads": [], "source_aliases": ["tb"],
+             "field_targets": ["y"], "field_logics": {},
+             "grain": {"input": "源", "output": "中间", "change": "无"}},
+        ])
+        dd.setdefault("tables", {})["tmp_c"] = {"build_mode": "accumulate"}
+        ts, _, _ = do_assemble(rs, dd)
+        field_names = {f["target_field"] for f in ts["tables"]["tmp_c"]["fields"]}
+        assert {"x", "y"} <= field_names, f"accumulate 并集丢字段: {field_names}"
+        assert ts["rules"]["R0001"]["source_refs"]["x"] == "ta.x"
+        assert ts["rules"]["R0002"]["source_refs"]["y"] == "tb.y"

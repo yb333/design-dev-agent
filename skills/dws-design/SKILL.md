@@ -107,8 +107,8 @@ description: >-
   - JOIN 键唯一性验证（关联安全）见第4层（调 explore.py）。
 - **数据量因子**：RS data_exploration 或 explore.py 估档位（万/百万/亿），拿不到标"未知"，只影响物化决策，不阻断
 
-**产出**：每个规则 `step_type` + `target_role` + 依赖声明（`produces_for` / `reads`）
-**闭合条件**（assemble_ts 校验）：step_type/target_role 合法且不矛盾；中间表有消费者；依赖声明闭合（无悬空、无循环、顺序合法）
+**产出**：每个规则 `step_type` + `target_role` + 依赖声明（`produces_for` / `reads`）；规则需排除部分行时填规则级 `filter`（"本来就不要"，如 del_flag='N'；冲突让位才用 `dedup_strategy`，两者别混）
+**闭合条件**（assemble_ts 校验）：step_type/target_role 合法且不矛盾；中间表有消费者；依赖声明闭合（无悬空、无循环、顺序合法）；规则内别名一别名一表（N31）
 
 ### 第3层 时间属性（含场景横切）— 先识别资产增量性，再设计增量管道
 

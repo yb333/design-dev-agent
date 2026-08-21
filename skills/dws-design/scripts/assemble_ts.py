@@ -723,7 +723,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     # N10b 每张产出的中间表必须被某下游 reads 引用
     all_reads = set()
     for rule in rules:
-        for r in rule.get("reads") or []:
+        for r in _reads_tables(rule.get("reads")):
             all_reads.add(_table_short(r))
     for tbl_short, producers in intermediate_tables.items():
         if tbl_short not in all_reads:
@@ -747,7 +747,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     for rule in rules:
         code = rule.get("rule_code", "?")
         own_tbl = _table_short(rule.get("target_table", ""))
-        for r in rule.get("reads") or []:
+        for r in _reads_tables(rule.get("reads")):
             r_short = _table_short(r)
             if r_short == own_tbl:
                 continue  # 自引用例外（累积共建场景），不校验存在性
@@ -1155,8 +1155,8 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                                 f"init 规则 {icode} 显式声明 load_mode='{ilm}'，"
                                 f"init 规则的 load_mode 由装配器统一补为 truncate_table（先删全插），不要手填")
                 # N_INIT3（warn）：init 规则引用 delta 机器 tmp → 提示确认剥净
-                for rd in (ir.get("reads") or []):
-                    rd_short = _table_short(rd).lower() if isinstance(rd, str) else ""
+                for rd in _reads_tables(ir.get("reads")):
+                    rd_short = _table_short(rd).lower()
                     if rd_short and rd_short in delta_tmp_tables:
                         vr.add_warn("LI", "N_INIT3",
                                     f"init 规则 {icode} 读取 '{rd}'（增量 delta 机器产出的 tmp）——"
@@ -1196,6 +1196,18 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     # （无别名前缀）在规则涉及的表里都查无 → 开窗残留。
     # ============================================================
     any_joins_declared = any(rule.get("joins") for rule in rules)
+    # 别名 → schema.table（rs_input 全局源表别名；N30 解析 + N31/N32 绑定校验共用）
+    alias_map = {}
+    for st in rs_input.get("source_tables") or []:
+        al = (st.get("source_alias") or "").strip().lower()
+        if al:
+            alias_map[al] = f"{(st.get('source_schema') or '').strip()}.{(st.get('source_table') or '').strip()}".lower()
+    # tmp 表 → 字段集（产出规则的 field_targets；中间表的存在性查这里）
+    tmp_fields = {}
+    for r in rules:
+        tt = _table_short(r.get("target_table", "")).lower()
+        tmp_fields.setdefault(tt, set()).update(
+            c.lower() for c in (r.get("field_targets") or []))
     cache_tables = {}
     if schema_cache_path is not None:
         try:
@@ -1212,39 +1224,45 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             "（第4层⓪人工确认：条件里每个字段要在源表真实存在）")
     if cache_tables:
         import re as _re30
-        # 别名 → schema.table（designer joins 用 rs_input 全局别名，同 N_JOIN1）
-        alias_map = {}
-        for st in rs_input.get("source_tables") or []:
-            al = (st.get("source_alias") or "").strip().lower()
-            if al:
-                alias_map[al] = f"{(st.get('source_schema') or '').strip()}.{(st.get('source_table') or '').strip()}".lower()
-        # tmp 表 → 字段集（产出规则的 field_targets）
-        tmp_fields = {}
-        for r in rules:
-            tt = _table_short(r.get("target_table", "")).lower()
-            tmp_fields.setdefault(tt, set()).update(
-                c.lower() for c in (r.get("field_targets") or []))
         _QUALIFIED = _re30.compile(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
         # 裸字段 = 字面量（rn=1 / del_flag='N' 形态；负向后视排除别名限定引用的列名）
         _BARE_LITERAL = _re30.compile(r'(?<![\w.])([A-Za-z_]\w*)\s*=\s*(?:\'[^\']*\'|[-+]?\d+(?:\.\d+)?)')
         for rule in rules:
             code = rule.get("rule_code", "?")
-            for j in rule.get("joins") or []:
-                cond = (j.get("condition") or "").strip()
+            # 规则级 tmp 别名绑定（reads 对象形式声明；字符串形式默认别名=表短名）
+            rule_tmp_alias = _rule_tmp_aliases(rule)
+            # 待查文本：join 条件 + 规则级 filter（都是 designer 声明的结构化产物）
+            texts = [((j.get("condition") or "").strip()) for j in rule.get("joins") or []]
+            _flt = (rule.get("filter") or "").strip()
+            if _flt:
+                texts.append(_flt)
+            for cond in texts:
                 if not cond:
                     continue
-                alias_tables = {alias_map[a] for a, _c in _QUALIFIED.findall(cond)
-                                if a.lower() in alias_map}
+
+                def _resolve(al: str):
+                    """别名 → (表key, 是否tmp)。rs_input 全局别名优先，其次本规则 tmp 别名。"""
+                    if al in alias_map:
+                        return alias_map[al], False
+                    if al in rule_tmp_alias:
+                        return rule_tmp_alias[al], True
+                    return None, False
+
+                alias_tables = set()
+                for a, _c in _QUALIFIED.findall(cond):
+                    tk, _is_tmp = _resolve(a.lower())
+                    if tk:
+                        alias_tables.add(tk)
                 # ① 别名限定引用 a.x：定位到表后查存在
                 for al, col in _QUALIFIED.findall(cond):
                     al, col = al.lower(), col.lower()
-                    tbl_key = alias_map.get(al)
+                    tbl_key, is_tmp_ref = _resolve(al)
                     if tbl_key is None:
                         continue  # 别名解析不了（可能是函数/CTE 名）→ 跳过不猜
-                    if tbl_key in tmp_fields:
-                        if col not in tmp_fields[tbl_key]:
+                    if is_tmp_ref or tbl_key in tmp_fields:
+                        if col not in tmp_fields.get(tbl_key, set()):
                             vr.add_hard("L4", "N30",
-                                f"规则 {code} 的关联条件（{cond}）引用 {al}.{col}，"
+                                f"规则 {code} 的条件（{cond}）引用 {al}.{col}，"
                                 f"但中间表 {tbl_key} 的字段里没有 '{col}'——检查拼写或补 field_targets")
                         continue
                     fields = cache_tables.get(tbl_key)
@@ -1252,7 +1270,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                         continue  # 表不在缓存 → 跳过（宁放过）
                     if col not in fields:
                         vr.add_hard("L4", "N30",
-                            f"规则 {code} 的关联条件（{cond}）引用 {al}.{col}，"
+                            f"规则 {code} 的条件（{cond}）引用 {al}.{col}，"
                             f"但源表 {tbl_key} 里没有字段 '{col}'——join_condition 可能是"
                             f"copy 源代码的残留（典型 rn=1 开窗产物，表里无此字段）：不自行还原，"
                             f"需源端提供开窗定义，闸口①退回（见 SKILL 第4层⓪）")
@@ -1266,20 +1284,79 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                         or any(bcol in fs for t, fs in tmp_fields.items() if t in alias_tables)
                     if not found:
                         vr.add_hard("L4", "N30",
-                            f"规则 {code} 的关联条件（{cond}）引用裸字段 '{bcol}'，"
+                            f"规则 {code} 的条件（{cond}）引用裸字段 '{bcol}'，"
                             f"在涉及的源表里都不存在——典型是 copy 源代码的开窗残留"
                             f"（如 rn=1，ROW_NUMBER 取一行的逻辑字段）：真实语义是'从表按业务键不唯一、"
                             f"开窗取一行'，需源端提供开窗定义（按啥分组/排序），闸口①退回，"
                             f"designer 不自行还原（见 SKILL 第4层⓪）")
 
+    # ============================================================
+    # N31/N32 别名绑定（结构校验，不依赖 schema_cache）。
+    # 别名是字段来源/关联条件的引用键：规则内一个别名只许指一张表（SQL 查询语义）。
+    # N31（hard）：同一别名绑定到不同表（rs_input 源表 vs tmp、或 reads 内冲突）。
+    # N32（warn）：joins/source_aliases 引用的别名无表绑定（tmp 别名要在 reads 对象形式声明）。
+    # ============================================================
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        rule_tmp_alias = _rule_tmp_aliases(rule)
+        refs = {(a or "").strip().lower() for a in (rule.get("source_aliases") or [])}
+        for j in rule.get("joins") or []:
+            _ja = (j.get("alias") or "").strip() if isinstance(j, dict) else ""
+            if _ja:
+                refs.add(_ja.lower())
+        if not refs and not rule_tmp_alias:
+            continue
+        bindings: dict = {}  # alias -> 表key（rs_input 全局的带 schema，tmp 为短名小写）
+        for a in refs:
+            if a in alias_map:
+                bindings[a] = alias_map[a]
+        conflicts = []
+        for a, t in rule_tmp_alias.items():
+            if a in bindings and bindings[a] != t:
+                conflicts.append(f"{a}: {bindings[a]} ↔ {t}")
+            bindings[a] = t
+        if conflicts:
+            vr.add_hard("L4", "N31",
+                f"规则 {code} 的别名绑定冲突（一个别名在一个规则里只许指一张表）: "
+                f"{'; '.join(conflicts)}——tmp 别名换个名字，或改 rs_input 源表别名（全局）")
+        unbound = sorted(a for a in refs if a not in bindings)
+        if unbound:
+            vr.add_warn("L4", "N32",
+                f"规则 {code} 引用的别名 {unbound} 没有表绑定（不在 rs_input 源表别名，"
+                f"也不在本规则 reads 的 tmp 别名里）——tmp 表别名用 reads 对象形式声明"
+                f"（如 reads: [{{table: tmp1, alias: t1}}]），否则 coder 无法定位该别名指哪张表")
+
     return vr
+
+
+def _reads_tables(reads) -> list:
+    """reads 表名列表（兼容对象形式 {table, alias} 与字符串形式）。"""
+    out = []
+    for r in reads or []:
+        out.append(str(r.get("table") if isinstance(r, dict) else r))
+    return out
+
+
+def _rule_tmp_aliases(rule: dict) -> dict:
+    """解析规则的 reads → {别名小写: tmp表短名小写}。字符串形式默认别名=表短名。"""
+    out = {}
+    for r in rule.get("reads") or []:
+        if isinstance(r, dict):
+            t_short = _table_short(str(r.get("table") or ""))
+            a = ((r.get("alias") or "").strip() or t_short).lower()
+        else:
+            t_short = _table_short(str(r))
+            a = t_short.lower()
+        if t_short:
+            out[a] = t_short.lower()
+    return out
 
 
 # ============================================================
 # 组装 ts.json
 # ============================================================
 def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None,
-                all_source_rows=None, tmp_source=""):
+                all_source_rows=None, tmp_source="", tmp_alias=""):
     """从 rs_input 的 field_mapping 记录 + design_logic 组装 ts 的 field 对象。
 
     field_rec: rs_input.field_mappings 的一条记录（取 target_type/transform_rule/design_logic 默认）
@@ -1291,6 +1368,8 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
                      None 时用 field_rec 单行。field_type 只取 field_rec 的（对着目标，不对来源）。
     tmp_source: 该字段血缘归属的 tmp 表短名（产出它的前序规则的 target_table；
                 调用方按 field_targets 血缘算出）。空时退 reads_tables[0]。
+    tmp_alias: 该 tmp 在本规则的别名（reads 对象声明或默认表短名）——design_logic
+               引用限定符用它（t1.a）；source_fields 的 alias 位也填它。
     """
     transform_rule = field_rec.get("transform_rule", "直接复制")
     transform_type = TRANSFORM_MAP.get(transform_rule, "direct")
@@ -1316,10 +1395,11 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
             # 字段来源 = 本规则 join 进来的真源表（如 step2 关联 cx 补取的字段）
             design_logic = f"直取 {alias}.{source_column}"
         else:
-            # 来源属于前序规则（step1 的 ht 等）→ 本步从 tmp 搬运
+            # 来源属于前序规则（step1 的 ht 等）→ 本步从 tmp 搬运（引用限定符用 tmp 别名）
             transform_type = "direct"
             src_tbl = tmp_source or (reads_tables[0] if reads_tables else "临时表")
-            design_logic = f"直取 {src_tbl}.{target_column}（前序步骤已加工，本步搬运）"
+            src_ref = tmp_alias or src_tbl
+            design_logic = f"直取 {src_ref}.{target_column}（前序步骤已加工，本步搬运）"
             carried_from_tmp = True
     elif transform_type == "direct":
         design_logic = f"直取 {alias}.{source_column}" if alias else f"直取 {source_table}.{source_column}"
@@ -1327,11 +1407,11 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
         # 加工类字段没写 logic 是个问题, 但先给个占位, 校验层会警告
         design_logic = f"[需补充] 加工逻辑未写, transform_detail: {field_rec.get('transform_detail', '')}"
 
-    # source_fields：装配规则的搬运字段指向 tmp（field 名 = target_column，前序已落同名），
-    # 不能沿用 rs_input 的源表血缘（ht.a 会把 coder 引向不存在的 FROM）。
+    # source_fields：装配规则的搬运字段指向 tmp（field 名 = target_column，前序已落同名；
+    # alias 位填本规则的 tmp 别名），不能沿用 rs_input 的源表血缘（ht.a 会把 coder 引向不存在的 FROM）。
     if carried_from_tmp:
         _tbl = tmp_source or (reads_tables[0] if reads_tables else "临时表")
-        source_fields_list = [{"table": _tbl, "field": target_column, "alias": ""}]
+        source_fields_list = [{"table": _tbl, "field": target_column, "alias": tmp_alias or _tbl}]
     elif all_source_rows:
         source_fields_list = [
             {
@@ -1404,18 +1484,29 @@ def build_rule(rule_dec, field_map, rs_source_tables):
             "alias": sa,
         })
 
-    # ★ 装配/merge 规则（reads 非空）：把 reads 的临时表也加进 source_tables
-    # 临时表不在 rs_input 的 source_tables 里（它是前序步骤产出的），但要作为伪源表声明，
-    # 否则下游 coder/slice_ts 拿不到该规则读的临时表信息。
+    # ★ 装配/merge 规则（reads 非空）：把 reads 的临时表也加进 source_tables（伪源表）。
+    # reads 支持两种形式（向后兼容）：
+    #   字符串 "tmp1"                → 别名默认 = 表短名
+    #   对象 {table: tmp1, alias: t1} → 别名显式声明（规则内唯一，N31 校验）
+    # ts 的 reads 保持表名列表（DAG 语义不变）；别名绑定进 source_tables 伪源表。
     reads = rule_dec.get("reads") or []
-    existing_tables = {src["table"].split(".")[-1].lower() for src in rule_sources if src.get("table")}
+    read_entries = []  # [(表短名, 别名)]
     for r in reads:
-        r_short = _table_short(r) if "." in str(r) else str(r)
+        if isinstance(r, dict):
+            r_tbl = str(r.get("table") or "")
+            r_alias = (r.get("alias") or "").strip() or _table_short(r_tbl)
+        else:
+            r_tbl = str(r)
+            r_alias = _table_short(r_tbl)
+        r_short = _table_short(r_tbl) if "." in r_tbl else r_tbl
+        read_entries.append((r_short, r_alias))
+    existing_tables = {src["table"].split(".")[-1].lower() for src in rule_sources if src.get("table")}
+    for r_short, r_alias in read_entries:
         if r_short and r_short.split(".")[-1].lower() not in existing_tables:
             rule_sources.append({
                 "schema": "",           # 临时表无 schema（或同 schema，coder 推断）
                 "table": r_short,
-                "alias": "",            # 临时表别名 coder 按表名推
+                "alias": r_alias,       # 临时表别名（reads 对象声明或默认表短名）
                 "_from_reads": True,    # 标记来自 reads（临时表），区别于 rs_input 源表
             })
 
@@ -1431,8 +1522,9 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "step_type": rule_dec.get("step_type", "full"),  # full/aggregate/incremental_extract/merge（design-guide §4.4）
         "target_role": rule_dec.get("target_role", "target"),  # intermediate/target
         "produces_for": rule_dec.get("produces_for", []) or [],  # 中间表规则填：产出供哪些规则消费
-        "reads": rule_dec.get("reads", []) or [],  # 装配/merge规则填：读哪些中间表
+        "reads": [str(r.get("table") if isinstance(r, dict) else r) for r in reads],  # 表名列表（DAG）
         "incremental": rule_dec.get("incremental", {}),  # 增量设计（key/filter/init_time_range/init_strategy）
+        "filter": (rule_dec.get("filter") or "").strip(),  # 规则级行过滤（WHERE，如 del_flag='N'；join 级限定在 joins.filter）
         "source_tables": rule_sources,
         "grain": rule_dec.get("grain", {}),
         "joins": rule_dec.get("joins", []),
@@ -1479,15 +1571,9 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
             continue
         tbl_short = tbl.rsplit(".", 1)[-1] if "." in tbl else tbl
 
-        # 跳过已处理的表（多 rule 写同表，只建一次字段集）
-        if tbl_short in tables:
-            continue
-
-        # 判断表类型
-        is_final = (tbl_short == final_table_short)
-        tbl_type = "target" if is_final else "intermediate"
-
         # 字段定义：从 field_map 按 field_targets 组装（design_logic 取规则 field_logics）
+        # ★ 每个规则都算（不只首规则）：accumulate 多规则写同表时，各规则字段并集入表 +
+        #   rule 级 source_refs 各归各的来源（不互相污染）
         rule_logics = rule.get("field_logics", {})
         rule_reads = rule.get("reads") or []
         # reads 的表短名（用于装配规则字段的"直取 tmp.xxx"默认 logic）
@@ -1500,6 +1586,9 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
             _ja = (_j.get("alias") or "").strip() if isinstance(_j, dict) else ""
             if _ja:
                 rule_alias_set.add(_ja)
+        # tmp 表短名 → 别名（build_rule 已把 reads 别名放进伪源表；design_logic/切片引用用别名）
+        tmp_alias_map = {str(st.get("table", "")).lower(): (st.get("alias") or "")
+                         for st in (rule.get("source_tables") or []) if st.get("_from_reads")}
         # 字段 → 产出它的 tmp 表（血缘：本规则 reads 的表里，哪个前序规则的 field_targets 含该字段）
         reads_short_set = {str(r).lower() for r in reads_short}
         lineage: dict = {}
@@ -1515,17 +1604,19 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         if not isinstance(dec_tbl_cfg, dict):
             dec_tbl_cfg = {}
         dec_tbl_fields = dec_tbl_cfg.get("fields") or {}  # {字段名: 类型}
-        fields = []
+        rule_field_objs = []  # [(target名, field对象)] 本规则的字段产出
         missing_types = []  # 找不到类型的字段（rs_input 没 + designer 没声明）
         for tname in rule.get("field_targets", []):
             rec = field_map.get(tname)
             # 收集该 target_column 的所有来源行（多来源合并 source_fields）
             all_source_rows = [fm for fm in all_fm if fm.get("target_column") == tname]
             if rec:
+                _tmp_src = lineage.get(tname.lower(), "")
                 f = build_field(rec, rule_logics.get(tname), rule_alias_set,
                                 is_assembly=is_asm, reads_tables=reads_short,
                                 all_source_rows=all_source_rows,
-                                tmp_source=lineage.get(tname.lower(), ""))
+                                tmp_source=_tmp_src,
+                                tmp_alias=tmp_alias_map.get(_tmp_src, ""))
             elif tname in dec_tbl_fields:
                 # 中间表自建字段（rs_input 没有，designer 在 tables.fields 声明了类型）
                 declared_type = dec_tbl_fields[tname]
@@ -1550,10 +1641,35 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
                     "source_fields": [],
                     "design_logic": "[类型缺失] rs_input 无此字段且 designer 未声明类型",
                 }
-            fields.append(f)
+            rule_field_objs.append((tname, f))
         if missing_types:
             import sys as _sys
             print(f"[warn] 表 {tbl_short} 以下字段类型缺失（rs_input 无 + designer 未在 tables.fields 声明）: {missing_types}", file=_sys.stderr)
+
+        # ★ rule 级来源映射（coder 直取行的唯一口径；accumulate 同字段多来源各归各的规则）
+        rule["source_refs"] = {}
+        for _tn, _f in rule_field_objs:
+            _sfs = _f.get("source_fields") or []
+            if _sfs:
+                _sf = _sfs[0]
+                if _sf.get("alias") and _sf.get("field"):
+                    rule["source_refs"][_tn] = f"{_sf['alias']}.{_sf['field']}"
+                elif _sf.get("table") and _sf.get("field"):
+                    rule["source_refs"][_tn] = f"{_sf['table']}.{_sf['field']}"
+
+        # ★ accumulate 多规则写同表：字段并集（首声明者赢），物理属性保持首规则
+        if tbl_short in tables:
+            existing_names = {f["target_field"].lower() for f in tables[tbl_short]["fields"]}
+            for _tn, _f in rule_field_objs:
+                if _tn.lower() not in existing_names:
+                    tables[tbl_short]["fields"].append(_f)
+            continue
+
+        # 判断表类型
+        is_final = (tbl_short == final_table_short)
+        tbl_type = "target" if is_final else "intermediate"
+
+        fields = [_f for _tn, _f in rule_field_objs]
 
         # 目标表补充审计字段
         if is_final:

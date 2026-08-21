@@ -56,11 +56,13 @@ rules:
     step_type: "full"                   # ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。决策树见 design-guide §4.4
     target_role: "target"               # ★ 目标角色: intermediate(中间表) | target(目标F表)
     produces_for: []                    # ★ 中间表规则填：产出供哪些规则消费（rule_code列表），如 ["R0003"]
-    reads: []                           # ★ 装配/merge规则填：读哪些中间表（表名列表），如 ["tmp1","tmp2"]
-                                         #   搬运字段默认"直取 {tmp表名}.{字段}"（脚本按 field_targets 血缘归到具体 tmp，
-                                         #   不再沿用 step1 源表别名）；想用自己的 tmp 别名口径（如 t1.a）→ 该字段写 field_logics。
-                                         #   merge 时另 join 真源表补取的字段：joins 声明 + source_aliases 带上该源表别名，
-                                         #   默认口径保持"直取 {源别名}.{列}"
+    reads: []                           # ★ 装配/merge规则填：读哪些中间表。两种写法：
+                                         #   字符串 ["tmp1"]              → 别名默认=表短名
+                                         #   对象 [{table: tmp1, alias: t1}] → 别名显式声明（规则内唯一，N31 校验冲突）
+                                         #   搬运字段默认"直取 {tmp别名}.{字段}"（按 field_targets 血缘归到具体 tmp）；
+                                         #   merge 时另 join 真源表补取的字段：joins 声明 + source_aliases 带上该源表别名。
+    filter: ""                         # 规则级行过滤（WHERE，如 "ht.del_flag = 'N'"）——"本来就不要"的行排除；
+                                         # join 级限定写 joins[].filter；两者都只引用本规则实际读的表（N30 查存在性）
 
     # 增量设计（step_type=incremental_extract 时填，详见 design-guide §5.2）
     # ★ 增量资产结构铁律（RS 增量驱动表非空时）：至少两个规则——增量取数

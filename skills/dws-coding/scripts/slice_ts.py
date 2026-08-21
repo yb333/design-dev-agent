@@ -100,6 +100,12 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
         # 增量设计（如有：coder 要在 SELECT 里加增量 WHERE 过滤）
         "incremental": rule.get("incremental", {}),
 
+        # 规则级行过滤（WHERE，如 del_flag='N'；与 join 级限定 joins.filter 分工）
+        "filter": rule.get("filter", ""),
+
+        # 排重策略（累积共建场景：designer 定策略 coder 翻译成 LEFT JOIN / NOT EXISTS）
+        "dedup_strategy": rule.get("dedup_strategy", {}),
+
         # 关联策略（coder 写 FROM/JOIN 用）
         "source_tables": rule.get("source_tables", []),
         "joins": rule.get("joins", []),
@@ -111,6 +117,8 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
         # ★ 字段列表（coder 写 SELECT 的核心依据）
         # 从 tables 段取字段定义，合并 rule 的 field_logics 口径
         "fields": slice_fields,
+        # rule 级来源映射（accumulate 同表多规则各归各的来源；direct 行的引用优先用这）
+        "source_refs": rule.get("source_refs", {}),
         "field_count": len(slice_fields),
 
         # 全局信息（coder 需要参考的）
@@ -125,6 +133,8 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
             "target_schema": ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", ""),
             # 可用参数（coder 在 SELECT 里用 ${PARAM} 引用）
             "exec_params": ts.get("meta", {}).get("schedule", {}).get("exec_params", {}),
+            # 数据量级（写法参考：亿级慎用行函数/跨键操作）
+            "data_volume": (design.get("complexity_analysis") or {}).get("data_volume", ""),
         },
     }
 
@@ -150,25 +160,27 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
     return sliced
 
 
-def _compact_direct_field(f: dict) -> str:
+def _compact_direct_field(f: dict, source_refs: dict = None) -> str:
     """把 direct 字段压成单行字符串。
 
     格式: target_field | field_type | direct | alias.src_field
     例: user_name | varchar(100) | direct | oub.user_name
 
-    source_fields 缺失或 alias/field 为空 → 用 placeholder 标记
-    （codegen 消费 compact 行时会把这些标 TODO，不瞎生成）
+    引用优先取 rule 级 source_refs（accumulate 同表多规则各归各的来源），
+    缺失时退 source_fields[0]。都缺失 → placeholder（codegen 会标 TODO，不瞎生成）。
     """
     target = f.get("target_field", "")
     ftype = f.get("field_type", "")
-    sf_list = f.get("source_fields", [])
-    if sf_list:
-        sf = sf_list[0]
-        alias = sf.get("alias", "")
-        src = sf.get("field", "")
-        src_ref = f"{alias}.{src}" if alias and src else "?"
-    else:
-        src_ref = "?"
+    src_ref = (source_refs or {}).get(target, "")
+    if not src_ref:
+        sf_list = f.get("source_fields", [])
+        if sf_list:
+            sf = sf_list[0]
+            alias = sf.get("alias", "")
+            src = sf.get("field", "")
+            src_ref = f"{alias}.{src}" if alias and src else "?"
+        else:
+            src_ref = "?"
     return f"{target} | {ftype} | direct | {src_ref}"
 
 
@@ -184,12 +196,13 @@ def to_compact_view(sliced: dict) -> dict:
     若 assign 字段非审计类，保留在 fields_detail。
     """
     fields = sliced.get("fields", [])
+    source_refs = sliced.get("source_refs") or {}
     direct_compact = []
     detail = []
     for f in fields:
         ttype = f.get("transform_type", "")
         if ttype == "direct":
-            direct_compact.append(_compact_direct_field(f))
+            direct_compact.append(_compact_direct_field(f, source_refs))
         else:
             detail.append(f)
 
