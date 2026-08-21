@@ -165,10 +165,6 @@
         { "schema": "", "table": "", "alias": "" }
       ],
 
-      "ctes": [                          // CTE(内联临时表)
-        { "name": "", "purpose": "", "source_tables": [] }
-      ],
-
       // grain —— 输入->输出粒度变化
       "grain": {
         "input": "",                     // 输入粒度

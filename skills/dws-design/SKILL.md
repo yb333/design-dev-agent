@@ -131,7 +131,8 @@ description: >-
 **想清楚**：
 - **分布键**：按业务主键 / 关联使用频率（减少重分布）/ 离散程度选，与数据量无关。多表 JOIN 时各表分布键必须一致。
   → 详见 `references/design-guide.md` §1.1
-- **关联安全（三维判断，每个声明的 JOIN 都要对三维度有结论）**：
+- **关联安全（每个声明的 JOIN：⓪条件可信 + 三维判断，都要有结论）**：
+  - ⓪ **条件本身可信（对 join_condition 审，先于三维）**：join_condition 可能是从源代码 copy 的，含表里不存在的**逻辑字段**（开窗产物，典型 `and rn=1`）。条件里每个字段要有存在性结论，不确定调 schema_query。查实不存在 → 这是"从表按业务键不唯一、源系统开窗取一行"的 copy 残留：**不自行还原开窗定义**（按啥分组/排序取哪条是业务口径，源端提供，designer 不编），标"需源端提供开窗定义"，闸口①退回问；拿到口径后按①方向设计显式收敛。**rn=1 类过滤本身就是键不唯一的强信号**——即使字段存在，①方向也必须有对齐结论。
   - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一。不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行）。
     不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique；连不上库静默跳过）：
     ```
@@ -156,13 +157,18 @@ description: >-
   → 依赖类型选择见 `references/design-guide.md` §二
 
 **产出**：`tables.{表}.distribution_key`、`join_safety`、`schedule`
-**闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在；join_type_risk 检出对的 cast/豁免核对（N_JOIN1）
+**闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在；joins 引用的字段在源表/tmp 表真实存在（N30，有 schema_cache 时硬校验——⓪的产物兜底）；join_type_risk 检出对的 cast/豁免核对（N_JOIN1）
 
 ### 字段加工逻辑（贯穿第1-2层）
 
-- **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic（自然语言口径，不含 SQL）
+- **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic（自然语言口径，不含 SQL）；design_logic 是拆解后的技术口径，**禁止照抄 mapping 的 transform_detail 原文**（翻译者原则见岗位定义；照抄会被 N29 warn 提示）
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"
 - **★ 类型转换字段是加工字段**：precheck 类型风险决策通过后，会回写 rs_input 把转换字段改"数据加工"（transform_detail 标注如"类型转换：varchar→date"）。读到这类字段照常写 field_logic（转换口径），coder 翻译成 CAST/TO_DATE。**改 ETL 不改 DDL（目标类型不变）**
+- **聚合类字段必拆解**（拼接/汇总，"对同一 X 的多个值拼接/合计"类描述），design_logic 至少答四件事：
+  - **收敛时机**：一对多侧**先预聚合收敛、再回连主表**（先 join 再聚合会让其他字段发散→主键重复）；多字段共用同一收敛（只拼接值不同）→ 声明共用同一子查询产出
+  - **过滤**：聚合前提条件（如 del_flag='N'）
+  - **去重**：组内值是否先 DISTINCT
+  - **拼接序**：聚合函数必须带 ORDER BY 保产出确定性——**工程补全，可合理推理**（默认按拼接值排序，写明即可），业务对顺序有真实要求才问源端。（对照：开窗取哪条的分组/排序口径是业务语义，必须源端给——见第4层⓪）
 - **design_logic 引用 mapping 未列的同表字段、不确定是否存在时**，可调 design-dev-shared 的 `schema_query.py` 确认（在本 skill 上三级同目录的 design-dev-shared/scripts/ 下，读 precheck 产的 schema_cache，不连库，秒级）：
   `python .../schema_query.py --ts {deliver}/_internal/rs_input.json --table ods.ods_b --column col2`
   （--ts 是定位锚点，设计阶段传 rs_input.json——cache 就在它同级 _internal/；工具按需取用不是必经步骤，确定字段存在就不用查）
@@ -188,7 +194,7 @@ description: >-
 
 ### DQ 规则（RS 驱动，designer 翻译）
 
-DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规则。**designer 是翻译者，不是搬运工，也不自主决定产不产**——类比 field_logics 写 design_logic：
+DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规则。翻译者原则见岗位定义（agents/dws-designer.md），此处只说 DQ 专属：**也不自主决定产不产**——类比 field_logics 写 design_logic：
 
 - **RS 有 DQ 需求**（`rs_input_view.json` 的 `dq.requirements` 非空）→ designer **翻译**成 coder 可执行的 DQ 规格写进 `dq_rules`
   - `scope`/`check_type`/`rule_name` 跟 RS 保持一致（分类不变）

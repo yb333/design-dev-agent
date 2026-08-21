@@ -588,11 +588,13 @@ def _table_short(name: str) -> str:
     return name.rsplit(".", 1)[-1] if "." in name else name
 
 
-def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> ValidationResult:
+def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
+                        schema_cache_path=None) -> ValidationResult:
     """运行五层校验全集。返回 ValidationResult。
 
     存量校验（C7-C13）通过 validate_decisions 调用，结果并入 L1/L4。
-    新增校验按层独立函数。
+    新增校验按层独立函数。schema_cache_path 可选——传了才做 N30 join 字段存在性
+    硬校验（未连库无缓存时降为单条 warn 提示）。
     """
     vr = ValidationResult()
     rules = decisions.get("rules", [])
@@ -1165,6 +1167,111 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict) -> Val
                                 f"init 规则 {icode} 既无 core_from 又无 field_logics——"
                                 f"核心加工口径为空（field_logics 空时 coder 无口径可参考），确认是否需要")
 
+    # ============================================================
+    # N29（warn）：design_logic 照抄 mapping 原文（翻译者原则的产物探测）。
+    # 只对"数据加工"类字段查（赋值/直取的 detail 本来就是字面量，查了全是噪音）；
+    # 完全一致才报（改写过=拆解过的证据），warn 不拦，闸口①可见。
+    # ============================================================
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        for col, logic in (rule.get("field_logics") or {}).items():
+            fm = field_map.get(col) or {}
+            if (fm.get("transform_rule") or "").strip() != "数据加工":
+                continue
+            detail = (fm.get("transform_detail") or fm.get("mapping_expression") or "").strip()
+            if not detail or detail in ("-", "无"):
+                continue
+            if str(logic).strip() == detail:
+                vr.add_warn("L1", "N29",
+                    f"规则 {code} 字段 {col} 的 design_logic 与 mapping 的 transform_detail 完全一致"
+                    f"——疑似照抄原文。design_logic 应是拆解后的技术口径（收敛时机/过滤/去重/排序），"
+                    f"不是业务描述搬运（翻译者原则）")
+
+    # ============================================================
+    # N30（hard/warn）：designer 声明的 joins 引用字段必须真实存在（第4层⓪的产物兜底）。
+    # 校验对象是 designer 自己的声明（结构化产物），不是 mapping 原文——先例 N21
+    # （distribution_key ∈ 表字段）。存在性查两处：源表查 schema_cache（precheck 连库产出），
+    # tmp 表查产出规则的 field_targets。降误报：别名解析不了/表不在缓存 → 跳过不猜；
+    # 无 cache 文件 → 整体降为单条 warn（未连库）。专抓 rn=1 类：条件里"裸字段 = 字面量"
+    # （无别名前缀）在规则涉及的表里都查无 → 开窗残留。
+    # ============================================================
+    any_joins_declared = any(rule.get("joins") for rule in rules)
+    cache_tables = {}
+    if schema_cache_path is not None:
+        try:
+            _cand = Path(schema_cache_path)
+            if _cand.exists():
+                _raw = json.loads(_cand.read_text(encoding="utf-8"))
+                for k, v in (_raw.get("tables") or {}).items():
+                    cache_tables[k.lower()] = {c.lower() for c in (v or {})}
+        except Exception:
+            cache_tables = {}
+    if any_joins_declared and schema_cache_path is not None and not cache_tables:
+        vr.add_warn("L4", "N30",
+            "声明了 joins 但未连库无 schema_cache——关联条件引用字段的存在性未校验"
+            "（第4层⓪人工确认：条件里每个字段要在源表真实存在）")
+    if cache_tables:
+        import re as _re30
+        # 别名 → schema.table（designer joins 用 rs_input 全局别名，同 N_JOIN1）
+        alias_map = {}
+        for st in rs_input.get("source_tables") or []:
+            al = (st.get("source_alias") or "").strip().lower()
+            if al:
+                alias_map[al] = f"{(st.get('source_schema') or '').strip()}.{(st.get('source_table') or '').strip()}".lower()
+        # tmp 表 → 字段集（产出规则的 field_targets）
+        tmp_fields = {}
+        for r in rules:
+            tt = _table_short(r.get("target_table", "")).lower()
+            tmp_fields.setdefault(tt, set()).update(
+                c.lower() for c in (r.get("field_targets") or []))
+        _QUALIFIED = _re30.compile(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
+        # 裸字段 = 字面量（rn=1 / del_flag='N' 形态；负向后视排除别名限定引用的列名）
+        _BARE_LITERAL = _re30.compile(r'(?<![\w.])([A-Za-z_]\w*)\s*=\s*(?:\'[^\']*\'|[-+]?\d+(?:\.\d+)?)')
+        for rule in rules:
+            code = rule.get("rule_code", "?")
+            for j in rule.get("joins") or []:
+                cond = (j.get("condition") or "").strip()
+                if not cond:
+                    continue
+                alias_tables = {alias_map[a] for a, _c in _QUALIFIED.findall(cond)
+                                if a.lower() in alias_map}
+                # ① 别名限定引用 a.x：定位到表后查存在
+                for al, col in _QUALIFIED.findall(cond):
+                    al, col = al.lower(), col.lower()
+                    tbl_key = alias_map.get(al)
+                    if tbl_key is None:
+                        continue  # 别名解析不了（可能是函数/CTE 名）→ 跳过不猜
+                    if tbl_key in tmp_fields:
+                        if col not in tmp_fields[tbl_key]:
+                            vr.add_hard("L4", "N30",
+                                f"规则 {code} 的关联条件（{cond}）引用 {al}.{col}，"
+                                f"但中间表 {tbl_key} 的字段里没有 '{col}'——检查拼写或补 field_targets")
+                        continue
+                    fields = cache_tables.get(tbl_key)
+                    if fields is None:
+                        continue  # 表不在缓存 → 跳过（宁放过）
+                    if col not in fields:
+                        vr.add_hard("L4", "N30",
+                            f"规则 {code} 的关联条件（{cond}）引用 {al}.{col}，"
+                            f"但源表 {tbl_key} 里没有字段 '{col}'——join_condition 可能是"
+                            f"copy 源代码的残留（典型 rn=1 开窗产物，表里无此字段）：不自行还原，"
+                            f"需源端提供开窗定义，闸口①退回（见 SKILL 第4层⓪）")
+                # ② 裸字段 = 字面量：在规则涉及的源表/tmp 字段里查，都查无才报
+                if not alias_tables:
+                    continue  # 条件里没有可解析的别名限定 → 无法圈定范围，跳过不猜
+                for bcol in {b.lower() for b in _BARE_LITERAL.findall(cond)}:
+                    if bcol in ("and", "or", "not", "is", "in", "like", "between"):
+                        continue
+                    found = any(bcol in cache_tables.get(t, set()) for t in alias_tables) \
+                        or any(bcol in fs for t, fs in tmp_fields.items() if t in alias_tables)
+                    if not found:
+                        vr.add_hard("L4", "N30",
+                            f"规则 {code} 的关联条件（{cond}）引用裸字段 '{bcol}'，"
+                            f"在涉及的源表里都不存在——典型是 copy 源代码的开窗残留"
+                            f"（如 rn=1，ROW_NUMBER 取一行的逻辑字段）：真实语义是'从表按业务键不唯一、"
+                            f"开窗取一行'，需源端提供开窗定义（按啥分组/排序），闸口①退回，"
+                            f"designer 不自行还原（见 SKILL 第4层⓪）")
+
     return vr
 
 
@@ -1314,7 +1421,6 @@ def build_rule(rule_dec, field_map, rs_source_tables):
         "reads": rule_dec.get("reads", []) or [],  # 装配/merge规则填：读哪些中间表
         "incremental": rule_dec.get("incremental", {}),  # 增量设计（key/filter/init_time_range/init_strategy）
         "source_tables": rule_sources,
-        "ctes": rule_dec.get("ctes", []),
         "grain": rule_dec.get("grain", {}),
         "joins": rule_dec.get("joins", []),
         "join_safety": rule_dec.get("join_safety", []),
@@ -2344,8 +2450,10 @@ def main():
         for r in _i_converted_rules:
             print(f"  {r}")
 
-    # 3a. 五层校验（含存量 C7-C13 + 新增 N1-N27）
-    vr = run_all_validations(decisions, rs_input, field_map)
+    # 3a. 五层校验（含存量 C7-C13 + 新增 N1-N30）
+    # N30 需要 schema_cache（rs_input 同级的 _internal 缓存，precheck 连库产出）
+    _cache_path = Path(args.rs).resolve().parent / "schema_cache.json"
+    vr = run_all_validations(decisions, rs_input, field_map, schema_cache_path=_cache_path)
     exemptions = decisions.get("exemptions") or []
 
     # N5（W1 升级）：加工字段缺 design_logic 现在是硬阻断

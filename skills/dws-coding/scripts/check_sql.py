@@ -196,10 +196,6 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
         t = st.get("table", "")
         if t:
             ts_source_tables.add(t.lower())
-    # CTE 名也算合法引用
-    for cte in rule.get("ctes", []):
-        if cte.get("name"):
-            ts_source_tables.add(cte["name"].lower())
     # 所有规则的 target_table（中间表）也算合法引用——多规则场景下下游会引用上游产出的中间表
     for rc, rr in rules.items():
         tt = rr.get("target_table", "")

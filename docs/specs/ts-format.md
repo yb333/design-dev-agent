@@ -122,7 +122,6 @@ TS 不是单文档，是**制品包**：
     "design_intent": "...",            // 该规则的设计意图（自然语言）
 
     "source_tables": [ { "schema", "table", "alias" } ],
-    "ctes": [ { "name", "purpose", "source_tables": [...] } ],
 
     "grain": {                         // 输入→输出粒度变化
       "input": "...",

@@ -212,7 +212,6 @@ def build_rules(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], Lis
             "produces_for": info["produces_for"],
             "reads": info["reads_tables"],
             "source_tables": src,
-            "ctes": [],
             "grain": {"input": "", "output": "", "change": ""},   # 语义位
             "joins": joins,
             "join_safety": [],                        # 语义位：关联安全声明

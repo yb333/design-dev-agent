@@ -108,9 +108,6 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
         # 粒度变化
         "grain": rule.get("grain", {}),
 
-        # CTE
-        "ctes": rule.get("ctes", []),
-
         # ★ 字段列表（coder 写 SELECT 的核心依据）
         # 从 tables 段取字段定义，合并 rule 的 field_logics 口径
         "fields": slice_fields,
@@ -180,7 +177,7 @@ def to_compact_view(sliced: dict) -> dict:
 
     - direct 字段压成单行字符串，放进 fields_direct 列表（一行一个）
     - 非 direct 字段（aggregate/assign/其他）完整保留在 fields_detail
-    - 其余规则信息（joins/join_safety/ctes/grain 等）原样保留
+    - 其余规则信息（joins/join_safety/grain 等）原样保留
 
     注意：assign 审计字段既不在 fields_direct 也不在 fields_detail
     （它们固定4个，codegen 自动处理，coder 不需要看）。

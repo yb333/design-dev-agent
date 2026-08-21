@@ -90,11 +90,11 @@ class TestSliceTs:
             assert f.get("transform_type") != "direct"
 
     def test_compact_keeps_rule_info(self, ts_data):
-        """compact 模式：规则信息（joins/grain/ctes等）原样保留"""
+        """compact 模式：规则信息（joins/grain等）原样保留"""
         from slice_ts import slice_rule, to_compact_view
         sliced = slice_rule(ts_data, "R0001")
         compact = to_compact_view(sliced)
-        for key in ("rule_code", "rule_name", "joins", "join_safety", "grain", "ctes", "_global"):
+        for key in ("rule_code", "rule_name", "joins", "join_safety", "grain", "_global"):
             assert key in compact, f"compact 丢了规则信息: {key}"
 
     def test_compact_direct_field_format(self, ts_data):

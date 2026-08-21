@@ -1425,3 +1425,151 @@ class TestTwoPipelinesSameTable:
         inc_ft = ts["rules"]["R0003"]["field_targets"]
         init_ft = ts["init"]["rules"]["INIT_R0001"]["field_targets"]
         assert set(inc_ft) == set(init_ft)
+
+
+class TestN29TranslateGuard:
+    """N29 warn：design_logic 照抄 mapping 原文（翻译者原则的产物探测）。只查数据加工类。"""
+
+    def _agg_rs(self):
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_test_f", "source_column": "id", "source_type": "bigint",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "id", "target_column_cn": "ID", "target_type": "bigint",
+             "source_alias": "t", "remark": ""},
+            {"source_table": "ods_pay_f", "source_column": "no", "source_type": "varchar(50)",
+             "transform_rule": "数据加工", "transform_detail": "将同一个t.id对应的m.no值拼接，限制m.del_flag=N，用,隔开",
+             "target_column": "pay_nos", "target_column_cn": "付款单号串", "target_type": "varchar(2000)",
+             "source_alias": "m", "remark": ""},
+        ], has_audit=True)
+        return rs
+
+    def test_copied_logic_warns(self):
+        """design_logic 与 transform_detail 完全一致 → N29 warn。"""
+        rs = self._agg_rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["id", "pay_nos", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {"pay_nos": "将同一个t.id对应的m.no值拼接，限制m.del_flag=N，用,隔开"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = _run(dd, rs)
+        warns = [i for i in vr.items if i["code"] == "N29" and i["level"] == "warn"]
+        assert warns, "照抄原文应触发 N29 warn"
+
+    def test_translated_logic_no_warn(self):
+        """拆解后的技术口径（与原文不同）→ 无 N29。"""
+        rs = self._agg_rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["id", "pay_nos", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {"pay_nos": "m 表先按 t.id 预聚合（过滤 del_flag='N'，no 去重，按 no 排序）拼接为逗号分隔串"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = _run(dd, rs)
+        assert "N29" not in _codes(vr), "翻译过的 design_logic 不该报"
+
+    def test_direct_field_not_checked(self):
+        """直取字段（脚本的'直取 t.id'恰好等于 detail 时）不查——只对数据加工类。"""
+        rs = self._agg_rs()
+        rs["field_mappings"][0]["transform_detail"] = "直取 t.id"
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["id", "pay_nos", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {"pay_nos": "m 表预聚合拼接"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = _run(dd, rs)
+        assert "N29" not in _codes(vr)
+
+
+class TestN30JoinFieldExistence:
+    """N30：designer 声明的 joins 引用字段必须真实存在（schema_cache 硬校验，无缓存降 warn）。"""
+
+    def _two_src_rs(self):
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_test_f", "source_column": "id", "source_type": "bigint",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "id", "target_column_cn": "ID", "target_type": "bigint",
+             "source_alias": "t", "remark": ""},
+        ], has_audit=True)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_test_f", "source_table_cn": "主",
+             "source_alias": "t", "join_condition": ""},
+            {"source_schema": "ods", "source_table": "ods_pay_f", "source_table_cn": "从",
+             "source_alias": "m", "join_condition": "t.id = m.order_id and rn = 1"},
+        ]
+        return rs
+
+    def _cache(self, tmp_path, extra_pay=None):
+        pay = {"order_id": "bigint", "no": "varchar(50)", "del_flag": "varchar(1)"}
+        if extra_pay:
+            pay.update(extra_pay)
+        cache = {"cached_at": "", "tables": {
+            "ods.ods_test_f": {"id": "bigint"},
+            "ods.ods_pay_f": pay,
+        }}
+        p = tmp_path / "schema_cache.json"
+        p.write_text(json.dumps(cache), encoding="utf-8")
+        return p
+
+    def _dd(self, condition):
+        return make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "joins": [{"alias": "m", "type": "LEFT JOIN", "condition": condition}],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+
+    def _run_with_cache(self, dd, rs, cache_path):
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        return run_all_validations(dd, rs, field_map, schema_cache_path=cache_path)
+
+    def test_qualified_missing_field_hard(self, tmp_path):
+        """别名限定引用的列在源表不存在 → N30 hard（rn 抄进限定引用的变体）。"""
+        rs = self._two_src_rs()
+        cache = self._cache(tmp_path)  # ods_pay_f 无 cust_id
+        vr = self._run_with_cache(self._dd("t.id = m.cust_id"), rs, cache)
+        assert "N30" in _codes(vr, "L4")
+        msgs = [i["msg"] for i in vr.items if i["code"] == "N30"]
+        assert any("cust_id" in m for m in msgs)
+
+    def test_bare_rn_literal_hard(self, tmp_path):
+        """回归核心：'on x=x and rn=1' 的裸 rn 在所有涉及表都不存在 → N30 hard + 开窗残留提示。"""
+        rs = self._two_src_rs()
+        cache = self._cache(tmp_path)
+        vr = self._run_with_cache(self._dd("t.id = m.order_id and rn = 1"), rs, cache)
+        assert "N30" in _codes(vr, "L4")
+        msgs = [i["msg"] for i in vr.items if i["code"] == "N30"]
+        assert any("rn" in m and "开窗" in m for m in msgs), msgs
+
+    def test_existing_bare_literal_ok(self, tmp_path):
+        """裸字段确实存在（del_flag='N'）→ 不报。"""
+        rs = self._two_src_rs()
+        cache = self._cache(tmp_path)
+        vr = self._run_with_cache(self._dd("t.id = m.order_id and m.del_flag = 'N'"), rs, cache)
+        assert "N30" not in _codes(vr, "L4")
+
+    def test_no_cache_degrades_to_warn(self, tmp_path):
+        """无 schema_cache（未连库）→ 降为单条 warn，不硬拦。"""
+        rs = self._two_src_rs()
+        vr = self._run_with_cache(self._dd("t.id = m.order_id and rn = 1"), rs,
+                                  tmp_path / "not_exist.json")
+        n30_items = [i for i in vr.items if i["code"] == "N30"]
+        assert all(i["level"] == "warn" for i in n30_items), "无缓存应是 warn，不该有 hard"
+        assert n30_items, "无缓存应是 warn 提示"
+
+    def test_valid_condition_passes(self, tmp_path):
+        """全部引用存在 → 无 N30。"""
+        rs = self._two_src_rs()
+        cache = self._cache(tmp_path)
+        vr = self._run_with_cache(self._dd("t.id = m.order_id"), rs, cache)
+        assert "N30" not in _codes(vr, "L4")

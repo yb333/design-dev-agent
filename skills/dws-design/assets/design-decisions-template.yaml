@@ -89,12 +89,6 @@ rules:
     # 如果留空，脚本默认用 rs_input 里所有 source_tables
     source_aliases: []
 
-    # CTE（内联临时表，可选）
-    ctes:
-      - name: ""
-        purpose: ""
-        source_tables: []
-
     # 粒度变化（输入→输出）
     grain:
       input: ""                         # 如 "一行=一个源合同"
