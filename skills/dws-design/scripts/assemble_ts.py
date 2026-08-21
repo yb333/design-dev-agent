@@ -1223,10 +1223,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             "声明了 joins 但未连库无 schema_cache——关联条件引用字段的存在性未校验"
             "（第4层⓪人工确认：条件里每个字段要在源表真实存在）")
     if cache_tables:
-        import re as _re30
-        _QUALIFIED = _re30.compile(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
-        # 裸字段 = 字面量（rn=1 / del_flag='N' 形态；负向后视排除别名限定引用的列名）
-        _BARE_LITERAL = _re30.compile(r'(?<![\w.])([A-Za-z_]\w*)\s*=\s*(?:\'[^\']*\'|[-+]?\d+(?:\.\d+)?)')
+        from sql_parse import extract_condition_field_refs
         for rule in rules:
             code = rule.get("rule_code", "?")
             # 规则级 tmp 别名绑定（reads 对象形式声明；字符串形式默认别名=表短名）
@@ -1248,14 +1245,14 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                         return rule_tmp_alias[al], True
                     return None, False
 
+                qualified_refs, _bare = extract_condition_field_refs(cond)
                 alias_tables = set()
-                for a, _c in _QUALIFIED.findall(cond):
-                    tk, _is_tmp = _resolve(a.lower())
+                for a, _c in qualified_refs:
+                    tk, _is_tmp = _resolve(a)
                     if tk:
                         alias_tables.add(tk)
                 # ① 别名限定引用 a.x：定位到表后查存在
-                for al, col in _QUALIFIED.findall(cond):
-                    al, col = al.lower(), col.lower()
+                for al, col in qualified_refs:
                     tbl_key, is_tmp_ref = _resolve(al)
                     if tbl_key is None:
                         continue  # 别名解析不了（可能是函数/CTE 名）→ 跳过不猜
@@ -1277,7 +1274,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                 # ② 裸字段 = 字面量：在规则涉及的源表/tmp 字段里查，都查无才报
                 if not alias_tables:
                     continue  # 条件里没有可解析的别名限定 → 无法圈定范围，跳过不猜
-                for bcol in {b.lower() for b in _BARE_LITERAL.findall(cond)}:
+                for bcol in dict.fromkeys(_bare):
                     if bcol in ("and", "or", "not", "is", "in", "like", "between"):
                         continue
                     found = any(bcol in cache_tables.get(t, set()) for t in alias_tables) \

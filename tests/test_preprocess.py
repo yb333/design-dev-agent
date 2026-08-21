@@ -1056,3 +1056,24 @@ class TestNullPreservation:
                       if (fm.get("transform_rule") or fm.get("mapping_rule")) == "赋值"]
         expr = assign_fms[0].get("transform_detail") or assign_fms[0].get("mapping_expression")
         assert expr == "", f"真没填应是空串，实际: {repr(expr)}"
+
+
+class TestCompactConditionIssues:
+    """precheck 入口闸检出 → view 的 tables 块 ⚠ 标记（designer 第一眼处理）。"""
+
+    def test_issue_marked_on_table_entry(self):
+        from preprocess import build_compact
+        rs = _rs_input_with([_direct("id", "id")])
+        rs["source_tables"][0]["join_condition"] = "t.id = m.mid and m.rn = 1"
+        rs["_condition_issues"] = [{
+            "table": "ods.ods_test_f", "field": "rn", "level": "error",
+            "issue": "无出处（不在表结构，无产生逻辑记载）"}]
+        c = build_compact(rs)
+        entry = next(e for e in c["tables"] if e.get("alias") == "t")
+        assert "⚠ rn" in entry["输入存疑"]
+
+    def test_no_marker_without_issues(self):
+        from preprocess import build_compact
+        rs = _rs_input_with([_direct("id", "id")])
+        c = build_compact(rs)
+        assert all("输入存疑" not in e for e in c["tables"])

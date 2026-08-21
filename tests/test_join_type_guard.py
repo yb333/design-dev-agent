@@ -98,7 +98,7 @@ def _mk_cache(tmp_path, tables=None):
     """造 schema_cache（不连库）。"""
     tables = tables if tables is not None else {
         "ods.t_order": {"prod_code": "varchar(32)", "order_id": "bigint"},
-        "ods.t_prod": {"prod_id": "bigint", "prod_name": "varchar(64)"},
+        "ods.t_prod": {"prod_id": "bigint", "prod_name": "varchar(64)", "status": "varchar(2)"},
     }
     cache_file = tmp_path / "schema_cache.json"
     cache_file.write_text(json.dumps(

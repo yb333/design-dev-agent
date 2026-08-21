@@ -1136,6 +1136,16 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "fields": cnt, "join": st.get("join_condition", ""),
         })
 
+    # precheck 入口闸检出（designer 第一眼要处理：无出处条件字段 / 逻辑字段落地提示）
+    cond_issues = rs_input.get("_condition_issues") or []
+    if cond_issues:
+        for entry in table_list:
+            _tk = f"{entry.get('schema', '')}.{entry.get('table', '')}".lower()
+            _hits = [i for i in cond_issues if (i.get("table") or "").lower() == _tk]
+            if _hits:
+                entry["输入存疑"] = "; ".join(
+                    f"⚠ {h.get('field')}: {h.get('issue')}" for h in _hits)
+
     # 增量驱动表（来自 RS L07 增量表段，给 designer 看增量识别方式）
     incremental_tables = rs_input.get("schedule", {}).get("incremental_tables", [])
 

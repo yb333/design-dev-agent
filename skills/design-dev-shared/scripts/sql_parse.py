@@ -248,3 +248,53 @@ def cte_projection_names(cte_body: str) -> set[str]:
     for m in re.finditer(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)', cte_body):
         names.add(m.group(2).lower())
     return names
+
+
+# ============================================================
+# 关联条件引用 + 逻辑字段出处（precheck 入口闸 / assemble_ts N30 共用）
+# ============================================================
+_QUALIFIED_REF = re.compile(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
+_BARE_REF = re.compile(r'(?<![\w.])([A-Za-z_]\w*)\s*=\s*(?:\'[^\']*\'|[-+]?\d+(?:\.\d+)?)')
+_FUNC_KEYWORD = (r'ROW_NUMBER|RANK|DENSE_RANK|NTILE|LAG|LEAD|SUBSTR|SUBSTRING|'
+                 r'CASE|COALESCE|NVL|TO_CHAR|TO_DATE|CAST|CONCAT|OVER')
+
+
+def extract_condition_field_refs(condition: str) -> tuple[list, list]:
+    """关联条件里的字段引用集（引用≠证据）。
+
+    返回 (qualified, bare)：
+    - qualified: [(alias, col)] 别名限定引用（含等值对/函数参数里的一切 a.b 形态，小写）
+    - bare: [name] 裸字段 = 字面量 形态（rn=1 / del_flag='N'，小写；排除别名限定的列名）
+    """
+    qualified = [(a.lower(), c.lower()) for a, c in _QUALIFIED_REF.findall(condition or "")]
+    bare = [b.lower() for b in _BARE_REF.findall(condition or "")]
+    return qualified, bare
+
+
+def find_field_provenance(field: str, texts: list, mention_texts: list = None) -> str:
+    """在文本里找 field 的"定义语境"出处，返回最强档（无则空串）。
+
+    档位（强→弱）：alias（AS field 别名定义）/ assign（field = 表达式，RHS 非字面量）/
+    cooccur（函数关键字与 field 同文本单元共现）/ mention（field 出现在说明性文本里）。
+    纯引用（field = 字面量）不算证据——由 assign 的 RHS 排除保证。
+
+    texts：强档语境（可含条件自身——"ROW_NUMBER() OVER(...)=1" 这类自文档写法）。
+    mention_texts：说明性文本（字段行 transform_detail/remark）——条件自身不进这档，
+    否则引用会命中自己（a.rn=1 里的 rn 不是出处）。
+    """
+    f = re.escape(field)
+    for t in texts:
+        if re.search(rf'\bAS\s+{f}\b', t, re.IGNORECASE):
+            return "alias"
+    for t in texts:
+        # field = 非字面量（函数调用/标识符运算）→ 定义性赋值；= 'N'/=1 是引用
+        if re.search(rf'(?<![\w.]){f}\s*=\s*(?!\s*(?:\'[^\']*\'|"[^"]*"|[-+]?\d))', t):
+            return "assign"
+    pat = re.compile(rf'\b{f}\b', re.IGNORECASE)
+    for t in texts:
+        if pat.search(t) and re.search(_FUNC_KEYWORD, t, re.IGNORECASE):
+            return "cooccur"
+    for t in (mention_texts or []):
+        if pat.search(t):
+            return "mention"
+    return ""

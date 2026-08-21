@@ -343,6 +343,11 @@ def precheck(
     if not result.errors:
         _check_db_schema(rs_input, result, cache_path, refresh_schema)
 
+    # 9.5 入口闸：join_condition 引用字段存在性 + 逻辑字段出处（泛化 rn 案例族；
+    # 表结构已知无出处=error 退源端 / 未知=warn）。检出入 view 的 tables 块 ⚠ 标记
+    if not result.errors:
+        _check_join_conditions(rs_input, result, cache_path, rs_input_path)
+
     # 10+11. 类型转换风险 + 关联键类型对账：**同一轮全爆**（都是"待人决策"类问题，
     # 一轮问完不剥洋葱）。仅在结构性错误（静态/DB）存在时短路——那些错误意味着
     # 元数据不可信，基于它的风险判定会产垃圾决策。
@@ -1061,6 +1066,124 @@ def _fetch_tables_schema_batch(
             key = (row["nsp"].lower(), row["rel"].lower())
             result.setdefault(key, {})[row["col"].lower()] = (row["col_type"] or "").lower()
     return result
+
+
+def _check_join_conditions(
+    rs_input: dict[str, Any],
+    result: PrecheckResult,
+    cache_path: Path | None = None,
+    rs_input_path: Path | None = None,
+):
+    """入口闸：mapping join_condition 引用字段的存在性 + 逻辑字段出处。
+
+    泛化判定（不枚举字段家族，rn 只是报错示例）：凡条件引用、表里没有的名字，
+    都必须在"同表作用域"找到"定义语境"出处（AS X / X=表达式 / 函数关键字共现 /
+    同表字段行说明提及）。纯引用（X = 字面量）不算出处。
+
+    - 表结构可得（schema_cache）：无出处 → error（copy 残留或笔误，退源端）；
+      有出处 → 放行 + 记 _condition_issues（designer 视图可见，需在设计里落地产生逻辑）
+    - 表结构不可得：无出处且不在该表 mapping 字段集 → warn（join-only 键合法，不能 error）
+    """
+    import json
+    from sql_parse import extract_condition_field_refs, find_field_provenance
+
+    sources = [st for st in (rs_input.get("source_tables") or [])
+               if (st.get("join_condition") or "").strip()]
+    if not sources:
+        return
+
+    # 表结构（cache 可能刚被 _check_db_schema 刷新）：{"schema.table": {col, ...}}
+    structures: dict[str, set] = {}
+    if cache_path is not None and Path(cache_path).exists():
+        try:
+            raw = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+            for k, v in (raw.get("tables") or {}).items():
+                structures[k.lower()] = {c.lower() for c in (v or {})}
+        except Exception:
+            structures = {}
+
+    alias_map = {}
+    for st in rs_input.get("source_tables") or []:
+        al = (st.get("source_alias") or "").strip().lower()
+        if al:
+            alias_map[al] = f"{(st.get('source_schema') or '').strip()}.{(st.get('source_table') or '').strip()}".lower()
+    # 表 → 字段行说明文本（mention 档合法载体）+ mapping 声明的 source_column 集（弱版判据）
+    mention_texts: dict[str, list] = {}
+    mapped_cols: dict[str, set] = {}
+    for fm in rs_input.get("field_mappings", []):
+        # 键优先用别名反查（fm 行的 source_table 常是短名/无 schema，拼不出全键）
+        _al = (fm.get("source_alias") or "").strip().lower()
+        _t = alias_map.get(_al) or f"{(fm.get('source_schema') or '').strip()}.{(fm.get('source_table') or '').strip()}".lower()
+        mention_texts.setdefault(_t, [])
+        for k in ("transform_detail", "mapping_expression", "remark"):
+            _txt = str(fm.get(k) or "").strip()
+            if _txt and _txt not in ("-", "无"):
+                mention_texts[_t].append(_txt)
+        _sc = (fm.get("source_column") or "").strip().lower()
+        if _sc:
+            mapped_cols.setdefault(_t, set()).add(_sc)
+
+    issues = []  # 进 rs_input._condition_issues → view 的 tables 块 ⚠ 标记
+    for st in sources:
+        cond = (st.get("join_condition") or "").strip()
+        tbl_key = f"{(st.get('source_schema') or '').strip()}.{(st.get('source_table') or '').strip()}".lower()
+        strong_texts = [cond]  # 条件自身可作强档（自文档开窗写法），mention 档不含它
+        qualified, bare = extract_condition_field_refs(cond)
+
+        def _check_field(field: str, scope_tables: list, where: str):
+            """scope_tables：该字段的查找范围（绑定的表 key 列表）。返回处理结果。"""
+            known = [t for t in scope_tables if t in structures]
+            if any(field in structures.get(t, set()) for t in known):
+                return  # 真实列
+            prov = find_field_provenance(
+                field, strong_texts,
+                mention_texts=[txt for t in scope_tables for txt in mention_texts.get(t, [])])
+            where_desc = where
+            if prov:
+                issues.append({
+                    "table": scope_tables[0] if len(scope_tables) == 1 else ",".join(scope_tables),
+                    "field": field, "level": "note",
+                    "issue": f"join_condition 引用逻辑字段（出处档 {prov}）——设计时须落地其产生逻辑，不能直接引用",
+                })
+                result.add_pass(
+                    f"关联条件逻辑字段 {where_desc}: {field}（有出处，designer 落地）")
+                return
+            if len(known) == len(scope_tables) and scope_tables:
+                result.add_error(
+                    f"[条件字段] {where_desc} 引用 '{field}'：不在源表结构里且无产生逻辑记载"
+                    f"——典型是 copy 源代码的逻辑字段残留（如 rn=1 开窗取一）或笔误；"
+                    f"需源端补出处（写明产生逻辑）或修正 mapping")
+                issues.append({"table": ",".join(scope_tables), "field": field,
+                               "level": "error", "issue": "无出处（不在表结构，无产生逻辑记载）"})
+            else:
+                # 表结构不可得：mapping 声明过该列也算数（join-only 键）
+                if any(field in mapped_cols.get(t, set()) for t in scope_tables):
+                    return
+                result.add_warn(
+                    f"[条件字段] {where_desc} 引用 '{field}'：未连库无法查表结构，"
+                    f"且不在 mapping 字段集、无产生逻辑记载——确认字段真实存在或有出处")
+                issues.append({"table": ",".join(scope_tables), "field": field,
+                               "level": "warn", "issue": "存在性未校验（未连库），mapping 无记载"})
+
+        # ① 别名限定引用 a.x：绑定到该别名对应的表
+        for al, col in qualified:
+            tk = alias_map.get(al)
+            if tk:
+                _check_field(col, [tk], f"{tbl_key} 的 join_condition（{al}.{col}）")
+        # ② 裸字段 = 字面量：范围 = 本条件里出现的别名对应的表
+        bare_scope = [alias_map[a] for a, _c in qualified if alias_map.get(a)]
+        for bcol in dict.fromkeys(bare):  # 去重保序
+            if bcol in ("and", "or", "not", "is", "in", "like", "between"):
+                continue
+            if bare_scope:
+                _check_field(bcol, bare_scope, f"{tbl_key} 的 join_condition（裸字段 {bcol}）")
+
+    if issues:
+        rs_input["_condition_issues"] = issues
+        if rs_input_path is not None:
+            rs_input_path.write_text(
+                json.dumps(rs_input, ensure_ascii=False, indent=2), encoding="utf-8")
+            _sync_compact_view(rs_input, rs_input_path)
 
 
 def _check_db_schema(

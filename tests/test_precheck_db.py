@@ -1387,3 +1387,91 @@ class TestAliasGradingAndGuidance:
         # 不应是 error
         derived_errors = [e for e in result.errors if "数据加工" in e and "没有来源字段" in e]
         assert derived_errors == [], f"纯派生不应报 error: {derived_errors}"
+
+
+class TestJoinConditionGate:
+    """入口闸：join_condition 引用字段存在性 + 逻辑字段出处（泛化 rn 案例族）。"""
+
+    def _rs(self, join_a="a.oid = b.oid and a.rn = 1", join_m="m.cid = c.cid and m.rn = 1",
+            detail_on_a=None):
+        fm = [
+            {"source_table": "ods_a_f", "source_column": "oid", "source_type": "bigint",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "oid", "target_column_cn": "OID", "target_type": "bigint",
+             "source_alias": "a", "remark": ""},
+        ]
+        if detail_on_a:
+            fm.append({
+                "source_table": "ods_a_f", "source_column": "", "source_type": "",
+                "transform_rule": "数据加工", "transform_detail": detail_on_a,
+                "target_column": "latest_flag", "target_column_cn": "最新标记",
+                "target_type": "varchar(10)", "source_alias": "a", "remark": ""})
+        return {
+            "field_mappings": fm,
+            "source_tables": [
+                {"source_schema": "ods", "source_table": "ods_a_f", "source_table_cn": "A",
+                 "source_alias": "a", "join_condition": join_a},
+                {"source_schema": "ods", "source_table": "ods_b_f", "source_table_cn": "B",
+                 "source_alias": "b", "join_condition": ""},
+                {"source_schema": "ods", "source_table": "ods_m_f", "source_table_cn": "M",
+                 "source_alias": "m", "join_condition": join_m},
+            ],
+            "meta": {},
+        }
+
+    def _cache(self, tmp_path):
+        import json as _json
+        cache = {"cached_at": "", "tables": {
+            "ods.ods_a_f": {"oid": "bigint"},
+            "ods.ods_b_f": {"oid": "bigint"},
+            "ods.ods_m_f": {"cid": "bigint"},
+            "ods.ods_c_f": {"cid": "bigint"},
+        }}
+        p = tmp_path / "schema_cache.json"
+        p.write_text(_json.dumps(cache), encoding="utf-8")
+        return p
+
+    def _run(self, rs, cache_path):
+        from precheck import _check_join_conditions, PrecheckResult
+        result = PrecheckResult()
+        _check_join_conditions(rs, result, cache_path, None)
+        return result
+
+    def test_no_provenance_hard_error(self, tmp_path):
+        """两处 rn 均无出处 → error（copy 残留/笔误）。"""
+        rs = self._rs()
+        result = self._run(rs, self._cache(tmp_path))
+        errs = [e for e in result.errors if "rn" in e]
+        assert len(errs) >= 2, result.errors
+
+    def test_provenance_scoped_per_table(self, tmp_path):
+        """A 表有出处（字段行记载），M 表没有 → 只有 M 报（作用域隔离不冒领）。"""
+        rs = self._rs(detail_on_a="取最新：ROW_NUMBER() OVER(PARTITION BY oid ORDER BY upd DESC) rn，限定 rn=1")
+        result = self._run(rs, self._cache(tmp_path))
+        a_errs = [e for e in result.errors if "ods_a_f" in e and "rn" in e]
+        m_errs = [e for e in result.errors if "ods_m_f" in e and "rn" in e]
+        assert not a_errs, f"A 有出处不该报: {a_errs}"
+        assert m_errs, "M 无出处应报"
+        assert any("designer 落地" in p for p in result.passed), result.passed  # 放行+落地提示
+        assert any(i["field"] == "rn" and i["level"] == "note"
+                   for i in rs["_condition_issues"])
+
+    def test_typo_family_caught(self, tmp_path):
+        """笔误家族（cust_id vs 表里无此列）同一机制收编 → error。"""
+        rs = self._rs(join_a="a.oid = b.cust_id", join_m="")
+        result = self._run(rs, self._cache(tmp_path))
+        assert any("cust_id" in e for e in result.errors), result.errors
+
+    def test_weak_mode_warns_without_structure(self, tmp_path):
+        """未连库无缓存：无出处且不在 mapping 字段集 → warn（join-only 键合法不 error）。"""
+        rs = self._rs()
+        result = self._run(rs, tmp_path / "not_exist.json")
+        warns = [w for w in result.warnings if "rn" in w]
+        assert warns, result.warnings
+        assert not any("rn" in e for e in result.errors)
+
+    def test_pure_reference_not_self_provenance(self, tmp_path):
+        """纯引用不自证：条件 'a.rn = 1' 里的 rn 不算出处（无其他记载仍报）。"""
+        rs = self._rs()
+        result = self._run(rs, self._cache(tmp_path))
+        assert any("rn" in e for e in result.errors)
