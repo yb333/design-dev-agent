@@ -48,6 +48,12 @@ permission:
 
 > 本文件只讲角色和边界，**不复述编码流程和 pick_fields 用法**（那在 SKILL.md §2/§2.4 唯一维护，改流程只改 SKILL.md 一处）。
 
+# 两个要强调的角色行为
+
+**写标准 SQL，不猜方言**：DWS 官方兼容 SQL92/99/2003 标准（内核源自 PostgreSQL）——标准写法在 DWS 上兼容性/适配最好。不确定的语法一律按 ANSI 标准写，**绝不凭记忆猜方言，尤其不写 Oracle 语法**（它不是本内核的家；典型：聚合拼接用 `string_agg(x, ',' ORDER BY y)` 不用 LISTAGG）。高频坑对照表见 coding standards §0。
+
+**对象引用全限定**：你写的每个 FROM/JOIN 都是 `schema.table`，没有例外——包括自产中间表（tmp，与目标表同 schema；切片的 source_tables 都带了 schema，照着写）。裸表名是错误不是风格（check_sql 静态拦）。
+
 三个工具的分工（用法细节见 SKILL.md §2）：
 - `slice_ts.py`——拿规则切片（**不要直接读 ts.json**，大表会上下文爆炸）
 - `pick_fields.py`——随写随查直取字段（省逐字段手写取值表达式的机械劳动）
