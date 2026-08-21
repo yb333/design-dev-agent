@@ -1573,3 +1573,161 @@ class TestN30JoinFieldExistence:
         cache = self._cache(tmp_path)
         vr = self._run_with_cache(self._dd("t.id = m.order_id"), rs, cache)
         assert "N30" not in _codes(vr, "L4")
+
+
+class TestAssemblyFieldLineage:
+    """装配/merge 规则的无 logic 字段默认=tmp 搬运（不再沿用 step1 源表别名 ht.a）。
+
+    回归：两步设计（step1 多源加工→tmp1，step2 tmp1→merge 目标），step2 字段的
+    design_logic/source_fields 曾错指 ht.a（build_field 的 direct 分支先于
+    is_assembly 触发），coder 照写 SQL 在 UT 炸。
+    """
+
+    def _rs(self, extra_fields=None):
+        fields = [
+            {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "a", "target_column_cn": "字段A", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+            {"source_table": "ods_ht_f", "source_column": "amt", "source_type": "numeric(18,2)",
+             "transform_rule": "数据加工", "transform_detail": "金额×汇率",
+             "target_column": "amt_cny", "target_column_cn": "本币金额", "target_type": "numeric(18,2)",
+             "source_alias": "ht", "remark": ""},
+        ]
+        if extra_fields:
+            fields.extend(extra_fields)
+        rs = make_rs_input(fields=fields, has_audit=True)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_ht_f", "source_table_cn": "合同",
+             "source_alias": "ht", "join_condition": ""},
+        ]
+        for ef in (extra_fields or []):
+            rs["source_tables"].append({
+                "source_schema": ef.get("source_schema", "ods"),
+                "source_table": ef["source_table"], "source_table_cn": "",
+                "source_alias": ef["source_alias"], "join_condition": ""})
+        return rs
+
+    def test_step2_field_carries_from_tmp(self):
+        """step2（merge，无 field_logics）：direct 和加工字段都默认 tmp 搬运，不指 ht。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
+             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "step_type": "aggregate", "target_role": "intermediate",
+             "produces_for": ["R0002"], "reads": [],
+             "field_targets": ["a", "amt_cny", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {"amt_cny": "金额×汇率"},
+             "grain": {"input": "源", "output": "中间", "change": "聚合"}},
+            {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+             "write_condition": "T.id=T1.id",
+             "produces_for": [], "reads": ["dws.tmp1"],
+             "field_targets": ["a", "amt_cny", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {},
+             "grain": {"input": "中间", "output": "目标", "change": "无"}},
+        ])
+        ts, _, _ = do_assemble(rs, dd)
+        f_tbl = ts["tables"]["dwb_test_f"]
+        by_name = {f["target_field"]: f for f in f_tbl["fields"]}
+        # 直接复制字段（mapping 别名 ht）：搬运默认，指向 tmp1 不是 ht
+        f_a = by_name["a"]
+        assert f_a["design_logic"].startswith("直取 tmp1.a"), f_a["design_logic"]
+        assert "ht" not in f_a["design_logic"]
+        assert f_a["source_fields"] == [{"table": "tmp1", "field": "a", "alias": ""}]
+        # 加工字段：同样搬运（前序已加工）
+        f_amt = by_name["amt_cny"]
+        assert f_amt["design_logic"].startswith("直取 tmp1.amt_cny"), f_amt["design_logic"]
+        assert f_amt["source_fields"][0]["table"] == "tmp1"
+        assert f_amt["transform_type"] == "direct"
+
+    def test_step2_joined_source_field_keeps_alias(self):
+        """case B：step2 另 join 源表 cx 补取字段——cx 字段保持'直取 cx.b'，ht 字段仍搬运。"""
+        rs = self._rs(extra_fields=[
+            {"source_table": "ods_cx_f", "source_column": "b", "source_type": "varchar(20)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "b", "target_column_cn": "字段B", "target_type": "varchar(20)",
+             "source_alias": "cx", "remark": ""},
+        ])
+        dd = make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
+             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "step_type": "aggregate", "target_role": "intermediate",
+             "produces_for": ["R0002"], "reads": [],
+             "field_targets": ["a", "amt_cny", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {"amt_cny": "金额×汇率"},
+             "grain": {"input": "源", "output": "中间", "change": "聚合"}},
+            {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+             "write_condition": "T.id=T1.id",
+             "produces_for": [], "reads": ["dws.tmp1"],
+             "source_aliases": ["cx"],
+             "joins": [{"alias": "cx", "type": "LEFT JOIN", "condition": "t1.a = cx.a"}],
+             "field_targets": ["a", "amt_cny", "b", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {},
+             "grain": {"input": "中间", "output": "目标", "change": "无"}},
+        ])
+        ts, _, _ = do_assemble(rs, dd)
+        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
+        assert by_name["b"]["design_logic"] == "直取 cx.b"  # join 进来的真源表
+        assert by_name["b"]["source_fields"][0]["alias"] == "cx"
+        assert by_name["a"]["design_logic"].startswith("直取 tmp1.a")  # ht 血缘仍搬运
+
+    def test_multi_tmp_lineage_precision(self):
+        """模式二：双 tmp（tmp_a/tmp_b），字段血缘精确归属各自的 tmp。"""
+        rs = self._rs(extra_fields=[
+            {"source_table": "ods_py_f", "source_column": "p", "source_type": "varchar(10)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "p", "target_column_cn": "字段P", "target_type": "varchar(10)",
+             "source_alias": "py", "remark": ""},
+        ])
+        dd = make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "取A", "scenario": "default",
+             "exec_sequence": 1, "target_table": "dws.tmp_a", "is_view_step": False,
+             "step_type": "full", "target_role": "intermediate",
+             "produces_for": ["R0003"], "reads": [],
+             "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "无"}},
+            {"rule_code": "R0002", "rule_name": "取P", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.tmp_b", "is_view_step": False,
+             "step_type": "full", "target_role": "intermediate",
+             "produces_for": ["R0003"], "reads": [],
+             "field_targets": ["p"],
+             "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "无"}},
+            {"rule_code": "R0003", "rule_name": "合并", "scenario": "default",
+             "exec_sequence": 3, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+             "write_condition": "T.id=T1.id",
+             "produces_for": [], "reads": ["dws.tmp_a", "dws.tmp_b"],
+             "field_targets": ["a", "p", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "中间", "output": "目标", "change": "无"}},
+        ])
+        ts, _, _ = do_assemble(rs, dd)
+        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
+        assert by_name["a"]["design_logic"].startswith("直取 tmp_a.a"), by_name["a"]["design_logic"]
+        assert by_name["p"]["design_logic"].startswith("直取 tmp_b.p"), by_name["p"]["design_logic"]
+
+    def test_explicit_logic_wins(self):
+        """designer 显式写了 logic → 原样使用（可用自己的 tmp 别名口径 t1.a）。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
+             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "step_type": "aggregate", "target_role": "intermediate",
+             "produces_for": ["R0002"], "reads": [],
+             "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
+            {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+             "write_condition": "T.id=T1.id",
+             "produces_for": [], "reads": ["dws.tmp1"],
+             "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {"a": "直取 t1.a（tmp1 别名 t1）"},
+             "grain": {"input": "中间", "output": "目标", "change": "无"}},
+        ])
+        ts, _, _ = do_assemble(rs, dd)
+        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
+        assert by_name["a"]["design_logic"] == "直取 t1.a（tmp1 别名 t1）"

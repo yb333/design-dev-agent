@@ -57,6 +57,10 @@ rules:
     target_role: "target"               # ★ 目标角色: intermediate(中间表) | target(目标F表)
     produces_for: []                    # ★ 中间表规则填：产出供哪些规则消费（rule_code列表），如 ["R0003"]
     reads: []                           # ★ 装配/merge规则填：读哪些中间表（表名列表），如 ["tmp1","tmp2"]
+                                         #   搬运字段默认"直取 {tmp表名}.{字段}"（脚本按 field_targets 血缘归到具体 tmp，
+                                         #   不再沿用 step1 源表别名）；想用自己的 tmp 别名口径（如 t1.a）→ 该字段写 field_logics。
+                                         #   merge 时另 join 真源表补取的字段：joins 声明 + source_aliases 带上该源表别名，
+                                         #   默认口径保持"直取 {源别名}.{列}"
 
     # 增量设计（step_type=incremental_extract 时填，详见 design-guide §5.2）
     # ★ 增量资产结构铁律（RS 增量驱动表非空时）：至少两个规则——增量取数

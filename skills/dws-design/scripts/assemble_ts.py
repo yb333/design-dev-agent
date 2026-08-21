@@ -1279,16 +1279,18 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
 # 组装 ts.json
 # ============================================================
 def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None,
-                all_source_rows=None):
+                all_source_rows=None, tmp_source=""):
     """从 rs_input 的 field_mapping 记录 + design_logic 组装 ts 的 field 对象。
 
     field_rec: rs_input.field_mappings 的一条记录（取 target_type/transform_rule/design_logic 默认）
     logic: design_decisions 里该字段的 design_logic(可能为 None -> 用默认)
-    rule_aliases: 该规则关联的源表别名集合(用于决定 source_fields)
+    rule_aliases: 该规则实际读的表别名集合（source_aliases ∪ joins 别名；装配规则判断"真源表直取 vs tmp 搬运"用）
     is_assembly: 是否装配/merge 规则（reads 非空）。装配规则字段默认直取（从临时表搬）。
     reads_tables: 装配规则读取的临时表名列表（用于生成"直取 tmp.xxx"的默认 logic）
     all_source_rows: 该 target_column 的所有 rs_input 来源行（多来源合并 source_fields 用）。
                      None 时用 field_rec 单行。field_type 只取 field_rec 的（对着目标，不对来源）。
+    tmp_source: 该字段血缘归属的 tmp 表短名（产出它的前序规则的 target_table；
+                调用方按 field_targets 血缘算出）。空时退 reads_tables[0]。
     """
     transform_rule = field_rec.get("transform_rule", "直接复制")
     transform_type = TRANSFORM_MAP.get(transform_rule, "direct")
@@ -1298,28 +1300,39 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
     source_table = field_rec.get("source_table", "")
     target_column = field_rec.get("target_column", "")
 
-    # design_logic + transform_type：根据规则角色 + designer 是否写了 logic 共同决定
-    # 装配/merge 规则：designer 没写 logic 的字段 = 从临时表搬运（直取），transform_type 改 direct
-    #                 designer 写了 logic 的字段 = 二次加工，transform_type 保持原值
+    # design_logic + transform_type：根据规则角色 + designer 是否写了 logic 共同决定。
+    # ★ 装配/merge 规则（reads 非空）的无 logic 字段 = 从临时表搬运——**必须在 direct 分支之前判**：
+    #   否则 mapping 里"直接复制"的字段会先命中 direct 分支，产出"直取 ht.a"（step1 的源表别名，
+    #   本规则根本不 FROM 它，coder 照写必炸 UT）。例外：字段来源别名在本规则实际读的表集合里
+    #   （step2 join 进来的真源表直取）→ 保持源表直取。血缘归属的 tmp 由调用方精确传入。
+    carried_from_tmp = False
     if logic:
         design_logic = logic
         # designer 显式写了口径 → 按原 transform_type（加工）走，不改
-    elif transform_type == "direct":
-        design_logic = f"直取 {alias}.{source_column}" if alias else f"直取 {source_table}.{source_column}"
     elif transform_type == "assign":
         design_logic = "固定赋值"
     elif is_assembly:
-        # 装配/merge 规则的加工字段没写 logic → 默认从临时表直取（前面步骤已加工）
-        # transform_type 也改成 direct（跟 design_logic 的"直取"一致，避免 coder 看到矛盾）
-        transform_type = "direct"
-        src_tbl = reads_tables[0] if reads_tables else "临时表"
-        design_logic = f"直取 {src_tbl}.{target_column}（前序步骤已加工，本步搬运）"
+        if transform_type == "direct" and alias and rule_aliases and alias in rule_aliases:
+            # 字段来源 = 本规则 join 进来的真源表（如 step2 关联 cx 补取的字段）
+            design_logic = f"直取 {alias}.{source_column}"
+        else:
+            # 来源属于前序规则（step1 的 ht 等）→ 本步从 tmp 搬运
+            transform_type = "direct"
+            src_tbl = tmp_source or (reads_tables[0] if reads_tables else "临时表")
+            design_logic = f"直取 {src_tbl}.{target_column}（前序步骤已加工，本步搬运）"
+            carried_from_tmp = True
+    elif transform_type == "direct":
+        design_logic = f"直取 {alias}.{source_column}" if alias else f"直取 {source_table}.{source_column}"
     else:
         # 加工类字段没写 logic 是个问题, 但先给个占位, 校验层会警告
         design_logic = f"[需补充] 加工逻辑未写, transform_detail: {field_rec.get('transform_detail', '')}"
 
-    # source_fields：收集该 target_column 的所有来源行（多来源合并，不丢来源）
-    if all_source_rows:
+    # source_fields：装配规则的搬运字段指向 tmp（field 名 = target_column，前序已落同名），
+    # 不能沿用 rs_input 的源表血缘（ht.a 会把 coder 引向不存在的 FROM）。
+    if carried_from_tmp:
+        _tbl = tmp_source or (reads_tables[0] if reads_tables else "临时表")
+        source_fields_list = [{"table": _tbl, "field": target_column, "alias": ""}]
+    elif all_source_rows:
         source_fields_list = [
             {
                 "table": r.get("source_table", ""),
@@ -1480,6 +1493,23 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         # reads 的表短名（用于装配规则字段的"直取 tmp.xxx"默认 logic）
         reads_short = [_table_short(r) if ("." in str(r)) else r for r in rule_reads]
         is_asm = bool(rule_reads)  # 装配/merge 规则
+        # 本规则实际读的别名集合 = source_aliases ∪ joins 别名（装配规则判断"真源表直取 vs tmp 搬运"：
+        # 字段来源别名在集合里 = join 进来的真源表；不在 = 前序规则血缘，搬运）
+        rule_alias_set = set(rule.get("source_aliases") or [])
+        for _j in rule.get("joins") or []:
+            _ja = (_j.get("alias") or "").strip() if isinstance(_j, dict) else ""
+            if _ja:
+                rule_alias_set.add(_ja)
+        # 字段 → 产出它的 tmp 表（血缘：本规则 reads 的表里，哪个前序规则的 field_targets 含该字段）
+        reads_short_set = {str(r).lower() for r in reads_short}
+        lineage: dict = {}
+        if is_asm:
+            for _code2, _rule2 in rules.items():
+                _t2 = _rule2.get("target_table", "")
+                _t2_short = (_t2.rsplit(".", 1)[-1] if "." in _t2 else _t2).lower()
+                if _t2_short in reads_short_set:
+                    for _fn in _rule2.get("field_targets", []):
+                        lineage.setdefault(_fn.lower(), _t2_short)
         # 中间表 designer 声明的字段类型（自建字段/rs_input 没有的字段）
         dec_tbl_cfg = dec_tables.get(tbl_short, {})
         if not isinstance(dec_tbl_cfg, dict):
@@ -1492,9 +1522,10 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
             # 收集该 target_column 的所有来源行（多来源合并 source_fields）
             all_source_rows = [fm for fm in all_fm if fm.get("target_column") == tname]
             if rec:
-                f = build_field(rec, rule_logics.get(tname), rule.get("source_aliases"),
+                f = build_field(rec, rule_logics.get(tname), rule_alias_set,
                                 is_assembly=is_asm, reads_tables=reads_short,
-                                all_source_rows=all_source_rows)
+                                all_source_rows=all_source_rows,
+                                tmp_source=lineage.get(tname.lower(), ""))
             elif tname in dec_tbl_fields:
                 # 中间表自建字段（rs_input 没有，designer 在 tables.fields 声明了类型）
                 declared_type = dec_tbl_fields[tname]
