@@ -215,6 +215,35 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
             f"{sorted(unknown_tables)}（确认是否拼写错误或遗漏了源表声明）"
         )
 
+    # 5.1 schema 前缀：FROM/JOIN 引用一律 schema.table（裸表名 → 报错；CTE 名豁免）
+    # 真实教训：coder 忘写 schema，UT 阶段才暴露。切片的 source_tables 都带 schema
+    # （rs_input 源表 + tmp 伪源表=目标 schema），照着写就是全的。
+    from sql_parse import extract_table_refs_raw
+    bare_refs = sorted({
+        ref for ref in extract_table_refs_raw(sql_text)
+        if "." not in ref and ref.lower() not in cte_names
+    })
+    if bare_refs:
+        issues.append(
+            f"[schema] FROM/JOIN 引用必须带 schema 前缀（schema.table，自产 tmp 表与目标表同 schema）: "
+            f"{bare_refs}"
+        )
+
+    # 5.2 CTE 投影一致性：引用 cte.x 但该 CTE 定义体的投影里没有 x → 报错
+    # 真实教训：coder 写 CTE 漏投影字段，外层仍引用，字段别名错到 UT 才炸。
+    from sql_parse import parse_cte_bodies, cte_projection_names
+    cte_bodies = parse_cte_bodies(sql_text)
+    for cte_name, cbody in cte_bodies.items():
+        projections = cte_projection_names(cbody)
+        # 全 SQL（主查询 + 其他 CTE 体）里对该 CTE 的 `cte.列` 引用
+        for m in re.finditer(rf'\b{re.escape(cte_name)}\.([A-Za-z_]\w*)', sql_text, re.IGNORECASE):
+            col = m.group(1).lower()
+            if col not in projections:
+                issues.append(
+                    f"[CTE引用] 引用了 {cte_name}.{col}，但 CTE '{cte_name}' 的投影里没有 '{col}'"
+                    f"（漏写该列或列名拼错——检查 CTE 的 SELECT 投影）"
+                )
+
     return issues
 
 

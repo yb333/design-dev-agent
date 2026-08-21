@@ -169,3 +169,82 @@ def parse_join_pairs(text: str) -> list[tuple[tuple[str, str], tuple[str, str]]]
         right = (m.group(3).lower(), m.group(4).lower())
         pairs.append((left, right))
     return pairs
+
+
+def extract_table_refs_raw(sql: str) -> list[str]:
+    """提取 FROM/JOIN 后的原始表引用（保留 schema 前缀形态，供"必须带 schema"校验用）。
+
+    与 extract_from_tables（剥前缀取短名）互补：这里返回原文引用——
+    'ods.a_f' 原样返回，'a_f'（裸名）也原样返回，由调用方判定是否缺 schema。
+    """
+    refs = []
+    sql = _strip_sql_noise(sql)
+    for pattern in [r'\bFROM\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)',
+                    r'\bJOIN\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)']:
+        for m in re.finditer(pattern, sql, re.IGNORECASE):
+            refs.append(m.group(1))
+    return refs
+
+
+def parse_cte_bodies(sql: str) -> dict[str, str]:
+    """解析 WITH 子句里每个 CTE 的定义体：{cte名: 体文本}。
+
+    复用 split_cte_main 的括号深度扫描策略：识别顶层 CTE 头（name AS (），
+    记录其配对右括号之间的体。没有 WITH 返回空 dict。
+    """
+    m = re.search(r'\bWITH\b', sql, re.IGNORECASE)
+    if not m:
+        return {}
+    body = sql[m.end():]
+    cte_bodies: dict[str, str] = {}
+    depth = 0
+    cur_name = ""
+    body_start = -1
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch == '(':
+            if depth == 0:
+                # 顶层 '(' 前应是 "<name> AS "（允许空白/逗号分隔）
+                head = re.search(r'([A-Za-z_]\w*)\s+AS\s*$', body[max(0, i - 200):i])
+                if head:
+                    cur_name = head.group(1).lower()
+                    body_start = i + 1
+            depth += 1
+            i += 1
+            continue
+        if ch == ')':
+            depth -= 1
+            if depth == 0 and cur_name and body_start > 0:
+                cte_bodies[cur_name] = body[body_start:i]
+                cur_name = ""
+                body_start = -1
+            i += 1
+            continue
+        if depth == 0:
+            if ch in (',', ' ', '\t', '\n', '\r'):
+                i += 1
+                continue
+            hm = re.match(r'([A-Za-z_]\w*)\s+AS\s*\(', body[i:])
+            if hm:
+                # 跳过头部，让 '(' 的深度计数接管（下一轮 ch=='(' 时 body_start 才设）
+                i += hm.end() - 1
+                continue
+            break
+        i += 1
+    return cte_bodies
+
+
+def cte_projection_names(cte_body: str) -> set[str]:
+    """提取 CTE 定义体的投影列名集合（小写）。
+
+    取两类：AS 别名 + 体文本里所有 `别名.列` 的列名（SELECT t.a 无 AS 时投影名即 a）。
+    宁多勿漏——JOIN 条件里的列也进集，只会放行不会误报。
+    """
+    names = set()
+    for m in re.finditer(r'\bAS\s+([A-Za-z_]\w*)', cte_body, re.IGNORECASE):
+        names.add(m.group(1).lower())
+    for m in re.finditer(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)', cte_body):
+        names.add(m.group(2).lower())
+    return names

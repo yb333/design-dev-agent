@@ -448,3 +448,30 @@ class TestSchemaQuery:
         anchor.write_text("{}", encoding="utf-8")
         out = query_fields(anchor, "ods", "ods_b", "col2")
         assert "存在" in out and "varchar(50)" in out
+
+
+class TestSqlParseCtePrimitives:
+    """CTE 体解析/投影提取/原始表引用（check_sql 的 schema 与 CTE 一致性校验的原语）。"""
+
+    def test_parse_cte_bodies(self):
+        from sql_parse import parse_cte_bodies
+        sql = ("WITH a AS (SELECT t.x FROM ods.f1 t), b AS (SELECT a.x FROM a) "
+               "SELECT b.x FROM b")
+        bodies = parse_cte_bodies(sql)
+        assert set(bodies) == {"a", "b"}
+        assert "ods.f1" in bodies["a"]
+
+    def test_parse_cte_bodies_no_with(self):
+        from sql_parse import parse_cte_bodies
+        assert parse_cte_bodies("SELECT 1") == {}
+
+    def test_cte_projection_names(self):
+        from sql_parse import cte_projection_names
+        body = "SELECT t.a, t.b AS bb, count(*) AS cnt FROM ods.f t GROUP BY t.a, t.b"
+        names = cte_projection_names(body)
+        assert {"a", "bb", "cnt"} <= names  # 裸引用列名 + AS 别名都收（宁多勿漏）
+
+    def test_extract_table_refs_raw(self):
+        from sql_parse import extract_table_refs_raw
+        sql = "FROM ods.a_f t LEFT JOIN b_f m ON t.id = m.id"
+        assert extract_table_refs_raw(sql) == ["ods.a_f", "b_f"]

@@ -8,6 +8,23 @@
 
 ---
 
+## 0. SQL 方言原则：写标准 SQL，不猜方言
+
+**GaussDB(DWS) 官方兼容 SQL92/99/2003 标准，内核源自 PostgreSQL**——标准 SQL 在 DWS 上兼容性/适配最好，PG 家族语法是安全基线。**不确定的语法一律按 ANSI 标准写，不凭记忆猜方言**（尤其别写 Oracle 语法——它不是本内核的家）。
+
+| 场景 | ❌ 避免的方言写法 | ✅ 标准/PG 基线写法 |
+|------|-----------------|-------------------|
+| 字符串聚合（拼接） | `LISTAGG(x, ',') WITHIN GROUP (ORDER BY y)`（Oracle；DWS 支持依集群版本/兼容模式而异） | `string_agg(x, ',' ORDER BY y)` |
+| NULL 兜底 | `NVL(a, b)` | `COALESCE(a, b)` |
+| 条件映射 | `DECODE(x, v1, r1, d)` | `CASE WHEN x = v1 THEN r1 ELSE d END` |
+| 当前时间 | `sysdate` | `CURRENT_TIMESTAMP` |
+| 取第一行 | `ROWNUM = 1` | `ROW_NUMBER() OVER (...) = 1`（配合显式排序） |
+| 类型转换 | 隐式转换 / `TO_NUMBER` | `CAST(x AS 类型)` |
+
+**聚合拼接必须带 ORDER BY**：`string_agg(x, ',')` 不带排序在 DWS 上**结果不稳定**（官方故障案例）——拼接序由 designer 在 design_logic 定（四要素），照写。
+
+---
+
 ## 1. SELECT 字段规范
 
 ### 1.1 字段别名
@@ -196,6 +213,8 @@ LEFT JOIN dim.dim_user_d u ON o.user_id = u.user_id
 FROM dwd_order_f o
 LEFT JOIN dim_user_d u ON o.user_id = u.user_id
 ```
+
+**每张表都必须有 schema**——包括我们自产的中间表（tmp，与目标表同 schema；切片 source_tables 的伪源表已带）。check_sql 静态查裸表名引用（CTE 名豁免）。
 
 ### 3.3 排序 NULL 值处理
 

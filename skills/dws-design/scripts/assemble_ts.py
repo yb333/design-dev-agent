@@ -1446,8 +1446,10 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
     }
 
 
-def build_rule(rule_dec, field_map, rs_source_tables):
-    """组装一个规则对象。字段定义不在此产出（由 build_tables 按表汇总）。"""
+def build_rule(rule_dec, field_map, rs_source_tables, target_schema=""):
+    """组装一个规则对象。字段定义不在此产出（由 build_tables 按表汇总）。
+    target_schema：目标表 schema——自产中间表与目标表同 schema（建表在同一个库 schema 下），
+    伪源表带上它，coder 的 FROM/JOIN 才能写全 schema.table。"""
     code = rule_dec.get("rule_code", "")
     targets = rule_dec.get("field_targets", [])
     logics = rule_dec.get("field_logics") or {}
@@ -1504,7 +1506,7 @@ def build_rule(rule_dec, field_map, rs_source_tables):
     for r_short, r_alias in read_entries:
         if r_short and r_short.split(".")[-1].lower() not in existing_tables:
             rule_sources.append({
-                "schema": "",           # 临时表无 schema（或同 schema，coder 推断）
+                "schema": target_schema,   # 自产 tmp 与目标表同 schema（coder 的 FROM 写全 schema.table）
                 "table": r_short,
                 "alias": r_alias,       # 临时表别名（reads 对象声明或默认表短名）
                 "_from_reads": True,    # 标记来自 reads（临时表），区别于 rs_input 源表
@@ -2146,7 +2148,9 @@ def assemble_ts(rs_input, decisions):
     all_missing_logic = []
     for rule_dec in decisions.get("rules", []):
         code = rule_dec.get("rule_code", "")
-        rule_obj, missing_logic = build_rule(rule_dec, field_map, rs_input.get("source_tables", []))
+        rule_obj, missing_logic = build_rule(
+            rule_dec, field_map, rs_input.get("source_tables", []),
+            target_schema=meta.get("target", {}).get("f_table", {}).get("schema", ""))
         rules[code] = rule_obj
         if missing_logic:
             all_missing_logic.append((code, missing_logic))

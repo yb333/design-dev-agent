@@ -116,6 +116,8 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 详见 `references/dws-coding-standards.md`：
 - 不能 SELECT *、审计字段齐全、命名规范、注释用 `/* */` 禁 `--`
 - NULL 处理按业务语义判断（不是必须 COALESCE，见 §1.3）
+- **★ FROM/JOIN 一律 `schema.table`**（含自产 tmp——与目标表同 schema；切片 source_tables 都带了，照着写。裸表名 check_sql 会拦）
+- **★ 方言原则：写标准 SQL**（DWS 兼容 SQL92/99/2003 + PG 内核基线；不确定的语法按 ANSI 标准写，不猜方言——尤其聚合拼接用 `string_agg(x, ',' ORDER BY y)` 不用 LISTAGG，见 standards §0）
 
 ### 步骤 5：静态对比
 

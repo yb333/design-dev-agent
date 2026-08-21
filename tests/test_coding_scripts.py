@@ -945,3 +945,39 @@ class TestSliceNewContract:
         compact = to_compact_view(sliced)
         hit = [line for line in compact["fields_direct"] if "| t9." in line]
         assert hit, f"direct 行应使用 source_refs 的引用: {compact['fields_direct'][:3]}"
+
+
+class TestCheckSqlNewGuards:
+    """check_sql 新闸：schema 前缀 + CTE 投影一致性。"""
+
+    def _run_check(self, ts_data, sql_text, rule="R0001"):
+        from check_sql import check_sql
+        return check_sql(sql_text, ts_data, rule)
+
+    def test_bare_table_ref_reported(self, ts_data):
+        """FROM 裸表名（无 schema）→ [schema] 报错。"""
+        sql = ("SELECT t.contract_no AS contract_no FROM dwl_con_pu_any_f t")
+        issues = self._run_check(ts_data, sql)
+        assert any("[schema]" in i for i in issues), issues
+
+    def test_prefixed_ref_passes(self, ts_data):
+        """schema.table 形态不触发 [schema]。"""
+        sql = ("SELECT t.contract_no AS contract_no FROM fin_dwl_cnb.dwl_con_pu_any_f t")
+        issues = self._run_check(ts_data, sql)
+        assert not any("[schema]" in i for i in issues), issues
+
+    def test_cte_ref_without_projection_reported(self, ts_data):
+        """引用 cte.missing 但 CTE 投影没有 → [CTE引用] 报错。"""
+        sql = ("WITH base AS (SELECT t.contract_no AS contract_no "
+               "FROM fin_dwl_cnb.dwl_con_pu_any_f t) "
+               "SELECT base.contract_no AS contract_no, base.ghost_col AS ghost_col FROM base")
+        issues = self._run_check(ts_data, sql)
+        assert any("[CTE引用]" in i and "ghost_col" in i for i in issues), issues
+
+    def test_cte_ref_valid_projection_ok(self, ts_data):
+        """引用的列在 CTE 投影里 → 无 [CTE引用]。"""
+        sql = ("WITH base AS (SELECT t.contract_no AS contract_no "
+               "FROM fin_dwl_cnb.dwl_con_pu_any_f t) "
+               "SELECT base.contract_no AS contract_no FROM base")
+        issues = self._run_check(ts_data, sql)
+        assert not any("[CTE引用]" in i for i in issues), issues
