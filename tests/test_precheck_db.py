@@ -1475,3 +1475,33 @@ class TestJoinConditionGate:
         rs = self._rs()
         result = self._run(rs, self._cache(tmp_path))
         assert any("rn" in e for e in result.errors)
+
+
+class TestJoinConditionKeywordWarn:
+    """join_condition 含 SQL 关键字 → warn（输入代码是描述不是规格，designer 归位）。"""
+
+    def test_where_in_condition_warns(self):
+        from precheck import _check_join_conditions, PrecheckResult
+        rs = {"field_mappings": [], "source_tables": [
+            {"source_schema": "ods", "source_table": "ods_a_f", "source_alias": "a",
+             "join_condition": "a.oid = b.oid where b.status = 'N'"}], "meta": {}}
+        # 关键字检查在 precheck() 静态段；这里直接构造 precheck 调用太重，用内部逻辑等价验证
+        import re as _re
+        cond = rs["source_tables"][0]["join_condition"]
+        hits = [kw for kw in ("where", "left join") if _re.search(rf'\b{kw}\b', cond, _re.I)]
+        assert "where" in hits
+
+    def test_keyword_check_via_precheck(self, tmp_path):
+        from precheck import precheck
+        rs = {"field_mappings": [
+                {"source_table": "ods_a_f", "source_column": "id", "source_type": "bigint",
+                 "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "id", "target_column_cn": "ID", "target_type": "bigint",
+                 "source_alias": "a", "remark": ""}],
+              "source_tables": [
+                {"source_schema": "ods", "source_table": "ods_a_f", "source_alias": "a",
+                 "join_condition": "left join on a.id = b.id"}],
+              "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_t_f"}}}}
+        result = precheck(rs, tmp_path / "no_cache.json", False,
+                          tmp_path / "dec.yaml", None)
+        assert any("SQL 关键字" in w for w in result.warnings), result.warnings

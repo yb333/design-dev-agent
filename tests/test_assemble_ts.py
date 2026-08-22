@@ -1884,3 +1884,35 @@ class TestAccumulateFieldUnion:
         assert {"x", "y"} <= field_names, f"accumulate 并集丢字段: {field_names}"
         assert ts["rules"]["R0001"]["source_refs"]["x"] == "ta.x"
         assert ts["rules"]["R0002"]["source_refs"]["y"] == "tb.y"
+
+
+class TestTmpNaming:
+    """N33：tmp 命名规范 warn（目标表主体+_tmp+序号；特殊命名 warn 不拦）。"""
+
+    def _dd(self, tmp_table):
+        return make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "取数", "scenario": "default",
+             "exec_sequence": 1, "target_table": tmp_table, "is_view_step": False,
+             "step_type": "aggregate", "target_role": "intermediate",
+             "produces_for": ["R0002"], "reads": [],
+             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
+            {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+             "write_condition": "T.id=T1.id", "produces_for": [], "reads": [tmp_table],
+             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "中间", "output": "目标", "change": "无"}},
+        ])
+
+    def test_standard_name_no_warn(self):
+        rs = make_rs_input()
+        vr = _run(self._dd("dws.dwb_test_tmp1"), rs)
+        assert "N33" not in _codes(vr, "L2")
+
+    def test_tmp_prefix_name_warns(self):
+        """tmp 前置（tmp_x）→ warn 提示规范。"""
+        rs = make_rs_input()
+        vr = _run(self._dd("dws.tmp_order"), rs)
+        warns = [i for i in vr.items if i["code"] == "N33" and i["level"] == "warn"]
+        assert warns and "tmp_order" in warns[0]["msg"]

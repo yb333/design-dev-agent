@@ -174,7 +174,16 @@ def _resolve_insert_columns(select_sql: str, table_fields: list) -> list[str]:
     try:
         aliases = extract_select_aliases(select_sql)
         if aliases:
+            # 终检：INSERT 列重复 = 解析异常（CTE 边界错位）或 SELECT 真重复输出——
+            # 两者拼出的 INSERT 都是非法 SQL，明确报错不静默拼（fail-visible）
+            dup = [a for a in set(aliases) if aliases.count(a) > 1]
+            if dup:
+                raise ValueError(
+                    f"INSERT 字段清单解析出重复列 {sorted(dup)}——疑似 CTE 边界识别失败"
+                    f"（检查 SELECT 里的字符串字面量/括号配对）或 SELECT 输出了重复别名")
             return aliases
+    except ValueError:
+        raise
     except Exception:
         pass
     # 回退：table_fields 顺序

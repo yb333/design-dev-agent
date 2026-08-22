@@ -981,3 +981,57 @@ class TestCheckSqlNewGuards:
                "SELECT base.contract_no AS contract_no FROM base")
         issues = self._run_check(ts_data, sql)
         assert not any("[CTE引用]" in i for i in issues), issues
+
+
+class TestCheckSqlFieldRef:
+    """check_sql 5.3 字段存在性核对（三层登记处：schema_cache 源表 / ts tmp 字段；CTE 层已另有检查）。"""
+
+    def _ts(self):
+        return {
+            "rules": {"R0001": {
+                "rule_name": "t", "target_table": "dws.dwb_test_f",
+                "source_tables": [
+                    {"schema": "ods", "table": "ods_a_f", "alias": "a"},
+                    {"schema": "dws", "table": "dwb_test_tmp1", "alias": "t1", "_from_reads": True},
+                ],
+                "field_targets": ["id", "del_flag"],
+            }},
+            "tables": {
+                "dwb_test_tmp1": {"fields": [{"target_field": "id"}]},
+                "dwb_test_f": {"fields": [{"target_field": "id"}, {"target_field": "del_flag"}]},
+            },
+            "design": {"audit_fields": {"del_flag": {}}},
+        }
+
+    def _check(self, sql, cache=None):
+        import tempfile, json as _json
+        from check_sql import check_sql
+        ts = self._ts()
+        cp = None
+        if cache is not None:
+            f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+            _json.dump({"tables": cache}, f)
+            f.close()
+            cp = f.name
+        return check_sql(sql, ts, "R0001", cache_path=cp)
+
+    def test_source_field_missing_in_cache(self):
+        issues = self._check(
+            "SELECT a.order_id AS id FROM ods.ods_a_f a",
+            cache={"ods.ods_a_f": {"cust_id": "bigint"}})
+        assert any("[字段引用]" in i and "order_id" in i for i in issues), issues
+
+    def test_tmp_field_missing_in_ts(self):
+        issues = self._check(
+            "SELECT t1.ghost AS id FROM dws.dwb_test_tmp1 t1", cache=None)
+        assert any("[字段引用]" in i and "ghost" in i for i in issues), issues
+
+    def test_no_cache_source_layer_skips(self):
+        issues = self._check(
+            "SELECT a.order_id AS id FROM ods.ods_a_f a", cache=None)
+        assert not any("[字段引用]" in i for i in issues), issues
+
+    def test_subquery_alias_skipped(self):
+        issues = self._check(
+            "SELECT s.x AS id FROM (SELECT t.y AS x FROM ods.ods_a_f t) s", cache=None)
+        assert not any("[字段引用]" in i for i in issues), issues

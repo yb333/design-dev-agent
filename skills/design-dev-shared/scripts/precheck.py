@@ -334,6 +334,22 @@ def precheck(
             if term in str(expr):
                 result.add_warn(f"字段 {fm.get('target_column', '?')} 的映射表达式含模糊术语: '{term}'")
 
+    # 7.5 join_condition 含 SQL 关键字 → 输入的代码是描述不是规格（designer 翻译归位）
+    #   典型："left join on a.x=b.y and b.status='N'" / 条件里混 where——
+    #   ON 过滤还是行过滤要 designer 归位（joins.filter vs 规则 filter），不能照抄形态
+    import re as _re_kw
+    for st in rs_input.get("source_tables") or []:
+        cond = (st.get("join_condition") or "").strip()
+        if not cond:
+            continue
+        _kw_hits = [kw for kw in ("where", "left join", "inner join", "group by", "order by")
+                    if _re_kw.search(rf'\b{kw}\b', cond, _re_kw.IGNORECASE)]
+        if _kw_hits:
+            result.add_warn(
+                f"表 {st.get('source_table', '?')} 的 join_condition 含 SQL 关键字 {_kw_hits}"
+                f"——输入的代码是描述不是规格：designer 翻译时归位（join 级限定 → joins.filter；"
+                f"行过滤 → 规则级 filter），不照抄代码形态")
+
     # 8. 审计字段校验
     _check_audit_fields(field_mappings, result)
 

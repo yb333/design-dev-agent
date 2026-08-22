@@ -269,6 +269,19 @@ def main():
             tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
             if not tbl_fields:
                 tbl_fields = rule.get("fields", [])
+            try:
+                _wrap_probe = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition)
+            except ValueError as ve:
+                # INSERT 列清单解析异常（重复列=CTE 边界错位/重复别名）——规则级 FAIL，不拖垮整轮
+                rule_result["status"] = "FAIL"
+                rule_result["error_type"] = "SQL"
+                rule_result["detail"] = f"INSERT 构造失败: {ve}"
+                print(f"  ❌ INSERT 构造失败: {ve}")
+                _dump_rule_sql(ts_path, rule_code, target, select_sql, "",
+                               f"构造失败: {ve}", [])
+                all_results.append(rule_result)
+                prev_failed = True
+                continue
 
             # ── 采样试跑（快速失败闸门，仅 truncate_table 模式）──
             trial_used = False

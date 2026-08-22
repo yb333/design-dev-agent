@@ -94,10 +94,11 @@ def _format_field_list(fields, per_line: int = 5) -> str:
     return "\n".join(lines)
 
 
-def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
+def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[str]:
     """静态对比 SELECT vs ts.json。
 
-    返回问题列表（空=全部通过）。
+    返回问题列表（空=全部通过）。cache_path 可选（schema_cache.json）——
+    给了才做源表字段存在性核对（未连库跳过该层，CTE/tmp 层照查）。
     """
     issues = []
 
@@ -244,6 +245,48 @@ def check_sql(sql_text: str, ts: dict, rule_code: str) -> list[str]:
                     f"（漏写该列或列名拼错——检查 CTE 的 SELECT 投影）"
                 )
 
+    # 5.3 字段存在性核对（写完即查，三层登记处）：
+    # 源表别名 → schema_cache；tmp 别名 → ts.tables.fields；CTE 别名 → 上面已查不重复；
+    # 绑不到的（子查询别名等）→ 跳过不猜（宁放过）。真实教训：designer 错引字段
+    # （未连库时 N30 降 warn 漏掉）到 UT 才炸——coder 侧缓存核对接住（防御纵深）。
+    from sql_parse import extract_qualified_refs
+    if cache_path is not None:
+        try:
+            _cp = Path(cache_path)
+            cache_tables = ({k.lower(): {c.lower() for c in (v or {})}
+                             for k, v in json.loads(_cp.read_text(encoding="utf-8"))
+                             .get("tables", {}).items()}) if _cp.exists() else {}
+        except Exception:
+            cache_tables = {}
+    else:
+        cache_tables = {}
+    ts_tables_fields = {t.lower(): {f.get("target_field", "").lower()
+                                    for f in (tcfg.get("fields") or [])}
+                        for t, tcfg in ts.get("tables", {}).items()}
+    for al, col in sorted(set(extract_qualified_refs(sql_text))):
+        if al in cte_names:
+            continue  # CTE 层上面已查
+        st_entry = next((s for s in rule.get("source_tables", [])
+                         if (s.get("alias") or "").lower() == al), None)
+        if st_entry is None:
+            continue  # 子查询别名/函数名等 → 跳过不猜
+        t_short = (st_entry.get("table") or "").split(".")[-1].lower()
+        schema = (st_entry.get("schema") or "").strip().lower()
+        if t_short in ts_tables_fields and t_short not in cache_tables:
+            # tmp（自产中间表）：登记处 = ts.tables.fields
+            if col not in ts_tables_fields[t_short]:
+                issues.append(
+                    f"[字段引用] {al}.{col}：中间表 {t_short} 的字段里没有 '{col}'"
+                    f"（检查拼写，或 ts 的 field_targets 漏了该字段——设计问题回报，不自行改）")
+            continue
+        if not schema or not cache_tables:
+            continue  # 无 schema/无缓存 → 源表层跳过
+        fields = cache_tables.get(f"{schema}.{t_short}")
+        if fields and col not in fields:
+            issues.append(
+                f"[字段引用] {al}.{col}：源表 {schema}.{t_short} 里没有字段 '{col}'"
+                f"（检查拼写；若 ts/design_logic 引用本身有误 → 回报调用方，不自行改设计）")
+
     return issues
 
 
@@ -270,8 +313,9 @@ def main():
         sys.exit(2)
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
-    # 检查
-    issues = check_sql(sql_text, ts, args.rule)
+    # 检查（schema_cache 在 ts 同级 _internal/——precheck 连库产出；没有则源表层跳过）
+    issues = check_sql(sql_text, ts, args.rule,
+                       cache_path=ts_path.parent / "_internal" / "schema_cache.json")
 
     if issues:
         print(f"[静态对比未通过] {args.rule} 有 {len(issues)} 个问题:", file=sys.stderr)

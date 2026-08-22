@@ -50,8 +50,21 @@ def split_cte_main(sql: str) -> tuple[list[str], str]:
     last_cte_close = -1  # 最后一个 CTE 的右括号在 body 中的位置
     i = 0
     n = len(body)
+    in_string = False
+    string_char = ''
     while i < n:
         ch = body[i]
+        # 字符串字面量内的括号不参与深度计数（"WHERE note = '('" 会把边界打乱）
+        if in_string:
+            if ch == string_char:
+                in_string = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_string = True
+            string_char = ch
+            i += 1
+            continue
         if ch == '(':
             depth += 1
             i += 1
@@ -202,8 +215,21 @@ def parse_cte_bodies(sql: str) -> dict[str, str]:
     body_start = -1
     i = 0
     n = len(body)
+    in_string = False
+    string_char = ''
     while i < n:
         ch = body[i]
+        # 字符串字面量内的括号不参与深度计数
+        if in_string:
+            if ch == string_char:
+                in_string = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_string = True
+            string_char = ch
+            i += 1
+            continue
         if ch == '(':
             if depth == 0:
                 # 顶层 '(' 前应是 "<name> AS "（允许空白/逗号分隔）
@@ -298,3 +324,12 @@ def find_field_provenance(field: str, texts: list, mention_texts: list = None) -
         if pat.search(t):
             return "mention"
     return ""
+
+
+def extract_qualified_refs(sql: str) -> list:
+    """提取 SQL 文本里所有 `别名.列` 限定引用 [(alias, col)]（小写）。
+
+    与 extract_condition_field_refs（条件专用，含裸字面量）不同：这个面向整段 SQL，
+    供字段存在性核对遍历用。
+    """
+    return [(a.lower(), c.lower()) for a, c in _QUALIFIED_REF.findall(sql or "")]

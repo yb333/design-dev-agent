@@ -707,6 +707,19 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             if not pf:
                 vr.add_hard("L2", "N9", f"规则 {code} 是中间表(intermediate)但 produces_for 为空（中间表必须声明被谁消费）")
 
+    # N33（warn）：tmp 命名规范——目标表主体（去 _f）+ _tmp + 序号（dwb_x_f → dwb_x_tmp1）。
+    # 特殊命名允许（dwl/dwb 前缀与尾缀之间可改），一般不建议——warn 提示对齐规范。
+    _f_full = (rs_input.get("meta", {}).get("target", {}).get("f_table", {}) or {}).get("table", "")
+    _f_short = _f_full.rsplit(".", 1)[-1] if _f_full else ""
+    _f_body = _f_short[:-2] if _f_short.endswith("_f") else _f_short
+    if _f_body:
+        _tmp_pat = re.compile(rf"^{re.escape(_f_body)}_tmp\d*$", re.IGNORECASE)
+        for tbl_short in intermediate_tables:
+            if not _tmp_pat.match(tbl_short):
+                vr.add_warn("L2", "N33",
+                    f"中间表 '{tbl_short}' 命名不合规范——建议 {(_f_body + '_tmp序号')}（目标表主体+"
+                    f"_tmp+序号，与目标表同前缀便于血缘识别）；特殊场景可改前缀后主体，一般不建议")
+
     # N10 下游 reads 非空（merge 必须；full 有中间表时必须；无中间表放行）
     has_intermediate = len(intermediate_tables) > 0
     for rule in rules:

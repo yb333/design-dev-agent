@@ -475,3 +475,32 @@ class TestSqlParseCtePrimitives:
         from sql_parse import extract_table_refs_raw
         sql = "FROM ods.a_f t LEFT JOIN b_f m ON t.id = m.id"
         assert extract_table_refs_raw(sql) == ["ods.a_f", "b_f"]
+
+
+class TestSqlParseStringAwareness:
+    """括号深度扫描的字符串字面量感知（修 CTE 边界错位→INSERT 列重复的根因）。"""
+
+    def test_string_paren_does_not_break_cte_boundary(self):
+        from sql_parse import split_cte_main, extract_select_aliases
+        sql = ("WITH base AS (SELECT t.id, t.remark AS remark FROM ods.a_f t "
+               "WHERE t.note = '(') "
+               "SELECT base.id AS id, base.remark AS remark FROM base")
+        names, main = split_cte_main(sql)
+        assert names == ["base"]
+        assert main.startswith("SELECT base.id")
+        assert extract_select_aliases(sql) == ["id", "remark"]  # CTE 内别名不泄漏
+
+    def test_parse_cte_bodies_string_aware(self):
+        from sql_parse import parse_cte_bodies
+        sql = "WITH b AS (SELECT x FROM t WHERE s = ')') SELECT b.x AS x FROM b"
+        bodies = parse_cte_bodies(sql)
+        assert set(bodies) == {"b"} and "s = ')'" in bodies["b"]
+        assert bodies["b"].endswith("FROM t WHERE s = ')'") or "FROM t" in bodies["b"]
+
+    def test_insert_columns_duplicate_raises(self):
+        from run_ut import _resolve_insert_columns
+        import pytest
+        dup_sql = "WITH b AS (SELECT x AS id FROM t) SELECT b.id AS id, b.id AS id2 FROM b"
+        # 手工构造重复别名场景（解析器正常但 SELECT 真重复输出）
+        with pytest.raises(ValueError, match="重复列"):
+            _resolve_insert_columns("SELECT a AS x, b AS x FROM t", [])
