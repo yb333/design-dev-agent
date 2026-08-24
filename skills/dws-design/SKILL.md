@@ -64,7 +64,7 @@ description: >-
 ### 输入体检（五层之前，逐条 join_condition 过）
 
 - 表里 `⚠ 输入存疑` 标记（precheck 检出）→ 优先处理：无出处字段退源端（question），有出处的逻辑字段记下产生逻辑（第2层落地）
-- 未连库时（precheck 没查存在性）：条件字段对 mapping 字段集人工判，不确定调 schema_query
+- 未连库时（precheck 没查存在性）：条件字段对 mapping 字段集人工判，不确定调 check_field
 - 条件带"取一/最新/去重"意味（如 rn=1）→ 记下：键不唯一信号，第4层 join_safety 必须有对齐结论
 - 有不过的 → question 退源端，不进五层
 
@@ -147,7 +147,8 @@ description: >-
         --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
     ```
   - ② **类型可比**：两边键类型大类必须可比（字符=数值这种等式本身就是错的）。视图里有类型直接判；
-    没有 → 用 schema_query 查双侧（`--table schema.table --column 列名`，返回类型，两边各查一次对比）。
+    没有 → 用 check_field 查双侧（返回类型，两边各查一次对比）：
+    `python skills/dws-design/scripts/check_field.py --rs {deliver}/_internal/rs_input.json --field t1.order_id`
     不可比但内容兼容 → joins 里声明 cast（显式转换表达式，如 `a.prod_code::numeric`，coder 按声明写不自己发挥）；
     不可比且内容对不上 → 关联键选错了，回 mapping/人确认。紧凑视图 `join_type_risk` 段是 precheck 的
     前置检出（处置=转换的必须声明 cast，N_JOIN1 校验核对）；**precheck 没检出的（自然语言条件等）
@@ -176,9 +177,9 @@ description: >-
   - **过滤**：聚合前提条件（如 del_flag='N'）
   - **去重**：组内值是否先 DISTINCT
   - **拼接序**：聚合函数必须带 ORDER BY 保产出确定性——**工程补全，可合理推理**（默认按拼接值排序，写明即可），业务对顺序有真实要求才问源端。（对照：开窗取哪条的分组/排序口径是业务语义，必须源端给——见第4层⓪）
-- **design_logic 引用 mapping 未列的同表字段、不确定是否存在时**，可调 design-dev-shared 的 `schema_query.py` 确认（在本 skill 上三级同目录的 design-dev-shared/scripts/ 下，读 precheck 产的 schema_cache，不连库，秒级）：
-  `python .../schema_query.py --ts {deliver}/_internal/rs_input.json --table ods.ods_b --column col2`
-  （--ts 是定位锚点，设计阶段传 rs_input.json——cache 就在它同级 _internal/；工具按需取用不是必经步骤，确定字段存在就不用查）
+- **design_logic 引用 mapping 未列的同表字段、不确定是否存在时**，调本 skill 的 `check_field.py`（读 precheck 产的 schema_cache，不连库秒级；抄你正要写的 别名.字段 引用直接查，查无给相似字段建议）：
+  `python skills/dws-design/scripts/check_field.py --rs {deliver}/_internal/rs_input.json --field ht.col2`
+  （只给别名=列全表字段；按需取用不是必经步骤，确定存在就不用查）
   —— 设计确认过的，coder 信任 design_logic。要引用 rs_input 完全未声明的全新表时不要用工具绕，正路是补 mapping（闸口①确认）
 - 加工字段没写 design_logic 会被硬校验拦住（不允许占位继续跑）
 

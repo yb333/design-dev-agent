@@ -56,7 +56,8 @@
 | `assemble_ts.py` | rs_input + design_decisions → ts.json + ts.md；跑 ~40 条校验（五层+LI，含 **N_JOIN1 关联键类型闭合**：rs_input._join_type_risks 检出对必须 joins.cast 或豁免） | designer 写完 decisions 后组装 | rs_input.json + design_decisions.yaml → ts.json / ts.md | 读 decisions.rules **+ decisions.init**（Chunk 1 已接通 init 段） |
 | `explore.py` | JOIN 键唯一性探查（count vs count distinct，只读单表，不 JOIN）+ **键值重叠率试算**（--check-overlap：双侧 DISTINCT 采样500 算交集，探测同类型不同内容的静默空关联） | designer 第4层关联安全/内容语义 | ts.json + 表/键 → 结论 | ts.rules / ts.tables |
 | `assemble_ts_opt.py` ★opt | 优化模式组装：ts_baseline + 增量 decisions（opt-decisions-template.yaml）→ ts_v2 + change 段；新 JOIN 必须声明 join_safety；确定性应用不动存量 | 优化模式 designer 写完 decisions 后 | ts_baseline.json + decisions.yaml → ts_v2.json | 读 ts_baseline 全部 + 写 change 段 |
-| `schema_query.py`（住 design-dev-shared，**designer/coder 公共**） | 查 schema_cache 字段存在性（--column 单查/列全表；只读缓存不连库，与 explore 连库互补） | designer 写 design_logic 引用 mapping 外字段前（设计时验证一次，coder 信任 design_logic；coder 不确定时兜底直调） | ts.json + schema.table → 存在性/字段清单 | 不读 ts（读 `_internal/schema_cache.json`） |
+| `check_field.py`（★ designer 自有入口） | 字段查证：抄正要写的 `别名.字段` 引用直接查 schema_cache（别名自动解析；查无给相似字段建议；只给别名=列全表）。内核调 shared/schema_query | designer 写 design_logic/关联条件引用 mapping 外字段前；惯例假设字段（SCD2 start_date 类）先查再写 | rs_input.json + 别名.字段 → 存在性/类型/相似建议 | 不读 ts（读 `_internal/schema_cache.json`） |
+| `schema_query.py`（住 design-dev-shared，**能力层**：query_fields/lookup_table 库 + 通用 CLI） | 字段查询公共能力——check_field（designer 入口）/ pick_fields（coder 入口）的内核 | 被两个角色入口 import；通用 CLI 仅兜底 | 锚点 + schema.table → 存在性/字段清单 | 不读 ts（读 `_internal/schema_cache.json`） |
 
 ---
 

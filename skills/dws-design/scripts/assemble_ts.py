@@ -589,12 +589,13 @@ def _table_short(name: str) -> str:
 
 
 def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
-                        schema_cache_path=None) -> ValidationResult:
+                        schema_cache_path=None, rs_path=None) -> ValidationResult:
     """运行五层校验全集。返回 ValidationResult。
 
     存量校验（C7-C13）通过 validate_decisions 调用，结果并入 L1/L4。
     新增校验按层独立函数。schema_cache_path 可选——传了才做 N30 join 字段存在性
-    硬校验（未连库无缓存时降为单条 warn 提示）。
+    硬校验（未连库无缓存时降为单条 warn 提示）。rs_path 可选——N30 报错的教学
+    命令里给可复制的真实路径。
     """
     vr = ValidationResult()
     rules = decisions.get("rules", [])
@@ -1252,6 +1253,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             "（第4层⓪人工确认：条件里每个字段要在源表真实存在）")
     if cache_tables:
         from sql_parse import extract_condition_field_refs
+        _rs_arg = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
         for rule in rules:
             code = rule.get("rule_code", "?")
             # 规则级 tmp 别名绑定（reads 对象形式声明；字符串形式默认别名=表短名）
@@ -1264,6 +1266,9 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             if _flt:
                 texts.append(_flt)
             texts += [str(v) for v in (rule.get("field_logics") or {}).values() if v]
+            # join_safety 的限定条件（如 is_current = 1）也是 designer 声明的引用载体
+            texts += [str(js.get("join_filter") or "").strip()
+                      for js in rule.get("join_safety") or [] if isinstance(js, dict)]
             for cond in texts:
                 if not cond:
                     continue
@@ -1301,7 +1306,9 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                             f"规则 {code} 的条件（{cond}）引用 {al}.{col}，"
                             f"但源表 {tbl_key} 里没有字段 '{col}'——join_condition 可能是"
                             f"copy 源代码的残留（典型 rn=1 开窗产物，表里无此字段）：不自行还原，"
-                            f"需源端提供开窗定义，闸口①退回（见 SKILL 第4层⓪）")
+                            f"需源端提供开窗定义，闸口①退回（见 SKILL 第4层⓪）"
+                            f"\n先查证（下次写前）: python skills/dws-design/scripts/check_field.py "
+                            f"{_rs_arg} --field {al}.{col}")
                 # ② 裸字段 = 字面量：在规则涉及的源表/tmp 字段里查，都查无才报
                 if not alias_tables:
                     continue  # 条件里没有可解析的别名限定 → 无法圈定范围，跳过不猜
@@ -1316,7 +1323,9 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                             f"在涉及的源表里都不存在——典型是 copy 源代码的开窗残留"
                             f"（如 rn=1，ROW_NUMBER 取一行的逻辑字段）：真实语义是'从表按业务键不唯一、"
                             f"开窗取一行'，需源端提供开窗定义（按啥分组/排序），闸口①退回，"
-                            f"designer 不自行还原（见 SKILL 第4层⓪）")
+                            f"designer 不自行还原（见 SKILL 第4层⓪）"
+                            f"\n先查证（下次写前）: python skills/dws-design/scripts/check_field.py "
+                            f"{_rs_arg} --field {bcol}")
 
     # ============================================================
     # N31/N32 别名绑定（结构校验，不依赖 schema_cache）。
@@ -2645,7 +2654,8 @@ def main():
     # 3a. 五层校验（含存量 C7-C13 + 新增 N1-N30）
     # N30 需要 schema_cache（rs_input 同级的 _internal 缓存，precheck 连库产出）
     _cache_path = Path(args.rs).resolve().parent / "schema_cache.json"
-    vr = run_all_validations(decisions, rs_input, field_map, schema_cache_path=_cache_path)
+    vr = run_all_validations(decisions, rs_input, field_map, schema_cache_path=_cache_path,
+                             rs_path=args.rs)
     exemptions = decisions.get("exemptions") or []
 
     # N5（W1 升级）：加工字段缺 design_logic 现在是硬阻断

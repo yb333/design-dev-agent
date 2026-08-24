@@ -18,7 +18,7 @@
 ```
 skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
-│   ├── scripts/         # assemble_ts.py explore.py fill_type_risk_decision.py
+│   ├── scripts/         # assemble_ts.py explore.py check_field.py(字段查证,designer自有入口) fill_type_risk_decision.py
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json schema_apps.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
@@ -54,7 +54,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 
 | agent | 职责 | skill | 能调的工具（详见 tool-registry.md） | 能写 |
 |-------|------|-------|----------------------------------|------|
-| **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design | assemble_ts（组装）/ explore（JOIN键唯一性） | `_internal/design_decisions.yaml` |
+| **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design | assemble_ts（组装）/ explore（JOIN键唯一性）/ check_field（字段查证） | `_internal/design_decisions.yaml` |
 | **dws-coder** | 单规则 design_logic → SELECT | dws-coding | slice_ts / pick_fields / check_sql | `etl/*.sql`、`dq/*.sql` |
 
 > ★ 其余管线脚本（preprocess / precheck / gate_summary / assemble_ddl / assemble_export / run_ut / ut_* / check_db 等）**调用方都是 command（new-pipe.md 编排）**，不是 agent——它们统一住在 `design-dev-shared/scripts`（2026-08 按调用方归位）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。

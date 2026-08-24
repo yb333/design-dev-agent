@@ -92,3 +92,26 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def lookup_table(ts_path, schema: str, table: str):
+    """结构化查询：返回 (status, cols)。
+
+    status: "ok"（cols={字段:类型}）/ "no_cache" / "not_cached"（cols=None）。
+    给 check_field / pick_fields 这类角色定制入口组合自己的文案用（query_fields
+    是整段文案的便捷版，本函数是裸数据版）。
+    """
+    ts_path = Path(ts_path)
+    cache_path = ts_path.parent / "_internal" / "schema_cache.json"
+    if not cache_path.exists() and (ts_path.parent / "schema_cache.json").exists():
+        cache_path = ts_path.parent / "schema_cache.json"
+    if not cache_path.exists():
+        return "no_cache", None
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "no_cache", None
+    cols = (cache.get("tables") or {}).get(f"{schema}.{table}".lower())
+    if not cols:
+        return "not_cached", None
+    return "ok", cols

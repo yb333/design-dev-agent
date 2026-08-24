@@ -2033,3 +2033,64 @@ class TestAssignCarryInAssembly:
         vr = run_all_validations(dd, rs, field_map, schema_cache_path=cp)
         n30 = [i for i in vr.items if i["code"] == "N30" and i["level"] == "hard"]
         assert any("start_date" in i["msg"] for i in n30), [i["msg"] for i in n30]
+
+
+class TestCheckField:
+    """designer 自有字段查证入口：别名解析/相似建议/全表/未知别名。"""
+
+    def _setup(self, tmp_path):
+        import json as _json
+        d = tmp_path / "_internal"
+        d.mkdir(exist_ok=True)
+        (d / "rs_input.json").write_text(_json.dumps({
+            "source_tables": [
+                {"source_schema": "ods", "source_table": "ods_emp_f", "source_alias": "emp"}],
+            "field_mappings": []}), encoding="utf-8")
+        (d / "schema_cache.json").write_text(_json.dumps({
+            "tables": {"ods.ods_emp_f": {"emp_id": "bigint", "start_dt": "date", "eff_date": "date"}}}),
+            encoding="utf-8")
+        return d / "rs_input.json"
+
+    def test_exists(self, tmp_path):
+        from check_field import check_field
+        out = check_field(self._setup(tmp_path), "emp.start_dt")
+        assert "✓" in out and "date" in out
+
+    def test_missing_with_suggestion(self, tmp_path):
+        from check_field import check_field
+        out = check_field(self._setup(tmp_path), "emp.start_date")
+        assert "✗" in out and "start_dt" in out  # 相似建议命中
+
+    def test_alias_only_lists_table(self, tmp_path):
+        from check_field import check_field
+        out = check_field(self._setup(tmp_path), "emp")
+        assert "emp_id" in out and "eff_date" in out
+
+    def test_unknown_alias(self, tmp_path):
+        from check_field import check_field
+        out = check_field(self._setup(tmp_path), "xx.yy")
+        assert "别名未识别" in out and "emp" in out
+
+    def test_n30_join_filter_checked(self, tmp_path):
+        """N30 覆盖 join_safety.join_filter 的字段引用。"""
+        import json as _json
+        rs = make_rs_input(has_audit=True)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_ht_f", "source_table_cn": "合同",
+             "source_alias": "ht", "join_condition": ""}]
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "joins": [{"alias": "ht", "type": "LEFT JOIN", "condition": "ht.id = ht.id"}],
+            "join_safety": [{"table": "ods_ht_f", "join_filter": "ht.is_current = 1",
+                             "join_key_unique": True, "strategy": "", "reason": ""}],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        cp = tmp_path / "schema_cache.json"
+        cp.write_text(_json.dumps({"tables": {"ods.ods_ht_f": {"id": "bigint"}}}), encoding="utf-8")
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(dd, rs, field_map, schema_cache_path=cp, rs_path=cp.parent / "rs_input.json")
+        n30 = [i for i in vr.items if i["code"] == "N30" and "is_current" in i["msg"]]
+        assert n30 and "check_field" in n30[0]["msg"]  # 拦截 + 教学命令
