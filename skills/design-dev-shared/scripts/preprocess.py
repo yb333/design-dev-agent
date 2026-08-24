@@ -1009,20 +1009,33 @@ FIELD_MAPPING_RULE_MAP = {
 
 
 def slim_mapping_data(mapping_raw: dict[str, Any]) -> dict[str, Any]:
-    """精简 mapping 数据: 去掉已移到 RS 的字段, 统一字段名。"""
+    """精简 mapping 数据: 去掉已移到 RS 的字段, 统一字段名。
+
+    归位（冗余措施）：transform_rule=赋值 但 detail 非平凡（CASE WHEN/函数/运算）→
+    改判"数据加工"——mapping 标错类型不应传染下游（规则1 走加工路径要求写 logic，
+    view 进 processed 段），打 warn 提示修源。
+    """
     # source_tables 精简
     source_tables = []
     for st in mapping_raw.get("source_tables", []):
         slim_st = {k: v for k, v in st.items() if k not in SOURCE_TABLE_DROP_FIELDS}
         source_tables.append(slim_st)
 
-    # field_mappings 精简 + 字段名统一
+    # field_mappings 精简 + 字段名统一 + 赋值错标归位
     field_mappings = []
     for fm in mapping_raw.get("field_mappings", []):
         slim_fm = {}
         for k, v in fm.items():
             new_key = FIELD_MAPPING_RULE_MAP.get(k, k)
             slim_fm[new_key] = v
+        if (slim_fm.get("transform_rule") or "").strip() == "赋值":
+            _detail = slim_fm.get("transform_detail") or slim_fm.get("mapping_expression") or ""
+            from sql_parse import is_trivial_assign_detail
+            if not is_trivial_assign_detail(str(_detail)):
+                print(f"[warn] 字段 {slim_fm.get('target_column', '?')} 标'赋值'但 detail 含加工逻辑"
+                      f"（{_detail}）——已按'数据加工'归位，建议修正 mapping 的映射规则列",
+                      file=sys.stderr)
+                slim_fm["transform_rule"] = "数据加工"
         field_mappings.append(slim_fm)
 
     return {

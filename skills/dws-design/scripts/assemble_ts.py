@@ -1201,6 +1201,21 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     f"不是业务描述搬运（翻译者原则）")
 
     # ============================================================
+    # N34（warn）：孤儿 field_logics——designer 写了口径但字段不在本规则 field_targets。
+    # build_tables 只遍历 field_targets，不在其中的 logic 被静默丢弃（真实案例：designer
+    # 把纠错逻辑写在规则1 但字段归属到了规则2，ts 烘焙回旧逻辑，coder 疑问到 UT 才暴露）。
+    # ============================================================
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        orphans = [c for c in (rule.get("field_logics") or {})
+                   if c not in (rule.get("field_targets") or [])]
+        if orphans:
+            vr.add_warn("L1", "N34",
+                f"规则 {code} 的 field_logics 写了 {sorted(orphans)} 的口径，但字段不在本规则"
+                f" field_targets 里——该逻辑会被静默忽略（组装只遍历 targets）。"
+                f"检查字段归属：要么把字段挪进本规则 targets，要么把口径挪到归属规则的 logics")
+
+    # ============================================================
     # N30（hard/warn）：designer 声明的 joins 引用字段必须真实存在（第4层⓪的产物兜底）。
     # 校验对象是 designer 自己的声明（结构化产物），不是 mapping 原文——先例 N21
     # （distribution_key ∈ 表字段）。存在性查两处：源表查 schema_cache（precheck 连库产出），
@@ -1241,11 +1256,14 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             code = rule.get("rule_code", "?")
             # 规则级 tmp 别名绑定（reads 对象形式声明；字符串形式默认别名=表短名）
             rule_tmp_alias = _rule_tmp_aliases(rule)
-            # 待查文本：join 条件 + 规则级 filter（都是 designer 声明的结构化产物）
+            # 待查文本：join 条件 + 规则级 filter + design_logic（designer 声明的产物——
+            # 口径里的 别名.字段 限定引用也查存在性，专抓"业界惯例假设字段名"如 SCD2 的
+            # start_date；裸词不查，中文混排误报不可控）
             texts = [((j.get("condition") or "").strip()) for j in rule.get("joins") or []]
             _flt = (rule.get("filter") or "").strip()
             if _flt:
                 texts.append(_flt)
+            texts += [str(v) for v in (rule.get("field_logics") or {}).values() if v]
             for cond in texts:
                 if not cond:
                     continue
@@ -1398,19 +1416,32 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
     if logic:
         design_logic = logic
         # designer 显式写了口径 → 按原 transform_type（加工）走，不改
-    elif transform_type == "assign":
-        design_logic = "固定赋值"
     elif is_assembly:
+        # ★ 装配判断必须在 assign 之前：装配/merge 规则的无 logic 字段（含赋值类）一律默认
+        #   tmp 搬运——赋值动作只在产出规则发生一次（规则1 赋好写进 tmp，规则2 搬运），
+        #   不许每个规则重复赋值。真实案例：merge 规则的赋值字段被 assign 分支拦下烘焙成
+        #   "固定赋值"（或错标输入的加工原文），没走 tmp 搬运，coder 直接从来源 copy。
+        #   designer 真要在本规则赋值（如场景 NULL）→ 写 field_logics 显式声明（logic 优先）。
         if transform_type == "direct" and alias and rule_aliases and alias in rule_aliases:
             # 字段来源 = 本规则 join 进来的真源表（如 step2 关联 cx 补取的字段）
             design_logic = f"直取 {alias}.{source_column}"
         else:
-            # 来源属于前序规则（step1 的 ht 等）→ 本步从 tmp 搬运（引用限定符用 tmp 别名）
+            # 来源属于前序规则（step1 的 ht 等，含赋值/加工产物）→ 本步从 tmp 搬运
             transform_type = "direct"
             src_tbl = tmp_source or (reads_tables[0] if reads_tables else "临时表")
             src_ref = tmp_alias or src_tbl
             design_logic = f"直取 {src_ref}.{target_column}（前序步骤已加工，本步搬运）"
             carried_from_tmp = True
+    elif transform_type == "assign":
+        from sql_parse import is_trivial_assign_detail
+        _detail = str(field_rec.get("transform_detail") or field_rec.get("mapping_expression") or "").strip()
+        if not is_trivial_assign_detail(_detail):
+            # 兜底（正常被 preprocess 归位；防手工编辑 rs_input 绕过）：错标赋值实为加工
+            # → 当加工处理，detail 作口径底稿，coder 至少看到真实逻辑而不是"固定赋值"
+            transform_type = "aggregate"
+            design_logic = f"[加工作业·mapping 原文] {_detail}"
+        else:
+            design_logic = "固定赋值"
     elif transform_type == "direct":
         design_logic = f"直取 {alias}.{source_column}" if alias else f"直取 {source_table}.{source_column}"
     else:

@@ -295,6 +295,12 @@ init 是首次全量装载，**先删再插 universally 正确**：空表上 tru
 | **derive**（模式一二） | 增量相对全量只多一个范围 WHERE（无 delta 机器） | 系统克隆增量规则物化 init.rules（extract 的 filter→init_filter、终态→truncate、core_from 指向源）；SQL 由 coder 适配源 .sql 改 filter | 只声明 `mode=derive` + `group_mode`，**不写 init 规则**（系统克隆） |
 | **explicit**（模式三） | 增量有 delta 机器（union 取并集 / 只重建受影响行 / tmp 存变化键） | 独立设计：剥掉 delta 机器，留核心加工全量跑 | 写 init 规则（core_from + joins），装配器补不变量 |
 
+> **derive 克隆的是"全量版增量管道"，与增量管道同构（几步照抄几步）**——不坍缩成单规则：
+> 掐头（filter→init_filter）去尾（merge→truncate）只换口径，tmp 加工和装载两步是必要结构，
+> 同构才可解释、coder 只需适配源 SQL 改 filter（成本低可靠）。嫌中间跳多余（如 extract 纯取数
+> 无加工，init 想一条 SQL 直接全量灌目标）→ 那是重新设计 init SQL，走 **explicit 手写**自由坍缩，
+> 判断归 designer，脚本不做自动融合（违背 derive 的克隆语义）。
+
 **判据一句话**：增量管道相对全量，是"只多了范围过滤"（derive），还是"多了一整套识别/隔离变化数据的结构"（explicit）？前者 init 可派生，后者 init 必须独立设计。
 
 > 为什么 explicit 不能派生：delta 机器（如 `A增量 UNION B增量 → tmp1`、`JOIN 限定在 tmp1 范围`）在全量场景毫无意义——init 不用算"谁变了"，直接全量加工。剥掉这些机器剩下的"核心加工"可能跟某条增量规则像、也可能完全不像，是设计判断，不是机械替换。

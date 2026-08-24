@@ -77,7 +77,7 @@
 | `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
 | `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行）+ **join_key_pair_risky**（JOIN 键对保守谓词：跨大类风险，integer↔numeric/同族放行） | precheck / ut_diagnose | design-dev-shared/scripts |
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样 / INSERT 列重复终检） | ut_precheck / ut_execute | design-dev-shared/scripts |
-| `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / parse_cte_bodies（均字符串字面量感知）/ extract_select_aliases / extract_from_tables / extract_table_refs_raw / cte_projection_names / extract_qualified_refs / extract_condition_field_refs / find_field_provenance） | run_ut / check_sql / precheck / assemble_ts(N30) | design-dev-shared/scripts |
+| `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / parse_cte_bodies（均字符串字面量感知）/ extract_select_aliases / extract_from_tables / extract_table_refs_raw / cte_projection_names / extract_qualified_refs / extract_condition_field_refs / find_field_provenance / is_trivial_assign_detail） | run_ut / check_sql / precheck / assemble_ts(N30) | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
 | `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline / tests/test_baseline_v1_contract | design-dev-shared/scripts |
 

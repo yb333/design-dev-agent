@@ -333,3 +333,26 @@ def extract_qualified_refs(sql: str) -> list:
     供字段存在性核对遍历用。
     """
     return [(a.lower(), c.lower()) for a, c in _QUALIFIED_REF.findall(sql or "")]
+
+
+_ASSIGN_TRIVIAL_KEYWORDS = {"CURRENT_TIMESTAMP", "SYSDATE", "CURRENT_DATE", "NULL"}
+
+
+def is_trivial_assign_detail(detail: str) -> bool:
+    """赋值字段的 detail 是否为平凡字面量/变量（'N' / 0 / ${PARAM} / CURRENT_TIMESTAMP / 空）。
+
+    非平凡（CASE WHEN / 函数 / 运算 / 字段引用）= 输入错标（应标数据加工）：
+    preprocess 归位用；assemble_ts build_field 兜底用（防手工编辑 rs_input 绕过归位）。
+    """
+    d = (detail or "").strip()
+    if not d or d in ("-", "无", "\\"):
+        return True
+    if re.fullmatch(r"'[^']*'", d):
+        return True
+    if re.fullmatch(r"\$\{[^}]+\}", d):
+        return True
+    if re.fullmatch(r"[-+]?\d+(\.\d+)?", d):
+        return True
+    if d.upper() in _ASSIGN_TRIVIAL_KEYWORDS:
+        return True
+    return False

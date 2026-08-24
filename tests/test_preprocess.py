@@ -1077,3 +1077,28 @@ class TestCompactConditionIssues:
         rs = _rs_input_with([_direct("id", "id")])
         c = build_compact(rs)
         assert all("输入存疑" not in e for e in c["tables"])
+
+
+class TestAssignReclassify:
+    """preprocess 归位：错标赋值实为加工（非平凡 detail）→ 数据加工 + 不影响平凡赋值。"""
+
+    def test_mislabeled_case_when_reclassified(self):
+        from preprocess import slim_mapping_data
+        raw = {"source_tables": [], "field_mappings": [
+            {"target_column": "flag", "mapping_rule": "赋值",
+             "mapping_expression": "CASE WHEN x=1 THEN 'Y' ELSE 'N' END"},
+            {"target_column": "del_flag", "mapping_rule": "赋值", "mapping_expression": "'N'"},
+        ]}
+        slim = slim_mapping_data(raw)
+        rules = {f["target_column"]: f["transform_rule"] for f in slim["field_mappings"]}
+        assert rules["flag"] == "数据加工"  # 错标归位
+        assert rules["del_flag"] == "赋值"  # 平凡字面量不动
+
+    def test_trivial_forms_all_kept(self):
+        from preprocess import slim_mapping_data
+        trivials = ["'N'", "0", "${P_CYCLE_ID}", "CURRENT_TIMESTAMP", "-", ""]
+        raw = {"source_tables": [], "field_mappings": [
+            {"target_column": f"c{i}", "mapping_rule": "赋值", "mapping_expression": d}
+            for i, d in enumerate(trivials)]}
+        slim = slim_mapping_data(raw)
+        assert all(f["transform_rule"] == "赋值" for f in slim["field_mappings"])

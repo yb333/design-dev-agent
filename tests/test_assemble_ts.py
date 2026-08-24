@@ -1916,3 +1916,120 @@ class TestTmpNaming:
         vr = _run(self._dd("dws.tmp_order"), rs)
         warns = [i for i in vr.items if i["code"] == "N33" and i["level"] == "warn"]
         assert warns and "tmp_order" in warns[0]["msg"]
+
+
+class TestAssignCarryInAssembly:
+    """装配规则赋值字段也 tmp 搬运（赋值动作只在产出规则发生一次）。
+
+    回归：两步设计（R1 加工+赋值→tmp1，R2 merge），R2 的赋值字段曾被 assign
+    分支拦下烘焙"固定赋值"（或错标输入的加工原文），不从 tmp 搬运。
+    """
+
+    def test_audit_assign_carried_from_tmp(self):
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "a", "target_column_cn": "字段A", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+        ], has_audit=True)  # 审计字段=赋值类（del_flag 'N' 等）
+        dd = make_design_decisions(rules=[
+            {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
+             "exec_sequence": 1, "target_table": "dws.dwb_test_tmp1", "is_view_step": False,
+             "step_type": "aggregate", "target_role": "intermediate",
+             "produces_for": ["R0002"], "reads": [],
+             "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
+            {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+             "write_condition": "T.id=T1.id", "produces_for": [], "reads": ["dws.dwb_test_tmp1"],
+             "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+             "field_logics": {}, "grain": {"input": "中间", "output": "目标", "change": "无"}},
+        ])
+        ts, _, _ = do_assemble(rs, dd)
+        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
+        # 赋值类审计字段在 R2 = tmp 搬运，不再"固定赋值"
+        f_del = by_name["del_flag"]
+        assert f_del["design_logic"].startswith("直取 dwb_test_tmp1.del_flag"), f_del["design_logic"]
+        assert f_del["transform_type"] == "direct"
+        assert f_del["source_fields"][0]["table"] == "dwb_test_tmp1"
+        assert ts["rules"]["R0002"]["source_refs"]["del_flag"] == "dwb_test_tmp1.del_flag"
+        # R1（产出规则）里仍是赋值语义（fixed）——赋值只发生一次
+        r1_by = {f["target_field"]: f for f in ts["tables"]["dwb_test_tmp1"]["fields"]}
+        assert r1_by["del_flag"]["design_logic"] == "固定赋值"
+
+    def test_mislabeled_assign_falls_back_to_processing(self):
+        """兜底：错标赋值实为加工（手工 rs_input 绕过 preprocess 归位）→ detail 当口径底稿。"""
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "a", "target_column_cn": "字段A", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+            {"source_table": "ods_ht_f", "source_column": "", "source_type": "",
+             "transform_rule": "赋值", "transform_detail": "CASE WHEN a=1 THEN 'Y' ELSE 'N' END",
+             "target_column": "flag", "target_column_cn": "标记", "target_type": "varchar(1)",
+             "source_alias": "ht", "remark": ""},
+        ], has_audit=False)
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["a", "flag"],
+            "field_logics": {"flag": "CASE WHEN ht.a=1 THEN 'Y' ELSE 'N' END"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        ts, _, _ = do_assemble(rs, dd)
+        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
+        assert "CASE WHEN" in by_name["flag"]["design_logic"]  # 真实口径，不是"固定赋值"
+
+    def test_orphan_field_logics_warns(self):
+        """N34：logic 写了但字段不在 targets → warn（防静默丢弃）。"""
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
+             "transform_rule": "数据加工", "transform_detail": "x 加工",
+             "target_column": "a", "target_column_cn": "字段A", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+            {"source_table": "ods_ht_f", "source_column": "b", "source_type": "varchar(50)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "b", "target_column_cn": "字段B", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+        ], has_audit=False)
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["a", "b"],
+            "field_logics": {"a": "口径A", "ghost": "写给不存在归属的字段的口径"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = _run(dd, rs)
+        warns = [i for i in vr.items if i["code"] == "N34" and i["level"] == "warn"]
+        assert warns and "ghost" in warns[0]["msg"], warns
+
+    def test_n30_checks_design_logic_refs(self, tmp_path):
+        """N30 扩展：design_logic 里的 别名.字段 限定引用也查存在性（SCD2 start_date 假设）。"""
+        import json as _json
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
+             "transform_rule": "数据加工", "transform_detail": "取最新",
+             "target_column": "a", "target_column_cn": "字段A", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+        ], has_audit=False)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_ht_f", "source_table_cn": "合同",
+             "source_alias": "ht", "join_condition": ""}]
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["a"],
+            "field_logics": {"a": "按 ht.start_date 排序取最新一条"},  # ★ 惯例假设的字段
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        cache = {"cached_at": "", "tables": {"ods.ods_ht_f": {"a": "varchar(50)"}}}  # 无 start_date
+        cp = tmp_path / "schema_cache.json"
+        cp.write_text(_json.dumps(cache), encoding="utf-8")
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(dd, rs, field_map, schema_cache_path=cp)
+        n30 = [i for i in vr.items if i["code"] == "N30" and i["level"] == "hard"]
+        assert any("start_date" in i["msg"] for i in n30), [i["msg"] for i in n30]
