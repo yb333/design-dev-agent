@@ -296,15 +296,33 @@ class TestPrecheckJoinTypeRisk:
         assert any("无法自动对账" in w for w in result.warnings)
         assert not any("关联键类型跨大类" in e for e in result.errors)
 
-    def test_no_cache_skips_with_warn(self, tmp_path):
+    def test_no_cache_skips_with_warn(self, tmp_path, monkeypatch):
         from precheck import precheck
         rs = _mk_rs_input()
-        # 全赋值字段 → DB 校验无字段可查不连库；缓存缺失 → 关联对账跳过 warn
+        # 全赋值字段，但实体级源表（join_condition 用）仍在 DB 校验范围（扩围修复）——
+        # mock 连库失败（环境类）→ 跳过；缓存缺失 → 关联对账跳过 warn
         for fm in rs["field_mappings"]:
             fm["transform_rule"] = "赋值"
             fm["transform_detail"] = "'N'"
             fm["source_alias"] = ""
             fm["source_schema"] = fm["source_table"] = fm["source_column"] = ""
+
+        class _Status:
+            ok = False
+            category = "network"
+            reason = "mock 不可达"
+        class _Exec:
+            def diagnose_connection(self):
+                return _Status()
+            def get_current_source(self):
+                return "mock"
+            def test_connection(self):
+                return False
+            def close(self):
+                pass
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": _Exec())
+
         decision = tmp_path / "type_risk_decision.yaml"
         result = precheck(rs, tmp_path / "none.json", False, decision, None)
         assert any("关联键类型对账跳过" in w for w in result.warnings)

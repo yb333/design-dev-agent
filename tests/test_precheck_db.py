@@ -489,12 +489,8 @@ class TestSchemaCache:
         updated = json.loads(cache_path.read_text(encoding="utf-8"))
         assert "ods.ods_test_f" in updated["tables"]
 
-    def test_cache_valid_partial_miss_uses_cache(self, tmp_path, monkeypatch):
-        """缓存有效（未过期）但缺某张表 → 仍用缓存（该表当空集，报字段不存在）。
-
-        新逻辑不做按表补缺：缓存整体有效就用，缺的表当空集处理。
-        想刷新用 --refresh-schema。
-        """
+    def test_cache_partial_miss_refreshes(self, tmp_path, monkeypatch):
+        """缓存有效（未过期）但缺某张表 → 不当命中，连库刷新补齐（防误报表不存在）。"""
         cache_path = tmp_path / "schema_cache.json"
         import json
         # 缓存有效但只有 table_a，没有 ods_test_f（本次要查的）
@@ -512,12 +508,12 @@ class TestSchemaCache:
         rs = _make_rs_input([_biz_field(source_column="id")])
         result = precheck(rs, cache_path)
 
-        # 不连库（缓存有效）
-        assert executor_called["n"] == 0, "缓存有效不连库"
-        # ods_test_f 不在缓存 → 当空集 → 报 id 不存在
+        # 缺表 → 连库刷新（不再当空集误报"字段不存在"）
+        assert executor_called["n"] == 1, "缓存缺表应连库刷新"
         db_errors = [e for e in result.errors if ("字段不存在" in e or "类型不符" in e)]
-        assert any("id" in e and "不存在" in e for e in db_errors), \
-            f"缓存缺该表应报字段不存在: {db_errors}"
+        assert db_errors == [], f"刷新后应校验通过: {db_errors}"
+        updated = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "ods.ods_test_f" in updated["tables"]
 
     def test_cache_expired_refetches(self, tmp_path, monkeypatch):
         """缓存过期（cached_at 过去很久）→ 重新连库捞。"""
@@ -1505,3 +1501,57 @@ class TestJoinConditionKeywordWarn:
         result = precheck(rs, tmp_path / "no_cache.json", False,
                           tmp_path / "dec.yaml", None)
         assert any("SQL 关键字" in w for w in result.warnings), result.warnings
+
+
+class TestDbScopeExpansion:
+    """DB 校验范围扩围：纯关联表进 fetch/缓存（修'未连库'误报根因）+ 大小写归一 + 表级存在性。"""
+
+    def test_join_only_table_fetched_and_cached(self, tmp_path, monkeypatch):
+        """纯关联表（无字段映射，只在 join_condition）→ 也被 fetch 并写缓存（键小写）。"""
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        import json
+        rs["source_tables"].append({
+            "source_schema": "ODS", "source_table": "ODS_JOIN_ONLY_F",  # ★ mapping 大写
+            "source_table_cn": "纯关联", "source_alias": "j",
+            "join_condition": "t.id = j.order_id"})
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": _make_mock_executor({
+                                ("ods", "ods_test_f"): ["id"],
+                                ("ods", "ods_join_only_f"): ["order_id"]}))
+        cache_path = tmp_path / "schema_cache.json"
+        result = precheck(rs, cache_path)
+        assert not any("表不存在" in e for e in result.errors), result.errors
+        updated = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "ods.ods_join_only_f" in updated["tables"]  # 大写 mapping → 缓存键小写归一
+
+    def test_join_only_table_missing_errors(self, tmp_path, monkeypatch):
+        """纯关联表库中查无 → 表级 error（ETL 必然失败，不静默降级成字段误报）。"""
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        rs["source_tables"].append({
+            "source_schema": "ods", "source_table": "ods_ghost_f",
+            "source_table_cn": "幽灵表", "source_alias": "g",
+            "join_condition": "t.id = g.order_id"})
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": _make_mock_executor({
+                                ("ods", "ods_test_f"): ["id"]}))  # ghost 表 fetch 为空
+        result = precheck(rs, tmp_path / "c.json")
+        assert any("ods_ghost_f" in e and "表不存在" in e for e in result.errors), result.errors
+
+    def test_gate_message_three_states(self, tmp_path):
+        """gate 弱分支文案三态：无缓存文件='未连库'；有缓存但表不在='表不在 schema 缓存'。"""
+        import json
+        from precheck import _check_join_conditions, PrecheckResult
+        rs = {"field_mappings": [], "source_tables": [
+            {"source_schema": "ods", "source_table": "ods_a_f", "source_alias": "a",
+             "join_condition": "a.oid = a.rn"}], "meta": {}}
+        # 无缓存文件
+        r1 = PrecheckResult()
+        _check_join_conditions(rs, r1, tmp_path / "none.json", None)
+        assert any("未连库（无 schema_cache）" in w for w in r1.warnings)
+        # 有缓存但该表不在（缓存范围没覆盖）
+        cp = tmp_path / "schema_cache.json"
+        cp.write_text(json.dumps({"tables": {"ods.other_f": {"x": "bigint"}}}), encoding="utf-8")
+        r2 = PrecheckResult()
+        _check_join_conditions(rs, r2, cp, None)
+        assert any("表不在 schema 缓存" in w for w in r2.warnings), r2.warnings
+        assert not any("未连库" in w for w in r2.warnings)

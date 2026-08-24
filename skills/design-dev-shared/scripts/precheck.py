@@ -1110,7 +1110,8 @@ def _check_join_conditions(
 
     # 表结构（cache 可能刚被 _check_db_schema 刷新）：{"schema.table": {col, ...}}
     structures: dict[str, set] = {}
-    if cache_path is not None and Path(cache_path).exists():
+    have_cache_file = cache_path is not None and Path(cache_path).exists()
+    if have_cache_file:
         try:
             raw = json.loads(Path(cache_path).read_text(encoding="utf-8"))
             for k, v in (raw.get("tables") or {}).items():
@@ -1165,21 +1166,31 @@ def _check_join_conditions(
                     f"关联条件逻辑字段 {where_desc}: {field}（有出处，designer 落地）")
                 return
             if len(known) == len(scope_tables) and scope_tables:
+                # 表在缓存但结构为空 = 表不存在/无权限（_check_db_schema 已报表级 error，
+                # 此处文案对齐语义，不再误导成"字段写错"）
+                if all(not structures.get(t) for t in scope_tables):
+                    _why = "表结构为空（表不存在或账号无权限）——重跑 precheck 确认表名/权限"
+                else:
+                    _why = ("典型是 copy 源代码的逻辑字段残留（如 rn=1 开窗取一）或笔误；"
+                            "需源端补出处（写明产生逻辑）或修正 mapping")
                 result.add_error(
-                    f"[条件字段] {where_desc} 引用 '{field}'：不在源表结构里且无产生逻辑记载"
-                    f"——典型是 copy 源代码的逻辑字段残留（如 rn=1 开窗取一）或笔误；"
-                    f"需源端补出处（写明产生逻辑）或修正 mapping")
+                    f"[条件字段] {where_desc} 引用 '{field}'：不在源表结构里且无产生逻辑记载——{_why}")
                 issues.append({"table": ",".join(scope_tables), "field": field,
                                "level": "error", "issue": "无出处（不在表结构，无产生逻辑记载）"})
             else:
                 # 表结构不可得：mapping 声明过该列也算数（join-only 键）
                 if any(field in mapped_cols.get(t, set()) for t in scope_tables):
                     return
+                # 文案三态：没缓存文件（未连库） vs 有缓存但该表不在（缓存范围没覆盖）
+                if not have_cache_file:
+                    _why2 = "未连库（无 schema_cache）"
+                else:
+                    _why2 = "表不在 schema 缓存（该表未入校验范围——mapping 无字段映射的纯关联表；重跑 precheck 连库补齐）"
                 result.add_warn(
-                    f"[条件字段] {where_desc} 引用 '{field}'：未连库无法查表结构，"
+                    f"[条件字段] {where_desc} 引用 '{field}'：{_why2}，"
                     f"且不在 mapping 字段集、无产生逻辑记载——确认字段真实存在或有出处")
                 issues.append({"table": ",".join(scope_tables), "field": field,
-                               "level": "warn", "issue": "存在性未校验（未连库），mapping 无记载"})
+                               "level": "warn", "issue": f"存在性未校验（{_why2}），mapping 无记载"})
 
         # ① 别名限定引用 a.x：绑定到该别名对应的表
         for al, col in qualified:
@@ -1240,12 +1251,22 @@ def _check_db_schema(
         if not schema or not table:
             continue
         col_key = source_column.lower()
-        tbl_map = needed.setdefault((schema, table), {})
+        # 键统一小写（DWS 元数据小写语义；mapping 写大写不影响任何下游比对/缓存键）
+        tbl_map = needed.setdefault((schema.lower(), table.lower()), {})
         if col_key not in tbl_map:
             source_type = (fm.get("source_type") or "").strip()
             tbl_map[col_key] = [source_column, [], source_type]
         # 累积目标字段（同一来源字段可能映射到多个目标）
         tbl_map[col_key][1].append(fm.get("target_column", "?"))
+
+    # ★ 扩围：实体级 source_tables 全表进校验范围——纯关联表（只在 join_condition 出现、
+    # 无字段映射）也要 fetch/缓存，否则 join_condition 的字段核对拿不到表结构，
+    # 误报"未连库"（mapping 大写的表同样靠这里兜进范围，键已小写归一）
+    for st in rs_input.get("source_tables") or []:
+        _sch = (st.get("source_schema") or "").strip().lower()
+        _tbl = (st.get("source_table") or "").strip().lower()
+        if _sch and _tbl:
+            needed.setdefault((_sch, _tbl), {})
 
     if not needed:
         return
@@ -1262,18 +1283,19 @@ def _check_db_schema(
     if cache_path and not refresh_schema:
         cache = _load_schema_cache(cache_path)
         if not _is_cache_expired(cache.get("cached_at", ""), ttl_hours=72):
-            # 缓存未过期：用缓存里的表结构（本次用到的表都应在缓存里）
-            raw_tables = cache.get("tables", {})
-            for (sch, tbl) in all_tables:
-                key = f"{sch.lower()}.{tbl.lower()}"
-                if key in raw_tables:
-                    # 缓存里是 {col: type}，兼容旧格式（list 时转无类型 dict）
+            # 缓存未过期：仅当本次要用的表【全部】在缓存里才算命中——缺表（扩围前旧缓存/
+            # 新增表/纯关联表首次入库）不当命中，走连库刷新整体补齐（防误报"表不存在"）
+            raw_tables = {k.lower(): v for k, v in cache.get("tables", {}).items()}
+            if all(f"{sch}.{tbl}" in raw_tables for (sch, tbl) in all_tables):
+                for (sch, tbl) in all_tables:
+                    key = f"{sch}.{tbl}"
                     raw = raw_tables[key]
+                    # 缓存里是 {col: type}，兼容旧格式（list 时转无类型 dict）
                     if isinstance(raw, dict):
-                        found[(sch.lower(), tbl.lower())] = {k.lower(): v.lower() for k, v in raw.items()}
+                        found[(sch, tbl)] = {k.lower(): str(v).lower() for k, v in raw.items()}
                     elif isinstance(raw, list):
-                        found[(sch.lower(), tbl.lower())] = {c.lower(): "" for c in raw}
-            cache_used = True
+                        found[(sch, tbl)] = {c.lower(): "" for c in raw}
+                cache_used = True
 
     # ── 缓存无效（过期/不存在/强制刷新）→ 连库整体查所有表 ──
     if not cache_used:
@@ -1313,11 +1335,11 @@ def _check_db_schema(
             fetched = _fetch_tables_schema_batch(executor, all_tables)
             executor.close()
             found = fetched
-            # 写缓存（存 {col: type}）
+            # 写缓存（存 {col: type}；键小写归一——DWS 元数据小写语义）
             if cache_path:
                 cache_new = {"cached_at": "", "tables": {}}
                 for (sch, tbl), cols in fetched.items():
-                    cache_new["tables"][f"{sch}.{tbl}"] = cols  # 已是 {col: type}
+                    cache_new["tables"][f"{sch.lower()}.{tbl.lower()}"] = cols  # 已是 {col: type}
                 _save_schema_cache(cache_path, cache_new)
         except Exception as e:
             result.add_warn(f"[DB校验异常] {e}")
@@ -1329,6 +1351,16 @@ def _check_db_schema(
         f"DB 校验: 校验 {len(all_tables)} 张表 / {total_fields} 个字段"
         f"（{'缓存命中' if cache_used else '连库刷新'}）"
     )
+
+    # 表级存在性（连库/缓存两路统一拦）：found 里结构为空 = 表不存在或账号无权限——
+    # 这类表后续 ETL 必然失败（至少权限报错），设计前明确拦下，不静默降级成字段级误报
+    for (sch, tbl) in all_tables:
+        if not found.get((sch, tbl)):
+            has_fields = bool(needed[(sch, tbl)])
+            result.add_error(
+                f"[表不存在] 来源表 '{sch}.{tbl}' 在库中查无结构（表不存在或账号无权限）"
+                + ("——纯关联表，ETL 必然失败，先确认表名/权限" if not has_fields
+                   else "——该表有字段映射，逐字段校验也会全部失败"))
 
     for (sch, tbl), cols_map in needed.items():
         found_cols = found.get((sch.lower(), tbl.lower()), {})
