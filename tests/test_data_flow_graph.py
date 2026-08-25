@@ -211,7 +211,7 @@ class TestRenderDataFlowMermaid:
         """生成的文本用 ```mermaid 围栏包裹"""
         ts = {
             "rules": {"R0001": {"rule_name": "x", "target_table": "t", "exec_sequence": 1,
-                                "is_view_step": False, "source_tables": []}},
+                                "source_tables": []}},
             "data_flow": {},
         }
         result = render_data_flow_mermaid(ts)
