@@ -32,14 +32,14 @@
 ### 制品生成（住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
-| `assemble_ddl.py` | ts → DDL（CREATE TABLE/VIEW + COMMENT + 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables（init 复用 tmp 无新 DDL；Chunk 2 确认不重复建） |
+| `assemble_ddl.py` | ts → DDL（CREATE TABLE + I 视图（F 表配套镜像）+ COMMENT（视图用 COMMENT ON VIEW）+ 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables |
 | `assemble_export.py` | ts + ETL → shujia_{表}.xlsx（10 sheet）+ lts_{表}.xlsx（3 sheet），无 manifest（取码脚本只读 Excel） | 步骤 7.5 | ts.json + etl/ → `export/*.xlsx`（视图走 ddl/ 通道部署，不发术加规则行） | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；编码占位符出厂 GR_*/规则码/PV000N 三处闭合校验；租户ID=appid、组织简称/数据源/项目中文名/责任人全走 shujia_tenants[appid]（platform_config 收敛为单块，schema_mappings/default 退役），项目编码/英文名及子项目全套由内网取码脚本补；lts 调度路径以 ts.tasks 为准（schedule_config 设计期盖章）；RULE 行带执行序列，TargetFields 来源字段 s.字段 形态，参数变量行每规则组一条） |
 
 ### UT（需数据库，住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
-| `ut_precheck.py` | 快速 UT 预检（回退 + DDL + SELECT 跑通，秒级，不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
+| `ut_precheck.py` | 快速 UT 预检（DDL 统一部署：回退容忍→建表→I 视图；SELECT 跑通秒级不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
 | `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **ts.rules + ts.init.rules**（init 先建基线→增量在基线上 merge；prev_failed 跨阶段级联） |
 | `run_ut.py` | **UT 函数库**（wrap_insert / wrap_write / run_ut_check / inject_tablesample / substitute_params / resolve_all_params 等，被 ut_precheck/ut_execute import）。纯函数库无 CLI 入口——UT 执行走 ut_precheck（6a）+ ut_execute（6b）两阶段 | 函数库：ut_precheck/ut_execute 用 | （由调用方读 ts） | 由调用方决定（ut_execute 读 ts.rules + ts.init.rules） |
 | `ut_diagnose.py` | UT 类型转换失败自动诊断（`diagnose_type_error`：圈跨类型字段→探测源表脏值+样例）+ **报错分类 + 关联键嫌疑反查 + 嫌疑报告**（classify_db_error 只认高置信模式宁漏诊不误诊；diagnose_join_suspicion 用 ts joins×schema_cache 列跨大类对；路由建议：有 join 嫌疑退 designer/人禁改类型）。ut_execute 钩子调用；CLI 供复跑（`--ts --rule`） | ut_execute 钩子调用 / designer·coder 复跑 | ts.json → 嫌疑报告文本 | ts.tables[].fields + ts.rules[].joins + ts.rules[].source_tables + `_internal/schema_cache.json` |

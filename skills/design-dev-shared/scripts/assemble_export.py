@@ -220,7 +220,7 @@ def _has_separate_init(ts: dict) -> bool:
     section = ts.get("init") or {}
     if not isinstance(section, dict) or section.get("group_mode") != "separate":
         return False
-    return any(not r.get("is_view_step") for r in (section.get("rules") or {}).values())
+    return bool(section.get("rules"))
 
 
 def _pv_codes(ts: dict) -> list[str]:
@@ -293,8 +293,6 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
 
     # --- 取数规则（每条 ETL SQL 一行）---
     for code, rule, is_init in merged:
-        if rule.get("is_view_step"):
-            continue
         # 读 ETL SQL 文件
         sql_file = etl_dir / f"{code}.sql"
         if not sql_file.exists():
@@ -423,8 +421,6 @@ def build_target_fields(ts: dict) -> list[list]:
     tables = ts.get("tables", {})
     rows = []
     for code, rule in rules.items():
-        if rule.get("is_view_step"):
-            continue
         # 字段来源：优先 tables 段
         target_tbl = rule.get("target_table", "")
         target_short = target_tbl.rsplit(".", 1)[-1] if "." in target_tbl else target_tbl

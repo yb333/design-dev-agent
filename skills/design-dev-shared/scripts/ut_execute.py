@@ -204,18 +204,9 @@ def main():
                 if f_schema:
                     target = f"{f_schema}.{target}"
 
-            is_view = rule.get("is_view_step", False)
             rule_result = {"rule": rule_code, "target": target, "checks": []}
 
             print(f"--- {rule_code}: {target} ---")
-
-            # 视图规则：预检已建好，跳过
-            if is_view:
-                pre = precheck_results.get(rule_code, {})
-                rule_result["status"] = pre.get("status", "SKIP")
-                rule_result["detail"] = "视图已在预检阶段完成"
-                all_results.append(rule_result)
-                continue
 
             # 预检跳过/失败的规则，级联跳过
             pre = precheck_results.get(rule_code, {})

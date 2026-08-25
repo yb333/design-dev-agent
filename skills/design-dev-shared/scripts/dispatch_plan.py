@@ -27,11 +27,9 @@ from pathlib import Path
 def build_dispatch_plan(ts: dict) -> dict:
     """从 ts.json 算执行计划（纯函数，不碰文件）。"""
     rules = ts.get("rules", {}) or {}
-    # 规则 coder 只编码非视图步骤（I 视图由 assemble_ddl 生成 CREATE VIEW，无需 SELECT）
-    etl_rules = sorted(
-        [code for code, r in rules.items() if not (r or {}).get("is_view_step")],
-        key=lambda c: ((rules[c] or {}).get("exec_sequence") or 0, c),
-    )
+    # 全部规则都由 coder 编码（视图是 F 表配套镜像，由 assemble_ddl 生成，不是规则）
+    etl_rules = sorted(rules.keys(),
+                       key=lambda c: ((rules[c] or {}).get("exec_sequence") or 0, c))
     init_rules = list(((ts.get("init") or {}).get("rules")) or {})
     dq_rules = ts.get("dq_rules") or []
     groups = ((ts.get("data_flow") or {}).get("schedule_groups")) or []

@@ -233,7 +233,6 @@ def render_data_flow_mermaid(ts: dict) -> str:
                 continue
 
             target = rule.get("target_table", "")
-            is_view = rule.get("is_view_step", False)
             step_id = "step_" + _sanitize_node_id(code)
 
             # 分类该规则的 source_tables
@@ -282,16 +281,14 @@ def render_data_flow_mermaid(ts: dict) -> str:
             if target:
                 tgt_id = "tbl_" + _sanitize_node_id(target)
                 if tgt_id not in declared_targets:
-                    if is_view:
-                        cls = "view"
-                    elif "tmp" in target.lower():
+                    if "tmp" in target.lower():
                         cls = "intermediate"
                     else:
                         cls = "target"
                     lines.append(f'  {tgt_id}["{target}"]')
                     declared_targets.add(tgt_id)
                     node_classes[tgt_id] = cls
-                edges.append((step_id, tgt_id, is_view))
+                edges.append((step_id, tgt_id, False))
 
         lines.append('')
 
@@ -1567,7 +1564,6 @@ def build_rule(rule_dec, field_map, rs_source_tables, target_schema=""):
         "scenario": rule_dec.get("scenario", ""),
         "exec_sequence": rule_dec.get("exec_sequence", 1),
         "target_table": rule_dec.get("target_table", ""),
-        "is_view_step": rule_dec.get("is_view_step", False),
         "design_intent": rule_dec.get("design_intent", ""),
         "load_mode": rule_dec.get("load_mode", "truncate_table"),
         "write_condition": rule_dec.get("write_condition", ""),  # 写入条件（MERGE ON/分区名/delete WHERE），designer填脚本只搬运
@@ -1619,7 +1615,7 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
     tables = {}
     for code, rule in rules.items():
         tbl = rule.get("target_table", "")
-        if not tbl or rule.get("is_view_step"):
+        if not tbl:
             continue
         tbl_short = tbl.rsplit(".", 1)[-1] if "." in tbl else tbl
 
@@ -2093,8 +2089,6 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
         def _init_code(c):
             return c if str(c).startswith("INIT_") else f"INIT_{c}"
         for code, r in rules.items():
-            if r.get("is_view_step"):
-                continue  # 视图步骤不属于数据管道
             inc = r.get("incremental") or {}
             cloned = {
                 "rule_name": (r.get("rule_name") or code) + "(初始化)",
@@ -2102,7 +2096,6 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
                 "target_table": r.get("target_table", ""),
                 "target_role": r.get("target_role", "target"),
                 "step_type": r.get("step_type", "full"),
-                "is_view_step": False,
                 # init 全是先删全插（中间 tmp 重建 / 终态全量装载）
                 "load_mode": "truncate_table",
                 "write_condition": "",
@@ -2267,12 +2260,7 @@ def render_md(ts):
     lines.append(f"| **写入策略** | {load_label} |")
     fc = meta["field_count"]
     lines.append(f"| **字段统计** | {fc['total']} |")
-    # 规则数（含直封视图提示）
-    has_view = any(r.get("is_view_step") for r in rules.values())
-    rule_label = f"{len(rules)}"
-    if has_view:
-        rule_label += "（含直封视图）"
-    lines.append(f"| **规则数** | {rule_label} |")
+    lines.append(f"| **规则数** | {len(rules)} |")
     lines.append("")
     lines.append("**来源表**:")
     lines.append("")

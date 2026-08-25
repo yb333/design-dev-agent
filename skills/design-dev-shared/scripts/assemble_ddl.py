@@ -7,7 +7,7 @@ DDL 生成器: ts.json → DDL SQL 文件
 
 生成内容：
 - 每个规则产出一张表（中间表 / 目标F表）→ 一个 DDL 文件
-- 视图步骤（is_view_step=true）→ 生成 CREATE VIEW（F表镜像）
+- 视图只有一种：I 视图（F 表配套镜像），由 meta.target.i_view 配套生成
 - 审计字段自动加（从 design.audit_fields）
 - 分布键（design.distribution_key）
 - 存储配置（列存 + LOW 压缩，固定标准）
@@ -163,55 +163,20 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
     return "\n".join(lines)
 
 
-def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: dict, tables: dict = None) -> str:
-    """生成 CREATE VIEW DDL（I视图 = F表镜像，列出全部字段，不用 SELECT *）"""
-    target = rule.get("target_table", "")
-    schema, table = split_table_ref(target)
-    if not schema:
-        schema = meta.get("target", {}).get("f_table", {}).get("schema", "")
+def normalize_type(t: str) -> str:
+    """归一化字段类型：只处理「带精度后缀的 int 家族」这类 mapping 合法但 Gauss 非法的写法，其余原样透传。"""
+    if not t:
+        return ""
+    t = t.strip()
+    for pat, repl in _TYPE_NORMALIZE:
+        if pat.match(t):
+            return pat.sub(repl, t)
+    return t
 
-    # 推导 F表名（_i → _f）
-    if table.endswith("_i"):
-        f_table = table[:-2] + "_f"
-    else:
-        f_table = table
 
-    cn = meta.get("target", {}).get("f_table", {}).get("cn", "")
-
-    # 字段来源：优先 tables[f_table].fields，fallback rule.fields（旧格式）
-    if tables and f_table in tables:
-        fields = tables[f_table].get("fields", [])
-    else:
-        fields = rule.get("fields", [])
-    all_fields = [(f.get("target_field", ""), f.get("field_comment", "")) for f in fields]
-
-    lines = []
-    lines.append(f"/* =====================================================")
-    lines.append(f"   视图: {schema}.{table}")
-    lines.append(f"   规则: {rule_code} - {rule.get('rule_name', '')}")
-    lines.append(f"   说明: F表镜像，对外消费接口（列出全部字段）")
-    lines.append(f"   ===================================================== */")
-    lines.append("")
-    lines.append(f"CREATE OR REPLACE VIEW {schema}.{table} AS")
-    lines.append(f"SELECT")
-
-    # 列出全部字段（不用 SELECT *）
-    for i, (fname, _) in enumerate(all_fields):
-        comma = "," if i < len(all_fields) - 1 else ""
-        lines.append(f"    {fname}{comma}")
-
-    lines.append(f"FROM {schema}.{f_table};")
-    lines.append("")
-    lines.append(f"COMMENT ON VIEW {schema}.{table} IS '{cn}（视图）';")
-    lines.append("")
-
-    # 字段注释
-    for fname, fcomment in all_fields:
-        if fcomment:
-            lines.append(f"COMMENT ON COLUMN {schema}.{table}.{fname} IS '{fcomment}';")
-
-    lines.append("")
-    return "\n".join(lines)
+def type_or_empty(t: str) -> str:
+    """字段类型（带精度 int 家族归一，其余原样），空则返回空"""
+    return normalize_type(t) if t else ""
 
 
 # 类型归一化分两类（规则不混）：
@@ -232,22 +197,6 @@ _TYPE_NORMALIZE = [
     (re.compile(r"^timestamp(\(\d+\))?( without time zone)?$", re.I),
      lambda m: f"timestamp{m.group(1) or '(0)'} without time zone"),  # 裸/无后缀 → 补 (0) + 标准后缀
 ]
-
-
-def normalize_type(t: str) -> str:
-    """归一化字段类型：带精度 int 家族（非法写法）+ 时间类型标准书写，其余原样透传。"""
-    if not t:
-        return ""
-    t = t.strip()
-    for pat, repl in _TYPE_NORMALIZE:
-        if pat.match(t):
-            return pat.sub(repl, t)
-    return t
-
-
-def type_or_empty(t: str) -> str:
-    """字段类型（带精度 int 家族归一，其余原样），空则返回空"""
-    return normalize_type(t) if t else ""
 
 
 def generate_rollback(schema: str, table: str, is_view: bool = False) -> str:

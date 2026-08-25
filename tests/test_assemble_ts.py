@@ -558,7 +558,7 @@ class TestLayer2Path:
         dd["rules"][0]["produces_for"] = ["R0002"]
         dd["rules"].append({
             "rule_code": "R0002", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 2, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "produces_for": [], "reads": ["dws.dwb_test_f"],
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -586,7 +586,7 @@ class TestLayer2Path:
         dd["rules"][0]["step_type"] = "aggregate"
         dd["rules"].append({
             "rule_code": "R0002", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 2, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "produces_for": [], "reads": [],  # 没读 tmp1
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -606,7 +606,7 @@ class TestLayer2Path:
         dd["rules"].append({
             "rule_code": "R0002", "rule_name": "装配", "scenario": "default",
             "exec_sequence": 1,  # 排在前面
-            "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "produces_for": [], "reads": ["dws.tmp1"],
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -623,7 +623,7 @@ class TestLayer2Path:
         dd["rules"][0]["produces_for"] = ["R0002"]
         dd["rules"].append({
             "rule_code": "R0002", "rule_name": "环", "scenario": "default",
-            "exec_sequence": 2, "target_table": "dws.tmp2", "is_view_step": False,
+            "exec_sequence": 2, "target_table": "dws.tmp2",
             "step_type": "aggregate", "target_role": "intermediate",
             "produces_for": ["R0001"], "reads": [],
             "field_targets": ["id"], "field_logics": {},
@@ -737,7 +737,7 @@ class TestLayer3Incremental:
         # 用一个普通的 full 规则，source 是别的表（不涉驱动表），完全没增量处理
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "全量", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
             "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
@@ -770,7 +770,7 @@ class TestLayer3Incremental:
         rs = make_incremental_rs_input()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "全量直灌", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target", "load_mode": "truncate_table",
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
             "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
@@ -790,7 +790,7 @@ class TestLayer3Incremental:
         rs = make_incremental_rs_input()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "单规则增量", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target", "load_mode": "merge_into",
             "write_condition": "T.id=T1.id",
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -1149,7 +1149,7 @@ class TestLoadModeHardBlock:
         rs = make_incremental_rs_input()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "增量直灌", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target", "load_mode": "truncate_table",
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
             "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
@@ -1448,7 +1448,7 @@ class TestN29TranslateGuard:
         rs = self._agg_rs()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "field_targets": ["id", "pay_nos", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
             "field_logics": {"pay_nos": "将同一个t.id对应的m.no值拼接，限制m.del_flag=N，用,隔开"},
@@ -1463,7 +1463,7 @@ class TestN29TranslateGuard:
         rs = self._agg_rs()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "field_targets": ["id", "pay_nos", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
             "field_logics": {"pay_nos": "m 表先按 t.id 预聚合（过滤 del_flag='N'，no 去重，按 no 排序）拼接为逗号分隔串"},
@@ -1478,7 +1478,7 @@ class TestN29TranslateGuard:
         rs["field_mappings"][0]["transform_detail"] = "直取 t.id"
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "field_targets": ["id", "pay_nos", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
             "field_logics": {"pay_nos": "m 表预聚合拼接"},
@@ -1521,7 +1521,7 @@ class TestN30JoinFieldExistence:
     def _dd(self, condition):
         return make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "joins": [{"alias": "m", "type": "LEFT JOIN", "condition": condition}],
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -1613,14 +1613,14 @@ class TestAssemblyFieldLineage:
         rs = self._rs()
         dd = make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
-             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "exec_sequence": 1, "target_table": "dws.tmp1",
              "step_type": "aggregate", "target_role": "intermediate",
              "produces_for": ["R0002"], "reads": [],
              "field_targets": ["a", "amt_cny", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
              "field_logics": {"amt_cny": "金额×汇率"},
              "grain": {"input": "源", "output": "中间", "change": "聚合"}},
             {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f",
              "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
              "write_condition": "T.id=T1.id",
              "produces_for": [], "reads": ["dws.tmp1"],
@@ -1652,14 +1652,14 @@ class TestAssemblyFieldLineage:
         ])
         dd = make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
-             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "exec_sequence": 1, "target_table": "dws.tmp1",
              "step_type": "aggregate", "target_role": "intermediate",
              "produces_for": ["R0002"], "reads": [],
              "field_targets": ["a", "amt_cny", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
              "field_logics": {"amt_cny": "金额×汇率"},
              "grain": {"input": "源", "output": "中间", "change": "聚合"}},
             {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f",
              "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
              "write_condition": "T.id=T1.id",
              "produces_for": [], "reads": ["dws.tmp1"],
@@ -1685,19 +1685,19 @@ class TestAssemblyFieldLineage:
         ])
         dd = make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "取A", "scenario": "default",
-             "exec_sequence": 1, "target_table": "dws.tmp_a", "is_view_step": False,
+             "exec_sequence": 1, "target_table": "dws.tmp_a",
              "step_type": "full", "target_role": "intermediate",
              "produces_for": ["R0003"], "reads": [],
              "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
              "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "无"}},
             {"rule_code": "R0002", "rule_name": "取P", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.tmp_b", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.tmp_b",
              "step_type": "full", "target_role": "intermediate",
              "produces_for": ["R0003"], "reads": [],
              "field_targets": ["p"],
              "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "无"}},
             {"rule_code": "R0003", "rule_name": "合并", "scenario": "default",
-             "exec_sequence": 3, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "exec_sequence": 3, "target_table": "dws.dwb_test_f",
              "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
              "write_condition": "T.id=T1.id",
              "produces_for": [], "reads": ["dws.tmp_a", "dws.tmp_b"],
@@ -1714,13 +1714,13 @@ class TestAssemblyFieldLineage:
         rs = self._rs()
         dd = make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
-             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "exec_sequence": 1, "target_table": "dws.tmp1",
              "step_type": "aggregate", "target_role": "intermediate",
              "produces_for": ["R0002"], "reads": [],
              "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
              "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
             {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f",
              "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
              "write_condition": "T.id=T1.id",
              "produces_for": [], "reads": ["dws.tmp1"],
@@ -1748,13 +1748,13 @@ class TestReadsAliasForm:
              "source_alias": "ht", "join_condition": ""}]
         dd = make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
-             "exec_sequence": 1, "target_table": "dws.tmp1", "is_view_step": False,
+             "exec_sequence": 1, "target_table": "dws.tmp1",
              "step_type": "aggregate", "target_role": "intermediate",
              "produces_for": ["R0002"], "reads": [],
              "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
              "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
             {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f",
              "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
              "write_condition": "T.id=T1.id",
              "produces_for": [], "reads": reads_form,
@@ -1801,7 +1801,7 @@ class TestAliasBindingValidation:
         rs = self._rs()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "合并", "scenario": "default",
-            "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 2, "target_table": "dws.dwb_test_f",
             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
             "write_condition": "T.id=T1.id",
             "source_aliases": ["ht"], "reads": [{"table": "dws.tmp1", "alias": "ht"}],
@@ -1817,7 +1817,7 @@ class TestAliasBindingValidation:
         rs = self._rs()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "合并", "scenario": "default",
-            "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 2, "target_table": "dws.dwb_test_f",
             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
             "write_condition": "T.id=T1.id",
             "source_aliases": [], "reads": [{"table": "dws.tmp1", "alias": "ht"}],
@@ -1832,7 +1832,7 @@ class TestAliasBindingValidation:
         rs = self._rs()
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "joins": [{"alias": "t9", "type": "LEFT JOIN", "condition": "t9.a = ht.a"}],
             "source_aliases": ["ht"],
@@ -1866,13 +1866,13 @@ class TestAccumulateFieldUnion:
         ]
         dd = make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "来源A", "scenario": "default",
-             "exec_sequence": 1, "target_table": "dws.tmp_c", "is_view_step": False,
+             "exec_sequence": 1, "target_table": "dws.tmp_c",
              "step_type": "full", "target_role": "intermediate",
              "produces_for": ["R0003"], "reads": [], "source_aliases": ["ta"],
              "field_targets": ["x"], "field_logics": {},
              "grain": {"input": "源", "output": "中间", "change": "无"}},
             {"rule_code": "R0002", "rule_name": "来源B", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.tmp_c", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.tmp_c",
              "step_type": "full", "target_role": "intermediate",
              "produces_for": ["R0003"], "reads": [], "source_aliases": ["tb"],
              "field_targets": ["y"], "field_logics": {},
@@ -1892,13 +1892,13 @@ class TestTmpNaming:
     def _dd(self, tmp_table):
         return make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "取数", "scenario": "default",
-             "exec_sequence": 1, "target_table": tmp_table, "is_view_step": False,
+             "exec_sequence": 1, "target_table": tmp_table,
              "step_type": "aggregate", "target_role": "intermediate",
              "produces_for": ["R0002"], "reads": [],
              "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
              "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
             {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f",
              "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
              "write_condition": "T.id=T1.id", "produces_for": [], "reads": [tmp_table],
              "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -1934,13 +1934,13 @@ class TestAssignCarryInAssembly:
         ], has_audit=True)  # 审计字段=赋值类（del_flag 'N' 等）
         dd = make_design_decisions(rules=[
             {"rule_code": "R0001", "rule_name": "加工", "scenario": "default",
-             "exec_sequence": 1, "target_table": "dws.dwb_test_tmp1", "is_view_step": False,
+             "exec_sequence": 1, "target_table": "dws.dwb_test_tmp1",
              "step_type": "aggregate", "target_role": "intermediate",
              "produces_for": ["R0002"], "reads": [],
              "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
              "field_logics": {}, "grain": {"input": "源", "output": "中间", "change": "聚合"}},
             {"rule_code": "R0002", "rule_name": "合并", "scenario": "default",
-             "exec_sequence": 2, "target_table": "dws.dwb_test_f", "is_view_step": False,
+             "exec_sequence": 2, "target_table": "dws.dwb_test_f",
              "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
              "write_condition": "T.id=T1.id", "produces_for": [], "reads": ["dws.dwb_test_tmp1"],
              "field_targets": ["a", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -1972,7 +1972,7 @@ class TestAssignCarryInAssembly:
         ], has_audit=False)
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "field_targets": ["a", "flag"],
             "field_logics": {"flag": "CASE WHEN ht.a=1 THEN 'Y' ELSE 'N' END"},
@@ -1996,7 +1996,7 @@ class TestAssignCarryInAssembly:
         ], has_audit=False)
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "field_targets": ["a", "b"],
             "field_logics": {"a": "口径A", "ghost": "写给不存在归属的字段的口径"},
@@ -2020,7 +2020,7 @@ class TestAssignCarryInAssembly:
              "source_alias": "ht", "join_condition": ""}]
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "field_targets": ["a"],
             "field_logics": {"a": "按 ht.start_date 排序取最新一条"},  # ★ 惯例假设的字段
@@ -2080,7 +2080,7 @@ class TestCheckField:
              "source_alias": "ht", "join_condition": ""}]
         dd = make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
             "step_type": "full", "target_role": "target",
             "joins": [{"alias": "ht", "type": "LEFT JOIN", "condition": "ht.id = ht.id"}],
             "join_safety": [{"table": "ods_ht_f", "join_filter": "ht.is_current = 1",

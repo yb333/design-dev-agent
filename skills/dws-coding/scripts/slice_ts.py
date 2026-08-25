@@ -89,7 +89,6 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
         "rule_code": rule_code,
         "rule_name": rule.get("rule_name", ""),
         "target_table": rule.get("target_table", ""),
-        "is_view_step": rule.get("is_view_step", False),
         "scenario": rule.get("scenario", ""),
         "exec_sequence": rule.get("exec_sequence", 1),
         "design_intent": rule.get("design_intent", ""),

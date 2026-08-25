@@ -78,8 +78,7 @@ class TestRenderDataFlowMermaid:
                     "rule_name": "订单汇总",
                     "target_table": "dwb_trade_order_d",
                     "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [
+                                        "source_tables": [
                         {"schema": "ods", "table": "ods_trade_order_di", "alias": "a"},
                     ],
                 }
@@ -111,15 +110,13 @@ class TestRenderDataFlowMermaid:
                     "rule_name": "销售汇总",
                     "target_table": "dwb_sales_tmp1",
                     "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [{"schema": "sdord", "table": "dwd_order_f", "alias": "a"}],
+                                        "source_tables": [{"schema": "sdord", "table": "dwd_order_f", "alias": "a"}],
                 },
                 "R0002": {
                     "rule_name": "装配宽表",
                     "target_table": "dwb_product_center_f",
                     "exec_sequence": 2,
-                    "is_view_step": False,
-                    "source_tables": [{"schema": "dim", "table": "dim_product_f", "alias": "b"}],
+                                        "source_tables": [{"schema": "dim", "table": "dim_product_f", "alias": "b"}],
                 },
             },
             "data_flow": {
@@ -146,8 +143,7 @@ class TestRenderDataFlowMermaid:
                     "rule_name": "装配",
                     "target_table": "dwb_xxx_f",
                     "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [
+                                        "source_tables": [
                         {"schema": "dim", "table": "dim_product_f", "alias": "a"},
                         {"schema": "dim", "table": "dim_brand_f", "alias": "b"},
                         {"schema": "sdord", "table": "dwd_order_f", "alias": "c"},
@@ -167,40 +163,6 @@ class TestRenderDataFlowMermaid:
         # 非维表画了节点
         assert "dwd_order_f" in result
 
-    def test_view_step_dashed_edge(self):
-        """视图规则：is_view_step → F表 -.-> 视图（虚线边）"""
-        ts = {
-            "rules": {
-                "R0001": {
-                    "rule_name": "目标表",
-                    "target_table": "dwb_xxx_f",
-                    "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [{"schema": "ods", "table": "ods_xxx_di", "alias": "a"}],
-                },
-                "R0002": {
-                    "rule_name": "视图",
-                    "target_table": "dwb_xxx_i",
-                    "exec_sequence": 2,
-                    "is_view_step": True,
-                    "source_tables": [],
-                },
-            },
-            "data_flow": {
-                "dependencies": [],
-                "schedule_groups": [
-                    {"sequence": 1, "rules": ["R0001"]},
-                    {"sequence": 2, "rules": ["R0002"]},
-                ],
-            },
-        }
-        result = render_data_flow_mermaid(ts)
-        # 视图节点存在，用 view 样式
-        assert "dwb_xxx_i" in result
-        assert "view" in result
-        # 虚线边
-        assert "-.->" in result
-
     def test_multi_write_same_table(self):
         """两个步骤写同一张表：两条边指向同一产出表节点"""
         ts = {
@@ -209,15 +171,13 @@ class TestRenderDataFlowMermaid:
                     "rule_name": "步骤1",
                     "target_table": "dwb_shared_f",
                     "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [{"schema": "ods", "table": "ods_a_f", "alias": "a"}],
+                                        "source_tables": [{"schema": "ods", "table": "ods_a_f", "alias": "a"}],
                 },
                 "R0002": {
                     "rule_name": "步骤2",
                     "target_table": "dwb_shared_f",
                     "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [{"schema": "ods", "table": "ods_b_f", "alias": "b"}],
+                                        "source_tables": [{"schema": "ods", "table": "ods_b_f", "alias": "b"}],
                 },
             },
             "data_flow": {"dependencies": [], "schedule_groups": [
@@ -237,8 +197,7 @@ class TestRenderDataFlowMermaid:
                     "rule_name": "步骤1",
                     "target_table": "tmp1",
                     "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [{"schema": "ods", "table": "ods_a", "alias": "a"}],
+                                        "source_tables": [{"schema": "ods", "table": "ods_a", "alias": "a"}],
                 },
             },
             "data_flow": {},
@@ -263,8 +222,7 @@ class TestRenderDataFlowMermaid:
         """classDef 声明齐全"""
         ts = {
             "rules": {"R0001": {"rule_name": "x", "target_table": "t", "exec_sequence": 1,
-                                "is_view_step": False,
-                                "source_tables": [{"schema": "ods", "table": "s", "alias": "a"}]}},
+                                                                "source_tables": [{"schema": "ods", "table": "s", "alias": "a"}]}},
             "data_flow": {"schedule_groups": [{"sequence": 1, "rules": ["R0001"]}]},
         }
         result = render_data_flow_mermaid(ts)
@@ -282,8 +240,7 @@ class TestRenderDataFlowMermaid:
                     "rule_name": "x",
                     "target_table": "t_f",
                     "exec_sequence": 1,
-                    "is_view_step": False,
-                    "source_tables": [
+                                        "source_tables": [
                         {"schema": "dim", "table": "dim_a_f", "alias": "a"},
                         {"schema": "dim", "table": "dim_b_f", "alias": "b"},
                         {"schema": "dim", "table": "dim_c_f", "alias": "c"},

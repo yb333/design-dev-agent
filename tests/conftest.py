@@ -146,8 +146,7 @@ def make_design_decisions(rules=None, business_key=None, distribution_key=None, 
     if rules is None:
         rules = [{
             "rule_code": "R0001", "rule_name": "测试规则", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "is_view_step": False,
-            "design_intent": "测试",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",             "design_intent": "测试",
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
             "field_logics": {},
             "grain": {"input": "源", "output": "目标", "change": "无"},
@@ -216,8 +215,7 @@ def make_incremental_decisions(drivers_config):
         code = f"R{seq:04d}"
         rules.append({
             "rule_code": code, "rule_name": f"增量取数{dc['table']}", "scenario": "default",
-            "exec_sequence": seq, "target_table": f"dws.tmp_{dc['table']}", "is_view_step": False,
-            "step_type": "incremental_extract", "target_role": "intermediate",
+            "exec_sequence": seq, "target_table": f"dws.tmp_{dc['table']}",             "step_type": "incremental_extract", "target_role": "intermediate",
             "produces_for": [], "reads": [],
             "field_targets": ["id"], "field_logics": {},
             "incremental": {
@@ -232,8 +230,7 @@ def make_incremental_decisions(drivers_config):
     merge_code = f"R{seq:04d}"
     rules.append({
         "rule_code": merge_code, "rule_name": "合并目标", "scenario": "default",
-        "exec_sequence": seq, "target_table": "dws.dwb_test_f", "is_view_step": False,
-        "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+        "exec_sequence": seq, "target_table": "dws.dwb_test_f",         "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
         "write_condition": "T.id=T1.id",
         "produces_for": [], "reads": [f"dws.tmp_{dc['table']}" for dc in drivers_config],
         "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -273,8 +270,7 @@ def make_explicit_init_decisions():
     rules = [
         {
             "rule_code": "R0001", "rule_name": "增量取并集", "scenario": "default",
-            "exec_sequence": 1, "target_table": "dws.tmp_delta", "is_view_step": False,
-            "step_type": "incremental_extract", "target_role": "intermediate",
+            "exec_sequence": 1, "target_table": "dws.tmp_delta",             "step_type": "incremental_extract", "target_role": "intermediate",
             "produces_for": ["R0002"], "reads": [],
             "field_targets": ["id"], "field_logics": {},
             "incremental": {"key": "update_time",
@@ -283,15 +279,13 @@ def make_explicit_init_decisions():
         },
         {
             "rule_code": "R0002", "rule_name": "重建受影响行", "scenario": "default",
-            "exec_sequence": 2, "target_table": "dws.tmp_rebuilt", "is_view_step": False,
-            "step_type": "full", "target_role": "intermediate",
+            "exec_sequence": 2, "target_table": "dws.tmp_rebuilt",             "step_type": "full", "target_role": "intermediate",
             "produces_for": ["R0003"], "reads": ["dws.tmp_delta"],
             "field_targets": ["id"], "field_logics": {"id": "核心加工口径：已确认状态取值"},
         },
         {
             "rule_code": "R0003", "rule_name": "合并目标", "scenario": "default",
-            "exec_sequence": 3, "target_table": "dws.dwb_test_f", "is_view_step": False,
-            "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
+            "exec_sequence": 3, "target_table": "dws.dwb_test_f",             "step_type": "merge", "target_role": "target", "load_mode": "merge_into",
             "write_condition": "T.id=T1.id",
             "produces_for": [], "reads": ["dws.tmp_rebuilt"],
             "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
@@ -326,16 +320,14 @@ def make_accumulate_decisions(overlap_fields=("b", "c"), extra_a=("a",), extra_b
     rules = [
         {
             "rule_code": "R0001", "rule_name": "来源A写入", "scenario": "default",
-            "exec_sequence": 1, "target_table": tmp_table, "is_view_step": False,
-            "step_type": "full", "target_role": "intermediate",
+            "exec_sequence": 1, "target_table": tmp_table,             "step_type": "full", "target_role": "intermediate",
             "produces_for": ["R0003"], "reads": [],
             "field_targets": flds_r1, "field_logics": {},
             "load_mode": "no_delete",
         },
         {
             "rule_code": "R0002", "rule_name": "来源B追加(排重)", "scenario": "default",
-            "exec_sequence": 2, "target_table": tmp_table, "is_view_step": False,
-            "step_type": "full", "target_role": "intermediate",
+            "exec_sequence": 2, "target_table": tmp_table,             "step_type": "full", "target_role": "intermediate",
             "produces_for": ["R0003"], "reads": [tmp_table],  # 自引用
             "field_targets": flds_r2, "field_logics": {},
             "load_mode": "no_delete",
@@ -346,8 +338,7 @@ def make_accumulate_decisions(overlap_fields=("b", "c"), extra_a=("a",), extra_b
         },
         {
             "rule_code": "R0003", "rule_name": "装配目标", "scenario": "default",
-            "exec_sequence": 3, "target_table": "dws.dwb_acc_f", "is_view_step": False,
-            "step_type": "full", "target_role": "target",
+            "exec_sequence": 3, "target_table": "dws.dwb_acc_f",             "step_type": "full", "target_role": "target",
             "produces_for": [], "reads": [tmp_table],
             "field_targets": list(extra_a) + list(overlap_fields) + list(extra_b),
             "field_logics": {},
@@ -373,7 +364,7 @@ def make_ts_json(schema="dws", table="dwb_test_i", cn="测试表",
     if rules is None:
         rules = {"R0001": {
             "rule_name": "测试规则", "scenario": "default", "exec_sequence": 1,
-            "target_table": f_table["table"], "is_view_step": False, "design_intent": "测试",
+            "target_table": f_table["table"], "design_intent": "测试",
             "source_tables": [{"schema": s["source_schema"], "table": s["source_table"], "alias": s.get("source_alias", "")} for s in rs["source_tables"]],
             "fields": [{"target_field": fm["target_column"], "field_type": fm.get("target_type", ""),
                         "field_comment": fm.get("target_column_cn", ""), "transform_type": "direct",

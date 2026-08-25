@@ -86,8 +86,7 @@ def sample_ts():
                 "rule_name": "XXX汇总",
                 "target_table": "dwb_xxx_f",
                 "exec_sequence": 1,
-                "is_view_step": False,
-                "design_intent": "以订单事实表为主表左关联用户表装配宽表",
+                                "design_intent": "以订单事实表为主表左关联用户表装配宽表",
                 "source_tables": [{"schema": "ods", "table": "ods_order_f", "alias": "a"}],
                 "fields": [
                     {"target_field": "order_id", "source_fields": [{"table": "ods_order_f", "field": "order_id", "alias": "a"}]},
@@ -335,8 +334,7 @@ class TestBuildRuleRows:
             "mode": "derive", "group_mode": "separate",
             "rules": {"INIT_R0001": {
                 "rule_name": "XXX汇总(初始化)", "exec_sequence": 1,
-                "target_table": "dwb_xxx_f", "is_view_step": False,
-                "load_mode": "truncate_table",
+                "target_table": "dwb_xxx_f",                 "load_mode": "truncate_table",
             }},
         }
         rows = build_rule_rows(sample_ts, sample_config, etl_dir)
@@ -408,8 +406,7 @@ class TestBuildGroupVariables:
             "mode": "derive", "group_mode": "separate",
             "rules": {"INIT_R0001": {
                 "rule_name": "XXX汇总(初始化)", "exec_sequence": 1,
-                "target_table": "dwb_xxx_f", "is_view_step": False,
-            }},
+                "target_table": "dwb_xxx_f",             }},
         }
         rows = build_group_variables(sample_ts)
         codes = {row[0] for row in rows}

@@ -30,19 +30,48 @@ from config_paths import db_sources_path
 from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample, resolve_sample_blocks
 
 
-def _deploy_i_view(ddl_executor, ddl_dir: Path, rb_dir: Path, i_view_short: str, param_values: dict):
-    """部署 I 视图（F 表镜像）：先回退再建（与表规则同节奏，admin 账号）。
+def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
+                    table_shorts, i_view_short: str, param_values: dict) -> list:
+    """统一部署全部生成的 DDL（视图=F表配套镜像，不是规则——按规则循环会漏）。
 
-    返回执行结果（None = DDL 文件不存在，跳过）。视图 DDL 失败不阻断主流程
-    （I 视图是消费接口，不影响规则的 SELECT/INSERT 预检），打日志即可。
+    顺序：回退（先视图后表；失败容忍——首次无对象可能报错，DROP IF EXISTS 兜不住的场景
+    也不阻断）→ 建表（失败=硬错误，收集返回）→ 建 I 视图（失败容忍——消费接口，不影响
+    规则的 SELECT/INSERT 预检）。返回建表失败清单。
     """
-    rb_file = rb_dir / f"rollback_create_view_{i_view_short}.sql"
-    if rb_file.exists():
-        ddl_executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
-    view_file = ddl_dir / f"create_view_{i_view_short}.sql"
-    if not view_file.exists():
-        return None
-    return ddl_executor.execute(substitute_params(view_file.read_text(encoding="utf-8"), param_values))
+    def _run(path: Path):
+        return ddl_executor.execute(substitute_params(path.read_text(encoding="utf-8"), param_values))
+
+    if i_view_short:
+        rb = rb_dir / f"rollback_create_view_{i_view_short}.sql"
+        if rb.exists():
+            r = _run(rb)
+            print(f"  {'🔄' if r.success else '⚠️'} 回退(容忍): {rb.name}")
+    for tb in sorted(table_shorts):
+        rb = rb_dir / f"rollback_create_table_{tb}.sql"
+        if rb.exists():
+            r = _run(rb)
+            print(f"  {'🔄' if r.success else '⚠️'} 回退(容忍): {rb.name}")
+
+    errors = []
+    for tb in sorted(table_shorts):
+        f = ddl_dir / f"create_table_{tb}.sql"
+        if not f.exists():
+            print(f"  ⚠️ DDL未找到: {f.name}")
+            continue
+        r = _run(f)
+        if r.success:
+            print(f"  ✅ 建表 {tb}: {r.summary()}")
+        else:
+            print(f"  ❌ 建表失败 {tb}: {r.error[:100]}")
+            errors.append(f"{tb}: {r.error[:100]}")
+
+    if i_view_short:
+        f = ddl_dir / f"create_view_{i_view_short}.sql"
+        if f.exists():
+            r = _run(f)
+            print(f"  {'✅' if r.success else '❌'} I视图DDL: {r.summary()}"
+                  + ("" if r.success else "（容忍：消费接口，不影响预检）"))
+    return errors
 
 
 def main():
@@ -115,6 +144,23 @@ def main():
         inc_groups = [{"sequence": r.get("exec_sequence", 1), "rules": [code]}
                        for code, r in rules.items()]
 
+    # ── DDL 统一部署（生成的都执行；建表失败整体终止——后续 SELECT 预检无意义）──
+    if not args.skip_ddl:
+        _table_shorts = set((ts.get("tables") or {}).keys()) or {f_table_short}
+        ddl_errors = _deploy_all_ddl(ddl_executor, ddl_dir, rb_dir,
+                                     _table_shorts, i_view_short, param_values)
+        if ddl_errors:
+            print(f"\n❌ DDL 部署失败 {len(ddl_errors)} 张表，终止预检:", file=sys.stderr)
+            for e in ddl_errors:
+                print(f"  - {e}", file=sys.stderr)
+            result_path = Path(args.result) if args.result else Path("ut_precheck_result.json")
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps(
+                {"status": "FAIL", "error_type": "DDL", "errors": ddl_errors},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+            sys.exit(1)
+        print()
+
     results = []
     prev_failed = False
 
@@ -131,7 +177,6 @@ def main():
                     target = f"{f_schema}.{target}"
 
             _, table = (target.split(".", 1) + [""])[:2] if "." in target else ("", target)
-            is_view = rule.get("is_view_step", False)
             r_result = {"rule": rule_code, "target": target}
 
             print(f"--- {rule_code}: {target} ---")
@@ -142,55 +187,6 @@ def main():
                 print(f"  ⏭️ 级联跳过（前序失败）")
                 results.append(r_result)
                 continue
-
-            # 视图规则：回退 + DDL（视图不跑 SELECT 预检）—— 用 admin 账号
-            if is_view:
-                rb_file = rb_dir / f"rollback_create_view_{table}.sql"
-                if rb_file.exists():
-                    ddl_executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
-
-                view_file = ddl_dir / f"create_view_{table}.sql"
-                if view_file.exists():
-                    r = ddl_executor.execute(substitute_params(view_file.read_text(encoding="utf-8"), param_values))
-                    r_result["status"] = "PASS" if r.success else "FAIL"
-                    r_result["detail"] = r.summary()
-                    print(f"  {'✅' if r.success else '❌'} 视图DDL: {r.summary()}")
-                else:
-                    r_result["status"] = "SKIP"
-                    r_result["detail"] = f"视图DDL未找到: {view_file.name}"
-                results.append(r_result)
-                continue
-
-            # 表规则：回退 → DDL → SELECT 预检
-            if not args.skip_ddl:
-                # 回退（admin 账号）
-                rb_file = rb_dir / f"rollback_create_table_{table}.sql"
-                if rb_file.exists():
-                    r_rb = ddl_executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
-                    print(f"  {'🔄' if r_rb.success else '⚠️'} 回退: {rb_file.name}")
-
-                # DDL（admin 账号）
-                ddl_file = ddl_dir / f"create_table_{table}.sql"
-                if ddl_file.exists():
-                    r = ddl_executor.execute(substitute_params(ddl_file.read_text(encoding="utf-8"), param_values))
-                    if not r.success:
-                        r_result["status"] = "FAIL"
-                        r_result["error_type"] = "DDL"
-                        r_result["detail"] = f"DDL失败: {r.error[:100]}"
-                        print(f"  ❌ DDL失败: {r.error[:100]}")
-                        results.append(r_result)
-                        prev_failed = True
-                        continue
-                    print(f"  ✅ DDL: {r.summary()}")
-                    # ★ F 表建成 → 配套部署 I 视图（F 表镜像，不挂在任何规则名下，
-                    # 按规则循环部署会漏——真实案例：UT 阶段视图没建，消费侧查无）
-                    if table == f_table_short and i_view_short and not i_view_deployed:
-                        _r_iv = _deploy_i_view(ddl_executor, ddl_dir, rb_dir, i_view_short, param_values)
-                        if _r_iv is not None:
-                            print(f"  {'✅' if _r_iv.success else '❌'} I视图DDL: {_r_iv.summary()}")
-                        i_view_deployed = True
-                else:
-                    print(f"  ⚠️ DDL未找到: {ddl_file.name}")
 
             # SELECT 预检
             select_sql = read_select(Path(args.select_dir), rule_code)

@@ -41,7 +41,6 @@ rules:
     exec_sequence: 1                    # 执行顺序
     target_table: ""                    # 产出表名（中间表/目标F表/视图I表）。tmp 命名规范：目标表主体+_tmp+序号
                                         #   （dwb_x_f → dwb_x_tmp1）；不建议 tmp 前置，特殊命名一般不建议（N33 warn）
-    is_view_step: false                 # 是否视图步骤
     design_intent: ""                   # 该规则的设计意图（自然语言，一句话说清为什么这样拆）
     load_mode: "truncate_table"         # ★ 写入方式（增量管道的写入方式，≠ init 的写入方式）:
                                         #   truncate_table(全量覆盖/中间tmp重建) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区清空) | merge_into(upsert)

@@ -369,9 +369,8 @@ class TestDispatchPlan:
         from dispatch_plan import build_dispatch_plan
         ts = {
             "rules": {
-                "R0002": {"exec_sequence": 2, "is_view_step": False},
-                "R0001": {"exec_sequence": 1, "is_view_step": False},
-                "V0001": {"exec_sequence": 3, "is_view_step": True},  # 视图步骤，排除
+                "R0002": {"exec_sequence": 2},
+                "R0001": {"exec_sequence": 1},
             },
             "init": {"mode": "derive", "rules": {"INIT_R0001": {}}},
             "dq_rules": [{"rule_name": "主键唯一"}],
@@ -380,7 +379,7 @@ class TestDispatchPlan:
         plan = build_dispatch_plan(ts)
         assert plan["ddl"] is True
         assert plan["dq"] is True and plan["dq_count"] == 1
-        assert plan["etl_rules"] == ["R0001", "R0002"]  # 按 exec_sequence 排序 + 排除视图
+        assert plan["etl_rules"] == ["R0001", "R0002"]  # 按 exec_sequence 排序
         assert plan["init_rules"] == ["INIT_R0001"]
         assert len(plan["groups"]) == 1
 
@@ -516,17 +515,6 @@ class TestViewCommentSyntax:
         assert "COMMENT ON VIEW dws.dwb_x_i" in out
         assert "COMMENT ON TABLE" not in out
 
-    def test_generate_create_view_uses_comment_on_view(self):
-        from assemble_ddl import generate_create_view
-        rule = {"target_table": "dws.dwb_x_i", "rule_name": "宽表视图"}
-        meta = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"},
-                           "i_view": {"schema": "dws", "table": "dwb_x_i"},
-                           "f_table_cn": "宽表"}}
-        tables = {"dwb_x_f": {"fields": [{"target_field": "id", "field_comment": "ID"}]}}
-        out = generate_create_view("R0002", rule, meta, {}, tables)
-        assert "COMMENT ON VIEW" in out
-        assert "COMMENT ON TABLE" not in out
-
     def test_create_table_keeps_comment_on_table(self):
         from assemble_ddl import generate_create_table
         rule = {"target_table": "dws.dwb_x_f", "rule_name": "宽表"}
@@ -539,32 +527,70 @@ class TestViewCommentSyntax:
         assert "COMMENT ON TABLE dws.dwb_x_f" in out
 
 
-class TestDeployIView:
-    """ut_precheck 的 I 视图部署：先回退再建；文件缺失返回 None 跳过。"""
+class TestDeployAllDdl:
+    """ut_precheck 统一 DDL 部署：回退容忍（先视图后表）→ 建表（失败收集）→ I 视图（容忍）。"""
 
     class _Exec:
-        def __init__(self):
+        def __init__(self, fail_tables=()):
             self.executed = []
+            self.fail_tables = set(fail_tables)
 
         def execute(self, sql):
             self.executed.append(sql)
             class _R:
-                success = True
+                def __init__(self, ok):
+                    self.success = ok
+                    self.error = "" if ok else "boom"
                 def summary(self):
-                    return "ok"
-            return _R()
+                    return "ok" if self.success else "boom"
+            import re as _r
+            m = _r.search(r"create_table_(\w+)", sql)
+            ok = not (m and m.group(1) in self.fail_tables)
+            return _R(ok)
 
-    def test_deploy_runs_rollback_then_create(self, tmp_path):
-        from ut_precheck import _deploy_i_view
-        (tmp_path / "rollback_create_view_dwb_x_i.sql").write_text("-- rb", encoding="utf-8")
-        (tmp_path / "create_view_dwb_x_i.sql").write_text("CREATE VIEW ...", encoding="utf-8")
-        ex = self._Exec()
-        r = _deploy_i_view(ex, tmp_path, tmp_path, "dwb_x_i", {})
-        assert r is not None and r.success
-        assert ex.executed == ["-- rb", "CREATE VIEW ..."]
+    def _files(self, tmp_path, tables, i_view="dwb_x_i"):
+        # 内容自带标记（执行器按内容判失败，文件名只是部署侧拼接）
+        for tb in tables:
+            (tmp_path / f"create_table_{tb}.sql").write_text(f"create_table_{tb}", encoding="utf-8")
+            (tmp_path / f"rollback_create_table_{tb}.sql").write_text(f"rollback_table_{tb}", encoding="utf-8")
+        (tmp_path / f"create_view_{i_view}.sql").write_text("create_view_x", encoding="utf-8")
+        (tmp_path / f"rollback_create_view_{i_view}.sql").write_text("rollback_view", encoding="utf-8")
 
-    def test_missing_files_skip(self, tmp_path):
-        from ut_precheck import _deploy_i_view
+    def test_rollback_view_first_then_tables_then_create(self, tmp_path):
+        from ut_precheck import _deploy_all_ddl
+        self._files(tmp_path, ["tmp1", "dwb_x_f"])
         ex = self._Exec()
-        assert _deploy_i_view(ex, tmp_path, tmp_path, "ghost_i", {}) is None
-        assert ex.executed == []
+        errors = _deploy_all_ddl(ex, tmp_path, tmp_path, {"tmp1", "dwb_x_f"}, "dwb_x_i", {})
+        assert errors == []
+        # 顺序：回退视图 → 回退表(字典序) → 建表(字典序) → 建视图
+        assert ex.executed[0] == "rollback_view"
+        assert ex.executed[1] == "rollback_table_dwb_x_f" and ex.executed[2] == "rollback_table_tmp1"
+        assert ex.executed[3] == "create_table_dwb_x_f" and ex.executed[4] == "create_table_tmp1"
+        assert ex.executed[-1] == "create_view_x"
+
+    def test_create_table_failure_collected(self, tmp_path):
+        from ut_precheck import _deploy_all_ddl
+        self._files(tmp_path, ["tmp1", "dwb_x_f"])
+        ex = self._Exec(fail_tables={"tmp1"})
+        errors = _deploy_all_ddl(ex, tmp_path, tmp_path, {"tmp1", "dwb_x_f"}, "dwb_x_i", {})
+        assert len(errors) == 1 and errors[0].startswith("tmp1")
+        # 视图仍部署（容忍链路继续）
+
+    def test_rollback_failure_tolerated(self, tmp_path):
+        """回退失败不阻断（首次无对象）：建表照常执行且成功。"""
+        from ut_precheck import _deploy_all_ddl
+        self._files(tmp_path, ["dwb_x_f"])
+        ex = self._Exec(fail_tables=set())  # 回退由同一 execute 跑——构造回退失败需按内容判
+        # 用一个对回退 SQL 报错的执行器
+        class _ExecRbFail(self._Exec):
+            def execute(self, sql):
+                r = super().execute(sql)
+                if sql.startswith("rollback"):
+                    r.success = False
+                    r.error = "first run no object"
+                return r
+        ex = _ExecRbFail()
+        errors = _deploy_all_ddl(ex, tmp_path, tmp_path, {"dwb_x_f"}, "dwb_x_i", {})
+        assert errors == []  # 回退失败被容忍，建表成功
+
+

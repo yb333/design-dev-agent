@@ -22,7 +22,7 @@ skills/
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json schema_apps.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
-│   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py
+│   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py（视图=F表配套镜像非规则，is_view_step 概念已清除）
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 └── design-dev-shared/   # ★ 公共代码库 + pipe 管线脚本（无 SKILL.md，install 单独拷）
     └── scripts/         # dws_db.py(连库) config_paths.py(★config路径集中) resolve_appid.py(查appid)
