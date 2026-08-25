@@ -34,9 +34,9 @@ def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
                     table_shorts, i_view_short: str, param_values: dict) -> list:
     """统一部署全部生成的 DDL（视图=F表配套镜像，不是规则——按规则循环会漏）。
 
-    顺序：回退（先视图后表；失败容忍——首次无对象可能报错，DROP IF EXISTS 兜不住的场景
-    也不阻断）→ 建表（失败=硬错误，收集返回）→ 建 I 视图（失败容忍——消费接口，不影响
-    规则的 SELECT/INSERT 预检）。返回建表失败清单。
+    顺序：回退（先视图后表；失败容忍——首次执行时对象不存在，DROP 可能报错）→
+    建表 → 建 I 视图。**部署必须全部成功**（表和视图一样，失败即收集返回、整体
+    终止）——UT 里建不成功的 DDL，部署生产就是生产问题；只有回退可以容忍。
     """
     def _run(path: Path):
         return ddl_executor.execute(substitute_params(path.read_text(encoding="utf-8"), param_values))
@@ -69,8 +69,11 @@ def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
         f = ddl_dir / f"create_view_{i_view_short}.sql"
         if f.exists():
             r = _run(f)
-            print(f"  {'✅' if r.success else '❌'} I视图DDL: {r.summary()}"
-                  + ("" if r.success else "（容忍：消费接口，不影响预检）"))
+            if r.success:
+                print(f"  ✅ I视图DDL: {r.summary()}")
+            else:
+                print(f"  ❌ I视图DDL失败: {r.error[:100]}")
+                errors.append(f"view_{i_view_short}: {r.error[:100]}")
     return errors
 
 

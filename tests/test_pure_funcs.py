@@ -574,7 +574,22 @@ class TestDeployAllDdl:
         ex = self._Exec(fail_tables={"tmp1"})
         errors = _deploy_all_ddl(ex, tmp_path, tmp_path, {"tmp1", "dwb_x_f"}, "dwb_x_i", {})
         assert len(errors) == 1 and errors[0].startswith("tmp1")
-        # 视图仍部署（容忍链路继续）
+
+    def test_view_create_failure_collected(self, tmp_path):
+        """部署必须全绿：I 视图建失败同样收集（UT 建不成=生产问题，不容忍）。"""
+        from ut_precheck import _deploy_all_ddl
+        self._files(tmp_path, ["dwb_x_f"])
+
+        class _ExecViewFail(self._Exec):
+            def execute(self, sql):
+                r = super().execute(sql)
+                if sql.startswith("create_view"):
+                    r.success = False
+                    r.error = "view boom"
+                return r
+
+        errors = _deploy_all_ddl(_ExecViewFail(), tmp_path, tmp_path, {"dwb_x_f"}, "dwb_x_i", {})
+        assert len(errors) == 1 and errors[0].startswith("view_dwb_x_i")
 
     def test_rollback_failure_tolerated(self, tmp_path):
         """回退失败不阻断（首次无对象）：建表照常执行且成功。"""
