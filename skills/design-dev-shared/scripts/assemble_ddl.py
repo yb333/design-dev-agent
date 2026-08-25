@@ -202,7 +202,7 @@ def generate_create_view(rule_code: str, rule: dict, meta: dict, audit_fields: d
 
     lines.append(f"FROM {schema}.{f_table};")
     lines.append("")
-    lines.append(f"COMMENT ON TABLE {schema}.{table} IS '{cn}（视图）';")
+    lines.append(f"COMMENT ON VIEW {schema}.{table} IS '{cn}（视图）';")
     lines.append("")
 
     # 字段注释
@@ -279,7 +279,7 @@ def generate_i_view(schema: str, f_table: str, cn: str, fields: list, audit_fiel
 
     lines.append(f"FROM {schema}.{f_table};")
     lines.append("")
-    lines.append(f"COMMENT ON TABLE {schema}.{i_table} IS '{cn}（视图）';")
+    lines.append(f"COMMENT ON VIEW {schema}.{i_table} IS '{cn}（视图）';")
     lines.append("")
 
     for fname, fcomment in all_fields:

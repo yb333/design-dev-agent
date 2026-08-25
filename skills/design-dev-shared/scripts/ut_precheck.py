@@ -30,6 +30,21 @@ from config_paths import db_sources_path
 from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample, resolve_sample_blocks
 
 
+def _deploy_i_view(ddl_executor, ddl_dir: Path, rb_dir: Path, i_view_short: str, param_values: dict):
+    """部署 I 视图（F 表镜像）：先回退再建（与表规则同节奏，admin 账号）。
+
+    返回执行结果（None = DDL 文件不存在，跳过）。视图 DDL 失败不阻断主流程
+    （I 视图是消费接口，不影响规则的 SELECT/INSERT 预检），打日志即可。
+    """
+    rb_file = rb_dir / f"rollback_create_view_{i_view_short}.sql"
+    if rb_file.exists():
+        ddl_executor.execute(substitute_params(rb_file.read_text(encoding="utf-8"), param_values))
+    view_file = ddl_dir / f"create_view_{i_view_short}.sql"
+    if not view_file.exists():
+        return None
+    return ddl_executor.execute(substitute_params(view_file.read_text(encoding="utf-8"), param_values))
+
+
 def main():
     parser = argparse.ArgumentParser(description="UT 预检（回退+DDL+SELECT，不写数据）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
@@ -78,6 +93,11 @@ def main():
 
     ddl_dir = Path(args.ddl_dir)
     rb_dir = Path(args.rollback_dir) if args.rollback_dir else ddl_dir.parent / "ddl_rollback"
+    # I 视图配套部署（F 表镜像；target 短名比对，多规则写 F 表只部署一次）
+    _target_meta = ts.get("meta", {}).get("target", {}) or {}
+    f_table_short = (_target_meta.get("f_table", {}) or {}).get("table", "").rsplit(".", 1)[-1]
+    i_view_short = (_target_meta.get("i_view", {}) or {}).get("table", "").rsplit(".", 1)[-1]
+    i_view_deployed = False
 
     # init 阶段先（建基线），增量阶段后——符合现实部署顺序
     init_section = ts.get("init") or {}
@@ -162,6 +182,13 @@ def main():
                         prev_failed = True
                         continue
                     print(f"  ✅ DDL: {r.summary()}")
+                    # ★ F 表建成 → 配套部署 I 视图（F 表镜像，不挂在任何规则名下，
+                    # 按规则循环部署会漏——真实案例：UT 阶段视图没建，消费侧查无）
+                    if table == f_table_short and i_view_short and not i_view_deployed:
+                        _r_iv = _deploy_i_view(ddl_executor, ddl_dir, rb_dir, i_view_short, param_values)
+                        if _r_iv is not None:
+                            print(f"  {'✅' if _r_iv.success else '❌'} I视图DDL: {_r_iv.summary()}")
+                        i_view_deployed = True
                 else:
                     print(f"  ⚠️ DDL未找到: {ddl_file.name}")
 

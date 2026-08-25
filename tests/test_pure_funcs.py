@@ -504,3 +504,67 @@ class TestSqlParseStringAwareness:
         # 手工构造重复别名场景（解析器正常但 SELECT 真重复输出）
         with pytest.raises(ValueError, match="重复列"):
             _resolve_insert_columns("SELECT a AS x, b AS x FROM t", [])
+
+
+class TestViewCommentSyntax:
+    """视图 DDL 的对象注释必须是 COMMENT ON VIEW（GaussDB 语法；TABLE 会报错）。"""
+
+    def test_generate_i_view_uses_comment_on_view(self):
+        from assemble_ddl import generate_i_view
+        fields = [{"target_field": "id", "field_comment": "ID"}]
+        out = generate_i_view("dws", "dwb_x_f", "宽表", fields, {})
+        assert "COMMENT ON VIEW dws.dwb_x_i" in out
+        assert "COMMENT ON TABLE" not in out
+
+    def test_generate_create_view_uses_comment_on_view(self):
+        from assemble_ddl import generate_create_view
+        rule = {"target_table": "dws.dwb_x_i", "rule_name": "宽表视图"}
+        meta = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"},
+                           "i_view": {"schema": "dws", "table": "dwb_x_i"},
+                           "f_table_cn": "宽表"}}
+        tables = {"dwb_x_f": {"fields": [{"target_field": "id", "field_comment": "ID"}]}}
+        out = generate_create_view("R0002", rule, meta, {}, tables)
+        assert "COMMENT ON VIEW" in out
+        assert "COMMENT ON TABLE" not in out
+
+    def test_create_table_keeps_comment_on_table(self):
+        from assemble_ddl import generate_create_table
+        rule = {"target_table": "dws.dwb_x_f", "rule_name": "宽表"}
+        meta = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        tables = {"dwb_x_f": {"fields": [{"target_field": "id", "field_type": "bigint",
+                                          "field_comment": "ID"}],
+                              "distribution_key": ["id"], "distribute_type": "HASH",
+                              "logical_group": "", "partition": "", "storage": "column"}}
+        out = generate_create_table("R0001", rule, {}, meta, tables)
+        assert "COMMENT ON TABLE dws.dwb_x_f" in out
+
+
+class TestDeployIView:
+    """ut_precheck 的 I 视图部署：先回退再建；文件缺失返回 None 跳过。"""
+
+    class _Exec:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, sql):
+            self.executed.append(sql)
+            class _R:
+                success = True
+                def summary(self):
+                    return "ok"
+            return _R()
+
+    def test_deploy_runs_rollback_then_create(self, tmp_path):
+        from ut_precheck import _deploy_i_view
+        (tmp_path / "rollback_create_view_dwb_x_i.sql").write_text("-- rb", encoding="utf-8")
+        (tmp_path / "create_view_dwb_x_i.sql").write_text("CREATE VIEW ...", encoding="utf-8")
+        ex = self._Exec()
+        r = _deploy_i_view(ex, tmp_path, tmp_path, "dwb_x_i", {})
+        assert r is not None and r.success
+        assert ex.executed == ["-- rb", "CREATE VIEW ..."]
+
+    def test_missing_files_skip(self, tmp_path):
+        from ut_precheck import _deploy_i_view
+        ex = self._Exec()
+        assert _deploy_i_view(ex, tmp_path, tmp_path, "ghost_i", {}) is None
+        assert ex.executed == []
