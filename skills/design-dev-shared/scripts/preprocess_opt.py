@@ -1,20 +1,23 @@
-"""preprocess_opt —— 优化输入预处理（docs/specs/opt/03 §一/二 + 02 §三）。
+"""preprocess_opt —— 优化输入预处理 v2（真实输入格式：全量 mapping + RS，2026-08-21 确认）。
 
-输入：已标注 mapping.xlsx（模板 + "变更标识"列，业务侧交付）+ ts_baseline.json（组装备件）
-     [+ RS.md 可选：优化章节原文附挂]
-产出：change_request.json（**业务级**变更清单：业务说了什么——字段/含义/源意图；
-     **不含落位**——挂哪条规则/怎么改是 designer 的事，见 03 §二两级声明）
-     诊断分级对齐 precheck：exit 0 通过 / 1 有 warn（问人）/ 2 阻断。
+输入包（docs/specs/opt/03 + 真实格式）：
+  --input-dir   需求包目录（分拣规则：唯一 xlsx = 全量 mapping、唯一 md = RS；
+                多个时按文件名关键词 full/最新/融合/全量 与 rs/需求 唯一命中；
+                仍分不出 → fail loud；其余文件忽略并记入 manifest）
+  或显式 --full-mapping X --rs Y（评测/疑难覆盖）
+  --ts-baseline ts_baseline.json（组装备件）
+  --version     可选覆盖（默认 = RS 变更记录最新"优化"行日期归一 YYYYMM）
 
-范围（阶段一）：
-- 机械校验全量：标识枚举 / 冲突（标"新增"但 baseline 已有）/ 漏标提示 /
-  实体-属性级配对（源表别名悬空）/ 资产定位一致性 / 存量表重复声明新来源；
-- 新来源信号（源表不在 baseline 源表清单）是**事实标记**，供 designer 落位用；
-- RS 解析最小化：优化章节原文附挂 + 新增字段名出现性对账（warn）——口径/回刷意向
-  由 designer 读原文，不做模糊结构化（RS 优化章节格式未定，00 挂账）；
-- 回刷 × load_mode 一致性在闸口①'人选拿时检查（本模块不预判）。
+真实格式约定（mapping-format.md 备注版本标记规范）：
+  - mapping 备注列写 "{YYYYMM}版本{动词}"（如"202608版本新增"），多次优化多个标记
+  - RS 3.3 变更记录表（日期/版本/修改人/修改内容），修改内容含"优化"的行 = 优化版本
+  - RS 正文以"{YYYYMM}版本"为锚描述该版本完整需求（变更记录里是简述）
 
-列名定义单源：复用 preprocess.ExcelMappingParser 的列名映射（mapping-format.md 权威）。
+提取：本次版本 + "新增"标记的行 → 变更清单（属性级 = add_field 候选，实体级 = 新来源）；
+其他动词（修改/下线…）→ 归类 change_type 并报告"待扩展"（识别是一回事，支持是另一回事）。
+校验：冲突/别名配对/资产一致（原有）+ 版本锚定与正文对账。
+产出：input_manifest.json（分拣结果与依据）+ change_request.json（+version+变更记录摘要）。
+exit 0/1/2 对齐 precheck 分级。编排者不读输入原文——分拣解析全在本脚本。
 """
 import argparse
 import json
@@ -26,28 +29,140 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from preprocess import ExcelMappingParser
-from baseline_contract import validate_baseline_v1  # noqa: F401  （保留导入关系备扩展）
 
-# 优化场景新增列（mapping-format.md 扩展，v2.3 兼容性检查：new-pipe 静默忽略该列）
-CHANGE_FLAG_COL = "变更标识"
-SUPPORTED_FLAGS = {"", "新增"}   # 第一刀只认"新增"；空串 = 存量行
+# 备注版本标记：{YYYYMM}版本{动词}（多个标记可并存——多次优化）
+REMARK_RE = re.compile(r"(20\d{4})\s*版本\s*(新增|修改|调整|变更|下线|删除|停用)")
+# 动词 → change_type（属性级/实体级语义在提取层区分）
+VERB_TO_CHANGE = {"新增": "add", "修改": "modify", "调整": "modify", "变更": "modify",
+                  "下线": "drop", "删除": "drop", "停用": "drop"}
+SUPPORTED_CHANGE_TYPES = {"add"}   # 第一刀全流程仅 add；其余识别+报告待扩展
 
-# 诊断码（阶段一；阶段二接 assemble_ts 报错风格时保持同名）
-D_UNSUPPORTED_FLAG = "unsupported_change_flag"
-D_FIELD_CONFLICT = "add_field_conflict"
-D_ENTITY_CONFLICT = "entity_add_conflict"
-D_UNMARKED_NEW_FIELD = "unmarked_new_field"
-D_ALIAS_DANGLING = "source_alias_dangling"
-D_ASSET_MISMATCH = "asset_table_mismatch"
-D_RS_FIELD_ABSENT = "rs_field_not_mentioned"
+FULL_KEYWORDS = ("full", "最新", "融合", "全量", "latest")
+RS_KEYWORDS = ("rs", "需求", "requirement")
 
 
 # ---------------------------------------------------------------------------
-# 读取已标注 mapping（复用 preprocess 的 sheet 发现与列名映射）
+# 1. 输入包分拣（确定性规则 + fail loud + 显式参数覆盖）
 # ---------------------------------------------------------------------------
 
-def read_marked_mapping(xlsx_path: Path) -> Dict[str, List[dict]]:
-    """读实体级/属性级 sheet → 规范化行列表（键=列名映射后的英文名，值=字符串）。"""
+def scan_input_dir(input_dir: Path) -> dict:
+    """分拣：唯一 xlsx=全量 mapping、唯一 md=RS；多个按文件名关键词；分不出 fail loud。"""
+    xlsx = sorted(p for p in input_dir.rglob("*.xls*") if not p.name.startswith("~$"))
+    mds = sorted(p for p in input_dir.rglob("*.md"))
+
+    def pick(cands: List[Path], kws: Tuple[str, ...], label: str) -> Optional[Path]:
+        if len(cands) == 1:
+            return cands[0]
+        if not cands:
+            return None
+        hits = [p for p in cands if any(k in p.name.lower() for k in kws)]
+        if len(hits) == 1:
+            return hits[0]
+        raise ValueError(f"{label}有 {len(cands)} 个且关键词无法唯一命中："
+                         f"{[p.name for p in cands]}——请改名或用 --full-mapping/--rs 显式指定")
+
+    full = pick(xlsx, FULL_KEYWORDS, "mapping 文件")
+    rs = pick(mds, RS_KEYWORDS, "RS 文档")
+    chosen = {full, rs} - {None}
+    ignored = [str(p.relative_to(input_dir)) for p in input_dir.rglob("*")
+               if p.is_file() and p not in chosen]
+    if full is None or rs is None:
+        missing = []
+        if full is None:
+            missing.append("全量 mapping（*.xlsx）")
+        if rs is None:
+            missing.append("RS（*.md）")
+        raise ValueError(f"输入包缺：{'+'.join(missing)}（目录：{input_dir}）")
+    return {"full_mapping": full, "rs": rs, "ignored": ignored}
+
+
+# ---------------------------------------------------------------------------
+# 2. RS 解析：变更记录表 + 版本锚定
+# ---------------------------------------------------------------------------
+
+def _md_tables_after(lines: List[str], start: int) -> List[List[List[str]]]:
+    """收集 start 之后连续的 markdown 表格块（| 分隔行）。"""
+    tables, cur = [], []
+    for ln in lines[start:]:
+        s = ln.strip()
+        if s.startswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if not all(re.fullmatch(r"[-: ]+", c or "-") for c in cells):  # 跳过分隔行
+                cur.append(cells)
+        else:
+            if cur:
+                tables.append(cur)
+                cur = []
+    if cur:
+        tables.append(cur)
+    return tables
+
+
+def parse_change_log(rs_text: str) -> List[dict]:
+    """解析变更记录表（定位含"变更记录"的标题，取其后第一个表格）。"""
+    lines = rs_text.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("#") and "变更记录" in ln:
+            tables = _md_tables_after(lines, i + 1)
+            if not tables:
+                break
+            header, *rows = tables[0]
+            idx = {k: next((j for j, h in enumerate(header) if k in h), None)
+                   for k in ("日期", "版本", "修改人", "修改内容")}
+            out = []
+            for r in rows:
+                get = lambda k: (r[idx[k]] if idx[k] is not None and idx[k] < len(r) else "")
+                out.append({"date": get("日期"), "ver": get("版本"),
+                            "author": get("修改人"), "desc": get("修改内容")})
+            return out
+    return []
+
+
+def normalize_yyyymm(s: str) -> str:
+    m = re.search(r"(20\d{2})[-/年.](\d{1,2})", s or "")
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+    m = re.fullmatch(r"(20\d{4})", (s or "").strip())
+    if m:
+        return m.group(1)
+    raise ValueError(f"日期无法归一成 YYYYMM：{s!r}")
+
+
+def pick_current_version(change_log: List[dict]) -> Tuple[str, dict]:
+    """最新"优化"行（修改内容含'优化'）→ (YYYYMM, 该行)。无优化行则报错。"""
+    opt_rows = [r for r in change_log if "优化" in r["desc"]]
+    if not opt_rows:
+        raise ValueError("变更记录表中没有'优化'行——无法定位本次版本（可用 --version 显式指定）")
+    row = opt_rows[-1]
+    return normalize_yyyymm(row["date"]), row
+
+
+def extract_version_section(rs_text: str, version: str) -> str:
+    """正文按 "{YYYYMM}版本" 锚定提取本次需求段（到下一个版本锚点/空行分隔为止）。"""
+    anchor = re.compile(rf"{version}\s*版本")
+    next_anchor = re.compile(r"20\d{4}\s*版本")
+    lines = rs_text.splitlines()
+    out, capturing = [], False
+    for ln in lines:
+        if anchor.search(ln):
+            capturing = True
+            out.append(ln)
+            continue
+        if capturing:
+            if next_anchor.search(ln) and not anchor.search(ln):
+                break
+            if ln.strip().startswith("#") and not anchor.search(ln):
+                break
+            out.append(ln)
+    return "\n".join(out).strip()
+
+
+# ---------------------------------------------------------------------------
+# 3. 全量 mapping 读取 + 备注标记分类
+# ---------------------------------------------------------------------------
+
+def read_full_mapping(xlsx_path: Path) -> Dict[str, List[dict]]:
+    """读全量 mapping 两 sheet（复用 preprocess 列名映射）→ 规范化行（含 remark 原文）。"""
     xlsx = pd.ExcelFile(xlsx_path)
     entity_df = attr_df = None
     for sheet in xlsx.sheet_names:
@@ -57,34 +172,29 @@ def read_marked_mapping(xlsx_path: Path) -> Dict[str, List[dict]]:
         elif any(k in s for k in ("属性级", "attribute")):
             attr_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
 
-    def normalize(df: Optional[pd.DataFrame], col_map: dict, label: str) -> List[dict]:
-        if df is None:
-            return []
+    def normalize(df, col_map):
         rows = []
+        if df is None:
+            return rows
         for _, raw in df.iterrows():
-            row: Dict[str, str] = {}
+            row = {}
             for col, val in raw.items():
-                name = col_map.get(str(col).strip(), None)
-                val_s = str(val).strip() if val is not None else ""
+                name = col_map.get(str(col).strip())
                 if name:
-                    row[name] = val_s
-                elif str(col).strip() == CHANGE_FLAG_COL:
-                    row["change_flag"] = val_s
+                    row[name] = str(val).strip() if val is not None else ""
             rows.append(row)
         return rows
 
-    return {
-        "entity": normalize(entity_df, ExcelMappingParser.ENTITY_COLUMN_MAP, "实体级"),
-        "attr": normalize(attr_df, ExcelMappingParser.ATTRIBUTE_COLUMN_MAP, "属性级"),
-    }
+    return {"entity": normalize(entity_df, ExcelMappingParser.ENTITY_COLUMN_MAP),
+            "attr": normalize(attr_df, ExcelMappingParser.ATTRIBUTE_COLUMN_MAP)}
 
 
-# ---------------------------------------------------------------------------
-# baseline 消费视角（ts_baseline 的最小读取面）
-# ---------------------------------------------------------------------------
+def remark_markers(remark: str) -> List[Tuple[str, str]]:
+    """备注文本 → [(YYYYMM, 动词)]（多次优化多个标记全解析）。"""
+    return [(m.group(1), m.group(2)) for m in REMARK_RE.finditer(remark or "")]
+
 
 def baseline_facts(ts_baseline: dict) -> dict:
-    """从 ts_baseline 提取校验所需事实：资产表 / 目标表字段集 / 源表集。"""
     f_table = ts_baseline["meta"]["target"]["f_table"]
     target_short = f_table["table"]
     fields = {f["target_field"]
@@ -95,175 +205,190 @@ def baseline_facts(ts_baseline: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 校验 + 变更提取
+# 4. 提取 + 校验
 # ---------------------------------------------------------------------------
 
-def extract_and_check(mapping: Dict[str, List[dict]], facts: dict,
-                      rs_text: Optional[str]) -> Tuple[List[dict], List[dict], List[dict]]:
-    """返回 (add_fields, diagnostics, unsupported_flags)。
+def extract_and_check(mapping: Dict[str, List[dict]], facts: dict, version: str,
+                      rs_section: str) -> Tuple[List[dict], List[dict], List[dict]]:
+    """返回 (add_fields, unsupported, diagnostics)。
 
-    add_fields 元素即 change_request.fields 条目（业务说了什么 + 事实标记）。
+    add_fields = 本次版本"新增"标记的属性级行（change_request.fields 条目）；
+    unsupported = 识别为其他 change_type 的行（识别+报告，不拒收为非法）。
     """
     diags: List[dict] = []
-    unsupported: List[str] = []
+    unsupported: List[dict] = []
     entity_rows, attr_rows = mapping["entity"], mapping["attr"]
 
-    # 0. 标识枚举（实体级 + 属性级都查）
-    for label, rows in (("实体级", entity_rows), ("属性级", attr_rows)):
-        for i, row in enumerate(rows, start=2):   # start=2：xlsx 行号（含表头）
-            flag = row.get("change_flag", "")
-            if flag not in SUPPORTED_FLAGS:
-                unsupported.append(flag)
-                diags.append({"level": "error", "code": D_UNSUPPORTED_FLAG,
-                              "message": f"{label}第{i}行：变更标识 {flag!r} 不支持"
-                                         f"（本刀仅支持：新增 / 留空=存量）"})
+    # 实体级分类：本次版本标记行 = 新来源声明；其余 = 存量
+    def row_change(row: dict) -> Optional[Tuple[str, str]]:
+        for ver, verb in remark_markers(row.get("remark", "")):
+            if ver == version:
+                return ver, verb
+        return None
 
-    # 1. 资产定位一致性：实体级声明的目标表必须就是本次资产
-    target_tables = {r.get("target_table", "") for r in entity_rows if r.get("target_table")}
-    for t in sorted(target_tables):
-        if t != facts["target_short"]:
-            diags.append({"level": "error", "code": D_ASSET_MISMATCH,
-                          "message": f"实体级目标表 {t!r} 与本次资产 "
-                                     f"{facts['target_short']!r} 不一致（载体用错/标注错资产）"})
-
-    # 2. 实体级新增行：存量表重复声明 → 冲突
-    for i, row in enumerate(entity_rows, start=2):
-        if row.get("change_flag") == "新增" and row.get("source_table") in facts["source_tables"]:
-            diags.append({"level": "error", "code": D_ENTITY_CONFLICT,
-                          "message": f"实体级第{i}行：源表 {row.get('source_table')!r} 已是 "
-                                     f"baseline 存量来源，不能标'新增'（同源直挂不需要新实体行）"})
-
-    # 3. 别名索引（实体级全部行——存量行与新增行都可被属性级引用）
     alias_index: Dict[str, dict] = {}
+    new_sources: Dict[str, dict] = {}
     for row in entity_rows:
         if row.get("source_alias"):
             alias_index[row["source_alias"]] = row
+        ch = row_change(row)
+        if ch:
+            verb = ch[1]
+            ctype = VERB_TO_CHANGE[verb]
+            if ctype != "add":
+                unsupported.append({"level": "entity", "change_type": ctype,
+                                    "name": row.get("source_table", "?"), "verb": verb})
+            else:
+                new_sources[row["source_table"]] = row
 
-    # 4. 属性级逐行：新增提取 / 冲突 / 漏标 / 配对
+    # 属性级分类
     add_fields: List[dict] = []
     for i, row in enumerate(attr_rows, start=2):
-        flag = row.get("change_flag", "")
         tcol = row.get("target_column", "")
-        if not tcol:
-            continue
-        if flag == "新增":
+        ch = row_change(row)
+        if ch:
+            ctype = VERB_TO_CHANGE[ch[1]]
+            if ctype != "add":
+                unsupported.append({"level": "attr", "change_type": ctype,
+                                    "name": tcol or "?", "verb": ch[1]})
+                continue
+            # add_field 候选：走原有校验链
             if tcol in facts["target_fields"]:
-                diags.append({"level": "error", "code": D_FIELD_CONFLICT,
-                              "message": f"属性级第{i}行：目标字段 {tcol!r} 标'新增'但 "
-                                         f"baseline 已存在（存量字段——请核对标注或需求）"})
+                diags.append({"level": "error", "code": "add_field_conflict",
+                              "message": f"属性级第{i}行：{tcol!r} 标本次新增但 baseline 已存在"})
                 continue
             alias = row.get("source_alias", "")
             ent = alias_index.get(alias)
             if ent is None:
-                diags.append({"level": "error", "code": D_ALIAS_DANGLING,
-                              "message": f"属性级第{i}行：源表别名 {alias!r} 在实体级找不到"
-                                         f"（新表来源需在实体级加行并标'新增'）"})
+                diags.append({"level": "error", "code": "source_alias_dangling",
+                              "message": f"属性级第{i}行：源表别名 {alias!r} 在实体级找不到"})
                 continue
-            src_table = ent.get("source_table", "")
             add_fields.append({
-                "field": tcol,
-                "cn": row.get("target_column_cn", ""),
-                "type": row.get("target_type", ""),
-                "scene_group": row.get("scene_group", ""),
-                "source": {
-                    "schema": ent.get("source_schema", ""),
-                    "table": src_table,
-                    "alias": alias,
-                    "field": row.get("source_column", ""),
-                    "rule": row.get("mapping_rule", ""),
-                    "expr": row.get("mapping_expression", ""),
-                    "join_condition": ent.get("join_condition", ""),
-                },
-                # 事实标记：源表不在 baseline 源表清单 → 新来源（落位归 designer）
-                "new_source_table": src_table not in facts["source_tables"],
+                "field": tcol, "cn": row.get("target_column_cn", ""),
+                "type": row.get("target_type", ""), "scene_group": row.get("scene_group", ""),
+                "source": {"schema": ent.get("source_schema", ""),
+                           "table": ent.get("source_table", ""), "alias": alias,
+                           "field": row.get("source_column", ""),
+                           "rule": row.get("mapping_rule", ""),
+                           "expr": row.get("mapping_expression", ""),
+                           "join_condition": ent.get("join_condition", "")},
+                "new_source_table": ent.get("source_table", "") not in facts["source_tables"],
             })
         else:
-            if tcol not in facts["target_fields"]:
-                diags.append({"level": "warn", "code": D_UNMARKED_NEW_FIELD,
-                              "message": f"属性级第{i}行：目标字段 {tcol!r} 不在 baseline "
-                                         f"存量字段中且未标'新增'——漏标？（请业务确认）"})
+            if tcol and tcol not in facts["target_fields"]:
+                diags.append({"level": "warn", "code": "unmarked_new_field",
+                              "message": f"属性级第{i}行：{tcol!r} 不在 baseline 存量且无本次"
+                                         f"版本标记（旧版本漏入档 or 漏标）——请业务确认"})
 
-    # 5. RS 对账（可选）：新增字段名应出现在 RS 优化章节
-    if rs_text:
+    # 资产定位一致性
+    for t in sorted({r.get("target_table", "") for r in entity_rows if r.get("target_table")}):
+        if t != facts["target_short"]:
+            diags.append({"level": "error", "code": "asset_table_mismatch",
+                          "message": f"实体级目标表 {t!r} 与本次资产 {facts['target_short']!r} 不一致"})
+
+    # RS 对账：新增字段应出现在版本锚定段
+    if rs_section:
         for f in add_fields:
-            if f["field"] not in rs_text:
-                diags.append({"level": "warn", "code": D_RS_FIELD_ABSENT,
-                              "message": f"新增字段 {f['field']!r} 未在 RS 优化章节提及"
-                                         f"（双源对账——请业务确认口径来源）"})
-    return add_fields, diags, unsupported
+            if f["field"] not in rs_section:
+                diags.append({"level": "warn", "code": "rs_field_not_mentioned",
+                              "message": f"新增字段 {f['field']!r} 未在 RS {version}版本 需求段提及"})
+    else:
+        diags.append({"level": "warn", "code": "rs_section_not_found",
+                      "message": f"RS 正文未找到 {version}版本 锚定段——口径请人确认"})
+    return add_fields, unsupported, diags
 
 
 # ---------------------------------------------------------------------------
-# RS 优化章节提取（最小化：定位含"优化"的标题，取其后的原文；找不到取全文）
+# 5. 组装与 main
 # ---------------------------------------------------------------------------
 
-def extract_rs_opt_section(rs_text: str) -> str:
-    lines = rs_text.splitlines()
-    start = None
-    for i, ln in enumerate(lines):
-        if ln.strip().startswith("#") and "优化" in ln:
-            start = i
-            break
-    if start is None:
-        return rs_text.strip()
-    out = lines[start:]
-    for j in range(1, len(out)):
-        if out[j].strip().startswith("#") and "优化" not in out[j]:
-            return "\n".join(out[:j]).strip()
-    return "\n".join(out).strip()
-
-
-# ---------------------------------------------------------------------------
-# change_request 组装与 main
-# ---------------------------------------------------------------------------
-
-def build_change_request(facts: dict, add_fields: List[dict],
+def build_change_request(facts: dict, version: str, add_fields: List[dict],
+                         unsupported: List[dict], change_log_row: dict,
                          rs_section: str, files: dict) -> dict:
     return {
-        "change_type": "add_field",          # 原则6：枚举第一值
+        "change_type": "add_field",
+        "version": version,
         "asset": facts["asset"],
+        "change_log_summary": change_log_row,   # 闸口素材：简述 ↔ 提取字段并排（delta 已取消，漏标靠人扫这一眼）
+        "unsupported_changes": unsupported,     # 识别+归类但流程待扩展（modify/drop/add_source…）
         "source_files": files,
         "fields": add_fields,
-        "backfill": "pending",               # 回刷意向：RS 无结构化来源时 pending 到闸口①'
-        "rs_opt_section": rs_section or "",  # 原文附挂，designer 读口径（不做模糊结构化）
+        "backfill": "pending",
+        "rs_opt_section": rs_section,
     }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="优化输入预处理：标注 mapping → change_request")
-    ap.add_argument("--mapping", required=True, help="已标注 mapping.xlsx")
-    ap.add_argument("--ts-baseline", required=True, help="ts_baseline.json（组装备件）")
-    ap.add_argument("--outdir", required=True, help="输出目录（{deliver}/_internal）")
-    ap.add_argument("--rs", default="", help="RS.md（可选，优化章节原文附挂+对账）")
+    ap = argparse.ArgumentParser(description="优化输入预处理 v2：全量 mapping + RS（真实格式）")
+    ap.add_argument("--input-dir", default="", help="需求包目录（分拣：唯一 xlsx/md 或关键词）")
+    ap.add_argument("--full-mapping", default="", help="显式指定全量 mapping（覆盖分拣）")
+    ap.add_argument("--rs", default="", help="显式指定 RS（覆盖分拣）")
+    ap.add_argument("--ts-baseline", required=True)
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--version", default="", help="覆盖版本号（默认 RS 变更记录最新优化行 YYYYMM）")
     args = ap.parse_args(argv)
+
+    # 分拣
+    try:
+        if args.full_mapping and args.rs:
+            scan = {"full_mapping": Path(args.full_mapping), "rs": Path(args.rs), "ignored": []}
+        elif args.input_dir:
+            scan = scan_input_dir(Path(args.input_dir))
+        else:
+            print("OPT_PRECHECK_ERROR: 需要 --input-dir 或 --full-mapping + --rs", file=sys.stderr)
+            return 2
+    except ValueError as e:
+        print(f"OPT_PRECHECK_ERROR: {e}", file=sys.stderr)
+        return 2
+
+    rs_text = scan["rs"].read_text(encoding="utf-8")
+    try:
+        change_log = parse_change_log(rs_text)
+        version = args.version or pick_current_version(change_log)[0]
+        if args.version:
+            row = next((r for r in reversed(change_log) if "优化" in r["desc"]),
+                       {"date": args.version, "desc": "（显式指定版本）"})
+        else:
+            row = pick_current_version(change_log)[1]
+    except ValueError as e:
+        print(f"OPT_PRECHECK_ERROR: {e}", file=sys.stderr)
+        return 2
+    rs_section = extract_version_section(rs_text, version)
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
     facts = baseline_facts(ts_baseline)
-    mapping = read_marked_mapping(Path(args.mapping))
-    rs_text = Path(args.rs).read_text(encoding="utf-8") if args.rs else ""
-    rs_section = extract_rs_opt_section(rs_text) if rs_text else ""
+    mapping = read_full_mapping(scan["full_mapping"])
+    add_fields, unsupported, diags = extract_and_check(mapping, facts, version, rs_section)
 
-    add_fields, diags, _ = extract_and_check(mapping, facts, rs_section)
     errors = [d for d in diags if d["level"] == "error"]
     warns = [d for d in diags if d["level"] == "warn"]
-
     for d in diags:
         print(f"[{d['level'].upper()}][{d['code']}] {d['message']}", file=sys.stderr)
-
-    if errors:
-        print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断（错误需处理输入后重跑），"
-              f"{len(warns)} 项 warn。", file=sys.stderr)
-        return 2
+    for u in unsupported:
+        print(f"[INFO] 识别到 {u['change_type']} 变更（{u['level']} {u['name']}，"
+              f"备注动词'{u['verb']}'）——本刀流程未支持，待扩展", file=sys.stderr)
 
     out = Path(args.outdir)
     out.mkdir(parents=True, exist_ok=True)
-    cr = build_change_request(facts, add_fields, rs_section,
-                              {"mapping": str(args.mapping), "rs": args.rs or None,
+    # manifest 永远落盘（分拣可追溯）
+    (out / "input_manifest.json").write_text(json.dumps({
+        "full_mapping": str(scan["full_mapping"]), "rs": str(scan["rs"]),
+        "ignored": scan["ignored"], "version": version,
+        "classify_rule": "唯一 xlsx=全量 mapping / 唯一 md=RS；多个按文件名关键词"},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if errors:
+        print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断，{len(warns)} 项 warn。", file=sys.stderr)
+        return 2
+
+    cr = build_change_request(facts, version, add_fields, unsupported, row, rs_section,
+                              {"mapping": str(scan["full_mapping"]), "rs": str(scan["rs"]),
                                "ts_baseline": str(args.ts_baseline)})
     (out / "change_request.json").write_text(
         json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"change_request: {out / 'change_request.json'}")
-    print(f"add_fields: {len(add_fields)}, warns: {len(warns)}")
+    print(f"version: {version}, add_fields: {len(add_fields)}, "
+          f"unsupported: {len(unsupported)}, warns: {len(warns)}")
     return 1 if warns else 0
 
 

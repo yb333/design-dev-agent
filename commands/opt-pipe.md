@@ -5,7 +5,7 @@ agent: build
 
 你是优化流程的执行者。按以下步骤执行**存量资产的精确变更交付**（第一刀：新增字段 add_field）。
 
-用户输入：$ARGUMENTS（三样东西的位置：存量 [baseline_v1.json 或资产档案] + RS + 已标注 mapping.xlsx）
+用户输入：$ARGUMENTS（两样：需求包目录 [全量 mapping + RS] + 存量表示 [baseline_v1.json，仅外部资产首次；自建/已优化资产走档案不用给]）
 
 ## ⚠️ 编排者铁律（同 new-pipe，全文适用）
 
@@ -43,16 +43,22 @@ python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --ou
 ```
    产出 ts_baseline.json + etl_baseline/ + baseline_view.md + exemptions.json。exit 2 = 契约违约 → 停，报告（契约问题归逆向侧）。
 
-## 步骤 1：优化输入校验
+## 步骤 1：优化输入预处理（真实格式：全量 mapping 备注版本标记 + RS 变更记录）
+
+⚠️ **需求包目录下的任何文件禁止 Read**——分拣/解析/校验全由脚本消化（对齐 new-pipe"输入原文一律不 Read"），你只消费 manifest 与 change_request。
 
 ```bash
 python SHARED_SCRIPTS/preprocess_opt.py \
-  --mapping {标注mapping.xlsx} --ts-baseline {deliver}/_internal/ts_baseline.json \
-  --outdir {deliver}/_internal --rs {RS.md}
+  --input-dir {需求包目录} \
+  --ts-baseline {deliver}/_internal/ts_baseline.json \
+  --outdir {deliver}/_internal [--version 202608]
 ```
-- exit 2 = 阻断（冲突/悬空/资产不一致/不支持的标识）→ 报告人改输入，不自动修；
-- exit 1 = 有 warn（漏标/RS 未提及）→ **question 问人**是否继续；
-- 产出 `change_request.json`。
+- 分拣：唯一 xlsx = 全量 mapping、唯一 md = RS（多个按文件名关键词 full/最新/融合 与 rs/需求；分不出 fail loud；`--full-mapping/--rs` 可显式覆盖）；
+- 版本锚点：默认取 RS 变更记录最新"优化"行日期归一 YYYYMM（撞车/缺行 → --version 显式指定）；
+- 变更提取：mapping 备注列 `{YYYYMM}版本{动词}` 匹配本次版本——属性级"新增"= 新增字段候选、实体级"新增"= 新来源；**其他动词（修改/下线…）识别归类并报告"待扩展"，不是非法输入**；
+- exit 2 = 阻断（冲突/别名悬空/资产不一致/版本定位失败）→ 报告人改输入，不自动修；
+- exit 1 = 有 warn（漏标漂移/RS 未提及）→ **question 问人**是否继续；
+- 产出 `input_manifest.json`（分拣依据，可追溯）+ `change_request.json`（含 version/变更记录摘要——闸口①'把简述与提取字段并排亮给人扫漏标）。
 
 ## 步骤 2：designer（优化模式，显式声明）
 

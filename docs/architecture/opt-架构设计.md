@@ -25,7 +25,7 @@ edition: 实现版（v2，2026-08-19 建成后重写；设计过程版见 git �
   逆向侧（dws-analyzer-skill，peer agent）
     └─ /export-baseline → baseline_v1.json（v1.1，文件交接——本体系不调它的脚本）
   业务侧（业务 / 上游 agent）
-    └─ RS.md + 已标注 mapping.xlsx（"变更标识"列，格式按我方发布的 mapping-format 规格）
+    └─ 需求包：全量 mapping（备注列"{YYYYMM}版本{动词}"标记变更）+ RS（3.3 变更记录表 + 正文版本锚定段）
 
 【本体系】
   archives/{schema}/{资产表}/{NNN_日期}/        ← ★唯一锚点：资产档案（入 git，文本小件）
@@ -52,13 +52,13 @@ python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --ou
 ```
 产出四件：`ts_baseline.json` / `etl_baseline/{规则}.sql`（逐字原文）/ `baseline_view.md`（designer 读）/ `exemptions.json`（语义空位清单）。exit 2 = 契约违约（版本/必填/dm=6 缺 merge_on），停线报逆向侧。`kind→load_mode` 词表外的写入类型报"待定"不硬映射。
 
-### 步骤 1 · 输入校验
+### 步骤 1 · 优化输入预处理（真实格式；需求包目录禁止 Read——分拣解析全在脚本）
 ```bash
 python SHARED_SCRIPTS/preprocess_opt.py \
-  --mapping {标注mapping.xlsx} --ts-baseline {deliver}/_internal/ts_baseline.json \
-  --outdir {deliver}/_internal --rs {RS.md}
+  --input-dir {需求包目录} --ts-baseline {deliver}/_internal/ts_baseline.json \
+  --outdir {deliver}/_internal [--version 202608]
 ```
-产出 `change_request.json`（**只装业务说了什么**：字段/含义/源意图/`new_source_table` 信号 + RS 优化章节原文；不含落位）。exit 0/1/2 对齐 precheck 分级：冲突/别名悬空/资产不一致/不支持的标识 = 2 阻断；漏标/RS 未提及 = 1 问人。
+分拣（唯一 xlsx=全量 mapping、唯一 md=RS，冗余文件忽略记 manifest）→ 版本锚点（RS 变更记录最新"优化"行日期归一 YYYYMM）→ 备注标记提取（`{YYYYMM}版本{动词}`；属性级新增=字段候选、实体级新增=新来源；其他动词识别归类报告"待扩展"）→ 校验 → `change_request.json`（+version+变更记录摘要，**只装业务说了什么**；闸口①'把简述↔提取字段并排供人扫漏标——delta 取消后的补偿）+ `input_manifest.json`。exit 0/1/2 对齐 precheck 分级。
 
 ### 步骤 2 · designer（优化模式，prompt 显式声明）
 dws-designer 加载 **dws-design-opt** skill：读 baseline_view + change_request → 落位决策（opt-playbook 取舍树）→ 新 JOIN 声明 join_safety（强制）→ 回刷判断 → 写增量 decisions（模板 `dws-design-opt/assets/opt-decisions-template.yaml`）→ 组装：
