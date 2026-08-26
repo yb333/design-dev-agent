@@ -207,7 +207,9 @@ DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规�
 - **RS 有 DQ 需求**（`rs_input_view.json` 的 `dq.requirements` 非空）→ designer **翻译**成 coder 可执行的 DQ 规格写进 `dq_rules`
   - `scope`/`check_type`/`rule_name` 跟 RS 保持一致（分类不变）
   - `rule_desc` 是**翻译后的技术口径**（检查哪个字段、什么条件、阈值、告警级），不是 RS 原文复制
-  - 例：RS `rule_desc="订单金额不能为空"` → 翻译 `rule_desc="检查 dwb_order_f.order_amount IS NOT NULL，空值告警"`
+  - **必须写明违规方向**（什么情况算违规）——coder 照此定 WHERE，UT 按行数判（0 行通过，非 0 行告警）
+  - 例：RS `rule_desc="订单金额不能为空"` → 翻译 `rule_desc="违规=dwb_order_f.order_amount IS NULL（有空值即告警）"`——别写"检查 IS NOT NULL"这种正向描述，方向容易译反
+  - 阈值非 0/100% 极端值（中间阈值）→ rule_desc 保留精确口径并标注"结果依赖数据分布"（UT 零结果也证不了绝对合理性，闸口② 人工确认预期）
   - 翻译后条数可增加（一条模糊需求拆多条），但不应少于 RS（assemble_ts 会 warn）
 - **RS 无 DQ 需求**（`dq.requirements` 为空，标注"无 DQ"）→ `dq_rules` 留空，**不产任何 DQ**（coder 不调、无 DQ 调度任务）
 - designer **不自主决定产不产**（DQ 是业务决策归 RS），RS 有就翻译、没有就不干

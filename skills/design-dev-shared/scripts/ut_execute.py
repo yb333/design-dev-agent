@@ -24,7 +24,7 @@ except AttributeError:
 # 依赖全在 shared 同目录（dws_db/config_paths/run_ut/ut_diagnose），无需跨目录引导
 from dws_db import create_executor
 from config_paths import db_sources_path
-from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks
+from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks, run_dq_checks
 
 
 def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
@@ -352,10 +352,30 @@ def main():
             all_results.append(rule_result)
             print()
 
+    # ── DQ 检查（数据全部就位后）：契约 0 行=通过，非 0 行=告警 ──
+    # DQ 是上生产的制品，UT 里执行验证（SQL 错误/方向反只有执行能暴露）。
+    # 数据不完整（有失败/跳过）时 DQ 结果无意义，不执行——修复后重跑 UT 自带。
+    dq_results = []
+    dq_note = ""
+    dq_rules_list = ts.get("dq_rules") or []
+    if dq_rules_list:
+        if all_results and all(r["status"] == "PASS" for r in all_results):
+            print("▶ DQ 检查（0 行=通过，非 0 行=告警）")
+            dq_results = run_dq_checks(executor, ts_path.parent / "dq", dq_rules_list, param_values)
+            for d in dq_results:
+                symbol = {"PASS": "✅", "ALERT": "🚨", "FAIL": "❌", "MISSING": "❓"}.get(d["status"], "?")
+                print(f"  {symbol} {d['rule_name']}: {d['detail']}")
+        else:
+            dq_note = "规则存在失败/跳过，数据不完整——DQ 未执行（修复后重跑 UT 自带 DQ）"
+            print(f"⏭️ DQ 跳过：{dq_note}")
+
     # 汇总报告
     passed = sum(1 for r in all_results if r["status"] == "PASS")
     failed = sum(1 for r in all_results if r["status"] == "FAIL")
     skipped = sum(1 for r in all_results if r["status"] == "SKIP")
+    dq_pass = sum(1 for d in dq_results if d["status"] == "PASS")
+    dq_alert = sum(1 for d in dq_results if d["status"] == "ALERT")
+    dq_bad = sum(1 for d in dq_results if d["status"] in ("FAIL", "MISSING"))
 
     report_lines = []
     report_lines.append("# UT 报告")
@@ -367,6 +387,9 @@ def main():
                             f"试跑通过后清表全量执行——**最终审视按全量结果**（仅 truncate_table 规则试跑）")
     report_lines.append("")
     report_lines.append(f"**汇总**: ✅{passed} 通过  ❌{failed} 失败  ⏭️{skipped} 跳过")
+    if dq_results or dq_note:
+        report_lines.append(f"**DQ**: ✅{dq_pass} 通过  🚨{dq_alert} 告警  ❌{dq_bad} 失败/缺失"
+                            f"（0 行=通过，非 0 行=告警——提交部署前必须确认为 0 行）")
     report_lines.append("")
     report_lines.append("## 规则明细")
     report_lines.append("")
@@ -391,6 +414,31 @@ def main():
                     symbol = {"PASS": "✅", "FAIL": "❌", "WARN": "⚠️"}.get(c["status"], "?")
                     report_lines.append(f"| {c['check']} | {symbol} | {c['detail']} |")
                 report_lines.append("")
+
+    if dq_results or dq_note:
+        report_lines.append("## DQ 检查（0 行=通过，非 0 行=告警）")
+        report_lines.append("")
+        if dq_note:
+            report_lines.append(f"> ⏭️ {dq_note}")
+        if dq_results:
+            report_lines.append("| 规则 | 文件 | 结果 | 违规行数 | 详情 |")
+            report_lines.append("|------|------|------|---------|------|")
+            for d in dq_results:
+                symbol = {"PASS": "✅", "ALERT": "🚨", "FAIL": "❌", "MISSING": "❓"}.get(d["status"], "?")
+                report_lines.append(f"| {d['rule_name']} | `{d['file']}` | {symbol} {d['status']} | {d['rows']} | {d['detail']} |")
+            if dq_alert:
+                report_lines.append("")
+                report_lines.append("**告警样例（违规行）**：")
+                for d in dq_results:
+                    if d["status"] == "ALERT" and d.get("samples"):
+                        report_lines.append(f"- {d['rule_name']}:")
+                        for s in d["samples"]:
+                            report_lines.append(f"  - {s}")
+            report_lines.append("")
+            report_lines.append("> **DQ 分流**：执行报错/文件缺失 → 回 coder（SQL 类）；阈值或口径不合理 → 回 designer"
+                                " 改 rule_desc（或退 RS 源）；数据真脏 → 人定。中间阈值的结果依赖数据分布，"
+                                "人工确认预期后再放行。")
+        report_lines.append("")
 
     if failed:
         report_lines.append("## ⚠️ 问题清单（数据质量类，需人确认根因）")
@@ -418,9 +466,12 @@ def main():
 
     print("=" * 50)
     print(f"UT 汇总: ✅{passed} 通过  ❌{failed} 失败  ⏭️{skipped} 跳过")
+    if dq_results or dq_note:
+        print(f"DQ 汇总: ✅{dq_pass} 通过  🚨{dq_alert} 告警  ❌{dq_bad} 失败/缺失")
     print(f"UT 报告: {report_path}")
 
-    sys.exit(0 if failed == 0 else 1)
+    # DQ 告警同样阻断出口（提交部署前必须确认为 0 行，处置权在闸口② 的人）
+    sys.exit(0 if failed == 0 and dq_alert == 0 and dq_bad == 0 else 1)
 
 
 if __name__ == "__main__":

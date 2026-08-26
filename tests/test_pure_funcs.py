@@ -568,6 +568,88 @@ class TestCastTypeStripping:
         assert extract_select_aliases("SELECT CAST(a.amt AS int8 FROM t") == ["int8"]
 
 
+class TestRunDqChecks:
+    """DQ 检查执行（run_dq_checks）：契约 = 违规行探测器——0 行通过，非 0 行告警。
+
+    行数用 COUNT 包裹判（不拉全量结果集），告警才追加 LIMIT 采样；
+    文件按 dq_rules.check_type 确定名拼接，缺失即 MISSING。
+    """
+
+    class _Exec:
+        """按 SQL 片段返回预置行数的 fake executor。count_map: 片段→cnt。"""
+
+        def __init__(self, count_map=None, error_sub=None):
+            self.count_map = count_map or {}
+            self.error_sub = error_sub
+            self.executed = []
+
+        def execute(self, sql):
+            self.executed.append(sql)
+
+            class _R:
+                def __init__(self, success, rows=None, error=""):
+                    self.success = success
+                    self.rows = rows or []
+                    self.error = error
+            if self.error_sub and self.error_sub in sql:
+                return _R(False, error="COLUMN does not exist: bad_col")
+            if "COUNT(*)" in sql:
+                cnt = next((c for frag, c in self.count_map.items() if frag in sql), 0)
+                return _R(True, rows=[{"cnt": cnt}])
+            # 采样查询（LIMIT 5）
+            return _R(True, rows=[{"order_no": "O1", "amt": None}, {"order_no": "O2", "amt": None}])
+
+    @staticmethod
+    def _rules(**kw):
+        base = {"check_type": "空值检查", "rule_name": "金额非空"}
+        base.update(kw)
+        return [base]
+
+    def test_zero_rows_passes_without_sample_query(self, tmp_path):
+        from run_ut import run_dq_checks
+        (tmp_path / "dq_空值检查.sql").write_text(
+            "/* 检查空值 */\nSELECT order_no, amt FROM dws.t WHERE amt IS NULL;", encoding="utf-8")
+        ex = self._Exec()
+        results = run_dq_checks(ex, tmp_path, self._rules(), {})
+        assert results[0]["status"] == "PASS" and results[0]["rows"] == 0
+        assert len(ex.executed) == 1  # 0 行不做采样查询
+        assert "COUNT(*)" in ex.executed[0]  # COUNT 包裹判行数
+        assert ex.executed[0].startswith("SELECT COUNT(*)")  # 注释已被 read_sql 剥掉
+
+    def test_nonzero_rows_alert_with_samples(self, tmp_path):
+        from run_ut import run_dq_checks
+        (tmp_path / "dq_空值检查.sql").write_text(
+            "SELECT order_no, amt FROM dws.t WHERE amt IS NULL", encoding="utf-8")
+        ex = self._Exec(count_map={"amt IS NULL": 3})
+        results = run_dq_checks(ex, tmp_path, self._rules(), {})
+        r = results[0]
+        assert r["status"] == "ALERT" and r["rows"] == 3 and "3 行违规" in r["detail"]
+        assert r["samples"] and "O1" in r["samples"][0]
+        assert any("LIMIT 5" in s for s in ex.executed)  # 告警才采样
+
+    def test_exec_error_fails(self, tmp_path):
+        from run_ut import run_dq_checks
+        (tmp_path / "dq_空值检查.sql").write_text(
+            "SELECT bad_col FROM dws.t WHERE bad_col IS NULL", encoding="utf-8")
+        results = run_dq_checks(self._Exec(error_sub="bad_col"), tmp_path, self._rules(), {})
+        assert results[0]["status"] == "FAIL" and "bad_col" in results[0]["detail"]
+
+    def test_missing_file_reported(self, tmp_path):
+        from run_ut import run_dq_checks
+        results = run_dq_checks(self._Exec(), tmp_path, self._rules(), {})
+        assert results[0]["status"] == "MISSING" and "dq_空值检查.sql" in results[0]["detail"]
+
+    def test_param_substituted_and_missing_param_fails(self, tmp_path):
+        from run_ut import run_dq_checks
+        (tmp_path / "dq_空值检查.sql").write_text(
+            "SELECT order_no FROM dws.t WHERE dt < ${P_CYCLE_ID}", encoding="utf-8")
+        ex = self._Exec()
+        run_dq_checks(ex, tmp_path, self._rules(), {"P_CYCLE_ID": "20260826"})
+        assert all("${" not in s for s in ex.executed) and "20260826" in ex.executed[0]
+        results = run_dq_checks(self._Exec(), tmp_path, self._rules(), {})  # 没配测试值
+        assert results[0]["status"] == "FAIL" and "P_CYCLE_ID" in results[0]["detail"]
+
+
 class TestViewCommentSyntax:
     """视图 DDL 的对象注释必须是 COMMENT ON VIEW（GaussDB 语法；TABLE 会报错）。"""
 

@@ -254,7 +254,11 @@ Task(
   description="生成DQ检查SQL",
   prompt="读取 {deliver}/ts.json 的 dq_rules，按每条规则的 rule_desc 技术口径
           生成检查 SQL，产出到 {deliver}/dq/ 目录。
-          每个文件命名 dq_{检查类型}.sql。"
+          每个文件命名 dq_{检查类型}.sql。
+          ★ 语义契约：DQ SELECT = 违规行探测器——0 行=通过，非 0 行=告警；
+          阈值/比例逻辑全收进 WHERE/HAVING。rule_desc 已写明什么情况算违规，
+          照口径定 WHERE 方向（别写反）。输出列 = 业务键+违规值字段（不 SELECT *），
+          参数直接写 ${参数名}（UT 会替换测试值）。"
 )
 ```
 
@@ -319,6 +323,7 @@ python SHARED_SCRIPTS/ut_execute.py \
 > ⚠️ `--precheck-result` 路径与 5a 的 `--result` 一致（都在 `_internal/` 下）。读不到直接退出（避免预检未通过误灌数据）。
 > **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms（数据库端 statement_timeout 自动兜底）。
 > ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**。无需分开调，脚本内部有序两阶段；init 挂了基线就废，后续增量自动跳过。
+> ★ **DQ 检查内嵌 5b 尾部**（`ts.dq_rules` 非空且数据完整时自动执行）：0 行=通过，非 0 行=告警。告警/报错阻断出口（exit 1），UT 报告有 DQ 段——分流见步骤 6。
 
 ---
 
@@ -330,7 +335,7 @@ python SHARED_SCRIPTS/ut_execute.py \
 
 > ⚠️ **类型转换类报错（含 invalid input syntax / operator does not exist）先看报告的"嫌疑报告"段再分流**：有关联键嫌疑（类型跨大类的 JOIN 对）→ 退 designer/人核对关联逻辑，**★禁止用改字段类型来"修复"**（掩盖根因，同 ROW_NUMBER 反模式）；无关联嫌疑才走 6a/6b。
 
-**6a. SQL 问题 → coder**（INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST，或预检 FAIL）。
+**6a. SQL 问题 → coder**（INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST，或预检 FAIL；**DQ 段的 FAIL/MISSING 同类**——DQ SQL 执行报错或 dq_{检查类型}.sql 文件缺失）。
 恢复该规则 coder 旧会话（task_id 在步骤4b 记的映射里）：
 ```
 Task(subagent_type="dws-coder", task_id="{该规则 task_id}",
@@ -338,6 +343,8 @@ Task(subagent_type="dws-coder", task_id="{该规则 task_id}",
      prompt="{rule_code} 执行报错：{报错信息}。请修正 SELECT。")
 ```
 改完重跑步骤5。**每规则限 3 轮**。
+
+**6a-DQ. DQ 告警（ALERT，非 0 行）→ 闸口② 人判，不自动改**。UT 报告 DQ 段带违规行样例，人三选一：SQL 方向写反 → 回 coder；阈值/口径不合理 → 回 designer 改 rule_desc（或退 RS 源）；数据真脏 → 人定（接受或退数据侧）。中间阈值的结果依赖数据分布，人工确认预期。
 
 **6b. 数据质量问题 → 人确认根因 → （要改设计才回 designer）→ coder**。
 INSERT 成功但 UT 检查 FAIL（主键重复/空值/行数异常，报告带样例数据）。
@@ -402,7 +409,7 @@ python SHARED_SCRIPTS/assemble_export.py \
 
 ## 步骤 8：闸口②（人确认编码质量）
 
-**必须调 question 展示结果摘要等用户确认**（摘要含 UT 通过/失败数 + 产出文件清单），跑完必须停下，不允许自己结束流程：
+**必须调 question 展示结果摘要等用户确认**（摘要含 UT 通过/失败数 + **DQ 检查结果（0 行=通过；有告警必须列样例与去向判断）** + 产出文件清单），跑完必须停下，不允许自己结束流程：
 
 - 用户选"确认" → 结束流程
 - 用户选"修改"（说明哪里改）→ 回对应步骤（编码问题回 coder / 设计问题回 designer）

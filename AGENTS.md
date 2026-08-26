@@ -131,8 +131,9 @@ UT 失败**不要一律回 coder**。按失败项类型分流：
 
 | 类型 | 识别 | 去向 |
 |------|------|------|
-| **SQL 问题** | INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST | coder 改语法（**恢复该规则旧会话**，不新开）|
+| **SQL 问题** | INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST；DQ 段 FAIL/MISSING（DQ SQL 报错或文件缺失） | coder 改语法（**恢复该规则旧会话**，不新开）|
 | **数据质量问题** | UT 检查 FAIL：主键重复 / 空值 / 行数异常 | **退回 designer**（绝不给 coder）|
+| **DQ 告警** | UT 报告 DQ 段 ALERT（非 0 行违规，带样例） | **闸口② 人判**（SQL 方向反→coder / 阈值口径→designer / 数据真脏→人定），不自动改 |
 | **环境问题** | 连接/权限/源表不存在/超时 | 闸口②报告给人 |
 
 **数据质量问题为什么不能给 coder**：coder 拿到"主键重复"会用 ROW_NUMBER 去重，掩盖根因（关联发散/关联键选错），反而丢数据。根因在设计层。
@@ -233,6 +234,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 - DQ 调度任务条件化（dq_rules 空不建 tasks["dq"]）；coder 条件化调用（dq_rules 空不调）。
 - preprocess build_compact 加 `dq` 段（designer 读 view 就看到 RS 的 DQ 需求）。
 - assemble_dq.py 已退役删除（2026-08）：eval-suite 改走 coder 生成 DQ（对齐生产 4c），两路 DQ 产出统一，无脚本兜底。
+- **语义契约 + UT 执行验证（2026-08）**：DQ SELECT = **违规行探测器**——0 行=通过，非 0 行=告警；阈值/比例逻辑全收 WHERE/HAVING，工具只判行数。designer 的 rule_desc **必须写明违规方向**（防译反，例："违规=order_amount IS NULL"）；coder 输出业务键+违规值列、文件名 `dq_{check_type}.sql`（UT 按确定名找）。ut_execute 尾部内嵌 DQ 阶段（`run_dq_checks`：dq_rules 非空且数据完整才执行；COUNT 包裹判行数，告警才 LIMIT 采样）——三分结果：FAIL/MISSING 回 coder（SQL 类）；**ALERT（非 0 行）阻断出口（exit 1）**，闸口② 人判（SQL 方向反→coder / 阈值口径不合理→designer / 数据真脏→人定）；中间阈值结果依赖数据分布，人工确认预期。UT 零结果证明"SQL 可执行+当前数据不告警"，不证明阈值绝对合理。
 
 ### 工程治理：工具注册表 + agent 瘦身 + legacy 清理（2026-08）
 

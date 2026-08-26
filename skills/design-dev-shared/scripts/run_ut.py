@@ -26,7 +26,7 @@ except AttributeError:
 
 # 依赖全在 shared 同目录（dws_db/sql_parse），无需跨目录引导
 from dws_db import load_test_params
-from sql_parse import extract_select_aliases
+from sql_parse import extract_select_aliases, read_sql
 
 
 # ============================================================
@@ -278,6 +278,63 @@ def read_select(select_dir: Path, rule_code: str) -> str:
     if candidates:
         return candidates[0].read_text(encoding="utf-8")
     return ""
+
+
+def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
+                  sample_limit: int = 5) -> list[dict]:
+    """执行 DQ 检查 SQL（对 UT 已灌数的目标表）——DQ 是上生产的制品，交付前必须执行验证。
+
+    契约：DQ SELECT = **违规行探测器**——0 行通过，非 0 行告警；阈值/比例逻辑全收在
+    SQL 的 WHERE/HAVING 里，这里只判行数。文件按 dq_rules 的 check_type 确定名拼接
+    （dq_{check_type}.sql），缺文件 = 发现项（coder 未按契约产出）。
+
+    行数用 COUNT 包裹查（不拉全量结果集），告警才追加 LIMIT 采样抓违规行样例。
+    返回 [{rule_name, check_type, file, status, detail, rows, samples}]，status：
+    PASS（0 行）/ ALERT（非 0 行）/ FAIL（执行报错/参数缺测试值）/ MISSING（文件缺失）。
+    分流：FAIL/MISSING 回 coder（SQL 类）；ALERT 归闸口② 人判（SQL 写错 / 阈值口径
+    不合理回 designer / 数据真脏人定）。
+    """
+    results = []
+    for rule in dq_rules or []:
+        check_type = (rule.get("check_type") or "").strip()
+        rule_name = rule.get("rule_name") or check_type
+        fname = f"dq_{check_type}.sql"
+        entry = {"rule_name": rule_name, "check_type": check_type, "file": fname,
+                 "status": "PASS", "detail": "", "rows": 0, "samples": []}
+        fpath = Path(dq_dir) / fname
+        if not check_type or not fpath.exists():
+            entry["status"] = "MISSING"
+            entry["detail"] = f"检查 SQL 文件缺失（预期 {fname}）"
+            results.append(entry)
+            continue
+        sql = read_sql(str(fpath)).strip().rstrip(";")
+        try:
+            sql = substitute_params(sql, param_values)
+        except ValueError as ve:
+            entry["status"] = "FAIL"
+            entry["detail"] = str(ve)
+            results.append(entry)
+            continue
+        count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) _dq_check"
+        r = executor.execute(count_sql)
+        if not r.success:
+            entry["status"] = "FAIL"
+            entry["detail"] = f"执行失败: {(r.error or '')[:200]}"
+            results.append(entry)
+            continue
+        cnt = ((r.rows or [{}])[0].get("cnt", 0)) or 0
+        entry["rows"] = cnt
+        if cnt:
+            entry["status"] = "ALERT"
+            entry["detail"] = f"{cnt} 行违规（0 行=通过，非 0 行=告警）"
+            sample_sql = f"SELECT * FROM ({sql}) _dq_check LIMIT {sample_limit}"
+            rs = executor.execute(sample_sql)
+            entry["samples"] = [" | ".join(f"{k}={v}" for k, v in row.items())
+                                for row in (rs.rows or [])[:sample_limit]]
+        else:
+            entry["detail"] = "0 行，通过"
+        results.append(entry)
+    return results
 
 
 def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
