@@ -288,7 +288,8 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
 
     # 上次同步对应的源提交（从内网仓最后一个 sync 提交解析）→ 本次积攒的
     # 能力更新清单 = 源仓 (上次hash..本次] 里动了 skills/agents/commands 的提交
-    # （工具/评测类提交不进同步，自动跳过）。解析失败一律退化为单条标题。
+    # （工具/评测类提交不进同步，自动跳过）。基线解析或区间查询失败（如源仓是
+    # 浅克隆、老 hash 不在历史里）则 entries 为空，提交时退到"最近能力提交标题"。
     r = run_git(["log", "-1", "--format=%s", "--grep=^sync:\\ design-dev-agent@"],
                 cwd=team_repo, capture=True)
     m = re.search(r"@([0-9a-f]{7,40})", r.stdout)
@@ -299,6 +300,10 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
                     cwd=src_repo, capture=True)
         if r.returncode == 0:
             entries = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        else:
+            print(f"  [WARN] 区间查询失败（上次同步 {m.group(1)[:8]} 不在源仓历史？浅克隆）")
+    print(f"  提交信息依据: 上次同步 {'未找到' if not m else m.group(1)[:8]}，"
+          f"区间能力提交 {len(entries)} 条")
 
     # 同步主体可整体重试：push 被拒（远端在窗口期又进了新提交）就整个重来一
     # 轮——重新对齐远端、重新 mirror、重新提交。sync 提交可再生成，重来比在
@@ -386,7 +391,8 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         if len(changed) > 20:
             print(f"  ...（共 {len(changed)} 个）")
         # 提交信息：积攒多条 → 首行汇总 + 正文逐条；单条 → 直接用该条标题；
-        # 区间无能力提交（纯 config 变化）→ config 更新；否则退化为源仓最新标题
+        # 区间查询失效 → 最近一条能力提交的标题（绝不用源仓最新提交——那是
+        # 工具/评测类时名字与内容不符）；纯 config 变化 → config 更新
         if len(entries) >= 2:
             commit_args = ["-m", f"sync: design-dev-agent@{src_hash} 能力更新 {len(entries)} 项",
                            "-m", "\n".join(f"* {e}" for e in entries)]
@@ -398,7 +404,12 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
                  for l in changed):
             commit_args = ["-m", f"sync: design-dev-agent@{src_hash} config 更新"]
         else:
-            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} {src_subject}"]
+            r = run_git(["log", "-1", "--format=%s", src_branch, "--",
+                         "skills", "agents", "commands"],
+                        cwd=src_repo, capture=True)
+            subject = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
+                       else src_subject)
+            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} {subject}"]
         if run_git(["commit"] + commit_args, cwd=team_repo).returncode != 0:
             fail("commit 失败")
 
