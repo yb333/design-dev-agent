@@ -23,6 +23,16 @@
 
 **聚合拼接必须带 ORDER BY**：`string_agg(x, ',')` 不带排序在 DWS 上**结果不稳定**（官方故障案例）——拼接序由 designer 在 design_logic 定（四要素），照写。
 
+**类型转换细则**（版本无关写法；爆错只发生在**字符→数值/日期**方向，反方向安全）：
+
+- 显式 `CAST(x AS 类型)` 首选；`::` 可用但官方未文档化，次选
+- 字符→数值，源可能有脏数据的加守卫（守不住就是 `invalid input syntax` 爆错）：
+  `CASE WHEN x ~ '^[0-9]+(\.[0-9]+)?$' THEN CAST(x AS numeric) END`；只防空串用 `CAST(NULLIF(trim(x),'') AS numeric)`
+- 带小数的字符串直接转整数会爆错——中转 numeric：`CAST(CAST(x AS numeric) AS int8)`；注意 numeric→整数是**四舍五入**不是截断
+- 字符→日期必须带显式格式 `to_date(x, 'YYYYMMDD')`——不写格式走会话参数（nls_date_format），环境漂移即错位；格式与源字符串严格对齐
+- 数值/日期→字符用 `to_char(x, fmt)` 定格式（裸 CAST float→字符可能出科学计数法）
+- JOIN/比较键两侧类型在源头对齐，不靠隐式转换（性能劣化+语义漂移）——键类型不齐回报调用方，不自作主张 CAST 凑合
+
 ---
 
 ## 1. SELECT 字段规范
