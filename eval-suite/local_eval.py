@@ -323,7 +323,7 @@ def step_check_sql(report, deliver, rule_code):
 
     code, out = run_python(
         str(CODING_REFS / "check_sql.py"),
-        ["--select", str(select_file), "--ts", str(deliver / "ts.json"), "--rule", rule_code]
+        ["--sql", str(select_file), "--ts", str(deliver / "ts.json"), "--rule", rule_code]
     )
     if code == 0:
         report.pass_step("静态对比(check_sql)", "字段覆盖完整, 表引用正确")

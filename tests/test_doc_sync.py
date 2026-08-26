@@ -81,5 +81,5 @@ def test_coder_skill_flags_known_to_scripts():
     text = skill.read_text(encoding="utf-8")
     assert "--compact" not in text  # 已废除的参数不再出现在运行时提示
     assert "--verbose" in text      # 实际存在的完整模式参数有说明
-    for flag in ("--select", "--ts", "--rule"):
+    for flag in ("--sql", "--ts", "--rule"):
         assert f"check_sql.py" in text and flag in text  # check_sql 必填三参有示例

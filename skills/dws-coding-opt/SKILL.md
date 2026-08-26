@@ -42,7 +42,7 @@ python {skills根}/dws-coding/scripts/slice_ts.py \
 
 ### 3. 自检（可选习惯，闸门在 pipe）
 ```bash
-python {skills根}/dws-coding/scripts/check_sql.py --select {SQL文件} --ts {deliver}/ts_v2.json --rule {rule_code}
+python {skills根}/dws-coding/scripts/check_sql.py --sql {SQL文件} --ts {deliver}/ts_v2.json --rule {rule_code}
 ```
 调 check_sql 静态对比；通过与否都落盘——pipe 的 SQL 围栏（sql_fence）是唯一强制闸门，
 越界会带着 `[SQL围栏]` 报错回来找你（恢复本会话改，限 3 轮）。

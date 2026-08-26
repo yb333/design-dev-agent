@@ -12,7 +12,7 @@ SELECT 静态对比: SELECT 语句 vs ts.json 规则切片
 4. 没有 SELECT *
 
 用法:
-  python check_sql.py --select R0001_select.sql --ts ts.json --rule R0001
+  python check_sql.py --sql R0001_select.sql --ts ts.json --rule R0001
 
 退出码: 0=通过, 1=有问题
 """
@@ -310,13 +310,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="SELECT 静态对比: SELECT vs ts.json 规则切片"
     )
-    parser.add_argument("--select", required=True, help="SELECT SQL 文件路径")
+    parser.add_argument("--sql", required=True, help="SELECT SQL 文件路径")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
     args = parser.parse_args()
 
     # 读 SQL
-    sql_path = Path(args.select)
+    sql_path = Path(args.sql)
     if not sql_path.exists():
         print(f"错误: SELECT 文件不存在: {sql_path}", file=sys.stderr)
         sys.exit(2)

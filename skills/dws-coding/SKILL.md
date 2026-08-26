@@ -123,7 +123,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 调 check_sql.py 检查 SELECT 和 ts.json 切片是否一致（表/字段/JOIN/口径引用）：
 
 ```bash
-python {skill目录}/scripts/check_sql.py --select {你的SELECT文件} --ts {ts路径} --rule {规则号}
+python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路径} --rule {规则号}
 ```
 
 不过则自己改后重对比，限3轮。
