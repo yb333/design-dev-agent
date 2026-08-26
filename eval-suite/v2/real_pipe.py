@@ -104,6 +104,7 @@ def run_real_pipe(
         on_suspect=discipline.on_file,
     )
     tracker._fallback = watcher  # 全盲兜底 + etl 计数
+    discipline._watcher = watcher  # 文件违规的代理前因（marker 时间线）
 
     def _do() -> tuple[bool, str]:
         # 不带 --format json：降低内网包壳启动器的旗标兼容面，默认格式流式输出更适合看进度
@@ -156,7 +157,8 @@ class _DisciplineTracker:
 
     def __init__(self, stage_provider=None):
         self._stage_provider = stage_provider
-        self._recent: list[str] = []  # 滚动上下文
+        self._watcher = None  # 注入 watcher（文件违规的代理前因：marker 时间线）
+        self._recent: list[str] = []  # 滚动上下文（仅主 agent 流——子 agent 内部顶层流不可见）
         self.violations: list[dict] = []
         self._seen_keys: set[str] = set()
 
@@ -170,8 +172,34 @@ class _DisciplineTracker:
             self._record(script, f"调用 {m.group(0)[:120]}", from_stream=True)
 
     def on_file(self, rel_path: str) -> None:
-        """watcher 检出产出目录里的自建脚本文件（diagnose 豁免由 watcher 保证）。"""
-        self._record(rel_path.replace("\\", "/"), f"自建文件 {rel_path}", from_stream=False)
+        """watcher 检出产出目录里的自建脚本文件（diagnose 豁免由 watcher 保证）。
+
+        前因用代理线索拼：子 agent 的推理在它自己的会话里、顶层流拿不到——
+        用 阶段 + 最近产出 marker 时间线 + 主 agent 流尾（派活语境）近似定位。
+        """
+        context = []
+        if self._watcher is not None:
+            markers = self._watcher.recent_markers()
+            if markers:
+                context.append(f"此前产出活动: {' → '.join(markers)}")
+        if self._recent:
+            context.append(f"主agent流尾| {self._recent[-1][:100]}")
+        key = rel_path.replace("\\", "/")
+        if key in self._seen_keys or "_internal/diagnose" in key:
+            return
+        stem = key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if stem in _WHITELIST_SCRIPTS:
+            return
+        self._seen_keys.add(key)
+        stage = ""
+        if self._stage_provider:
+            try:
+                stage = self._stage_provider()
+            except Exception:
+                pass
+        self.violations.append(
+            {"script": key, "action": f"自建文件 {rel_path}", "stage": stage, "context": context}
+        )
 
     def _record(self, script: str, action: str, from_stream: bool) -> None:
         base = script.rsplit("/", 1)[-1]
@@ -424,6 +452,11 @@ class _StageWatcher:
                             self._on_suspect(rel)
                         except Exception:
                             pass
+
+    def recent_markers(self, n: int = 3) -> list[str]:
+        """最近首现的 marker 阶段名（时间倒序）——文件违规的代理前因线索。"""
+        ordered = sorted(self._seen.items(), key=lambda kv: kv[1], reverse=True)
+        return [stage for stage, _ in ordered[:n]]
 
     def stage_text(self) -> str:
         """spinner 用的当前阶段文本（最近首现的 marker；编码阶段带规则计数）。"""

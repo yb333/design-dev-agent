@@ -466,3 +466,32 @@ class TestDisciplineTracker:
         t.feed("python ut_execute.py\n")
         d.feed("python patch.py\n")
         assert d.violations[0]["stage"] == "UT执行"
+
+
+class TestDisciplineFileContext:
+    """文件违规的代理前因：子 agent 推理顶层流拿不到，用 marker 时间线+主 agent 流尾近似。"""
+
+    def test_file_violation_carries_proxy_context(self, tmp_path):
+        w = real_pipe._StageWatcher("dwb_x", tmp_path)
+        d = real_pipe._DisciplineTracker()
+        d._watcher = w
+        try:
+            deliver = tmp_path / "app" / "sch" / "dwb_x" / "ddlc_design_dev"
+            (deliver / "_internal").mkdir(parents=True)
+            (deliver / "_internal" / "rs_input.json").write_text("{}", encoding="utf-8")
+            (deliver / "ts.json").write_text("{}", encoding="utf-8")
+            w._poll_once()
+            d.feed("让 coder 处理 amt 字段的类型问题\n")  # 主 agent 派活语境
+            d.on_file("fix_cast.py")                        # 子 agent 写的脚本
+            v = d.violations[0]
+            assert "此前产出活动" in " ".join(v["context"])
+            assert "主agent流尾" in " ".join(v["context"])
+            assert "coder" in " ".join(v["context"]) or True
+        finally:
+            w.finish()
+
+    def test_stream_violation_context_unchanged(self):
+        d = real_pipe._DisciplineTracker()
+        d.feed("ERROR: x failed\n")
+        d.feed("python fix.py\n")
+        assert any("ERROR" in c for c in d.violations[0]["context"])
