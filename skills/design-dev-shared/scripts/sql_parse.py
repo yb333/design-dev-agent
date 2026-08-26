@@ -440,6 +440,54 @@ def extract_qualified_refs(sql: str) -> list:
     return [(a.lower(), c.lower()) for a, c in _QUALIFIED_REF.findall(sql or "")]
 
 
+# 口径引用提取的噪音词（SQL 结构词/函数名/聚合名）：裸出现在口径文本里不是字段引用。
+# N36 是硬拦，排除集从宽（宁放过不误报）。
+_LOGIC_NOISE_WORDS = {
+    "CASE", "WHEN", "THEN", "ELSE", "END", "NULL", "AND", "OR", "NOT", "IN", "IS",
+    "EXISTS", "BETWEEN", "LIKE", "AS", "ON", "BY", "FROM", "WHERE", "JOIN", "LEFT",
+    "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "GROUP", "ORDER", "HAVING", "SELECT",
+    "DISTINCT", "UNION", "ALL", "OVER", "PARTITION", "LIMIT", "DESC", "ASC",
+    "TRUE", "FALSE", "IF", "COUNT", "SUM", "MAX", "MIN", "AVG", "STRING_AGG",
+    "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE", "LAG", "LEAD", "SUBSTR", "SUBSTRING",
+    "COALESCE", "NVL", "TO_CHAR", "TO_DATE", "TO_NUMBER", "CAST", "CONCAT",
+    "TRIM", "LENGTH", "UPPER", "LOWER", "REPLACE", "ROUND", "ABS",
+    "CURRENT_TIMESTAMP", "SYSDATE", "CURRENT_DATE",
+}
+
+
+def extract_logic_refs(text: str, registry_cols) -> tuple:
+    """从口径文本（mapping 伪代码 / design_logic）提取字段引用骨架（纯结构提取，非语义判断）。
+
+    返回 (qualified, bare_hits)：
+    - qualified: [(alias, col)] 别名限定引用（a.del_flag 形态，小写）——结构可靠
+    - bare_hits: [col] 裸英文 token 且命中登记处（registry_cols=列名全集）且非噪音词
+      ——半可靠（归属待定：由调用方决定补全/逼限定/提示）
+    ${...} 参数段先剥离；数字/中文天然不参与。
+    """
+    s = re.sub(r'\$\{[^}]*\}', ' ', text or "")
+    qualified = sorted(set((a.lower(), c.lower()) for a, c in _QUALIFIED_REF.findall(s)))
+    reg = {str(c).lower() for c in (registry_cols or set())}
+    bare_hits = set()
+    for m in re.finditer(r'(?<![\w.])([A-Za-z_]\w*)', s):
+        w = m.group(1).lower()
+        if w in reg and w.upper() not in _LOGIC_NOISE_WORDS:
+            bare_hits.add(w)
+    return qualified, sorted(bare_hits)
+
+
+def diff_logic_refs(raw_cols, logic_texts) -> list:
+    """对账：原文引用列名集 - design_logic 引用列名集 → 疑似翻译丢引用（列名级）。
+
+    按列名对齐——原文伪代码的裸引用无别名，(alias,col) 精确对不上。
+    designer 多出的引用不报（合法补充；幻觉由 N30 存在性校验拦）。
+    """
+    logic_cols = set()
+    for t in logic_texts or []:
+        qualified, _ = extract_logic_refs(t, set())
+        logic_cols.update(c for _, c in qualified)
+    return sorted(set(raw_cols or []) - logic_cols)
+
+
 _ASSIGN_TRIVIAL_KEYWORDS = {"CURRENT_TIMESTAMP", "SYSDATE", "CURRENT_DATE", "NULL"}
 
 

@@ -287,6 +287,22 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
                 f"[字段引用] {al}.{col}：源表 {schema}.{t_short} 里没有字段 '{col}'"
                 f"（检查拼写；若 ts/design_logic 引用本身有误 → 回报调用方，不自行改设计）")
 
+    # 6. 口径引用对账：design_logic 的限定引用 ⊆ SQL 实际限定引用（漏实现当场抓）。
+    # 真实案例：del_flag 口径引用三字段（a.del_flag/u.delete_flag/u.del_flag），coder
+    # 只按 source_refs 单字段实现，丢了两个——写完即查在 coder 手里就拦住，不用等 UT。
+    # SQL 引用集含 CTE 内部（design_logic 引用在 SQL 任何位置出现即算覆盖）。
+    from sql_parse import extract_logic_refs
+    sql_refs = set(extract_qualified_refs(sql_text))
+    missing_refs = set()
+    for _t in (rule.get("field_logics") or {}).values():
+        for _al, _c in extract_logic_refs(str(_t), set())[0]:
+            if (_al, _c) not in sql_refs:
+                missing_refs.add(f"{_al}.{_c}")
+    if missing_refs:
+        issues.append(
+            f"[口径引用] design_logic 引用了 {sorted(missing_refs)} 但 SQL 未引用——"
+            f"疑似漏实现（对照切片 source_refs 与口径逐字段核对；确认不用则回报口径可疑）")
+
     return issues
 
 

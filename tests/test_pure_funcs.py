@@ -650,6 +650,39 @@ class TestRunDqChecks:
         assert results[0]["status"] == "FAIL" and "P_CYCLE_ID" in results[0]["detail"]
 
 
+class TestLogicRefs:
+    """口径引用骨架提取（extract_logic_refs/diff_logic_refs）——翻译对账的机器原料。
+
+    真实案例：del_flag 口径伪代码引用三字段（a.del_flag/delete_flag/u.del_flag），
+    mapping 源字段单元格只写一个——加工字段的真来源活在口径里，引用集可结构提取。
+    """
+
+    def test_qualified_and_bare_extraction(self):
+        from sql_parse import extract_logic_refs
+        reg = {"del_flag", "delete_flag", "amt"}
+        q, b = extract_logic_refs("当 a.del_flag 和 delete_flag 以及 u.del_flag 都为 n 或空", reg)
+        assert q == [("a", "del_flag"), ("u", "del_flag")]
+        assert b == ["delete_flag"]  # 裸 token 命中登记处
+
+    def test_noise_words_and_params_excluded(self):
+        from sql_parse import extract_logic_refs
+        q, b = extract_logic_refs(
+            "CASE WHEN x=1 THEN sum(amt) ELSE null END，dt<${P_CYCLE_ID} 取 N", {"amt", "dt", "x"})
+        assert q == []
+        assert "amt" in b and "dt" in b  # 列名命中
+        assert all(w not in b for w in ("case", "when", "sum", "null", "end", "then"))  # 噪音词不进
+        # 未命中登记处的英文词不管（中文/数字天然不参与）
+
+    def test_diff_detects_dropped_reference(self):
+        from sql_parse import diff_logic_refs
+        # 翻译覆盖全部原文引用 → 无差异
+        assert diff_logic_refs(["del_flag", "delete_flag"],
+                               ["a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N"]) == []
+        # 翻译丢了 delete_flag → 对账抓到（真实案例形态）
+        assert diff_logic_refs(["del_flag", "delete_flag"],
+                               ["a.del_flag 为 N 或空 → N"]) == ["delete_flag"]
+
+
 class TestViewCommentSyntax:
     """视图 DDL 的对象注释必须是 COMMENT ON VIEW（GaussDB 语法；TABLE 会报错）。"""
 

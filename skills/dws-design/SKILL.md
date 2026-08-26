@@ -170,6 +170,7 @@ description: >-
 ### 字段加工逻辑（贯穿第1-2层）
 
 - **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic（自然语言口径，不含 SQL）；design_logic 是拆解后的技术口径，**禁止照抄 mapping 的 transform_detail 原文**（翻译者原则见岗位定义；照抄会被 N29 warn 提示）
+- **★ 口径里的源字段引用一律 `别名.字段`**（a.del_flag），不能只写列名——输入伪代码里的裸字段（delete_flag）翻译时补全归属（view 的 refs 提示给了候选；歧义 check_field 查证/多表同名 question）。裸引用被 N36 硬拦；**口径引用集就是 source_fields 的真来源**（mapping 源字段单元格对加工字段只是提示，脚本按你的引用自动补全），漏引用会被 N37 对账 warn——引用写全 = coder 的字段清单对
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"
 - **★ 类型转换字段是加工字段**：precheck 类型风险决策通过后，会回写 rs_input 把转换字段改"数据加工"（transform_detail 标注如"类型转换：varchar→date"）。读到这类字段照常写 field_logic（转换口径），coder 翻译成 CAST/TO_DATE。**改 ETL 不改 DDL（目标类型不变）**
 - **聚合类字段必拆解**（拼接/汇总，"对同一 X 的多个值拼接/合计"类描述），design_logic 至少答四件事：

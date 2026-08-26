@@ -1079,6 +1079,65 @@ class TestCompactConditionIssues:
         assert all("输入存疑" not in e for e in c["tables"])
 
 
+class TestRawRefs:
+    """口径引用骨架的输入侧：伪代码引用列名提取存 _raw_refs（对账A 原料）+ view refs 提示。"""
+
+    @staticmethod
+    def _raw():
+        return {
+            "target_schema": "dws", "target_table": "dwb_test_f",
+            "source_tables": [
+                {"source_schema": "ods", "source_table": "ods_a", "source_alias": "a"},
+                {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u"}],
+            "field_mappings": [
+                {"source_schema": "ods", "source_table": "ods_a", "source_alias": "a",
+                 "source_column": "del_flag", "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "d2", "target_type": "char(1)"},
+                {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u",
+                 "source_column": "delete_flag", "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "d1", "target_type": "char(1)"},
+                {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u",
+                 "source_column": "del_flag", "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "d3", "target_type": "char(1)"},
+                {"source_schema": "ods", "source_table": "ods_a", "source_alias": "a",
+                 "source_column": "del_flag", "transform_rule": "数据加工",
+                 "transform_detail": "当 a.del_flag 和 delete_flag 以及 u.del_flag 都为 n 或空时返回 n",
+                 "target_column": "flag", "target_type": "char(1)"},
+            ],
+        }
+
+    def test_raw_refs_extracted_for_processed_fields(self):
+        from preprocess import build_rs_input
+        rsi = build_rs_input(self._raw(), {})
+        flag = next(fm for fm in rsi["field_mappings"] if fm["target_column"] == "flag")
+        # 伪代码的引用列名集（限定引用列名 + 裸 token 命中登记处）——对账A 的原料
+        assert flag.get("_raw_refs") == ["del_flag", "delete_flag"]
+        # 直取字段不提取
+        d2 = next(fm for fm in rsi["field_mappings"] if fm["target_column"] == "d2")
+        assert "_raw_refs" not in d2
+
+    def test_compact_refs_hint_with_bare_ownership(self):
+        from preprocess import build_rs_input, build_compact
+        rsi = build_rs_input(self._raw(), {})
+        view = build_compact(rsi)
+        proc = [e for e in view.get("processed", []) if e.get("tgt") == "flag"][0]
+        hints = proc.get("refs", [])
+        # 限定引用原样 + 裸引用 delete_flag 唯一归属 u 表 → 疑似归属提示
+        assert hints == ["a.del_flag", "u.del_flag", "delete_flag→u.delete_flag?"], hints
+
+    def test_compact_refs_hint_multi_alias_bare(self):
+        """裸 token 多表同名 → 提示需限定（designer 翻译时补归属，N36 兜底硬拦）。"""
+        from preprocess import build_rs_input, build_compact
+        raw = self._raw()
+        raw["field_mappings"][-1]["transform_detail"] = "del_flag 和 delete_flag 都为 n 或空时返回 n"
+        rsi = build_rs_input(raw, {})
+        view = build_compact(rsi)
+        proc = [e for e in view.get("processed", []) if e.get("tgt") == "flag"][0]
+        hints = proc.get("refs", [])
+        assert any("del_flag（多表同名，需限定）" in h for h in hints), hints
+        assert any("delete_flag→u.delete_flag?" in h for h in hints), hints
+
+
 class TestAssignFaithfulPassthrough:
     """preprocess 如实反映：任何 detail 都不改 transform_rule。
 

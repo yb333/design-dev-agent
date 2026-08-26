@@ -195,7 +195,7 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
 调脚本从 ts.json 直接生成摘要（不需要 AI 提取）：
 
 ```bash
-python SHARED_SCRIPTS/gate_summary.py --ts {deliver}/ts.json
+python SHARED_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_internal/rs_input.json
 ```
 
 拿到摘要后，**立即调 question 停下等用户确认**（不允许跑完摘要直接进编码段）：

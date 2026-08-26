@@ -15,8 +15,8 @@ import argparse
 from pathlib import Path
 
 
-def generate_gate1_summary(ts: dict) -> str:
-    """从 ts.json 生成闸口①摘要文本。"""
+def generate_gate1_summary(ts: dict, rs_input: dict = None) -> str:
+    """从 ts.json 生成闸口①摘要文本。rs_input 可选——给了加翻译引用对账差异表。"""
     meta = ts.get("meta", {})
     target = meta.get("target", {})
     design = ts.get("design", {})
@@ -97,6 +97,28 @@ def generate_gate1_summary(ts: dict) -> str:
         lines.append("- **审计字段**: 全部来自 RS/mapping")
     lines.append("")
 
+    # 翻译引用对账（rs_input 提供时）：mapping 原文引用集 vs design_logic 引用集的差异——
+    # 机器验掉"没变的"，人只审"变的"（丢引用=翻译事故高发区，差异表让人扫一眼就够）
+    if rs_input:
+        from sql_parse import diff_logic_refs
+        raw_by_col = {fm.get("target_column"): (fm.get("_raw_refs") or [])
+                      for fm in rs_input.get("field_mappings", [])
+                      if fm.get("target_column")}
+        diffs = []
+        for code, rule in rules.items():
+            for col, text in (rule.get("field_logics") or {}).items():
+                missing = diff_logic_refs(raw_by_col.get(col), [str(text)])
+                if missing:
+                    diffs.append(f"- {code} 字段 {col}：原文引用了 {missing}，design_logic 未出现（疑似丢引用）")
+        if diffs:
+            lines.append("### ⚠️ 翻译引用对账（差异需人工确认）")
+            lines.append("")
+            lines.extend(diffs)
+            lines.append("")
+        else:
+            lines.append("- **翻译引用对账**: 原文引用全部覆盖，无差异")
+            lines.append("")
+
     lines.append("请选择：")
     lines.append("- ✅ 确认设计，进入编码")
     lines.append("- ✏️ 需要修改（说明哪里要改）")
@@ -108,6 +130,7 @@ def generate_gate1_summary(ts: dict) -> str:
 def main():
     parser = argparse.ArgumentParser(description="闸口①摘要生成器（从 ts.json 直接生成）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
+    parser.add_argument("--rs", default="", help="rs_input.json 路径（可选，加了出翻译引用对账差异表）")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -115,8 +138,15 @@ def main():
         print(f"错误: ts.json 不存在: {ts_path}", file=sys.stderr)
         sys.exit(2)
 
+    rs_input = None
+    if args.rs and Path(args.rs).exists():
+        try:
+            rs_input = json.loads(Path(args.rs).read_text(encoding="utf-8"))
+        except Exception:
+            rs_input = None  # 读不了就跳过对账段，不挡闸口
+
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
-    print(generate_gate1_summary(ts))
+    print(generate_gate1_summary(ts, rs_input))
 
 
 if __name__ == "__main__":

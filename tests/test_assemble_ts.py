@@ -463,7 +463,7 @@ from conftest import (make_rs_input, make_design_decisions,
                       make_incremental_rs_input, make_incremental_decisions,
                       make_accumulate_decisions, make_dq_rs_input,
                       make_derive_init_decisions, make_explicit_init_decisions)
-from assemble_ts import assemble_ts as do_assemble, render_md
+from assemble_ts import assemble_ts as do_assemble, render_md, build_field
 
 
 def _run(decisions, rs_input=None):
@@ -477,6 +477,73 @@ def _run(decisions, rs_input=None):
 def _codes(vr, layer=None):
     """提取触发的校验 code 列表（可选按层过滤）。"""
     return [info["code"] for info in vr.items if layer is None or info["layer"] == layer]
+
+
+class TestRefSkeleton:
+    """口径引用骨架：N36 裸引用硬拦 / N37 翻译丢引用对账 / source_fields 装配补全。
+
+    真实案例：del_flag 口径引用三字段，design_logic 只写一个 → coder 丢两个字段。
+    """
+
+    @staticmethod
+    def _rs():
+        fms = [
+            {"target_column": "id", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "a", "source_column": "id", "source_table": "ods_a"},
+            {"target_column": "d1", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "u", "source_column": "delete_flag", "source_table": "ods_u"},
+            {"target_column": "d2", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "a", "source_column": "del_flag", "source_table": "ods_a"},
+            {"target_column": "d3", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "u", "source_column": "del_flag", "source_table": "ods_u"},
+            {"target_column": "flag", "transform_rule": "数据加工",
+             "transform_detail": "当 a.del_flag 和 delete_flag 以及 u.del_flag 都为 n 或空",
+             "source_alias": "a", "source_column": "del_flag", "source_table": "ods_a",
+             "_raw_refs": ["del_flag", "delete_flag"]},
+        ]
+        return fms
+
+    @staticmethod
+    def _dec(logic):
+        cols = ["id", "d1", "d2", "d3", "flag"]
+        return make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+            "step_type": "full", "target_role": "target",
+            "field_targets": cols, "field_logics": {"flag": logic},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+
+    def test_fully_qualified_and_covered_passes(self):
+        rs = {"field_mappings": self._rs(), "source_tables": []}
+        vr = _run(self._dec("a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y"), rs)
+        assert "N36" not in _codes(vr) and "N37" not in _codes(vr)
+
+    def test_bare_reference_hard_blocked(self):
+        vr = _run(self._dec("a.del_flag 和 delete_flag 为 N → N"),
+                  {"field_mappings": self._rs(), "source_tables": []})
+        n36 = [i for i in vr.items if i["code"] == "N36"]
+        assert n36 and n36[0]["level"] == "hard" and "delete_flag" in n36[0]["msg"]
+
+    def test_dropped_reference_warns(self):
+        vr = _run(self._dec("a.del_flag 为 N 或空 → N"),
+                  {"field_mappings": self._rs(), "source_tables": []})
+        n37 = [i for i in vr.items if i["code"] == "N37"]
+        assert n37 and "delete_flag" in n37[0]["msg"]
+
+    def test_source_fields_completed_from_logic(self):
+        fms = self._rs()
+        registry = {}
+        for f in fms:
+            al, c = (f.get("source_alias") or "").lower(), (f.get("source_column") or "").lower()
+            if al and c:
+                registry.setdefault((al, c), f)
+        f = build_field(
+            next(x for x in fms if x["target_column"] == "flag"),
+            "a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y",
+            set(), ref_registry=registry)
+        sf = {(s["alias"], s["field"]) for s in f["source_fields"]}
+        assert {("a", "del_flag"), ("u", "delete_flag"), ("u", "del_flag")} <= sf
 
 
 class TestAssignTranslationGate:

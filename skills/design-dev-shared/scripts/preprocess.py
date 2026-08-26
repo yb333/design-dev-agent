@@ -1125,8 +1125,17 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     """
     fms = rs_input.get("field_mappings", [])
     source_tables = rs_input.get("source_tables", [])
-    from sql_parse import is_trivial_assign_detail
+    from sql_parse import is_trivial_assign_detail, extract_logic_refs
     from dws_standards import STANDARD_AUDIT_NAMES
+    # 引用提示的登记处（列名全集 + 列名→别名集合：裸引用归属判断用）
+    _reg_cols = {(f.get("source_column") or "").strip().lower()
+                 for f in fms if (f.get("source_column") or "").strip()}
+    _col_alias: dict = {}
+    for f in fms:
+        _c = (f.get("source_column") or "").strip().lower()
+        _a = (f.get("source_alias") or "").strip()
+        if _c and _a:
+            _col_alias.setdefault(_c, set()).add(_a)
 
     # ① 表级清单
     table_list = []
@@ -1224,6 +1233,16 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         detail = f0.get("transform_detail", "") or f0.get("mapping_expression", "")
         if detail and detail not in ("-", "无", ""):
             entry["logic"] = detail
+            # 引用提示：伪代码的引用骨架 + 裸引用疑似归属（designer 翻译时对照，
+            # 省自己翻 rs_input 查证——识别与支持分离，呈现不拦截）
+            _q, _b = extract_logic_refs(detail, _reg_cols)
+            if _q or _b:
+                _hints = sorted({f"{a}.{c}" for a, c in _q})
+                for _col in _b:
+                    _als = sorted(_col_alias.get(_col, []))
+                    _hints.append(f"{_col}→{_als[0]}.{_col}?" if len(_als) == 1
+                                  else f"{_col}（多表同名，需限定）")
+                entry["refs"] = _hints
         proc_section.append(entry)
 
     # 增量资产置顶横幅（designer 第一眼要看到的资产级事实：非空 = 增量资产，
@@ -1389,6 +1408,25 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
         "data_flow_hint": rs_data.get("data_flow_hint", {}),
         "dq_requirements": rs_data.get("dq_requirements", []),
     }
+
+    # 口径引用提取（对账A 的机器原料——纯结构提取，不是语义判断）：
+    # 加工字段的真来源活在加工逻辑里（mapping 源字段单元格对加工字段只是提示，
+    # 常写不全）。提取伪代码的引用列名集存 _raw_refs，供 assemble_ts 与 designer
+    # 翻译产物对账（原文引用了而 design_logic 没有 → 疑似丢引用 warn）+ view 提示。
+    from sql_parse import extract_logic_refs
+    fms = rs_input["field_mappings"]
+    _reg_cols = {(fm.get("source_column") or "").strip().lower()
+                 for fm in fms if (fm.get("source_column") or "").strip()}
+    for fm in fms:
+        if (fm.get("transform_rule") or "").strip() != "数据加工":
+            continue
+        _detail = fm.get("transform_detail") or fm.get("mapping_expression") or ""
+        if not str(_detail).strip():
+            continue
+        _q, _b = extract_logic_refs(str(_detail), _reg_cols)
+        _raw = {c for _, c in _q} | set(_b)
+        if _raw:
+            fm["_raw_refs"] = sorted(_raw)
 
     # 可选: 数据探索信息
     if "data_exploration" in rs_data:

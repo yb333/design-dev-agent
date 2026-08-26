@@ -960,6 +960,24 @@ class TestCheckSqlNewGuards:
         issues = self._run_check(ts_data, sql)
         assert any("[schema]" in i for i in issues), issues
 
+    def test_logic_ref_missing_in_sql_reported(self):
+        """[口径引用] design_logic 引用的字段 SQL 未引用 → 疑似漏实现（del_flag 案例形态）。"""
+        from check_sql import check_sql
+        ts = {"rules": {"R0001": {
+            "field_targets": ["f1", "flag"],
+            "field_logics": {"flag": "a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y"},
+            "source_tables": [{"schema": "ods", "table": "ods_a", "alias": "a"},
+                              {"schema": "ods", "table": "ods_u", "alias": "u"}],
+        }}, "design": {"audit_fields": {}, "business_key": []}, "tables": {}}
+        bad = ("SELECT a.f1 AS f1, CASE WHEN a.del_flag IS NULL THEN 'N' ELSE 'Y' END AS flag "
+               "FROM ods.ods_a a")  # 只实现了 a.del_flag，丢了 u 侧两个字段
+        issues = check_sql(bad, ts, "R0001")
+        assert any("[口径引用]" in i and "u.delete_flag" in i for i in issues), issues
+        good = ("SELECT a.f1 AS f1, CASE WHEN COALESCE(a.del_flag,'N')='N' "
+                "AND COALESCE(u.delete_flag,'N')='N' AND COALESCE(u.del_flag,'N')='N' "
+                "THEN 'N' ELSE 'Y' END AS flag FROM ods.ods_a a LEFT JOIN ods.ods_u u ON a.id=u.id")
+        assert not any("[口径引用]" in i for i in check_sql(good, ts, "R0001"))
+
     def test_prefixed_ref_passes(self, ts_data):
         """schema.table 形态不触发 [schema]。"""
         sql = ("SELECT t.contract_no AS contract_no FROM fin_dwl_cnb.dwl_con_pu_any_f t")
