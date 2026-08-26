@@ -505,6 +505,69 @@ class TestSqlParseStringAwareness:
             _resolve_insert_columns("SELECT a AS x, b AS x FROM t", [])
 
 
+class TestCastTypeStripping:
+    """CAST(x AS <type>) 结构化剥除——类型名是开放集（int8/timestamptz…），枚举白名单必漏。
+
+    曾经：int8 不在 ANSI 白名单 → 泄漏成输出列 → wrap_insert 拼出假列 → UT COLUMN 错
+    回 coder（他的 SQL 本身没错，改不动）→ 自写脚本修 → 越修越坏。
+    """
+
+    def test_gaussdb_type_names_not_leaked_as_alias(self):
+        from sql_parse import extract_select_aliases
+        sql = "SELECT CAST(a.amt AS int8) AS amt2, CAST(a.dt AS timestamptz) FROM sch.t a"
+        assert extract_select_aliases(sql) == ["amt2"]
+
+    def test_two_int8_casts_no_duplicate_column_error(self):
+        # 两个 CAST AS int8 曾触发重复列报错（文案指向 CTE 边界，误导 coder）
+        from run_ut import _resolve_insert_columns
+        sql = ("WITH c AS (SELECT 1 AS k) "
+               "SELECT CAST(a.k AS int8) AS k2, CAST(2 AS int8) AS j2 FROM t a")
+        assert _resolve_insert_columns(sql, []) == ["k2", "j2"]
+
+    def test_precision_and_nested(self):
+        from sql_parse import extract_select_aliases
+        assert extract_select_aliases(
+            "SELECT CAST(a.amt AS numeric(18,2)) FROM t a") == []
+        assert extract_select_aliases(
+            "SELECT CAST(CAST(a.amt AS int4) AS varchar) FROM t a") == []
+
+    def test_string_literal_with_as_inside_cast(self):
+        from sql_parse import extract_select_aliases
+        sql = "SELECT CAST(a.r || ' AS int8' AS varchar(100)) AS r2 FROM t a"
+        assert extract_select_aliases(sql) == ["r2"]
+
+    def test_try_cast_and_comment_with_paren(self):
+        from sql_parse import extract_select_aliases
+        assert extract_select_aliases(
+            "SELECT TRY_CAST(a.amt AS decimal(10,2)) FROM t a") == []
+        assert extract_select_aliases(
+            "SELECT CAST(a.amt /* ) */ AS int8) AS v FROM t a") == ["v"]
+
+    def test_subquery_alias_inside_cast_preserved(self):
+        # CAST 内子查询里的真别名（深度>1）不被剥；类型名（深度0的 AS）不泄漏
+        from sql_parse import extract_select_aliases
+        aliases = extract_select_aliases(
+            "SELECT CAST((SELECT max(x) AS mx FROM u) AS int8) AS v FROM t")
+        assert "v" in aliases and "int8" not in aliases
+
+    def test_dollar_brace_param_untouched(self):
+        from sql_parse import extract_select_aliases
+        sql = "SELECT CAST(${v} AS int8) AS x FROM t WHERE dt = ${bdp.system.bizdate}"
+        assert extract_select_aliases(sql) == ["x"]
+
+    def test_colon_cast_with_precision(self):
+        from sql_parse import extract_select_aliases
+        assert extract_select_aliases(
+            "SELECT a.amt::numeric(18,2) AS amt2 FROM t") == ["amt2"]
+
+    def test_unbalanced_parens_degrades_gracefully(self):
+        # 烂 SQL（括号不平衡）：结构剥除放弃、白名单兜底，不抛异常
+        from sql_parse import extract_select_aliases
+        assert extract_select_aliases("SELECT CAST(a.amt AS varchar FROM t") == []
+        # int8 不在白名单 → 降级后泄漏（文档化的降级行为，宁放过不误报）
+        assert extract_select_aliases("SELECT CAST(a.amt AS int8 FROM t") == ["int8"]
+
+
 class TestViewCommentSyntax:
     """视图 DDL 的对象注释必须是 COMMENT ON VIEW（GaussDB 语法；TABLE 会报错）。"""
 

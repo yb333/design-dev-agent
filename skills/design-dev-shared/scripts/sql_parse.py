@@ -100,24 +100,129 @@ def split_cte_main(sql: str) -> tuple[list[str], str]:
     return cte_names, main
 
 
+def _skip_sql_string(s: str, j: int) -> int:
+    """跳过 '...' 字符串字面量（'' 转义），返回串后位置。s[j] 必须是 '。"""
+    j += 1
+    n = len(s)
+    while j < n:
+        if s[j] == "'":
+            if j + 1 < n and s[j + 1] == "'":
+                j += 2
+                continue
+            return j + 1
+        j += 1
+    return n
+
+
+def _skip_sql_comment(s: str, j: int) -> int:
+    """跳过 /* */ 块注释或 -- 行注释，返回注释后位置。s[j:j+2] 必须是 /* 或 --。"""
+    if s.startswith('/*', j):
+        end = s.find('*/', j + 2)
+        return len(s) if end == -1 else end + 2
+    end = s.find('\n', j)
+    return len(s) if end == -1 else end + 1
+
+
+def _mask_literals_and_comments(s: str) -> str:
+    """字符串字面量与注释的内容抹成空格，防其中残留的 AS/FROM/JOIN 干扰 token 抽取。"""
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "'":
+            j = _skip_sql_string(s, i)
+            out.append(''.join(c if c == "'" else ' ' for c in s[i:j]))
+            i = j
+        elif s.startswith('/*', i) or s.startswith('--', i):
+            j = _skip_sql_comment(s, i)
+            out.append(' ' * (j - i))
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return ''.join(out)
+
+
+_CAST_HEAD = re.compile(r'\b(?:TRY_)?CAST\s*\(', re.IGNORECASE)
+
+
+def _is_as_word(s: str, j: int) -> bool:
+    """s[j] 起是否是独立的 AS 词（左侧词边界，右侧非标识符字符）。"""
+    if not re.match(r'AS(?![A-Za-z0-9_])', s[j:], re.IGNORECASE):
+        return False
+    return j == 0 or not re.match(r'[A-Za-z0-9_]', s[j - 1])
+
+
+def _strip_cast_types(s: str) -> str:
+    """结构化剥除 CAST(<expr> AS <type>) 里的 "AS <type>"（含 TRY_CAST）。
+
+    类型名是开放集（GaussDB 的 int8/timestamptz/bpchar…枚举必漏），所以不认类型名、
+    认结构：括号深度扫描定位 CAST( 的配对范围，剥其中相对深度 0 的 AS 词到收口括号
+    （保留收口括号与其前的表达式，类型带精度括号天然兼容）。字符串/注释不参与扫描；
+    嵌套 CAST 对保留的表达式段递归处理。
+    括号不平衡（烂 SQL）→ 整体放弃返回原文，调用方的 ANSI 白名单兜底（宁放过不误报）。
+    """
+    out = []
+    pos = 0
+    while True:
+        m = _CAST_HEAD.search(s, pos)
+        if not m:
+            out.append(s[pos:])
+            return ''.join(out)
+        out.append(s[pos:m.end()])
+        j = m.end()
+        n = len(s)
+        depth = 1
+        as_start = -1
+        while j < n and depth > 0:
+            ch = s[j]
+            if ch == "'":
+                j = _skip_sql_string(s, j)
+            elif s.startswith('/*', j) or s.startswith('--', j):
+                j = _skip_sql_comment(s, j)
+            elif ch == '(':
+                depth += 1
+                j += 1
+            elif ch == ')':
+                depth -= 1
+                j += 1
+            else:
+                if as_start < 0 and depth == 1 and ch in 'Aa' and _is_as_word(s, j):
+                    as_start = j
+                j += 1
+        if depth != 0:
+            return s  # 括号不平衡：放弃结构剥除，交白名单兜底
+        close = j - 1
+        if as_start >= 0:
+            out.append(_strip_cast_types(s[m.end():as_start]))
+            out.append(')')
+        else:
+            out.append(s[m.end():close + 1])
+        pos = close + 1
+
+
 def _strip_sql_noise(sql: str) -> str:
     """去掉会干扰字段/表抽取的 SQL 结构，避免误判。
 
     处理：
-    1. EXTRACT(x FROM y) → EXTRACT(x FROM y) 里的 FROM 不是表引用，整体替换掉 FROM 子句
-    2. CAST(... AS type) / ::type → 类型转换的 AS type 不是字段别名
+    1. 字符串字面量/注释内容抹空——其中残留的 AS/FROM 不是 SQL 结构
+    2. EXTRACT(x FROM y) —— 里面的 FROM 是函数语法，不是表引用
+    3. CAST(<expr> AS <type>) / ::type(精度) —— 类型转换的 AS <type> 不是字段别名；
+       结构化深度剥除（类型名开放集，枚举白名单必漏），白名单只兜烂 SQL 降级路径
     """
-    s = sql
-    # 1. EXTRACT(<part> FROM <expr>) —— 这里的 FROM 是函数语法，不是表引用
-    #    把 " FROM " 在 EXTRACT 上下文里替换掉（简单做法：替换 EXTRACT(...FROM...) 中的 FROM）
+    s = _mask_literals_and_comments(sql)
+    # 2. EXTRACT(<part> FROM <expr>) —— 把 " FROM " 在 EXTRACT 上下文里替换掉
     s = re.sub(r'(EXTRACT\s*\([^)]*?)\bFROM\b', r'\1__FROM__', s, flags=re.IGNORECASE)
-    # 2. CAST(<expr> AS <type>) —— 去掉 "AS <type>"，避免类型被当成别名
+    # 3a. CAST(<expr> AS <type>) —— 结构化剥除（配对括号内相对深度 0 的 AS，不认类型名）
+    s = _strip_cast_types(s)
+    # 3b. ANSI 类型名白名单——仅在结构剥除降级（括号不平衡）时兜底
     s = re.sub(r'\bAS\s+(BIGINT|INT|INTEGER|SMALLINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|'
                r'VARCHAR|NVARCHAR|CHAR|TEXT|DATE|DATETIME|TIMESTAMP|BOOLEAN|BOOL|'
                r'INTERVAL|JSON|BLOB|BYTEA|SERIAL)\b',
                '', s, flags=re.IGNORECASE)
-    # 3. postgres 风格的类型转换 ::type
-    s = re.sub(r'::\w+', '', s)
+    # 3c. postgres 风格的类型转换 ::type（含精度括号）
+    s = re.sub(r'::\w+(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?', '', s)
     return s
 
 
