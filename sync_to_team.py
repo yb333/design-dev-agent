@@ -185,18 +185,20 @@ def main() -> int:
                        accept_foreign=args.accept_foreign)
 
 
-def add_paths_of(rules_dir: str) -> list:
-    """我们管理的路径（git add / 他人改动检测 / ls-files 的统一口径）。"""
-    return [
-        ".opencode/skills", ".opencode/agents", ".opencode/commands",
-        f".opencode/_references/rules/{rules_dir}",
-    ]
+def managed_paths(skills: list, agents: list, commands: list, rules_dir: str) -> list:
+    """我们产出条目的精确清单——唯一受严格保护的路径（脏了拦/参与基线检测和提交）。"""
+    return (
+        [f".opencode/skills/{s}" for s in skills]
+        + [f".opencode/agents/{a}" for a in agents]
+        + [f".opencode/commands/{c}" for c in commands]
+        + [f".opencode/_references/rules/{rules_dir}"]
+    )
 
 
-def outside_opencode(files: list) -> bool:
-    """改动文件是否全部在 .opencode 之外（无关改动，可丢弃）。"""
+def outside_managed(files: list, managed: list) -> bool:
+    """改动文件是否全部在我们条目之外（可丢弃，以远端为准——含 .opencode 内别人的内容）。"""
     return bool(files) and all(
-        not (f == ".opencode" or f.startswith(".opencode/")) for f in files
+        not any(f == m or f.startswith(m + "/") for m in managed) for f in files
     )
 
 
@@ -205,19 +207,19 @@ def changed_files(team_repo: Path, rev: str) -> list:
     return [l.strip().strip('"') for l in r.stdout.splitlines() if l.strip()]
 
 
-def rebase_or_report(team_repo: Path, where: str) -> bool:
-    """pull --rebase；只动 .opencode 之外路径的无关提交自动跳过（以远端为准），
-    其余冲突列出冲突文件并 fail（现场留给人）。"""
+def rebase_or_report(team_repo: Path, where: str, managed: list) -> bool:
+    """pull --rebase；我们条目之外的提交（含 .opencode 内别人的内容）自动跳过
+    （以远端为准），其余冲突列出冲突文件并 fail（现场留给人）。"""
     if run_git(["pull", "--rebase"], cwd=team_repo).returncode == 0:
         return True
     while True:
         r = run_git(["rev-parse", "--git-path", "rebase-merge"], cwd=team_repo, capture=True)
         if r.returncode != 0 or not r.stdout.strip() or not (team_repo / r.stdout.strip()).exists():
             break  # 不在 rebase 进行中状态（如 fetch 失败）
-        if outside_opencode(changed_files(team_repo, "REBASE_HEAD")):
+        if outside_managed(changed_files(team_repo, "REBASE_HEAD"), managed):
             subj = run_git(["log", "-1", "--format=%s", "REBASE_HEAD"],
                            cwd=team_repo, capture=True).stdout.strip()
-            print(f"  跳过与远端冲突的无关提交（只动 .opencode 之外，以远端为准）: {subj}")
+            print(f"  跳过与远端冲突的无关提交（我们条目之外，以远端为准）: {subj}")
             rc = run_git(["rebase", "--skip"], cwd=team_repo).returncode
             if rc == 0:
                 return True
@@ -258,9 +260,9 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         d.name for d in sorted((export_dir / "skills").iterdir())
         if d.is_dir() and ((d / "SKILL.md").exists() or d.name == "design-dev-shared")
     ]
-    n_agents = len(list((export_dir / "agents").glob("*.md")))
-    n_commands = len(list((export_dir / "commands").glob("*.md")))
-    print(f"  Skills: {len(skills)} 个  Agents: {n_agents} 个  Commands: {n_commands} 个")
+    agents = sorted(p.name for p in (export_dir / "agents").glob("*.md"))
+    commands = sorted(p.name for p in (export_dir / "commands").glob("*.md"))
+    print(f"  Skills: {len(skills)} 个  Agents: {len(agents)} 个  Commands: {len(commands)} 个")
     print()
 
     # config 目录名从 config_paths 取（唯一源；取不到回退默认）
@@ -273,6 +275,11 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         pass
     finally:
         sys.path.pop(0)
+
+    # 我们产出条目的精确清单：唯一受严格保护的路径；
+    # 其余一切（含 .opencode 内别人的 skill/agent）都以远端为准。
+    managed = managed_paths(skills, agents, commands, rules_dir)
+    excludes = [f":(exclude){m}" for m in managed]
 
     # ── Step 2: 校验内部仓状态（干净 + 分支），rebase 到远端最新 ──
     print("[Step 2] 校验内部仓并拉取远端最新...")
@@ -304,35 +311,35 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
              "  处理: 在内部仓运行 git checkout 8.12 回到分支后重跑")
     if team_branch and cur_branch != team_branch:
         fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（请手动 checkout）")
-    # 工作区检查只针对 .opencode（我们的领地，脏了拦）；
-    # 其余目录不重要：本地改动直接还原（以内部远端为准），不卡同步。
+    # 工作区检查只针对我们的条目（脏了拦）；其余一切（含 .opencode 内别人的
+    # skill/agent）不重要：本地改动直接还原（以远端为准），不卡同步。
     r = run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True)
-    opencode_dirty = []
+    managed_dirty = []
     has_outside = False
     for line in r.stdout.splitlines():
         if not line.strip():
             continue
         p = line[3:] if len(line) > 3 else ""
         p = p.split(" -> ")[-1].strip('"')
-        if p == ".opencode" or p.startswith(".opencode/"):
-            opencode_dirty.append(line)
+        if any(p == m or p.startswith(m + "/") for m in managed):
+            managed_dirty.append(line)
         else:
             has_outside = True
     if has_outside:
         # reset 清 staged（含新增），checkout 还原 worktree；残留的 untracked 不碍 pull
-        run_git(["reset", "-q", "HEAD", "--", ".", ":(exclude).opencode"], cwd=team_repo)
-        if run_git(["checkout", "HEAD", "--", ".", ":(exclude).opencode"],
+        run_git(["reset", "-q", "HEAD", "--", "."] + excludes, cwd=team_repo)
+        if run_git(["checkout", "HEAD", "--", "."] + excludes,
                    cwd=team_repo).returncode != 0:
-            fail("重置非 .opencode 本地改动失败（git checkout HEAD -- . ':(exclude).opencode'）")
-        print("  已重置非 .opencode 的本地改动（内部仓其余内容以远端为准）")
-    if opencode_dirty:
-        detail = "\n".join(f"    {l}" for l in opencode_dirty)
-        fail(f"内部仓 .opencode/ 下有未提交改动（工具不覆盖未知内容）:\n{detail}\n"
+            fail(f"重置条目外本地改动失败（git checkout HEAD -- . + excludes: {excludes}）")
+        print("  已重置我们条目之外的本地改动（含 .opencode 内别人的内容，以远端为准）")
+    if managed_dirty:
+        detail = "\n".join(f"    {l}" for l in managed_dirty)
+        fail(f"内部仓我们条目内有未提交改动（工具不覆盖未知内容）:\n{detail}\n"
              f"  请先处理（git status / git diff 查看，提交或还原）后重跑")
-    # 本地领先的提交分级：sync 遗留（可再生）和只动 .opencode 之外的无关提交都
-    # 直接丢弃对齐远端（用户定调：内部仓只管 .opencode，其余一切以远端为准）。
-    # 改了 .opencode 的手工提交（如 config 维护）保留——全部可丢弃才整体 reset，
-    # 混合时不动，交给 rebase（无关冲突会被自动跳过）。
+    # 本地领先的提交分级：sync 遗留（可再生）和只动我们条目之外的提交（含
+    # .opencode 内别人的内容，以远端为准）都直接丢弃对齐远端。改了我们条目的
+    # 手工提交（如 config 维护）保留——全部可丢弃才整体 reset，混合时不动，
+    # 交给 rebase（条目外冲突会被自动跳过）。
     r = run_git(["rev-list", "--count", f"origin/{cur_branch}..HEAD"],
                 cwd=team_repo, capture=True)
     ahead = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
@@ -344,31 +351,30 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
             if not line.strip():
                 continue
             sha, subject = line.split(" ", 1)
-            if subject.startswith("sync: design-dev-agent@") or outside_opencode(
-                    changed_files(team_repo, sha)):
+            if subject.startswith("sync: design-dev-agent@") or outside_managed(
+                    changed_files(team_repo, sha), managed):
                 drops.append(subject)
             else:
                 keeps.append(f"{sha[:8]} {subject}")
         if drops and not keeps:
-            print(f"  本地有 {len(drops)} 个领先提交（sync 遗留或无关改动），对齐远端:")
+            print(f"  本地有 {len(drops)} 个领先提交（sync 遗留或条目外改动），对齐远端:")
             for s in drops:
                 print(f"    {s}")
             if run_git(["reset", "--hard", f"origin/{cur_branch}"],
                        cwd=team_repo).returncode != 0:
                 fail(f"reset 到 origin/{cur_branch} 失败")
         elif drops and keeps:
-            print("  [WARN] 本地领先提交混合（含 .opencode 手工改动，不能整体对齐远端）:")
+            print("  [WARN] 本地领先提交混合（含我们条目内的手工改动，不能整体对齐远端）:")
             for s in drops:
                 print(f"    可丢弃: {s}")
             for s in keeps:
                 print(f"    保留: {s}")
-    rebase_or_report(team_repo, "Step 2 拉取远端")
+    rebase_or_report(team_repo, "Step 2 拉取远端", managed)
 
-    # 他人改动检测：上次 sync 提交之后，我们管理的内容路径是否被别人的提交动过。
+    # 他人改动检测：上次 sync 提交之后，我们产出的条目是否被别人的提交动过。
     # 动过则同步会把他的改动静默覆盖掉（git 无冲突），必须拦下人工确认。
-    # 注意 config 目录（_references）不参与：那是内网侧的合法维护点，本就只补缺不覆盖。
-    paths = add_paths_of(rules_dir)
-    guard_paths = [p for p in paths if not p.startswith(".opencode/_references")]
+    # 注意 config 目录不参与：那是内网侧的合法维护点，本就只补缺不覆盖。
+    guard_paths = [m for m in managed if not m.startswith(".opencode/_references")]
     r = run_git(["log", "-1", "--format=%H", "--grep=^sync:\\ design-dev-agent@"],
                 cwd=team_repo, capture=True)
     last_sync = r.stdout.strip()
@@ -397,7 +403,7 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     rules_path.mkdir(parents=True, exist_ok=True)
 
     # 已跟踪清单：镜像删除只针对已跟踪文件，别人放的未跟踪文件绝不碰
-    r = run_git(["ls-files", "--"] + add_paths_of(rules_dir), cwd=team_repo, capture=True)
+    r = run_git(["ls-files", "--"] + managed, cwd=team_repo, capture=True)
     tracked = set(r.stdout.splitlines())
 
     for s in skills:
@@ -420,7 +426,7 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     print()
 
     # ── Step 4: 限定路径单 commit（无变更但本地有遗留未推提交则补推）──
-    if run_git(["add", "-A", "--"] + paths, cwd=team_repo).returncode != 0:
+    if run_git(["add", "-A", "--"] + managed, cwd=team_repo).returncode != 0:
         fail("git add 失败")
 
     r = run_git(["rev-list", "--count", "@{u}..HEAD"], cwd=team_repo, capture=True)
@@ -448,7 +454,7 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     print("[Step 5] 推送到内部远端...")
     if run_git(["push"], cwd=team_repo).returncode != 0:
         print("  push 被拒（远端有新提交），rebase 后重试...")
-        rebase_or_report(team_repo, "push 重试")
+        rebase_or_report(team_repo, "push 重试", managed)
         if run_git(["push"], cwd=team_repo).returncode != 0:
             fail("push 失败，请检查权限/网络")
     print()
