@@ -23,6 +23,7 @@ DEFAULT_WEIGHTS: dict[str, int] = {
     "structure_std": 5,   # 表结构/命名/数据流/GROUP_BY/JOIN 漂移
     "caliber_const": 2,   # 口径常量差异（写法差异，人裁决）
     "type_precision": 2,  # 类型精度差异（基类型满足输入要求即可）
+    "discipline": 10,     # agent 自建脚本绕过流程（FAIL 不拦及格，待人裁决）
     "artifact": 8,        # 其他产物层断言失败
     "design_default": 6,  # 其他 design 层断言失败
     "code_default": 6,    # 其他 code 层断言失败
@@ -53,6 +54,7 @@ _ASSERTION_ROOTS = [
     (("artifacts", "DDL类型"), "ddl_type"),
     (("artifacts", "I视图列"), "view_cols"),
     (("artifacts", "审计字段"), "audit_standard"),
+    (("discipline", ""), "discipline"),
     (("code", "字段覆盖契约"), "field_coverage"),
 ]
 
@@ -75,7 +77,10 @@ def _root_of_assertion(layer: str, detail: str) -> tuple[str, str]:
     """断言失败 → (根因, 扣分类别)。根因在 FATAL_ROOTS → 类别 fatal。"""
     for (ly, kw), root in _ASSERTION_ROOTS:
         if layer == ly and kw in detail:
-            return root, "fatal" if root in FATAL_ROOTS else "structure_std"
+            if root in FATAL_ROOTS:
+                return root, "fatal"
+            # 根因自身是权重键（如 discipline）就用对应类别，否则结构类
+            return root, (root if root in DEFAULT_WEIGHTS else "structure_std")
     return f"{layer}_default", {
         "pipeline": "fatal", "artifacts": "artifact",
         "design": "design_default", "code": "code_default",

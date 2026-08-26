@@ -97,7 +97,12 @@ def run_real_pipe(
     # 双信号：流锚点（顶层 pipe 活动）+ 文件 marker（subagent 写产出的内层活动，
     # 顶层流看不到 designer/coder 内部——设计/编码阶段靠文件事件补）
     tracker = _StageTracker()
-    watcher = _StageWatcher(case_dir, deliver_base, on_marker=tracker.feed_file)
+    discipline = _DisciplineTracker(stage_provider=tracker.stage_text)
+    watcher = _StageWatcher(
+        case_dir, deliver_base,
+        on_marker=tracker.feed_file,
+        on_suspect=discipline.on_file,
+    )
     tracker._fallback = watcher  # 全盲兜底 + etl 计数
 
     def _do() -> tuple[bool, str]:
@@ -107,14 +112,104 @@ def run_real_pipe(
             timeout,
             label="new-pipe 真实流程",
             stage_provider=tracker.stage_text,
-            line_hook=tracker.feed,
+            line_hook=lambda line: (tracker.feed(line), discipline.feed(line)),
         )
         deliver = find_deliver(deliver_base, case_dir.name)
         return judge_real_run(deliver, code, out)
 
     steps = [_step("new-pipe(真实流程)", _do)]
     stage_times, stage_loops = tracker.finish()
-    return steps, stage_times, stage_loops
+    return steps, stage_times, stage_loops, discipline.violations
+
+
+# ============================================================
+# 纪律检查：抓 agent 自建临时脚本绕过流程（违反编排者铁律"不 author 脚本"）
+# ============================================================
+
+# 剧本/管线规定脚本的基名白名单（宁可宽防误报；agent 调它们是本职）
+_WHITELIST_SCRIPTS = {
+    "resolve_appid", "preprocess", "precheck", "fill_type_risk_decision",
+    "assemble_ts", "gate_summary", "dispatch_plan", "assemble_ddl",
+    "check_db", "ut_precheck", "ut_execute", "run_ut_check",
+    "assemble_export", "check_sql", "slice_ts", "pick_fields",
+    "explore", "check_field", "config_paths", "dws_db", "schema_query",
+    "baseline_contract", "inject_tablesample", "local_eval", "run",
+    "seed", "promote", "history", "menu", "engine", "report_v2",
+}
+
+# 脚本调用行（python/bash/sh + 落盘脚本路径；-c 内联与 -m 模块豁免）
+_INVOKE_RE = re.compile(
+    r"\b(?:python3?|bash|sh)\s+(?!-c)([^\s`\"'|;]+?\.(?:py|sh))",
+    re.IGNORECASE,
+)
+
+# 上下文窗口行数（违规前文——agent 写脚本前的报错/诱因通常在这段里）
+_DISCIPLINE_CONTEXT_LINES = 15
+
+
+class _DisciplineTracker:
+    """编排纪律跟踪：白名单外的脚本调用 + 产出目录里的自建脚本文件。
+
+    检出即 FAIL（不进致命门）+ 扣分 + 上下文进报告待人裁决——脚本本身
+    可能是对的，问题是绕过了该走的流程（掩盖根因）。
+    """
+
+    def __init__(self, stage_provider=None):
+        self._stage_provider = stage_provider
+        self._recent: list[str] = []  # 滚动上下文
+        self.violations: list[dict] = []
+        self._seen_keys: set[str] = set()
+
+    def feed(self, line: str) -> None:
+        stripped = line.strip()
+        if stripped:
+            self._recent.append(stripped[:200])
+            self._recent = self._recent[-30:]
+        for m in _INVOKE_RE.finditer(stripped):
+            script = m.group(1).replace("\\", "/")
+            self._record(script, f"调用 {m.group(0)[:120]}", from_stream=True)
+
+    def on_file(self, rel_path: str) -> None:
+        """watcher 检出产出目录里的自建脚本文件（diagnose 豁免由 watcher 保证）。"""
+        self._record(rel_path.replace("\\", "/"), f"自建文件 {rel_path}", from_stream=False)
+
+    def _record(self, script: str, action: str, from_stream: bool) -> None:
+        base = script.rsplit("/", 1)[-1]
+        stem = base.rsplit(".", 1)[0]
+        if stem in _WHITELIST_SCRIPTS:
+            return
+        if "_internal/diagnose" in script:
+            return  # 铁律允许：诊断临时查询进 diagnose 目录
+        if script in self._seen_keys:
+            return
+        self._seen_keys.add(script)
+        stage = ""
+        if self._stage_provider:
+            try:
+                stage = self._stage_provider()
+            except Exception:
+                pass
+        context = list(self._recent[-_DISCIPLINE_CONTEXT_LINES:]) if from_stream else []
+        self.violations.append(
+            {"script": script, "action": action, "stage": stage, "context": context}
+        )
+
+    def summary(self) -> str:
+        """报告用明细（多行）。"""
+        if not self.violations:
+            return "无自建脚本（编排铁律遵守）"
+        lines = [f"发现 {len(self.violations)} 处 agent 自建脚本（绕过流程，待人裁决）:"]
+        for v in self.violations:
+            tag = f"[{v['stage']}]" if v["stage"] else "[?]"
+            lines.append(f"  {tag} {v['action']}")
+            if v["context"]:
+                cause = [c for c in v["context"] if any(
+                    k in c.upper() for k in ("ERROR", "FAIL", "阻断", "失败"))]
+                shown = cause[-3:] if cause else v["context"][-3:]
+                for c in shown:
+                    lines.append(f"    前因| {c[:100]}")
+            lines.append("    全文: results/_live/new-pipe_真实流程.log")
+        return "\n".join(lines)
 
 
 # ============================================================
@@ -274,14 +369,16 @@ class _StageTracker:
 class _StageWatcher:
     """轮询产出目录，按 marker 首现时间反推当前阶段与各阶段耗时。"""
 
-    def __init__(self, case_name: str, base: Path, on_marker=None):
+    def __init__(self, case_name: str, base: Path, on_marker=None, on_suspect=None):
         self._base = base
         self._asset = case_name
         self._on_marker = on_marker  # marker 首现回调（喂给 StageTracker 补内层阶段）
+        self._on_suspect = on_suspect  # 自建脚本文件回调（纪律检查）
         self._start = time.monotonic()
         self._seen: dict[str, float] = {}  # 阶段名 → 首现耗时
         self._etl_count = 0
         self._stop = threading.Event()
+        self._checked_suspects: set[str] = set()
         self._deliver: Path | None = None
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
@@ -313,6 +410,20 @@ class _StageWatcher:
         etl_dir = self._deliver / "etl"
         if etl_dir.exists():
             self._etl_count = sum(1 for f in etl_dir.iterdir() if f.suffix == ".sql")
+        # 纪律检查：产出目录里的自建脚本文件（.py/.sh；diagnose 目录铁律豁免）
+        if self._on_suspect:
+            for f in self._deliver.rglob("*"):
+                if f.is_file() and f.suffix in (".py", ".sh"):
+                    rel = f.relative_to(self._deliver).as_posix()
+                    if "_internal/diagnose" in rel:
+                        continue
+                    key = rel
+                    if key not in self._checked_suspects:
+                        self._checked_suspects.add(key)
+                        try:
+                            self._on_suspect(rel)
+                        except Exception:
+                            pass
 
     def stage_text(self) -> str:
         """spinner 用的当前阶段文本（最近首现的 marker；编码阶段带规则计数）。"""

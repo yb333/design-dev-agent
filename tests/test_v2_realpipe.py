@@ -112,7 +112,12 @@ class TestRunRealPipe:
         calls = {}
 
         def fake_stream(cmd, timeout, cwd=None, label="", stage_provider=None, line_hook=None):
+        # 模拟真实行为：line_hook 喂行（白名单脚本 + 违规脚本各一）
             calls["cmd"] = cmd
+            if line_hook:
+                line_hook("python SHARED_SCRIPTS/preprocess.py --mapping x\n")
+                line_hook("ERROR: column amt type mismatch\n")
+                line_hook("python fix_types.py\n")  # 违规：白名单外自建脚本
             return 0, ""
 
         def fake_find(base, name):
@@ -122,9 +127,13 @@ class TestRunRealPipe:
         monkeypatch.setattr(real_pipe, "find_deliver", fake_find)
 
         case_dir = tmp_path / "dwb_x"
-        steps, stage_times, stage_loops = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
+        steps, stage_times, stage_loops, violations = real_pipe.run_real_pipe(
+            case_dir, tmp_path / "base", timeout=5)
         assert len(steps) == 1
         assert isinstance(stage_times, dict) and isinstance(stage_loops, dict)
+        # 纪律检查经 line_hook 生效：抓到 fix_types.py，preprocess 白名单豁免
+        assert len(violations) == 1 and "fix_types.py" in violations[0]["script"]
+        assert "amt" in " ".join(violations[0]["context"])  # 前因上下文捕获
         assert steps[0].step == "new-pipe(真实流程)"
         assert steps[0].status.value == "pass"
         # 调用形态：--command new-pipe + 消息含 mapping 路径与非交互声明
@@ -138,7 +147,7 @@ class TestRunRealPipe:
         monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="", stage_provider=None, line_hook=None: (0, "ran ok"))
         monkeypatch.setattr(real_pipe, "find_deliver", lambda base, name: None)
         case_dir = tmp_path / "dwb_x"
-        steps, _, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
+        steps, _, _, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert steps[0].status.value == "fail"
 
 
@@ -412,3 +421,48 @@ class TestDualSignalStages:
         assert t.stage_text() == "预检(第2次·回路)"
         t.feed_file("设计")                            # 文件事件只前进
         assert t.stage_text() == "设计"
+
+
+class TestDisciplineTracker:
+    """编排纪律：白名单外自建脚本检测 + diagnose 豁免 + 上下文捕获。"""
+
+    def test_whitelisted_no_violation(self):
+        d = real_pipe._DisciplineTracker()
+        d.feed("Running bash: python SHARED_SCRIPTS/preprocess.py --mapping x\n")
+        d.feed("python /abs/ut_execute.py --ts ts.json\n")
+        assert d.violations == []
+
+    def test_inline_c_exempt(self):
+        d = real_pipe._DisciplineTracker()
+        d.feed('python -c "print(1)"\n')
+        d.feed("python3 -m pip install x\n")
+        assert d.violations == []
+
+    def test_violation_with_context(self):
+        d = real_pipe._DisciplineTracker()
+        d.feed("ut_execute: ERROR: column del_flag type mismatch\n")
+        d.feed("python fix_flag.py --table t\n")
+        assert len(d.violations) == 1
+        v = d.violations[0]
+        assert v["script"].endswith("fix_flag.py")
+        assert any("ERROR" in c for c in v["context"])  # 前因行捕获
+        assert "前因" in d.summary()
+
+    def test_diagnose_dir_exempt(self):
+        d = real_pipe._DisciplineTracker()
+        d.feed("python _internal/diagnose/q_check.py\n")
+        d.on_file("_internal/diagnose/tmp.py")
+        assert d.violations == []
+
+    def test_same_script_deduped(self):
+        d = real_pipe._DisciplineTracker()
+        d.feed("python fix.py\n")
+        d.feed("python fix.py\n")
+        assert len(d.violations) == 1
+
+    def test_stage_recorded(self):
+        t = real_pipe._StageTracker()
+        d = real_pipe._DisciplineTracker(stage_provider=t.stage_text)
+        t.feed("python ut_execute.py\n")
+        d.feed("python patch.py\n")
+        assert d.violations[0]["stage"] == "UT执行"

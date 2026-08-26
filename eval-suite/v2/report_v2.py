@@ -108,4 +108,5 @@ def _owner(layer: str) -> str:
         "design": "designer 角色（或 design skill）",
         "code": "coder 角色（或 coding skill）",
         "golden": "待人工裁决（可能新合理方案 → promote 沉淀；可能回归 → 修）",
+        "discipline": "agent 绕过流程自建脚本（待人裁决：修流程堵根因 / 修案例）",
     }.get(layer, "未知")

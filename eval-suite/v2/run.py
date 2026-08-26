@@ -32,7 +32,7 @@ for p in (str(EVAL_SUITE), str(V2_DIR)):
         sys.path.insert(0, p)
 
 from checks_schema import load_checks  # noqa: E402
-from engine import run_evaluation, LAYER_GOLDEN  # noqa: E402
+from engine import run_evaluation, LAYER_GOLDEN, LAYER_DISCIPLINE  # noqa: E402
 from pipeline import (  # noqa: E402
     DEFAULT_TIMEOUT_AI,
     DEFAULT_TIMEOUT_SCRIPT,
@@ -122,6 +122,27 @@ def _attach_golden(result, deliver: Path, case_dir: Path) -> None:
     result.add_layer(LAYER_GOLDEN, golden.golden_check(deliver, case_dir))
 
 
+def _attach_discipline(result, violations) -> None:
+    """挂纪律检查层：agent 自建脚本绕流程（FAIL 不拦及格，待人裁决）。"""
+    from validators.base import CheckResult, CheckStatus
+
+    import real_pipe
+
+    if violations:
+        detail = "\n".join(
+            f"[{v.get('stage') or '?'}] {v.get('action')}" for v in violations[:5]
+        )
+        result.add_layer(LAYER_DISCIPLINE, [
+            CheckResult("discipline", CheckStatus.FAIL,
+                        f"agent 自建脚本 {len(violations)} 处（绕过流程，待人裁决）:\n{detail}\n"
+                        f"上下文与全文见 results/_live/"),
+        ])
+    else:
+        result.add_layer(LAYER_DISCIPLINE, [
+            CheckResult("discipline", CheckStatus.PASS, "无自建脚本（编排铁律遵守）"),
+        ])
+
+
 def _result_has_fail(result) -> bool:
     return any(
         r.status.value == "fail"
@@ -175,7 +196,7 @@ def _run_pipeline_for(case_dir: Path, deliver: Path, executor: str, skip_ai: boo
         case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
     )
     stage_times = {s.step: round(s.duration_seconds, 1) for s in steps}
-    return steps, stage_times, {}
+    return steps, stage_times, {}, []  # 重放无纪律数据
 
 
 def _resolve_appid_quiet(schema: str) -> str:
@@ -284,7 +305,7 @@ def _run_repeat(
             if not keep_artifacts:
                 _clean_deliver(deliver)  # 每轮清场：旧产出会让 AI 复用，污染稳定性
             deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
-            pipeline_steps, stage_times, stage_loops = _run_pipeline_for(
+            pipeline_steps, stage_times, stage_loops, discipline_violations = _run_pipeline_for(
                 case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
             )
             if executor == "real":
@@ -296,6 +317,7 @@ def _run_repeat(
 
             result = run_evaluation(deliver, config, pipeline_steps)
             _attach_golden(result, deliver, case_dir)
+            _attach_discipline(result, discipline_violations)
 
             score = scoring.score_result(result, deliver, case_dir, weights_override=config.scoring)
             snapshot = baseline.snapshot_from_result(result)
@@ -387,7 +409,7 @@ def run_one_case(
         deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
         mode_desc = "真实入口 /new-pipe" if executor == "real" else "重放诊断 --replay"
         print(f"[v2] 跑流水线（{mode_desc}）: {case_name}")
-        pipeline_steps, stage_times, stage_loops = _run_pipeline_for(
+        pipeline_steps, stage_times, stage_loops, discipline_violations = _run_pipeline_for(
             case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
         )
         if executor == "real":
@@ -411,6 +433,7 @@ def run_one_case(
     # 评测（result.case_name 用 checks.yaml 的展示名，报告友好）
     result = run_evaluation(deliver, config, pipeline_steps)
     _attach_golden(result, deliver, case_dir)
+    _attach_discipline(result, discipline_violations)
 
     # baseline 对比（存档前先找上轮，对比后再存本次）
     # baseline 统一用 case_dir.name（目录名稳定唯一），不用展示名

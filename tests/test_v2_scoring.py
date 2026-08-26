@@ -115,3 +115,18 @@ class TestRender:
         out = scoring.render_score(
             {"total": 100, "deductions": [], "fatal": [], "passed": True, "has_golden": False})
         assert "无golden" in out
+
+
+class TestDisciplineScoring:
+    """纪律违规：FAIL 但不拦及格（-10 待人裁决）。"""
+
+    def test_discipline_fail_not_fatal(self):
+        r = _mk_result([("discipline", "agent 自建脚本 1 处（绕过流程，待人裁决）")])
+        s = scoring.score_result(r, Path("/tmp"), Path("/tmp"))
+        assert s["passed"] is True  # 不进致命门
+        assert s["total"] == 90     # -10
+
+    def test_discipline_pass_clean(self):
+        r = _mk_result([])
+        s = scoring.score_result(r, Path("/tmp"), Path("/tmp"))
+        assert s["total"] == 100
