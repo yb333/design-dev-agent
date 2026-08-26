@@ -276,6 +276,26 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
 
     # ── Step 2: 校验内部仓状态（干净 + 分支），rebase 到远端最新 ──
     print("[Step 2] 校验内部仓并拉取远端最新...")
+    # 上次失败遗留的 rebase/merge 冲突现场：自动放弃回退（此时 symbolic-ref 失败
+    # 会被误诊成 detached HEAD，且 checkout 被冲突 index 拒绝形成死锁）。
+    # 回退后由领先分级 + rebase 自动跳过接管。
+    def git_state_present(name: str) -> bool:
+        r = run_git(["rev-parse", "-q", "--verify", name], cwd=team_repo, capture=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return True
+        r = run_git(["rev-parse", "--git-path", name], cwd=team_repo, capture=True)
+        return (r.returncode == 0 and bool(r.stdout.strip())
+                and (team_repo / r.stdout.strip()).exists())
+
+    for state, abort_cmd in (
+        ("rebase-merge", ["rebase", "--abort"]),
+        ("rebase-apply", ["rebase", "--abort"]),
+        ("MERGE_HEAD", ["merge", "--abort"]),
+    ):
+        if git_state_present(state):
+            print(f"  检测到未完成的 {abort_cmd[0]} 现场（上次冲突遗留），自动放弃回退")
+            if run_git(abort_cmd, cwd=team_repo).returncode != 0:
+                fail(f"放弃 {abort_cmd[0]} 现场失败，请人工处理: git {' '.join(abort_cmd)}")
     r = run_git(["symbolic-ref", "--short", "HEAD"], cwd=team_repo, capture=True)
     cur_branch = r.stdout.strip()
     if not cur_branch:
