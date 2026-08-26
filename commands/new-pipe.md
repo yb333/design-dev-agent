@@ -252,13 +252,8 @@ Task(
 Task(
   subagent_type="dws-coder",
   description="生成DQ检查SQL",
-  prompt="读取 {deliver}/ts.json 的 dq_rules，按每条规则的 rule_desc 技术口径
-          生成检查 SQL，产出到 {deliver}/dq/ 目录。
-          每个文件命名 dq_{检查类型}.sql。
-          ★ 语义契约：DQ SELECT = 违规行探测器——0 行=通过，非 0 行=告警；
-          阈值/比例逻辑全收进 WHERE/HAVING。rule_desc 已写明什么情况算违规，
-          照口径定 WHERE 方向（别写反）。输出列 = 业务键+违规值字段（不 SELECT *），
-          参数直接写 ${参数名}（UT 会替换测试值）。"
+  prompt="DQ 检查 SQL 生成（按 dws-dq skill 流程）：ts.json 路径: {deliver}/ts.json，
+          产出检查 SQL 到 {deliver}/dq/。"
 )
 ```
 

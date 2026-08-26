@@ -147,14 +147,6 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 > 两种都：审计字段齐全、check_sql 对比、命名 `{INIT_编号}_{简称}_truncate_table.sql`。
 > init 规则不取增量范围（没有 `${BIZ_DATE_*}` 过滤），全量加工。
 
-### 2.6 DQ 检查 SQL 生成（pipe 4c 调，读 ts.json 的 dq_rules）
-
-**语义契约：DQ SELECT = 违规行探测器——0 行=通过，非 0 行=告警**。阈值/比例逻辑全收进 WHERE/HAVING，SQL 只负责吐违规行；rule_desc 已写明什么情况算违规，照口径定 WHERE 方向（别写反：查空值 → `WHERE col IS NULL`，有空值就是告警行）。
-
-- 每条 dq_rule 一个文件：`dq_{check_type}.sql`（UT 按此确定名找文件，缺失即发现项）
-- 输出列 = 业务键 + 违规值字段（告警时人直接定位行），不 SELECT *
-- 参数直接写 `${参数名}`（UT 执行前替换测试值）
-- 检查对象是**目标表**（UT 灌数后执行验证；上线后平台按调度跑同一份 SQL）
 
 ---
 

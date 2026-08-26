@@ -1053,3 +1053,24 @@ class TestCheckSqlFieldRef:
         issues = self._check(
             "SELECT s.x AS id FROM (SELECT t.y AS x FROM ods.ods_a_f t) s", cache=None)
         assert not any("[字段引用]" in i for i in issues), issues
+
+
+class TestSliceDq:
+    """slice_ts --dq：切 DQ 规则段（dws-dq 流程用）——不整读 ts.json。"""
+
+    def test_slice_dq_returns_contract_target_rules(self):
+        from slice_ts import slice_dq
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
+              "design": {"business_key": ["order_no"]},
+              "dq_rules": [{"check_type": "空值检查", "rule_name": "金额非空",
+                            "rule_desc": "违规=amt IS NULL"}]}
+        s = slice_dq(ts)
+        assert s["target_table"] == "dws.dwb_x_f"
+        assert s["business_key"] == ["order_no"]
+        assert len(s["dq_rules"]) == 1
+        assert "违规行探测器" in s["contract"]
+
+    def test_slice_dq_empty_rules_raises(self):
+        from slice_ts import slice_dq
+        with pytest.raises(ValueError, match="为空"):
+            slice_dq({"dq_rules": []})

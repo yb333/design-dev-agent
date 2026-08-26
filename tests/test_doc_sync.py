@@ -83,3 +83,12 @@ def test_coder_skill_flags_known_to_scripts():
     assert "--verbose" in text      # 实际存在的完整模式参数有说明
     for flag in ("--sql", "--ts", "--rule"):
         assert f"check_sql.py" in text and flag in text  # check_sql 必填三参有示例
+
+
+def test_dq_contract_single_source():
+    """DQ 契约唯一源在 dws-dq——dws-coding SKILL 不双写（跑偏防治：ETL skill 里的
+    DQ 知识对 ETL 任务是噪音，对 DQ 任务是过时副本）。"""
+    coding = (REPO / "skills" / "dws-coding" / "SKILL.md").read_text(encoding="utf-8")
+    dq = (REPO / "skills" / "dws-dq" / "SKILL.md").read_text(encoding="utf-8")
+    assert "违规行探测器" not in coding
+    assert "违规行探测器" in dq

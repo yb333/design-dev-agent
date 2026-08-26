@@ -65,7 +65,7 @@
 
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
-| `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸）；`--baseline-sql` 切**优化模式**（带 baseline SQL 原文+落位声明+硬约束，加法扩展零动存量路径） | coder 每规则起手 | ts.json + rule_code [+baseline-sql] → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter；opt 模式读 ts.change） |
+| `slice_ts.py` | 切单规则上下文为 YAML（避免大表上下文爆炸）；**--dq 切 DQ 规则段**（契约/target_table/business_key/dq_rules，dws-dq 流程用）；`--baseline-sql` 切**优化模式**（带 baseline SQL 原文+落位声明+硬约束，加法扩展零动存量路径） | coder 每规则起手 | ts.json + rule_code [+baseline-sql] → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter；opt 模式读 ts.change；--dq 模式读 ts.dq_rules） |
 | `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule；`--table-fields` 的查缓存能力来自 shared/schema_query 库 | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **ts.rules + ts.init.rules**（随 slice_ts 接通 init） |
 | `check_sql.py` | coder 的 SELECT vs ts 切片静态对比（字段覆盖/FROM 表/schema 前缀/CTE 投影一致性/**字段存在性三层核对**（schema_cache 源表/ts tmp 字段/CTE 已另查）/**口径引用对账**（design_logic 限定引用 ⊆ SQL 引用，漏实现当场抓）/括号引号/无 SELECT *） | coder 写完自检 | SELECT.sql + ts.json + rule_code → PASS/FAIL | **仅 ts.rules**（Chunk 2） |
 

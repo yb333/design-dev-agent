@@ -246,18 +246,46 @@ def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
     return sliced
 
 
+
+def slice_dq(ts: dict) -> dict:
+    """切 DQ 规则段（dws-dq 流程用）——不整读 ts.json。
+
+    内容：契约 + 目标表全名（检查对象）+ business_key（输出业务键列用）+ dq_rules 全量。
+    dq_rules 为空时报错（执行计划 dq=true 才发起 DQ 任务，空=上游错位）。
+    """
+    dq_rules = ts.get("dq_rules") or []
+    if not dq_rules:
+        raise ValueError("ts.dq_rules 为空——DQ 切片无内容（执行计划 dq=true 才发起 DQ 任务）")
+    f_table = ts.get("meta", {}).get("target", {}).get("f_table", {}) or {}
+    target = f"{f_table.get('schema', '')}.{f_table.get('table', '')}".strip(".")
+    return {
+        "contract": "DQ SELECT = 违规行探测器：0 行=通过，非 0 行=告警",
+        "target_table": target,
+        "business_key": ts.get("design", {}).get("business_key", []),
+        "dq_rules": dq_rules,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="TS 规则切片: 从 ts.json 切出单个规则的 YAML（给 coder 读）"
     )
     parser.add_argument("--ts", required=True, help="ts.json 路径")
-    parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
+    parser.add_argument("--rule", default="", help="规则编号，如 R0001（与 --dq 二选一）")
+    parser.add_argument("--dq", action="store_true", help="切 DQ 规则段（dws-dq 流程用）")
     parser.add_argument("--output", default="", help="输出 YAML 路径（默认打印到 stdout）")
     parser.add_argument("--verbose", action="store_true",
                         help="完整模式：direct 字段逐个展开（默认 compact 压一行省 70% 体积；需逐字段细节时用）")
     parser.add_argument("--baseline-sql", default="",
                         help="优化模式：baseline SQL 文件路径（etl_baseline/{rule}.sql）——给定时切优化模式")
     args = parser.parse_args()
+
+    if args.dq and args.rule:
+        parser.error("--dq 与 --rule 互斥（DQ 任务不带规则号）")
+    if not args.dq and not args.rule.strip():
+        parser.error("--rule 与 --dq 必须给一个（规则编码或 DQ 切片）")
+    if args.dq and args.baseline_sql:
+        parser.error("--dq 与 --baseline-sql 互斥")
 
     # 读 ts.json
     ts_path = Path(args.ts)
@@ -271,7 +299,9 @@ def main():
 
     # 切片
     try:
-        if args.baseline_sql:
+        if args.dq:
+            sliced = slice_dq(ts)
+        elif args.baseline_sql:
             bsql = Path(args.baseline_sql).read_text(encoding="utf-8")
             sliced = slice_rule_opt(ts, args.rule, baseline_sql=bsql)
         else:
@@ -280,8 +310,8 @@ def main():
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # 默认 compact（direct 压行）；--verbose 展开完整字段
-    output_data = sliced if args.verbose else to_compact_view(sliced)
+    # 默认 compact（direct 压行）；--verbose 展开完整字段；DQ 切片直出（无 fields 段）
+    output_data = sliced if (args.verbose or args.dq) else to_compact_view(sliced)
 
     # 输出
     yaml_text = yaml.dump(output_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
@@ -290,9 +320,12 @@ def main():
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(yaml_text, encoding="utf-8")
-        mode = "" if args.verbose else " [compact]"
+        mode = " [DQ]" if args.dq else ("" if args.verbose else " [compact]")
         print(f"切片产出: {out}{mode}", file=sys.stderr)
-        print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
+        if not args.dq:
+            print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
+        else:
+            print(f"DQ 规则数: {len(sliced['dq_rules'])}", file=sys.stderr)
     else:
         print(yaml_text)
 
