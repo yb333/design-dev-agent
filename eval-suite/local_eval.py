@@ -353,7 +353,7 @@ def step_ut(report, deliver):
     code, out = run_python(
         str(SHARED_REFS / "ut_precheck.py"),
         ["--ts", str(deliver / "ts.json"),
-         "--select-dir", str(deliver / "etl"),
+         "--etl-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),
          "--result", str(deliver / "ut_precheck_result.json")],
         timeout=300,
@@ -367,7 +367,7 @@ def step_ut(report, deliver):
     code, out = run_python(
         str(SHARED_REFS / "ut_execute.py"),
         ["--ts", str(deliver / "ts.json"),
-         "--select-dir", str(deliver / "etl"),
+         "--etl-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),
          "--report", str(deliver / "ut_report.md")],
         timeout=1800,
