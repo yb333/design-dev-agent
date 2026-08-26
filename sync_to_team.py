@@ -29,6 +29,7 @@
 """
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -285,6 +286,20 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         (oc / sub).mkdir(parents=True, exist_ok=True)
     rules_path.mkdir(parents=True, exist_ok=True)
 
+    # 上次同步对应的源提交（从内网仓最后一个 sync 提交解析）→ 本次积攒的
+    # 能力更新清单 = 源仓 (上次hash..本次] 里动了 skills/agents/commands 的提交
+    # （工具/评测类提交不进同步，自动跳过）。解析失败一律退化为单条标题。
+    r = run_git(["log", "-1", "--format=%s", "--grep=^sync:\\ design-dev-agent@"],
+                cwd=team_repo, capture=True)
+    m = re.search(r"@([0-9a-f]{7,40})", r.stdout)
+    entries = []
+    if m:
+        r = run_git(["log", f"{m.group(1)}..{src_branch}", "--oneline", "--",
+                     "skills", "agents", "commands"],
+                    cwd=src_repo, capture=True)
+        if r.returncode == 0:
+            entries = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+
     # 同步主体可整体重试：push 被拒（远端在窗口期又进了新提交）就整个重来一
     # 轮——重新对齐远端、重新 mirror、重新提交。sync 提交可再生成，重来比在
     # 原地解 rebase 冲突更简单可靠。
@@ -365,8 +380,21 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
             print(f"  {line}")
         if len(changed) > 20:
             print(f"  ...（共 {len(changed)} 个）")
-        if run_git(["commit", "-m", f"sync: design-dev-agent@{src_hash} {src_subject}"],
-                   cwd=team_repo).returncode != 0:
+        # 提交信息：积攒多条 → 首行汇总 + 正文逐条；单条 → 直接用该条标题；
+        # 区间无能力提交（纯 config 变化）→ config 更新；否则退化为源仓最新标题
+        if len(entries) >= 2:
+            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} 能力更新 {len(entries)} 项",
+                           "-m", "\n".join(f"* {e}" for e in entries)]
+            print(f"  信息: 能力更新 {len(entries)} 项（正文含逐条清单）")
+        elif len(entries) == 1:
+            subject = entries[0].split(" ", 1)[-1]
+            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} {subject}"]
+        elif all(l.split(maxsplit=2)[-1].startswith(".opencode/_references")
+                 for l in changed):
+            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} config 更新"]
+        else:
+            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} {src_subject}"]
+        if run_git(["commit"] + commit_args, cwd=team_repo).returncode != 0:
             fail("commit 失败")
 
         # ── push（显式 refspec 不依赖 upstream；只有竞争性被拒才重试）──
