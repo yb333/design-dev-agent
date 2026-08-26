@@ -1,0 +1,355 @@
+#!/usr/bin/env python3
+"""sync_to_team — 一键同步本仓「使用侧」内容到内部仓的 .opencode/
+
+源 = 本仓 origin/<SRC_BRANCH> 远端最新（内网克隆只 pull 不 commit，
+本地未推送内容不进同步）。结构对齐 install.py：
+
+  skills/    → .opencode/skills/     逐 skill 目录镜像（含 design-dev-shared）
+  agents/    → .opencode/agents/     *.md 覆盖（不删别人的）
+  commands/  → .opencode/commands/   *.md 覆盖（不删别人的）
+  四个 config → .opencode/_references/rules/<dws-design-dev>/
+              缺失时从 example 初始化，已有不覆盖（真实配置归内网侧维护）
+
+.opencode/ 是共享目录（别人也有 skill/agent），绝不整目录镜像 / 全量 add。
+多人协作：push 前 pull --rebase；rebase 冲突（有人动了我们的文件）立即退出，
+现场留给人，不自动猜。
+
+入口：sync_to_team.sh（开发环境测试）/ sync_to_team.bat（内网 Windows 实际运行），
+两者都是透传参数的薄壳。
+
+用法：
+  sync_to_team.sh                                # 同步（用已存配置）
+  sync_to_team.sh /path/to/internal/repo         # 指定内部仓路径，本次生效
+  sync_to_team.sh --config /path/to/repo         # 保存配置（含其他已生效选项）后退出
+  sync_to_team.sh --src-branch 8.12 --team-branch 8.12   # 分支覆盖，本次生效
+  sync_to_team.sh --accept-foreign               # 放行别人对我们路径的改动（见下）
+
+防覆盖（内部仓是多人分支，别人的内容绝不能被静默覆盖）：
+  1. 他人改动检测：上次 sync 提交之后若有别人的提交动过我们管理的路径，
+     拦截并列出明细；人工确认后加 --accept-foreign 才覆盖（不持久化）。
+  2. 镜像删除只针对 git 已跟踪文件——别人放的未跟踪文件绝不碰。
+  3. agents/commands 只覆盖 *.md 不删多余；config 缺失才初始化、已有不覆盖。
+  4. push 前 pull --rebase，冲突时列出冲突文件退出，现场留给人。
+
+配置 ~/.design-dev-agent-sync.conf（优先级：CLI 参数 > 配置文件 > 默认值）：
+  TEAM_REPO=/path/to/internal/repo   # 内部仓本地克隆路径（必填）
+  SRC_BRANCH=main                    # 源仓分支（fetch origin <branch>）
+  TEAM_BRANCH=                       # 内部仓分支校验，空=用当前 checkout 分支
+"""
+
+import argparse
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from io import BytesIO
+from pathlib import Path
+
+CONFIG_NAME = ".design-dev-agent-sync.conf"
+EXCLUDE_DIRS = {"__pycache__"}
+EXCLUDE_FILES = {".DS_Store"}
+EXCLUDE_SUFFIX = (".pyc",)
+CONFIG_MAP = [  # (example 相对路径, 真实名) —— 对齐 install.py 第 6-9 步
+    ("skills/dws-coding/assets/db-sources.example.json", "db-sources.json"),
+    ("skills/dws-coding/assets/platform_config.example.json", "platform_config.json"),
+    ("skills/dws-design/assets/schedule_config.example.json", "schedule_config.json"),
+    ("skills/dws-design/assets/schema_apps.example.json", "schema_apps.json"),
+]
+
+
+def fail(msg: str):
+    print(f"[ERROR] {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run_git(args, cwd=None, capture=False):
+    kwargs = {"cwd": str(cwd)} if cwd else {}
+    if capture:
+        kwargs.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return subprocess.run(["git"] + args, **kwargs)
+
+
+def load_config(path: Path) -> dict:
+    cfg = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            cfg[k.strip()] = v.strip()
+    return cfg
+
+
+def save_config(path: Path, cfg: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(f"{k}={v}\n" for k, v in cfg.items()), encoding="utf-8"
+    )
+
+
+def excluded(rel: Path) -> bool:
+    return (
+        any(part in EXCLUDE_DIRS for part in rel.parts)
+        or rel.name in EXCLUDE_FILES
+        or rel.suffix in EXCLUDE_SUFFIX
+    )
+
+
+def mirror_dir(src: Path, dst: Path, tracked: set, repo_prefix: str):
+    """镜像 src → dst：复制新增/变更，删除 dst 中 src 没有的。
+
+    只删除 git 已跟踪的文件（tracked 含 repo_prefix 前缀的仓库相对路径）——
+    别人放在目录里的未跟踪文件绝不碰。
+    """
+    dst.mkdir(parents=True, exist_ok=True)
+    src_files = set()
+    for p in sorted(src.rglob("*")):
+        rel = p.relative_to(src)
+        if excluded(rel) or not p.is_file():
+            continue
+        src_files.add(rel)
+        target = dst / rel
+        if not target.exists() or target.read_bytes() != p.read_bytes():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
+    for p in sorted(dst.rglob("*"), reverse=True):
+        rel = p.relative_to(dst)
+        if excluded(rel):
+            continue
+        if p.is_file():
+            if rel not in src_files and f"{repo_prefix}/{rel.as_posix()}" in tracked:
+                p.unlink()
+        elif not any(p.iterdir()):
+            p.rmdir()
+
+
+def copy_md(src_dir: Path, dst_dir: Path):
+    """*.md 覆盖式拷贝（不镜像——不动目标目录里别人的文件）。"""
+    for p in sorted(src_dir.glob("*.md")):
+        target = dst_dir / p.name
+        if not target.exists() or target.read_bytes() != p.read_bytes():
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
+
+
+def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.dont_write_bytecode = True  # import config_paths 不落 pyc
+
+    parser = argparse.ArgumentParser(description="同步本仓使用侧内容到内部仓 .opencode/")
+    parser.add_argument("team_repo", nargs="?", help="内部仓路径（本次生效）")
+    parser.add_argument("--config", metavar="TEAM_REPO", help="保存配置（含其他已生效选项）后退出")
+    parser.add_argument("--src-branch", help="源仓分支（默认 main）")
+    parser.add_argument("--team-branch", help="内部仓分支校验（空=用当前 checkout 分支）")
+    parser.add_argument("--accept-foreign", action="store_true",
+                        help="放行：确认别人对我们路径的改动可被覆盖（不持久化，每次显式传）")
+    args = parser.parse_args()
+
+    src_repo = Path(__file__).resolve().parent
+    config_path = Path.home() / CONFIG_NAME
+    cfg = load_config(config_path)
+
+    team_repo = args.team_repo or cfg.get("TEAM_REPO", "")
+    src_branch = args.src_branch or cfg.get("SRC_BRANCH", "") or "main"
+    team_branch = args.team_branch or cfg.get("TEAM_BRANCH", "")
+
+    if args.config:
+        save_config(config_path, {
+            "TEAM_REPO": args.config,
+            "SRC_BRANCH": src_branch,
+            "TEAM_BRANCH": team_branch,
+        })
+        print(f"[OK] 已保存配置: {args.config}（源分支: {src_branch}，内部仓分支: {team_branch or '不校验'}）")
+        return 0
+
+    if not team_repo:
+        fail("未指定内部仓路径（用法: sync_to_team.sh --config /path/to/internal/repo）")
+    team_repo = Path(team_repo).expanduser().resolve()
+    if not (team_repo / ".git").exists():
+        fail(f"不是 git 仓库: {team_repo}")
+
+    print("=" * 60)
+    print("  同步设计开发能力 → 内部仓 .opencode/")
+    print("=" * 60)
+    print(f"源:   {src_repo} (origin/{src_branch})")
+    print(f"目标: {team_repo}/.opencode/")
+    print()
+
+    with tempfile.TemporaryDirectory(prefix="design-dev-sync-") as tmp:
+        return do_sync(src_repo, Path(tmp), team_repo, src_branch, team_branch,
+                       accept_foreign=args.accept_foreign)
+
+
+def add_paths_of(rules_dir: str) -> list:
+    """我们管理的路径（git add / 他人改动检测 / ls-files 的统一口径）。"""
+    return [
+        ".opencode/skills", ".opencode/agents", ".opencode/commands",
+        f".opencode/_references/rules/{rules_dir}",
+    ]
+
+
+def rebase_or_report(team_repo: Path, where: str) -> bool:
+    """pull --rebase；冲突时列出冲突文件并 fail（现场留给人）。"""
+    if run_git(["pull", "--rebase"], cwd=team_repo).returncode == 0:
+        return True
+    r = run_git(["diff", "--name-only", "--diff-filter=U"], cwd=team_repo, capture=True)
+    files = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+    detail = "\n".join(f"    {f}" for f in files) or "    （未取到冲突文件清单）"
+    fail(f"{where} rebase 冲突（有人改动了我们的文件）:\n{detail}\n"
+         f"  处理: git rebase --abort 可放弃本次；人工解决后重跑同步")
+
+
+def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_branch: str,
+            accept_foreign: bool = False) -> int:
+    # ── Step 1: fetch 源仓远端最新，archive 导出（不动源仓工作区/分支）──
+    print(f"[Step 1] 拉取源仓远端最新 (origin/{src_branch})...")
+    if run_git(["fetch", "origin", src_branch], cwd=src_repo).returncode != 0:
+        fail("fetch 失败，请检查网络或远端配置")
+    r = run_git(["rev-parse", "--short", "FETCH_HEAD"], cwd=src_repo, capture=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        fail("取源提交 hash 失败（fetch 后 FETCH_HEAD 无效）")
+    src_hash = r.stdout.strip()
+    r = run_git(["log", "-1", "--format=%s", "FETCH_HEAD"], cwd=src_repo, capture=True)
+    src_subject = r.stdout.strip()
+    print(f"  源提交: {src_hash} {src_subject}")
+
+    export_dir = tmp / "src"
+    export_dir.mkdir()
+    r = subprocess.run(
+        ["git", "-C", str(src_repo), "archive", "FETCH_HEAD", "--", "skills", "agents", "commands"],
+        capture_output=True,
+    )
+    if r.returncode != 0:
+        fail(f"git archive 失败: {r.stderr.decode('utf-8', errors='replace')[:200]}")
+    with tarfile.open(fileobj=BytesIO(r.stdout)) as tf:
+        tf.extractall(export_dir)
+
+    # 条目清单动态扫描（对齐 install.py：含 SKILL.md 的目录 + design-dev-shared 特例）
+    skills = [
+        d.name for d in sorted((export_dir / "skills").iterdir())
+        if d.is_dir() and ((d / "SKILL.md").exists() or d.name == "design-dev-shared")
+    ]
+    n_agents = len(list((export_dir / "agents").glob("*.md")))
+    n_commands = len(list((export_dir / "commands").glob("*.md")))
+    print(f"  Skills: {len(skills)} 个  Agents: {n_agents} 个  Commands: {n_commands} 个")
+    print()
+
+    # config 目录名从 config_paths 取（唯一源；取不到回退默认）
+    rules_dir = "dws-design-dev"
+    sys.path.insert(0, str(export_dir / "skills" / "design-dev-shared" / "scripts"))
+    try:
+        from config_paths import RULES_DIR_NAME
+        rules_dir = RULES_DIR_NAME
+    except Exception:
+        pass
+    finally:
+        sys.path.pop(0)
+
+    # ── Step 2: 校验内部仓状态（干净 + 分支 + 他人改动检测），rebase 到远端最新 ──
+    print("[Step 2] 校验内部仓并拉取远端最新...")
+    r = run_git(["symbolic-ref", "--short", "HEAD"], cwd=team_repo, capture=True)
+    cur_branch = r.stdout.strip()
+    if team_branch and cur_branch != team_branch:
+        fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（请手动 checkout）")
+    if run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True).stdout.strip():
+        fail("内部仓工作区不干净，请先处理（git status 查看）——同步工具不覆盖未知改动")
+    rebase_or_report(team_repo, "Step 2 拉取远端")
+
+    # 他人改动检测：上次 sync 提交之后，我们管理的路径是否被别人的提交动过。
+    # 动过则同步会把他的改动静默覆盖掉（git 无冲突），必须拦下人工确认。
+    paths = add_paths_of(rules_dir)
+    r = run_git(["log", "-1", "--format=%H", "--grep=^sync:\\ design-dev-agent@"],
+                cwd=team_repo, capture=True)
+    last_sync = r.stdout.strip()
+    if last_sync:
+        r = run_git(["log", f"{last_sync}..HEAD", "--oneline", "--"] + paths,
+                    cwd=team_repo, capture=True)
+        foreign = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        if foreign:
+            detail = "\n".join(f"    {f}" for f in foreign)
+            if not accept_foreign:
+                fail(f"上次同步后有别人的提交改动过我们管理的文件（同步会覆盖这些改动）:\n{detail}\n"
+                     f"  确认可覆盖后重跑并加 --accept-foreign；或先人工合并这些改动")
+            print("  [WARN] 检测到别人对我们路径的改动，已 --accept-foreign 放行覆盖:")
+            for f in foreign:
+                print(f"    {f}")
+    else:
+        print("  （未找到上次同步基线，跳过他人改动检测——首次同步属正常）")
+    print()
+
+    # ── Step 3: 逐条目同步到 .opencode/（共享目录：只动自己的条目）──
+    print("[Step 3] 同步到内部仓 .opencode/...")
+    oc = team_repo / ".opencode"
+    rules_path = oc / "_references" / "rules" / rules_dir
+    for sub in ("skills", "agents", "commands"):
+        (oc / sub).mkdir(parents=True, exist_ok=True)
+    rules_path.mkdir(parents=True, exist_ok=True)
+
+    # 已跟踪清单：镜像删除只针对已跟踪文件，别人放的未跟踪文件绝不碰
+    r = run_git(["ls-files", "--"] + add_paths_of(rules_dir), cwd=team_repo, capture=True)
+    tracked = set(r.stdout.splitlines())
+
+    for s in skills:
+        mirror_dir(export_dir / "skills" / s, oc / "skills" / s,
+                   tracked=tracked, repo_prefix=f".opencode/skills/{s}")
+        print(f"  + skill: {s}")
+    copy_md(export_dir / "agents", oc / "agents")
+    copy_md(export_dir / "commands", oc / "commands")
+
+    inited = []
+    for ex, real in CONFIG_MAP:
+        dst = rules_path / real
+        src_ex = export_dir / ex
+        if not dst.exists() and src_ex.exists():
+            shutil.copy2(src_ex, dst)
+            inited.append(real)
+    if inited:
+        print(f"  config 初始化（已有未动）: {' '.join(inited)}")
+    print("  + 同步完成")
+    print()
+
+    # ── Step 4: 限定路径单 commit（无变更但本地有遗留未推提交则补推）──
+    if run_git(["add", "-A", "--"] + paths, cwd=team_repo).returncode != 0:
+        fail("git add 失败")
+
+    r = run_git(["rev-list", "--count", "@{u}..HEAD"], cwd=team_repo, capture=True)
+    unpushed = int(r.stdout.strip()) if r.returncode == 0 else 0
+
+    if run_git(["diff", "--cached", "--quiet"], cwd=team_repo).returncode == 0:
+        if unpushed == 0:
+            print("  无变更，内部仓内容已是最新。")
+            return 0
+        print(f"  内容无变更，补推遗留的 {unpushed} 个提交...")
+    else:
+        r = run_git(["diff", "--cached", "--name-status"], cwd=team_repo, capture=True)
+        changed = [l for l in r.stdout.splitlines() if l.strip()]
+        print(f"[Step 4] 提交（{len(changed)} 个文件变更）...")
+        for line in changed[:20]:
+            print(f"  {line}")
+        if len(changed) > 20:
+            print(f"  ...（共 {len(changed)} 个）")
+        if run_git(["commit", "-m", f"sync: design-dev-agent@{src_hash} {src_subject}"],
+                   cwd=team_repo).returncode != 0:
+            fail("commit 失败")
+        print()
+
+    # ── Step 5: push（被拒则 rebase 重试一次）──
+    print("[Step 5] 推送到内部远端...")
+    if run_git(["push"], cwd=team_repo).returncode != 0:
+        print("  push 被拒（远端有新提交），rebase 后重试...")
+        rebase_or_report(team_repo, "push 重试")
+        if run_git(["push"], cwd=team_repo).returncode != 0:
+            fail("push 失败，请检查权限/网络")
+    print()
+    print("=" * 60)
+    print(f"  ✅ 同步完成: design-dev-agent@{src_hash} → {cur_branch}")
+    print("=" * 60)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
