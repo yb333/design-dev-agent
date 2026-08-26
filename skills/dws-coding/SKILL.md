@@ -52,10 +52,10 @@ description: >-
 
 ### 步骤 1：拿规则切片，看全貌
 
-调 slice_ts.py 拿规则数据（大规则用 `--compact` 省体积）：
+调 slice_ts.py 拿规则数据（**默认就是 compact**——direct 字段压一行省 70% 体积；需逐字段细节再加 `--verbose`）：
 
 ```bash
-python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule {规则号} --compact
+python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule {规则号}
 ```
 
 或先用 pick_fields 看字段分布（哪个源表多少直取字段、有哪些加工字段）：
@@ -120,7 +120,12 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 
 ### 步骤 5：静态对比
 
-调 check_sql.py 检查 SELECT 和 ts.json 切片是否一致（表/字段/JOIN）。
+调 check_sql.py 检查 SELECT 和 ts.json 切片是否一致（表/字段/JOIN/口径引用）：
+
+```bash
+python {skill目录}/scripts/check_sql.py --select {你的SELECT文件} --ts {ts路径} --rule {规则号}
+```
+
 不过则自己改后重对比，限3轮。
 
 ### 2.5 init 规则编码（INIT_R000X，初始化管道）
