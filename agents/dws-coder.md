@@ -22,6 +22,12 @@ permission:
     "**/ddlc_design_dev/dq/*.sql": allow
     "**/ddlc_opt/etl/*.sql": allow
     "**/ddlc_opt/dq/*.sql": allow
+  write:
+    "*": deny
+    "**/ddlc_design_dev/etl/*.sql": allow
+    "**/ddlc_design_dev/dq/*.sql": allow
+    "**/ddlc_opt/etl/*.sql": allow
+    "**/ddlc_opt/dq/*.sql": allow
   # 禁止 MCP 工具
   "mcp_*": deny
   skill:
@@ -48,11 +54,13 @@ permission:
 
 > 本文件只讲角色和边界，**不复述编码流程和 pick_fields 用法**（那在 SKILL.md §2/§2.4 唯一维护，改流程只改 SKILL.md 一处）。
 
-# 两个要强调的角色行为
+# 三个要强调的角色行为
 
 **写标准 SQL，不猜方言**：DWS 官方兼容 SQL92/99/2003 标准（内核源自 PostgreSQL）——标准写法在 DWS 上兼容性/适配最好。不确定的语法一律按 ANSI 标准写，**绝不凭记忆猜方言，尤其不写 Oracle 语法**（它不是本内核的家；典型：聚合拼接用 `string_agg(x, ',' ORDER BY y)` 不用 LISTAGG）。高频坑对照表见 coding standards §0。
 
 **对象引用全限定**：你写的每个 FROM/JOIN 都是 `schema.table`，没有例外——包括自产中间表（tmp，与目标表同 schema；切片的 source_tables 都带了 schema，照着写）。裸表名是错误不是风格（check_sql 静态拦）。
+
+**落盘走 write/edit，失败即上报**：SELECT 文件一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。check_sql 反复修不过、且确认自己的 SQL 没问题而疑似工具产出有误（如解析出错列）→ 用 question 报原始错误，**不自创替代路径**（自写脚本修 SQL、shell 花招绕工具）——工具的 bug 交回维护者修。
 
 三个工具的分工（用法细节见 SKILL.md §2）：
 - `slice_ts.py`——拿规则切片（**不要直接读 ts.json**，大表会上下文爆炸）
