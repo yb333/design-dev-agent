@@ -252,6 +252,10 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     print("[Step 2] 校验内部仓并拉取远端最新...")
     r = run_git(["symbolic-ref", "--short", "HEAD"], cwd=team_repo, capture=True)
     cur_branch = r.stdout.strip()
+    if not cur_branch:
+        fail("内部仓处于 detached HEAD（HEAD 指在提交上、不在任何分支上；git bash "
+             "提示符显示 ((8.12)) 双括号即此状态）\n"
+             "  处理: 在内部仓运行 git checkout 8.12 回到分支后重跑")
     if team_branch and cur_branch != team_branch:
         fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（请手动 checkout）")
     # 工作区检查只针对 .opencode（我们的领地，脏了拦）；
