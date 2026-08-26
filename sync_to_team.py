@@ -283,6 +283,23 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         detail = "\n".join(f"    {l}" for l in opencode_dirty)
         fail(f"内部仓 .opencode/ 下有未提交改动（工具不覆盖未知内容）:\n{detail}\n"
              f"  请先处理（git status / git diff 查看，提交或还原）后重跑")
+    # 本地遗留的可再生成 sync 提交：本地领先且全部是 sync 提交时直接对齐远端
+    # （sync 提交是源仓内容的确定性镜像，丢弃后重同步会生成同样内容），
+    # 避免它们与远端新提交 rebase 冲突卡住流程。有手工提交则不动，走正常 rebase。
+    r = run_git(["rev-list", "--count", f"origin/{cur_branch}..HEAD"],
+                cwd=team_repo, capture=True)
+    ahead = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
+    if ahead > 0:
+        r = run_git(["log", f"origin/{cur_branch}..HEAD", "--format=%s"],
+                    cwd=team_repo, capture=True)
+        subjects = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        if subjects and all(s.startswith("sync: design-dev-agent@") for s in subjects):
+            print(f"  本地有 {ahead} 个未推送的 sync 提交（可再生成），对齐远端避免冲突:")
+            for s in subjects:
+                print(f"    {s}")
+            if run_git(["reset", "--hard", f"origin/{cur_branch}"],
+                       cwd=team_repo).returncode != 0:
+                fail(f"reset 到 origin/{cur_branch} 失败")
     rebase_or_report(team_repo, "Step 2 拉取远端")
 
     # 他人改动检测：上次 sync 提交之后，我们管理的内容路径是否被别人的提交动过。
