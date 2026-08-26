@@ -369,12 +369,24 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
                    cwd=team_repo).returncode != 0:
             fail("commit 失败")
 
-        # ── push ──
+        # ── push（显式 refspec 不依赖 upstream；只有竞争性被拒才重试）──
         print("  推送到内部远端...")
-        if run_git(["push"], cwd=team_repo).returncode == 0:
+        r = run_git(["push", "origin", f"HEAD:{cur_branch}"],
+                    cwd=team_repo, capture=True)
+        if r.returncode == 0:
             done = True
+        else:
+            err = ((r.stderr or "") + (r.stdout or "")).strip()
+            competitive = any(k in err for k in ("fetch first", "non-fast-forward", "stale info"))
+            if not competitive:
+                # 确定性失败（权限/分支保护/hook 拒绝等）——重试无意义，带原始错误停
+                print(err)
+                fail("push 失败（非竞争原因）——见上方 git 原始输出；"
+                     "常见：8.12 是受保护分支（找管理员开直推权限）、push 凭据/权限问题")
+            print(err.splitlines()[-1] if err else "  push 被拒")
     if not done:
-        fail("push 连续 3 轮被拒——远端推进太快或权限/网络问题；稍后直接重跑即可自愈")
+        fail("push 连续 3 轮竞争被拒（远端推进太快）——稍后直接重跑即可自愈；"
+             "持续失败请在内部仓手动 git push 看真实报错")
 
     print()
     print("=" * 60)
