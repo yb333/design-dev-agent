@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """sync_to_team — 一键同步本仓「使用侧」内容到内部仓的 .opencode/
 
-源 = 本仓本地 <SRC_BRANCH> 分支当前内容（用户自己 git pull，工具不 fetch 远端；
-要求内部仓工作区干净，脏了就拦）。结构对齐 install.py：
+源 = 本仓本地 <SRC_BRANCH> 分支当前内容（用户自己 git pull，工具不 fetch 远端）。
+内部仓只管 .opencode/：其下脏了拦；其余目录不重要，本地改动自动还原
+（以内部远端为准）。结构对齐 install.py：
 
   skills/    → .opencode/skills/     逐 skill 目录镜像（含 design-dev-shared）
   agents/    → .opencode/agents/     *.md 覆盖（不删别人的）
@@ -253,11 +254,30 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     cur_branch = r.stdout.strip()
     if team_branch and cur_branch != team_branch:
         fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（请手动 checkout）")
+    # 工作区检查只针对 .opencode（我们的领地，脏了拦）；
+    # 其余目录不重要：本地改动直接还原（以内部远端为准），不卡同步。
     r = run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True)
-    dirty = [l for l in r.stdout.splitlines() if l.strip()]
-    if dirty:
-        detail = "\n".join(f"    {l}" for l in dirty)
-        fail(f"内部仓工作区不干净（已跟踪文件有未提交改动，工具不覆盖未知内容）:\n{detail}\n"
+    opencode_dirty = []
+    has_outside = False
+    for line in r.stdout.splitlines():
+        if not line.strip():
+            continue
+        p = line[3:] if len(line) > 3 else ""
+        p = p.split(" -> ")[-1].strip('"')
+        if p == ".opencode" or p.startswith(".opencode/"):
+            opencode_dirty.append(line)
+        else:
+            has_outside = True
+    if has_outside:
+        # reset 清 staged（含新增），checkout 还原 worktree；残留的 untracked 不碍 pull
+        run_git(["reset", "-q", "HEAD", "--", ".", ":(exclude).opencode"], cwd=team_repo)
+        if run_git(["checkout", "HEAD", "--", ".", ":(exclude).opencode"],
+                   cwd=team_repo).returncode != 0:
+            fail("重置非 .opencode 本地改动失败（git checkout HEAD -- . ':(exclude).opencode'）")
+        print("  已重置非 .opencode 的本地改动（内部仓其余内容以远端为准）")
+    if opencode_dirty:
+        detail = "\n".join(f"    {l}" for l in opencode_dirty)
+        fail(f"内部仓 .opencode/ 下有未提交改动（工具不覆盖未知内容）:\n{detail}\n"
              f"  请先处理（git status / git diff 查看，提交或还原）后重跑")
     rebase_or_report(team_repo, "Step 2 拉取远端")
 
