@@ -48,8 +48,8 @@ sync_to_team.bat --config D:\path\to\内部仓克隆 --team-branch 8.12
 
 ## 四、日常使用（三步）
 
-1. **（外网）** 本仓 commit 并 push 到 GitHub main —— 工具只同步已推送内容，没 push 的改进不去
-2. **（内网）** 本仓克隆 `git pull` —— 让 `sync_to_team.bat` 本身是新版（工具不常改的话这步也可跳过，内容同步靠工具自己 fetch，不依赖本地 pull）
+1. **（外网）** 本仓 commit 并 push 到 GitHub main
+2. **（内网）** 本仓克隆 `git pull` —— **必须做**：工具读的就是本地 main 当前内容，不 pull 同步的是旧内容
 3. **（内网）** 双击或在 cmd 里运行 `sync_to_team.bat` —— 完成，无变更时不会有提交
 
 同步提交的 message 形如 `sync: design-dev-agent@f999a1e <本仓提交标题>`，每个都能对回本仓一个提交。
@@ -59,15 +59,15 @@ sync_to_team.bat --config D:\path\to\内部仓克隆 --team-branch 8.12
 ## 五、每次运行做什么（屏幕输出顺序）
 
 ```
-[Step 1] fetch 本仓远端 origin/main 最新 → 导出到临时目录（不动本地工作区）
-[Step 2] 校验内部仓：分支对不对、工作区干不干净 → pull --rebase 拿远端最新
+[Step 1] 读源仓本地 main 分支当前内容 → 导出到临时目录（不动本地工作区）
+[Step 2] 校验内部仓：分支对不对、工作区干不干净（脏了就拦，列出明细）→ pull --rebase 拿远端最新
          → 基线检测：上次同步后有没有别人动过我们的文件
 [Step 3] 逐条目同步到 .opencode/（skill 镜像 / md 覆盖 / config 补缺）
 [Step 4] git add 限定路径 → 无变更跳过 / 有变更单 commit
 [Step 5] push；被拒（别人刚推了）自动 rebase 重试一次
 ```
 
-git / fetch / pull / push 的原始输出都直接显示在屏幕上，出错时结合 `[ERROR]` 行定位。
+fetch / pull / push 的原始输出都直接显示在屏幕上，出错时结合 `[ERROR]` 行定位。
 
 ---
 
@@ -79,7 +79,7 @@ git / fetch / pull / push 的原始输出都直接显示在屏幕上，出错时
 | `不是 git 仓库: ...` | 路径不对 | 检查路径是否为内部仓克隆 |
 | `fetch 失败，请检查网络或远端配置` | 连不上 GitHub | 检查网络/代理 |
 | `内部仓当前分支是 X，配置要求 8.12` | 内部仓不在 8.12 | `git checkout 8.12` 后重跑 |
-| `内部仓工作区不干净，请先处理` | 内部仓克隆里有未处理的已跟踪改动 | `git status` 看是什么，处理完重跑（工具不覆盖未知改动） |
+| `内部仓工作区不干净（已跟踪文件有未提交改动）` + 文件明细 | 内部仓克隆里有未提交的已跟踪改动（如 config 填了真实地址没提交） | 看明细：该提交的提交（如 config 真实配置），该还原的 `git checkout -- <文件>`，处理完重跑 |
 | `上次同步后有别人的提交改动过我们管理的文件` + 提交明细 | 有同事改了我们的 skill/agent/config，同步会覆盖它 | 看明细：改动该保留就先人工合并；确认可覆盖才加 `--accept-foreign` 重跑 |
 | `rebase 冲突` + 冲突文件清单 | push 时和别人的提交撞了同一文件 | `git rebase --abort` 放弃本次；或人工解决冲突后重跑 |
 | `push 失败，请检查权限/网络` | 内部远端权限或网络问题 | 检查内部仓远端凭据 |
@@ -89,7 +89,7 @@ git / fetch / pull / push 的原始输出都直接显示在屏幕上，出错时
 
 ## 七、注意事项
 
-- **改了代码要先在外网 push**，再跑同步——顺序反了同步的是旧内容（不会出错，只是不同步最新）。
+- **顺序**：外网 push → 内网本仓 pull → 跑同步。顺序反了同步的是旧内容（不会出错，只是不同步最新）。
 - `--accept-foreign` 不持久化：每次命中拦截都要显式传，多看一眼明细再放行。
 - **弃用整个 skill / agent / command 条目**（不只是改内容）：工具不会自动删（扫描不到就不碰），需要在内部仓手动 `git rm -r` 一次。
 - 内部仓 `.gitignore` 建议加一行 `.opencode/venv/`——内网机器跑过 `install.py` 会生成 venv，忽略后同事 clone 下来 `git status` 才干净（工具本身不会把 venv 提交进去，这只是卫生问题）。
@@ -103,7 +103,7 @@ git / fetch / pull / push 的原始输出都直接显示在屏幕上，出错时
 
 ```ini
 TEAM_REPO=D:\path\to\internal-repo   # 内部仓本地克隆路径（必填）
-SRC_BRANCH=main                      # 源仓分支（本仓远端，默认 main）
+SRC_BRANCH=main                      # 源仓分支（读本地该分支当前内容，默认 main）
 TEAM_BRANCH=8.12                     # 内部仓分支校验（空=不校验）
 ```
 

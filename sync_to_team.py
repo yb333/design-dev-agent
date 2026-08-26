@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """sync_to_team — 一键同步本仓「使用侧」内容到内部仓的 .opencode/
 
-源 = 本仓 origin/<SRC_BRANCH> 远端最新（内网克隆只 pull 不 commit，
-本地未推送内容不进同步）。结构对齐 install.py：
+源 = 本仓本地 <SRC_BRANCH> 分支当前内容（用户自己 git pull，工具不 fetch 远端；
+要求内部仓工作区干净，脏了就拦）。结构对齐 install.py：
 
   skills/    → .opencode/skills/     逐 skill 目录镜像（含 design-dev-shared）
   agents/    → .opencode/agents/     *.md 覆盖（不删别人的）
@@ -33,7 +33,7 @@
 
 配置 ~/.design-dev-agent-sync.conf（优先级：CLI 参数 > 配置文件 > 默认值）：
   TEAM_REPO=/path/to/internal/repo   # 内部仓本地克隆路径（必填）
-  SRC_BRANCH=main                    # 源仓分支（fetch origin <branch>）
+  SRC_BRANCH=main                    # 源仓分支（读本地该分支当前内容）
   TEAM_BRANCH=                       # 内部仓分支校验，空=用当前 checkout 分支
 """
 
@@ -205,22 +205,20 @@ def rebase_or_report(team_repo: Path, where: str) -> bool:
 
 def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_branch: str,
             accept_foreign: bool = False) -> int:
-    # ── Step 1: fetch 源仓远端最新，archive 导出（不动源仓工作区/分支）──
-    print(f"[Step 1] 拉取源仓远端最新 (origin/{src_branch})...")
-    if run_git(["fetch", "origin", src_branch], cwd=src_repo).returncode != 0:
-        fail("fetch 失败，请检查网络或远端配置")
-    r = run_git(["rev-parse", "--short", "FETCH_HEAD"], cwd=src_repo, capture=True)
+    # ── Step 1: 读源仓本地分支当前内容（用户自己 pull，工具不 fetch 远端）──
+    print(f"[Step 1] 读取源仓本地分支 ({src_branch})...")
+    r = run_git(["rev-parse", "--short", src_branch], cwd=src_repo, capture=True)
     if r.returncode != 0 or not r.stdout.strip():
-        fail("取源提交 hash 失败（fetch 后 FETCH_HEAD 无效）")
+        fail(f"源仓本地分支不存在: {src_branch}（请先 git pull）")
     src_hash = r.stdout.strip()
-    r = run_git(["log", "-1", "--format=%s", "FETCH_HEAD"], cwd=src_repo, capture=True)
+    r = run_git(["log", "-1", "--format=%s", src_branch], cwd=src_repo, capture=True)
     src_subject = r.stdout.strip()
     print(f"  源提交: {src_hash} {src_subject}")
 
     export_dir = tmp / "src"
     export_dir.mkdir()
     r = subprocess.run(
-        ["git", "-C", str(src_repo), "archive", "FETCH_HEAD", "--", "skills", "agents", "commands"],
+        ["git", "-C", str(src_repo), "archive", src_branch, "--", "skills", "agents", "commands"],
         capture_output=True,
     )
     if r.returncode != 0:
@@ -249,24 +247,30 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     finally:
         sys.path.pop(0)
 
-    # ── Step 2: 校验内部仓状态（干净 + 分支 + 他人改动检测），rebase 到远端最新 ──
+    # ── Step 2: 校验内部仓状态（干净 + 分支），rebase 到远端最新 ──
     print("[Step 2] 校验内部仓并拉取远端最新...")
     r = run_git(["symbolic-ref", "--short", "HEAD"], cwd=team_repo, capture=True)
     cur_branch = r.stdout.strip()
     if team_branch and cur_branch != team_branch:
         fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（请手动 checkout）")
-    if run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True).stdout.strip():
-        fail("内部仓工作区不干净，请先处理（git status 查看）——同步工具不覆盖未知改动")
+    r = run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True)
+    dirty = [l for l in r.stdout.splitlines() if l.strip()]
+    if dirty:
+        detail = "\n".join(f"    {l}" for l in dirty)
+        fail(f"内部仓工作区不干净（已跟踪文件有未提交改动，工具不覆盖未知内容）:\n{detail}\n"
+             f"  请先处理（git status / git diff 查看，提交或还原）后重跑")
     rebase_or_report(team_repo, "Step 2 拉取远端")
 
-    # 他人改动检测：上次 sync 提交之后，我们管理的路径是否被别人的提交动过。
+    # 他人改动检测：上次 sync 提交之后，我们管理的内容路径是否被别人的提交动过。
     # 动过则同步会把他的改动静默覆盖掉（git 无冲突），必须拦下人工确认。
+    # 注意 config 目录（_references）不参与：那是内网侧的合法维护点，本就只补缺不覆盖。
     paths = add_paths_of(rules_dir)
+    guard_paths = [p for p in paths if not p.startswith(".opencode/_references")]
     r = run_git(["log", "-1", "--format=%H", "--grep=^sync:\\ design-dev-agent@"],
                 cwd=team_repo, capture=True)
     last_sync = r.stdout.strip()
     if last_sync:
-        r = run_git(["log", f"{last_sync}..HEAD", "--oneline", "--"] + paths,
+        r = run_git(["log", f"{last_sync}..HEAD", "--oneline", "--"] + guard_paths,
                     cwd=team_repo, capture=True)
         foreign = [l.strip() for l in r.stdout.splitlines() if l.strip()]
         if foreign:
