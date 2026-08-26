@@ -336,40 +336,48 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         detail = "\n".join(f"    {l}" for l in managed_dirty)
         fail(f"内部仓我们条目内有未提交改动（工具不覆盖未知内容）:\n{detail}\n"
              f"  请先处理（git status / git diff 查看，提交或还原）后重跑")
-    # 本地领先的提交分级：sync 遗留（可再生）和只动我们条目之外的提交（含
-    # .opencode 内别人的内容，以远端为准）都直接丢弃对齐远端。改了我们条目的
-    # 手工提交（如 config 维护）保留——全部可丢弃才整体 reset，混合时不动，
-    # 交给 rebase（条目外冲突会被自动跳过）。
+    # 本地领先的提交一律丢弃对齐远端（源头才是唯一权威，内网本地状态不重要：
+    # 上次失败的 sync 遗留、本地折腾的提交一视同仁）。唯一例外：config 目录
+    # 的真实值是内网侧资产（源头里没有），先快照、reset 后写回随本次同步提交。
     r = run_git(["rev-list", "--count", f"origin/{cur_branch}..HEAD"],
                 cwd=team_repo, capture=True)
     ahead = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
+    config_snapshot = {}
     if ahead > 0:
-        r = run_git(["log", f"origin/{cur_branch}..HEAD", "--format=%H %s"],
+        r = run_git(["log", f"origin/{cur_branch}..HEAD", "--format=%s"],
                     cwd=team_repo, capture=True)
-        drops, keeps = [], []
-        for line in r.stdout.splitlines():
-            if not line.strip():
-                continue
-            sha, subject = line.split(" ", 1)
-            if subject.startswith("sync: design-dev-agent@") or outside_managed(
-                    changed_files(team_repo, sha), managed):
-                drops.append(subject)
-            else:
-                keeps.append(f"{sha[:8]} {subject}")
-        if drops and not keeps:
-            print(f"  本地有 {len(drops)} 个领先提交（sync 遗留或条目外改动），对齐远端:")
-            for s in drops:
-                print(f"    {s}")
-            if run_git(["reset", "--hard", f"origin/{cur_branch}"],
-                       cwd=team_repo).returncode != 0:
-                fail(f"reset 到 origin/{cur_branch} 失败")
-        elif drops and keeps:
-            print("  [WARN] 本地领先提交混合（含我们条目内的手工改动，不能整体对齐远端）:")
-            for s in drops:
-                print(f"    可丢弃: {s}")
-            for s in keeps:
-                print(f"    保留: {s}")
+        subjects = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        print(f"  本地有 {ahead} 个领先提交（内网本地状态不保留，源头为准），对齐远端:")
+        for s in subjects:
+            print(f"    {s}")
+        cfg_rel = next(m for m in managed if m.startswith(".opencode/_references"))
+        cfg_dir = team_repo / cfg_rel
+        if cfg_dir.exists():
+            config_snapshot = {
+                p.relative_to(cfg_dir): p.read_bytes()
+                for p in sorted(cfg_dir.rglob("*")) if p.is_file()
+            }
+        if run_git(["reset", "--hard", f"origin/{cur_branch}"],
+                   cwd=team_repo).returncode != 0:
+            fail(f"reset 到 origin/{cur_branch} 失败")
     rebase_or_report(team_repo, "Step 2 拉取远端", managed)
+
+    # config 快照写回（reset 可能丢掉本地未推的真实值），并立即提交持久化——
+    # 后续任何拦截退出都不丢真实值；重跑时丢弃逻辑会再次快照带走，幂等。
+    if config_snapshot:
+        cfg_rel = next(m for m in managed if m.startswith(".opencode/_references"))
+        cfg_dir = team_repo / cfg_rel
+        restored = 0
+        for rel, data in config_snapshot.items():
+            target = cfg_dir / rel
+            if not target.exists() or target.read_bytes() != data:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                restored += 1
+        if restored:
+            print(f"  config 真实值已保留恢复 {restored} 个文件（随本次同步提交）")
+            run_git(["add", "--", cfg_rel], cwd=team_repo)
+            run_git(["commit", "-m", "chore: config 真实值保留（sync 工具）"], cwd=team_repo)
 
     # 他人改动检测：上次 sync 提交之后，我们产出的条目是否被别人的提交动过。
     # 动过则同步会把他的改动静默覆盖掉（git 无冲突），必须拦下人工确认。
@@ -450,11 +458,14 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
             fail("commit 失败")
         print()
 
-    # ── Step 5: push（被拒则 rebase 重试一次）──
+    # ── Step 5: push（被拒则以源头内容为准 rebase 重试一次）──
     print("[Step 5] 推送到内部远端...")
     if run_git(["push"], cwd=team_repo).returncode != 0:
-        print("  push 被拒（远端有新提交），rebase 后重试...")
-        rebase_or_report(team_repo, "push 重试", managed)
+        print("  push 被拒（远端有新提交），以源头内容为准 rebase 后重试...")
+        # sync 提交只动我们的条目，-X theirs 使条目内冲突取源头内容（源头是唯一
+        # 权威）；别人的条目不在 sync 提交改动集里，不受影响。
+        if run_git(["pull", "--rebase", "-X", "theirs"], cwd=team_repo).returncode != 0:
+            fail("rebase 失败，请人工处理后重跑（git rebase --abort 可放弃）")
         if run_git(["push"], cwd=team_repo).returncode != 0:
             fail("push 失败，请检查权限/网络")
     print()
