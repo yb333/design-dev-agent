@@ -1079,20 +1079,24 @@ class TestCompactConditionIssues:
         assert all("输入存疑" not in e for e in c["tables"])
 
 
-class TestAssignReclassify:
-    """preprocess 归位：错标赋值实为加工（非平凡 detail）→ 数据加工 + 不影响平凡赋值。"""
+class TestAssignFaithfulPassthrough:
+    """preprocess 如实反映：任何 detail 都不改 transform_rule。
 
-    def test_mislabeled_case_when_reclassified(self):
+    回归背景（187a92a 不完整修复的回声）：preprocess 曾把非平凡赋值改判"数据加工"——
+    只改类型改不了 source_alias，撞 precheck 步骤6"数据加工必须填别名"，把合法的
+    审计/传参字段全爆错。自然语言在输入层判不了（"传参"是描述不是错标），错标识别
+    后置到 designer 翻译之后（assemble_ts N35 过程校验）。"""
+
+    def test_any_detail_never_rewrites_rule(self):
         from preprocess import slim_mapping_data
         raw = {"source_tables": [], "field_mappings": [
             {"target_column": "flag", "mapping_rule": "赋值",
-             "mapping_expression": "CASE WHEN x=1 THEN 'Y' ELSE 'N' END"},
+             "mapping_expression": "CASE WHEN x=1 THEN 'Y' ELSE 'N' END"},  # 真错标也不动
+            {"target_column": "biz_flag", "mapping_rule": "赋值", "mapping_expression": "传参"},
             {"target_column": "del_flag", "mapping_rule": "赋值", "mapping_expression": "'N'"},
         ]}
         slim = slim_mapping_data(raw)
-        rules = {f["target_column"]: f["transform_rule"] for f in slim["field_mappings"]}
-        assert rules["flag"] == "数据加工"  # 错标归位
-        assert rules["del_flag"] == "赋值"  # 平凡字面量不动
+        assert all(f["transform_rule"] == "赋值" for f in slim["field_mappings"])
 
     def test_trivial_forms_all_kept(self):
         from preprocess import slim_mapping_data
@@ -1102,3 +1106,59 @@ class TestAssignReclassify:
             for i, d in enumerate(trivials)]}
         slim = slim_mapping_data(raw)
         assert all(f["transform_rule"] == "赋值" for f in slim["field_mappings"])
+
+
+class TestCompactAssignWarn:
+    """view 对非标准字面量赋值标 ⚠（designer 第一眼翻译）；标准审计/平凡豁免。"""
+
+    def test_marks_nontrivial_non_audit_only(self):
+        from preprocess import build_compact
+        rs = {"field_mappings": [
+            {"transform_rule": "赋值", "transform_detail": "传参", "target_column": "biz_flag"},
+            {"transform_rule": "赋值", "transform_detail": "'N'", "target_column": "del_flag"},
+            {"transform_rule": "赋值", "transform_detail": "新增时间戳",
+             "target_column": "dw_last_update_date"},
+        ], "source_tables": []}
+        view = build_compact(rs)
+        marks = {}
+        for blk in view.get("direct", []):
+            for row in blk.get("fields", []):
+                marks[row["tgt"]] = "⚠" in row
+        assert marks == {"biz_flag": True, "del_flag": False, "dw_last_update_date": False}
+
+
+class TestAssignSeamNoFalseAliasError:
+    """接缝回归（187a92a 教训：两个模块各自对、组合错）：preprocess 输出喂 precheck——
+    赋值字段（含非标准写法）不因类型被改判而撞"数据加工必须填 source_alias"。"""
+
+    def test_full_forms_pass_precheck(self, monkeypatch):
+        from preprocess import slim_mapping_data
+        from precheck import precheck
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": (_ for _ in ()).throw(ImportError("skip db")))
+        slim = slim_mapping_data({"source_tables": [
+            {"source_schema": "ods", "source_table": "ods_t", "source_alias": "t",
+             "source_table_cn": "测试"}],
+            "field_mappings": [
+                {"source_schema": "ods", "source_table": "ods_t", "source_alias": "t",
+                 "source_column": "id", "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "id", "target_column_cn": "ID", "target_type": "bigint"},
+                {"transform_rule": "赋值", "transform_detail": "传参",
+                 "target_column": "crt_cycle_id", "target_column_cn": "创建周期",
+                 "target_type": "bigint"},
+                {"transform_rule": "赋值",
+                 "transform_detail": "CASE WHEN t.id=1 THEN 'Y' ELSE 'N' END",
+                 "target_column": "flag", "target_column_cn": "标记",
+                 "target_type": "nvarchar(1)"},
+            ]})
+        rs = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_test_f", "cn": "测试"},
+                                  "i_view": {"schema": "dws", "table": "dwb_test_i", "cn": "测试"}}},
+              "source_tables": slim["source_tables"],
+              "field_mappings": slim["field_mappings"],
+              "schedule": {"strategy": "全量调度", "frequency": "T+1",
+                           "incremental_key": "不涉及", "incremental_tables": [], "upstream": []},
+              "_no_rs_mode": True}
+        result = precheck(rs)
+        alias_errs = [e for e in result.errors if "source_alias" in e or "来源别名" in e]
+        assert not alias_errs, alias_errs
+

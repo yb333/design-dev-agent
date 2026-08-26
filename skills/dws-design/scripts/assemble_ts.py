@@ -1214,6 +1214,32 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                 f"检查字段归属：要么把字段挪进本规则 targets，要么把口径挪到归属规则的 logics")
 
     # ============================================================
+    # N35（hard）：赋值字段翻译闸——标'赋值'但映射表达式非标准字面量/参数，且 designer
+    # 没写 field_logics 翻译。错标识别后置到 designer 之后（输入层判不了自然语言：
+    # "当xx条件赋1"的 xx 可能是字段也可能是描述；designer 翻译之后"处理过没有"是
+    # 过程问题，脚本可判）。标准审计字段豁免——语义约定固定，值取模板标准值
+    # （build_field/build_design 已归一，无需 designer 动作）。
+    # ============================================================
+    covered_logics = set()
+    from sql_parse import is_trivial_assign_detail
+    for rule in rules:
+        covered_logics.update((rule.get("field_logics") or {}).keys())
+    for col, fm in field_map.items():
+        if (fm.get("transform_rule") or "").strip() != "赋值":
+            continue
+        detail = str(fm.get("transform_detail") or fm.get("mapping_expression") or "").strip()
+        if is_trivial_assign_detail(detail):
+            continue
+        if col.lower() in STANDARD_AUDIT_NAMES:
+            continue
+        if col in covered_logics:
+            continue
+        vr.add_hard("L1", "N35",
+            f"字段 {col} 标'赋值'但映射表达式不是标准字面量/参数（原文：'{detail}'）——"
+            f"需翻译：在产出规则的 field_logics 写标准口径；无法确定口径（如'传参'未指明参数）"
+            f"→ question 弹源端确认。标准审计字段的值按模板约定处理，无需动作")
+
+    # ============================================================
     # N30（hard/warn）：designer 声明的 joins 引用字段必须真实存在（第4层⓪的产物兜底）。
     # 校验对象是 designer 自己的声明（结构化产物），不是 mapping 原文——先例 N21
     # （distribution_key ∈ 表字段）。存在性查两处：源表查 schema_cache（precheck 连库产出），
@@ -1441,13 +1467,18 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
     elif transform_type == "assign":
         from sql_parse import is_trivial_assign_detail
         _detail = str(field_rec.get("transform_detail") or field_rec.get("mapping_expression") or "").strip()
-        if not is_trivial_assign_detail(_detail):
-            # 兜底（正常被 preprocess 归位；防手工编辑 rs_input 绕过）：错标赋值实为加工
-            # → 当加工处理，detail 作口径底稿，coder 至少看到真实逻辑而不是"固定赋值"
+        _fname = (field_rec.get("target_column") or "").lower()
+        if _fname in STANDARD_AUDIT_TEMPLATE and not is_trivial_assign_detail(_detail):
+            # 标准审计字段语义约定固定（STANDARD_AUDIT_TEMPLATE 即约定）："传参"/"新增时间戳"
+            # 这类非标准写法按模板标准值，不走翻译链——约定即口径
+            design_logic = f"固定赋值 {STANDARD_AUDIT_TEMPLATE[_fname]['default']}"
+        elif not is_trivial_assign_detail(_detail):
+            # 兜底（防线是 N35 校验 error；此处防手工编辑 rs_input 绕过校验）：错标赋值
+            # 实为加工 → 当加工处理，detail 作口径底稿，coder 至少看到真实逻辑而不是"固定赋值"
             transform_type = "aggregate"
             design_logic = f"[加工作业·mapping 原文] {_detail}"
         else:
-            design_logic = "固定赋值"
+            design_logic = f"固定赋值 {_detail}" if _detail else "固定赋值"
     elif transform_type == "direct":
         design_logic = f"直取 {alias}.{source_column}" if alias else f"直取 {source_table}.{source_column}"
     else:
@@ -2028,14 +2059,24 @@ def build_design(decisions, rs_input):
     source_audit_names = {(fm.get("target_column") or "").lower() for fm in source_audit}
 
     audit_fields = {}
-    # 来源提供的审计字段：用来源的类型和默认值
+    # 来源提供的审计字段：用来源的类型和默认值；非标准写法（"传参"/"新增时间戳"等描述）
+    # 按模板标准值——审计语义约定固定，约定即口径
+    from sql_parse import is_trivial_assign_detail
     for fm in source_audit:
         name = (fm.get("target_column") or "").lower()
-        audit_fields[name] = {
-            "type": fm.get("target_type", ""),
-            "default": (fm.get("transform_detail") or fm.get("mapping_expression") or "").strip(),
-            "source": "mapping",  # 标记来自 mapping
-        }
+        _detail = (fm.get("transform_detail") or fm.get("mapping_expression") or "").strip()
+        if name in STANDARD_AUDIT_TEMPLATE and not is_trivial_assign_detail(_detail):
+            audit_fields[name] = {
+                "type": STANDARD_AUDIT_TEMPLATE[name]["type"],
+                "default": STANDARD_AUDIT_TEMPLATE[name]["default"],
+                "source": "mapping",
+            }
+        else:
+            audit_fields[name] = {
+                "type": fm.get("target_type", ""),
+                "default": _detail,
+                "source": "mapping",  # 标记来自 mapping
+            }
     # 来源没提供的审计字段：用标准模板补充
     for name, spec in STANDARD_AUDIT_TEMPLATE.items():
         if name not in source_audit_names:

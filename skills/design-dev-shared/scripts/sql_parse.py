@@ -446,8 +446,10 @@ _ASSIGN_TRIVIAL_KEYWORDS = {"CURRENT_TIMESTAMP", "SYSDATE", "CURRENT_DATE", "NUL
 def is_trivial_assign_detail(detail: str) -> bool:
     """赋值字段的 detail 是否为平凡字面量/变量（'N' / 0 / ${PARAM} / CURRENT_TIMESTAMP / 空）。
 
-    非平凡（CASE WHEN / 函数 / 运算 / 字段引用）= 输入错标（应标数据加工）：
-    preprocess 归位用；assemble_ts build_field 兜底用（防手工编辑 rs_input 绕过归位）。
+    非平凡（CASE WHEN / 函数 / 运算 / 字段引用）= 需要翻译（不是"错标"的语义判定——
+    自然语言在输入层不可判，错标识别后置到 designer 翻译之后）：assemble_ts build_field
+    路由用（非平凡→加工路径，detail 作口径底稿交 coder 翻译）+ N35 校验用（赋值+非平凡
+    +无 designer 翻译 → error）+ build_compact ⚠ 标记用（designer 第一眼翻译）。
     """
     d = (detail or "").strip()
     if not d or d in ("-", "无", "\\"):

@@ -479,6 +479,74 @@ def _codes(vr, layer=None):
     return [info["code"] for info in vr.items if layer is None or info["layer"] == layer]
 
 
+class TestAssignTranslationGate:
+    """N35 赋值翻译闸：错标识别后置到 designer 翻译之后（输入层判不了自然语言——
+    "当xx条件赋1"的 xx 可能是字段也可能是描述），装配层做过程检查：
+    赋值 + 非标准字面量 + designer 没写 field_logics → hard。标准审计字段豁免
+    （语义约定固定，值按 STANDARD_AUDIT_TEMPLATE 归一，无需 designer 动作）。"""
+
+    @staticmethod
+    def _rs_with_assign(detail):
+        return make_rs_input(fields=[
+            {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "a", "target_column_cn": "字段A", "target_type": "varchar(50)",
+             "source_alias": "ht", "remark": ""},
+            {"source_table": "ods_ht_f", "source_column": "", "source_type": "",
+             "transform_rule": "赋值", "transform_detail": detail,
+             "target_column": "flag", "target_column_cn": "标记", "target_type": "varchar(1)",
+             "source_alias": "", "remark": ""},
+        ], has_audit=True)
+
+    @staticmethod
+    def _dec(flag_logic=None):
+        return make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+            "step_type": "full", "target_role": "target",
+            "field_targets": ["a", "flag", "del_flag", "crt_cycle_id",
+                              "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {"flag": flag_logic} if flag_logic else {},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+
+    def test_untranslated_nontrivial_assign_blocked(self):
+        """条件是描述（非字段名）——输入层判不了，但 designer 没翻译就是可判的过程缺失。"""
+        vr = _run(self._dec(), self._rs_with_assign("当订单状态为已完成时赋1，否则赋2"))
+        assert "N35" in _codes(vr)
+        n35 = [i for i in vr.items if i["code"] == "N35"][0]
+        assert n35["level"] == "hard" and n35["layer"] == "L1" and "flag" in n35["msg"]
+
+    def test_translated_assign_passes(self):
+        vr = _run(self._dec("ht.a=1 置 Y 否则 N"),
+                  self._rs_with_assign("CASE WHEN ht.a=1 THEN 'Y' ELSE 'N' END"))
+        assert "N35" not in _codes(vr)
+
+    def test_trivial_assign_passes_without_translation(self):
+        vr = _run(self._dec(), self._rs_with_assign("'N'"))
+        assert "N35" not in _codes(vr)
+
+    def test_standard_audit_exempt_and_normalized(self):
+        """审计字段豁免 N35；非标准写法（"传参"/"新增时间戳"）按模板标准值归一。"""
+        from assemble_ts import build_design, build_field
+        from dws_standards import STANDARD_AUDIT_TEMPLATE
+        rs = make_rs_input(has_audit=True)
+        for fm in rs["field_mappings"]:
+            if fm["target_column"] == "crt_cycle_id":
+                fm["transform_detail"] = "传参"
+            if fm["target_column"] == "dw_last_update_date":
+                fm["transform_detail"] = "新增时间戳"
+        assert "N35" not in _codes(_run(make_design_decisions(), rs))
+        d = build_design(make_design_decisions(), rs)
+        assert d["audit_fields"]["crt_cycle_id"]["default"] == \
+            STANDARD_AUDIT_TEMPLATE["crt_cycle_id"]["default"]
+        assert d["audit_fields"]["dw_last_update_date"]["default"] == "CURRENT_TIMESTAMP"
+        fm_crt = next(fm for fm in rs["field_mappings"] if fm["target_column"] == "crt_cycle_id")
+        f = build_field(fm_crt, None, set())
+        assert f["design_logic"] == \
+            f"固定赋值 {STANDARD_AUDIT_TEMPLATE['crt_cycle_id']['default']}"
+
+
 def _level_of(vr, code):
     """返回某 code 的 level（hard/soft/warn），不存在返回 None。"""
     for info in vr.items:
@@ -1956,10 +2024,10 @@ class TestAssignCarryInAssembly:
         assert ts["rules"]["R0002"]["source_refs"]["del_flag"] == "dwb_test_tmp1.del_flag"
         # R1（产出规则）里仍是赋值语义（fixed）——赋值只发生一次
         r1_by = {f["target_field"]: f for f in ts["tables"]["dwb_test_tmp1"]["fields"]}
-        assert r1_by["del_flag"]["design_logic"] == "固定赋值"
+        assert r1_by["del_flag"]["design_logic"] == "固定赋值 'N'"
 
     def test_mislabeled_assign_falls_back_to_processing(self):
-        """兜底：错标赋值实为加工（手工 rs_input 绕过 preprocess 归位）→ detail 当口径底稿。"""
+        """兜底：错标赋值实为加工（手工 rs_input 绕过 N35 校验）→ detail 当口径底稿。"""
         rs = make_rs_input(fields=[
             {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
              "transform_rule": "直接复制", "transform_detail": "-",
