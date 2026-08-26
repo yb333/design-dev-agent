@@ -9,7 +9,8 @@ UT 预检（快，秒级）：回退 → DDL → SELECT 预检
 agent 分步调用：precheck 通过后再跑 ut_execute.py。
 
 用法:
-  python ut_precheck.py --ts ts.json --select-dir etl/ --ddl-dir ddl/
+  python ut_precheck.py --ts ts.json --etl-dir etl/ --ddl-dir ddl/
+  （--select-dir 为兼容旧名，同义）
   退出码: 0=全通过, 1=有失败, 2=连库/配置错误
 """
 
@@ -80,7 +81,8 @@ def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
 def main():
     parser = argparse.ArgumentParser(description="UT 预检（回退+DDL+SELECT，不写数据）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
-    parser.add_argument("--select-dir", required=True, help="ETL SQL 目录（etl/）")
+    parser.add_argument("--etl-dir", "--select-dir", dest="etl_dir", required=True,
+                        help="ETL SQL 目录（etl/）——统一名 --etl-dir（与 export/opt 族一致），--select-dir 为兼容旧名")
     parser.add_argument("--ddl-dir", required=True, help="DDL 目录（ddl/）")
     parser.add_argument("--db-config", default="", help="db-sources.json 路径")
     parser.add_argument("--source", default="", help="数据源名")
@@ -192,7 +194,7 @@ def main():
                 continue
 
             # SELECT 预检
-            select_sql = read_select(Path(args.select_dir), rule_code)
+            select_sql = read_select(Path(args.etl_dir), rule_code)
             if not select_sql:
                 r_result["status"] = "SKIP"
                 r_result["detail"] = "SELECT文件未找到"

@@ -300,7 +300,7 @@ python SHARED_SCRIPTS/check_db.py --ts {deliver}/ts.json
 ```bash
 python SHARED_SCRIPTS/ut_precheck.py \
   --ts {deliver}/ts.json \
-  --select-dir {deliver}/etl \
+  --etl-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
   --result {deliver}/_internal/ut_precheck_result.json
 ```
@@ -314,7 +314,7 @@ python SHARED_SCRIPTS/ut_precheck.py \
 ```bash
 python SHARED_SCRIPTS/ut_execute.py \
   --ts {deliver}/ts.json \
-  --select-dir {deliver}/etl \
+  --etl-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
   --precheck-result {deliver}/_internal/ut_precheck_result.json \
   --report {deliver}/ut_report.md

@@ -5,7 +5,8 @@ UT 执行（慢，分钟级）：load_mode预处理 → INSERT → UT检查 → 
 在 ut_precheck.py 通过后调用。把 SELECT 结果灌入目标表并做数据质量检查。
 
 用法:
-  python ut_execute.py --ts ts.json --select-dir etl/ --ddl-dir ddl/ --report ut_report.md
+  python ut_execute.py --ts ts.json --etl-dir etl/ --ddl-dir ddl/ --report ut_report.md
+  （--select-dir 为兼容旧名，同义）
   退出码: 0=全通过, 1=有失败, 2=连库/配置错误
 """
 
@@ -121,7 +122,8 @@ def _diagnose_insert_failure(executor, rule: dict, ts: dict, ts_path: Path,
 def main():
     parser = argparse.ArgumentParser(description="UT 执行（INSERT+UT检查，慢操作）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
-    parser.add_argument("--select-dir", required=True, help="ETL SQL 目录（etl/）")
+    parser.add_argument("--etl-dir", "--select-dir", dest="etl_dir", required=True,
+                        help="ETL SQL 目录（etl/）——统一名 --etl-dir（与 export/opt 族一致），--select-dir 为兼容旧名")
     parser.add_argument("--ddl-dir", required=True, help="DDL 目录（ddl/）")
     parser.add_argument("--db-config", default="", help="db-sources.json 路径")
     parser.add_argument("--source", default="", help="数据源名")
@@ -225,7 +227,7 @@ def main():
                 continue
 
             # 读 SELECT
-            select_sql = read_select(Path(args.select_dir), rule_code)
+            select_sql = read_select(Path(args.etl_dir), rule_code)
             if not select_sql:
                 rule_result["status"] = "SKIP"
                 rule_result["detail"] = "SELECT文件未找到"

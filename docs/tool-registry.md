@@ -39,8 +39,8 @@
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
-| `ut_precheck.py` | 快速 UT 预检（DDL 统一部署：回退容忍→建表→I 视图；SELECT 跑通秒级不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
-| `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → **DQ 检查（数据完整时，0 行=通过/非 0 行=告警阻断）** → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ + dq/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **ts.rules + ts.init.rules + ts.dq_rules**（init 先建基线→增量在基线上 merge；prev_failed 跨阶段级联；DQ 只在规则全 PASS 时跑） |
+| `ut_precheck.py` | 快速 UT 预检（DDL 统一部署：回退容忍→建表→I 视图；SELECT 跑通秒级不写数据。`--etl-dir` 统一名，`--select-dir` 兼容旧名） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
+| `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → **DQ 检查（数据完整时，0 行=通过/非 0 行=告警阻断）** → 报告，分钟级。`--etl-dir` 统一名，`--select-dir` 兼容旧名） | 步骤 6b | ts.json + etl/ + ddl/ + dq/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **ts.rules + ts.init.rules + ts.dq_rules**（init 先建基线→增量在基线上 merge；prev_failed 跨阶段级联；DQ 只在规则全 PASS 时跑） |
 | `run_ut.py` | **UT 函数库**（wrap_insert / wrap_write / run_ut_check / **run_dq_checks（DQ 执行：COUNT 判行数+告警采样）** / inject_tablesample / substitute_params / resolve_all_params 等，被 ut_precheck/ut_execute import）。纯函数库无 CLI 入口——UT 执行走 ut_precheck（6a）+ ut_execute（6b）两阶段 | 函数库：ut_precheck/ut_execute 用 | （由调用方读 ts） | 由调用方决定（ut_execute 读 ts.rules + ts.init.rules + ts.dq_rules） |
 | `ut_diagnose.py` | UT 类型转换失败自动诊断（`diagnose_type_error`：圈跨类型字段→探测源表脏值+样例）+ **报错分类 + 关联键嫌疑反查 + 嫌疑报告**（classify_db_error 只认高置信模式宁漏诊不误诊；diagnose_join_suspicion 用 ts joins×schema_cache 列跨大类对；路由建议：有 join 嫌疑退 designer/人禁改类型）。ut_execute 钩子调用；CLI 供复跑（`--ts --rule`） | ut_execute 钩子调用 / designer·coder 复跑 | ts.json → 嫌疑报告文本 | ts.tables[].fields + ts.rules[].joins + ts.rules[].source_tables + `_internal/schema_cache.json` |
 
