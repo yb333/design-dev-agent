@@ -73,6 +73,7 @@ python3 eval-suite/v2/history.py --case X    # 或 --all
 | design 质量 | business_key/规则集/load_mode 契约 + **ts类型vs mapping输入类型** + 默认检查 | designer / 脚本 |
 | code 质量 | **字段覆盖契约（SELECT⊇field_targets，零配置）** + 配置类断言 | coder |
 | golden 命中 | 八维指纹 vs 人审 golden 集合（命中任一即过） | 待人工裁决 |
+| **纪律检查** | **agent 自建脚本绕流程**（白名单外脚本调用+产出目录自建 .py/.sh；diagnose 豁免、-c 豁免）——FAIL 不拦及格 -10，带前因上下文 | agent 绕过流程（修流程堵根因/修案例） |
 
 **checks.yaml 可用键全清单**（写错键名直接报错，防 typo 静默失效）：
 
