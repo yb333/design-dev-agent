@@ -309,15 +309,23 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
             print(f"[重试 {attempt}/3] push 被拒，重新对齐远端再来一轮...")
             print("  丢弃本轮生成的 sync 提交（可再生成）")
 
+        # fetch 先行。对齐目标用 FETCH_HEAD 而非 origin/<分支>：某些克隆配置
+        # （--single-branch / fetch refspec 被改过）下 fetch <分支> 不更新跟踪
+        # 引用，reset 到陈旧引用会把已推内容回退重放（全量差异 + push 永远
+        # non-FF 三轮失败）。FETCH_HEAD 永远是刚 fetch 的真实远端状态。
+        if run_git(["fetch", "origin", cur_branch], cwd=team_repo).returncode != 0:
+            restore_config()
+            fail("fetch 内部远端失败，请检查网络")
+
         # ── 对齐远端：丢一切本地状态（唯一例外：config 已快照）──
         if attempt == 1:
             r = run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True)
             dirty = [l for l in r.stdout.splitlines() if l.strip()]
-            r = run_git(["rev-list", "--count", f"origin/{cur_branch}..HEAD"],
+            r = run_git(["rev-list", "--count", "FETCH_HEAD..HEAD"],
                         cwd=team_repo, capture=True)
             ahead = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
             if ahead > 0:
-                r = run_git(["log", f"origin/{cur_branch}..HEAD", "--format=%s"],
+                r = run_git(["log", "FETCH_HEAD..HEAD", "--format=%s"],
                             cwd=team_repo, capture=True)
                 print(f"  本地有 {ahead} 个领先提交（本地状态不保留），对齐远端:")
                 for s in [l.strip() for l in r.stdout.splitlines() if l.strip()]:
@@ -329,11 +337,8 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
                 if len(dirty) > 10:
                     print(f"    ...（共 {len(dirty)} 个）")
 
-        if run_git(["fetch", "origin", cur_branch], cwd=team_repo).returncode != 0:
-            restore_config()
-            fail("fetch 内部远端失败，请检查网络")
         # 远端新增文件撞本地未跟踪文件的先清掉（以远端为准，不清会挡住 reset）
-        r = run_git(["diff", "--name-only", "--diff-filter=A", "HEAD", f"origin/{cur_branch}"],
+        r = run_git(["diff", "--name-only", "--diff-filter=A", "HEAD", "FETCH_HEAD"],
                     cwd=team_repo, capture=True)
         added = {l.strip().strip('"') for l in r.stdout.splitlines() if l.strip()}
         if added:
@@ -342,10 +347,10 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
             clash = added & {l.strip().strip('"') for l in r.stdout.splitlines() if l.strip()}
             for f in sorted(clash):
                 (team_repo / f).unlink(missing_ok=True)
-        if run_git(["reset", "--hard", f"origin/{cur_branch}"],
+        if run_git(["reset", "--hard", "FETCH_HEAD"],
                    cwd=team_repo).returncode != 0:
             restore_config()
-            fail(f"reset 到 origin/{cur_branch} 失败")
+            fail("reset 到远端最新（FETCH_HEAD）失败")
         restore_config()
 
         # ── mirror 源头内容到我们的条目 ──
