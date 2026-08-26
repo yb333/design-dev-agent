@@ -2,18 +2,16 @@
 """sync_to_team — 一键同步本仓「使用侧」内容到内部仓的 .opencode/
 
 源 = 本仓本地 <SRC_BRANCH> 分支当前内容（用户自己 git pull，工具不 fetch 远端）。
-内部仓只管 .opencode/：其下脏了拦；其余目录不重要，本地改动自动还原
-（以内部远端为准）。结构对齐 install.py：
+内部仓一切本地状态不保留（工作区改动/本地提交/失败遗留一律 reset 对齐远端）；
+唯一例外：config 目录的工作区改动快照保护（用户拷来的内网真实值，随同步提交）。
+结构对齐 install.py：
 
   skills/    → .opencode/skills/     逐 skill 目录镜像（含 design-dev-shared）
   agents/    → .opencode/agents/     *.md 覆盖（不删别人的）
   commands/  → .opencode/commands/   *.md 覆盖（不删别人的）
   四个 config → .opencode/_references/rules/<dws-design-dev>/
-              缺失时从 example 初始化，已有不覆盖（真实配置归内网侧维护）
-
-.opencode/ 是共享目录（别人也有 skill/agent），绝不整目录镜像 / 全量 add。
-多人协作：push 前 pull --rebase；rebase 冲突（有人动了我们的文件）立即退出，
-现场留给人，不自动猜。
+              缺失时从 example 初始化，已有不覆盖（config 以远端为准；
+              要更新 config：拷文件到内网仓该目录下，跑工具即随同步提交）
 
 入口：sync_to_team.sh（开发环境测试）/ sync_to_team.bat（内网 Windows 实际运行），
 两者都是透传参数的薄壳。
@@ -23,14 +21,6 @@
   sync_to_team.sh /path/to/internal/repo         # 指定内部仓路径，本次生效
   sync_to_team.sh --config /path/to/repo         # 保存配置（含其他已生效选项）后退出
   sync_to_team.sh --src-branch 8.12 --team-branch 8.12   # 分支覆盖，本次生效
-  sync_to_team.sh --accept-foreign               # 放行别人对我们路径的改动（见下）
-
-防覆盖（内部仓是多人分支，别人的内容绝不能被静默覆盖）：
-  1. 他人改动检测：上次 sync 提交之后若有别人的提交动过我们管理的路径，
-     拦截并列出明细；人工确认后加 --accept-foreign 才覆盖（不持久化）。
-  2. 镜像删除只针对 git 已跟踪文件——别人放的未跟踪文件绝不碰。
-  3. agents/commands 只覆盖 *.md 不删多余；config 缺失才初始化、已有不覆盖。
-  4. push 前 pull --rebase，冲突时列出冲突文件退出，现场留给人。
 
 配置 ~/.design-dev-agent-sync.conf（优先级：CLI 参数 > 配置文件 > 默认值）：
   TEAM_REPO=/path/to/internal/repo   # 内部仓本地克隆路径（必填）
@@ -146,8 +136,6 @@ def main() -> int:
     parser.add_argument("--config", metavar="TEAM_REPO", help="保存配置（含其他已生效选项）后退出")
     parser.add_argument("--src-branch", help="源仓分支（默认 main）")
     parser.add_argument("--team-branch", help="内部仓分支校验（空=用当前 checkout 分支）")
-    parser.add_argument("--accept-foreign", action="store_true",
-                        help="放行：确认别人对我们路径的改动可被覆盖（不持久化，每次显式传）")
     args = parser.parse_args()
 
     src_repo = Path(__file__).resolve().parent
@@ -181,8 +169,7 @@ def main() -> int:
     print()
 
     with tempfile.TemporaryDirectory(prefix="design-dev-sync-") as tmp:
-        return do_sync(src_repo, Path(tmp), team_repo, src_branch, team_branch,
-                       accept_foreign=args.accept_foreign)
+        return do_sync(src_repo, Path(tmp), team_repo, src_branch, team_branch)
 
 
 def managed_paths(skills: list, agents: list, commands: list, rules_dir: str) -> list:
@@ -232,8 +219,7 @@ def rebase_or_report(team_repo: Path, where: str, managed: list) -> bool:
          f"  处理: git rebase --abort 可放弃本次；人工解决后重跑同步")
 
 
-def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_branch: str,
-            accept_foreign: bool = False) -> int:
+def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_branch: str) -> int:
     # ── Step 1: 读源仓本地分支当前内容（用户自己 pull，工具不 fetch 远端）──
     print(f"[Step 1] 读取源仓本地分支 ({src_branch})...")
     r = run_git(["rev-parse", "--short", src_branch], cwd=src_repo, capture=True)
@@ -311,95 +297,56 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
              "  处理: 在内部仓运行 git checkout 8.12 回到分支后重跑")
     if team_branch and cur_branch != team_branch:
         fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（请手动 checkout）")
-    # 工作区检查只针对我们的条目（脏了拦）；其余一切（含 .opencode 内别人的
-    # skill/agent）不重要：本地改动直接还原（以远端为准），不卡同步。
-    r = run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True)
-    managed_dirty = []
-    has_outside = False
-    for line in r.stdout.splitlines():
-        if not line.strip():
-            continue
-        p = line[3:] if len(line) > 3 else ""
-        p = p.split(" -> ")[-1].strip('"')
-        if any(p == m or p.startswith(m + "/") for m in managed):
-            managed_dirty.append(line)
-        else:
-            has_outside = True
-    if has_outside:
-        # reset 清 staged（含新增），checkout 还原 worktree；残留的 untracked 不碍 pull
-        run_git(["reset", "-q", "HEAD", "--", "."] + excludes, cwd=team_repo)
-        if run_git(["checkout", "HEAD", "--", "."] + excludes,
-                   cwd=team_repo).returncode != 0:
-            fail(f"重置条目外本地改动失败（git checkout HEAD -- . + excludes: {excludes}）")
-        print("  已重置我们条目之外的本地改动（含 .opencode 内别人的内容，以远端为准）")
-    if managed_dirty:
-        detail = "\n".join(f"    {l}" for l in managed_dirty)
-        fail(f"内部仓我们条目内有未提交改动（工具不覆盖未知内容）:\n{detail}\n"
-             f"  请先处理（git status / git diff 查看，提交或还原）后重跑")
-    # 本地领先的提交一律丢弃对齐远端（源头才是唯一权威，内网本地状态不重要：
-    # 上次失败的 sync 遗留、本地折腾的提交一视同仁）。唯一例外：config 目录
-    # 的真实值是内网侧资产（源头里没有），先快照、reset 后写回随本次同步提交。
-    r = run_git(["rev-list", "--count", f"origin/{cur_branch}..HEAD"],
-                cwd=team_repo, capture=True)
-    ahead = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
-    config_snapshot = {}
-    if ahead > 0:
-        r = run_git(["log", f"origin/{cur_branch}..HEAD", "--format=%s"],
-                    cwd=team_repo, capture=True)
-        subjects = [l.strip() for l in r.stdout.splitlines() if l.strip()]
-        print(f"  本地有 {ahead} 个领先提交（内网本地状态不保留，源头为准），对齐远端:")
-        for s in subjects:
-            print(f"    {s}")
-        cfg_rel = next(m for m in managed if m.startswith(".opencode/_references"))
-        cfg_dir = team_repo / cfg_rel
-        if cfg_dir.exists():
-            config_snapshot = {
-                p.relative_to(cfg_dir): p.read_bytes()
-                for p in sorted(cfg_dir.rglob("*")) if p.is_file()
-            }
-        if run_git(["reset", "--hard", f"origin/{cur_branch}"],
-                   cwd=team_repo).returncode != 0:
-            fail(f"reset 到 origin/{cur_branch} 失败")
-    rebase_or_report(team_repo, "Step 2 拉取远端", managed)
+    # 一切本地状态对齐远端（源头+远端双权威，本地全弃：工作区改动、本地提交、
+    # 上次失败的遗留一视同仁）。唯一例外：config 目录的工作区改动先快照、对齐
+    # 后写回——那是用户拷来的内网真实值（源头里没有），随本次同步提交推送。
+    cfg_rel = next(m for m in managed if m.startswith(".opencode/_references"))
+    cfg_dir = team_repo / cfg_rel
+    snapshot = {}
+    if cfg_dir.exists():
+        snapshot = {
+            p.relative_to(cfg_dir): p.read_bytes()
+            for p in sorted(cfg_dir.rglob("*")) if p.is_file()
+        }
 
-    # config 快照写回（reset 可能丢掉本地未推的真实值），并立即提交持久化——
-    # 后续任何拦截退出都不丢真实值；重跑时丢弃逻辑会再次快照带走，幂等。
-    if config_snapshot:
-        cfg_rel = next(m for m in managed if m.startswith(".opencode/_references"))
-        cfg_dir = team_repo / cfg_rel
+    def restore_config():
         restored = 0
-        for rel, data in config_snapshot.items():
+        for rel, data in snapshot.items():
             target = cfg_dir / rel
             if not target.exists() or target.read_bytes() != data:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
                 restored += 1
         if restored:
-            print(f"  config 真实值已保留恢复 {restored} 个文件（随本次同步提交）")
-            run_git(["add", "--", cfg_rel], cwd=team_repo)
-            run_git(["commit", "-m", "chore: config 真实值保留（sync 工具）"], cwd=team_repo)
+            print(f"  config 工作区改动已保留恢复 {restored} 个文件（随本次同步提交）")
 
-    # 他人改动检测：上次 sync 提交之后，我们产出的条目是否被别人的提交动过。
-    # 动过则同步会把他的改动静默覆盖掉（git 无冲突），必须拦下人工确认。
-    # 注意 config 目录不参与：那是内网侧的合法维护点，本就只补缺不覆盖。
-    guard_paths = [m for m in managed if not m.startswith(".opencode/_references")]
-    r = run_git(["log", "-1", "--format=%H", "--grep=^sync:\\ design-dev-agent@"],
+    r = run_git(["status", "--porcelain", "-uno"], cwd=team_repo, capture=True)
+    dirty = [l for l in r.stdout.splitlines() if l.strip()]
+    r = run_git(["rev-list", "--count", f"origin/{cur_branch}..HEAD"],
                 cwd=team_repo, capture=True)
-    last_sync = r.stdout.strip()
-    if last_sync:
-        r = run_git(["log", f"{last_sync}..HEAD", "--oneline", "--"] + guard_paths,
+    ahead = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
+    if ahead > 0:
+        r = run_git(["log", f"origin/{cur_branch}..HEAD", "--format=%s"],
                     cwd=team_repo, capture=True)
-        foreign = [l.strip() for l in r.stdout.splitlines() if l.strip()]
-        if foreign:
-            detail = "\n".join(f"    {f}" for f in foreign)
-            if not accept_foreign:
-                fail(f"上次同步后有别人的提交改动过我们管理的文件（同步会覆盖这些改动）:\n{detail}\n"
-                     f"  确认可覆盖后重跑并加 --accept-foreign；或先人工合并这些改动")
-            print("  [WARN] 检测到别人对我们路径的改动，已 --accept-foreign 放行覆盖:")
-            for f in foreign:
-                print(f"    {f}")
-    else:
-        print("  （未找到上次同步基线，跳过他人改动检测——首次同步属正常）")
+        print(f"  本地有 {ahead} 个领先提交（本地状态不保留），对齐远端:")
+        for s in [l.strip() for l in r.stdout.splitlines() if l.strip()]:
+            print(f"    {s}")
+    if dirty:
+        print(f"  本地有 {len(dirty)} 个工作区改动（本地状态不保留），对齐远端:")
+        for l in dirty[:10]:
+            print(f"    {l}")
+        if len(dirty) > 10:
+            print(f"    ...（共 {len(dirty)} 个）")
+
+    # fetch（不碰工作区）→ reset 对齐远端 → 恢复 config（恢复物不再阻碍任何 git 操作）
+    if run_git(["fetch", "origin", cur_branch], cwd=team_repo).returncode != 0:
+        restore_config()
+        fail("fetch 内部远端失败，请检查网络")
+    if run_git(["reset", "--hard", f"origin/{cur_branch}"],
+               cwd=team_repo).returncode != 0:
+        restore_config()
+        fail(f"reset 到 origin/{cur_branch} 失败")
+    restore_config()
     print()
 
     # ── Step 3: 逐条目同步到 .opencode/（共享目录：只动自己的条目）──
