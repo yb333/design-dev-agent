@@ -83,6 +83,30 @@ class TestDiscoverRealCases:
         assert len(cases) == 1
         assert cases[0].category == "未分类"
 
+    def test_golden_count_in_tag(self, tmp_path, monkeypatch):
+        """golden 存量进状态标记：✓golden×N / ✗golden（对照目标可见）。"""
+        _make_real_input(tmp_path / "cases_real", "增量合并", "dwb_x")
+        g = tmp_path / "cases_real" / "增量合并" / "dwb_x" / "golden"
+        (g / "方案A").mkdir(parents=True)
+        (g / "方案A" / "ts.json").write_text("{}", encoding="utf-8")
+        (g / "方案B").mkdir()
+        (g / "方案B" / "ts.json").write_text("{}", encoding="utf-8")
+        (g / "坏方案").mkdir()  # 无 ts.json 不算
+        _make_deliver(tmp_path, "dwb_x")
+        monkeypatch.setattr(menu, "DELIVER_BASE", tmp_path)
+        monkeypatch.setattr(menu, "CASES_REAL_DIR", tmp_path / "cases_real")
+        cases = menu._discover_real_cases()
+        assert cases[0].golden_count == 2
+        assert "✓golden×2" in cases[0].status_tag
+
+    def test_no_golden_shows_missing(self, tmp_path, monkeypatch):
+        _make_real_input(tmp_path / "cases_real", "增量合并", "dwb_x")
+        _make_deliver(tmp_path, "dwb_x")
+        monkeypatch.setattr(menu, "DELIVER_BASE", tmp_path)
+        monkeypatch.setattr(menu, "CASES_REAL_DIR", tmp_path / "cases_real")
+        cases = menu._discover_real_cases()
+        assert "✗golden" in cases[0].status_tag
+
     def test_placed_without_mapping_carries_category(self, tmp_path, monkeypatch):
         """目录在分类下但没 mapping（seed 后 mv 过去）→ category=分类名，✗输入。
 

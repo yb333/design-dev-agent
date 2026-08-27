@@ -117,6 +117,7 @@ class CaseInfo:
     input_dir: Path | None  # cases_real/{分类}/{资产}/，有 mapping.xlsx 才算，否则 None
     has_deliver: bool  # 10_project_deliver/{资产}/ddlc_design_dev/ts.json 存在
     has_checks: bool  # cases_real/{分类}/{资产}/checks.yaml 存在
+    golden_count: int = 0  # golden/{方案}/ 方案数（对照目标存量；0=未沉淀，评分打折）
 
     @property
     def status_tag(self) -> str:
@@ -126,6 +127,7 @@ class CaseInfo:
         tags.append("✓产出" if self.has_deliver else "✗产出")
         if self.has_checks:
             tags.append("✓要点")
+        tags.append(f"✓golden×{self.golden_count}" if self.golden_count else "✗golden")
         return " ".join(tags)
 
 
@@ -154,6 +156,15 @@ def _discover_real_cases() -> list[CaseInfo]:
     # 产出目录：10_project_deliver/（平铺或 {appid}/{schema} 三层，统一扫描）
     deliver_assets = scan_deliver_assets(DELIVER_BASE)  # {资产名: ddlc_design_dev}
 
+    def _golden_count(case_dir: Path | None) -> int:
+        """golden/{方案}/ 方案数（子目录含 ts.json 才算，与 golden.load_goldens 同口径）。"""
+        if not case_dir:
+            return 0
+        gdir = case_dir / "golden"
+        if not gdir.exists():
+            return 0
+        return sum(1 for g in gdir.iterdir() if g.is_dir() and (g / "ts.json").exists())
+
     all_names = sorted(set(placed_cases) | set(deliver_assets))
     infos = []
     for n in all_names:
@@ -167,6 +178,7 @@ def _discover_real_cases() -> list[CaseInfo]:
                 input_dir=dir_for_cat if has_mapping else None,
                 has_deliver=n in deliver_assets,
                 has_checks=has_checks,
+                golden_count=_golden_count(dir_for_cat),
             )
         )
     return infos
