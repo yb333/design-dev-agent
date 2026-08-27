@@ -673,6 +673,17 @@ class TestLogicRefs:
         assert all(w not in b for w in ("case", "when", "sum", "null", "end", "then"))  # 噪音词不进
         # 未命中登记处的英文词不管（中文/数字天然不参与）
 
+    def test_find_unqualified_refs_pure_syntax(self):
+        """N36 守门原语：纯语法零漏报（不依赖登记处）——限定/引号/${}/函数/类型词/单字母豁免。"""
+        from sql_parse import find_unqualified_refs
+        assert find_unqualified_refs("a.del_flag、u.delete_flag 均为 N 或空") == []
+        assert find_unqualified_refs("a.del_flag 和 delete_flag 为 N") == ["delete_flag"]
+        # 引号串（值）、${参数}、函数调用、SQL 类型词不参与
+        assert find_unqualified_refs(
+            "CASE WHEN x=1 THEN 'Y' ELSE 'N' END，cast(amt as int8)，dt<${P}") == ["amt", "dt"]
+        assert find_unqualified_refs("返回 n 否则 y") == []  # 单字母豁免
+        assert find_unqualified_refs("按 coalesce(x, 0) 与 to_char(a.dt,'yyyymmdd') 处理") == []
+
     def test_diff_detects_dropped_reference(self):
         from sql_parse import diff_logic_refs
         # 原文引用集是实例形态（与 view refs 同粒度），diff 投影到列名比较

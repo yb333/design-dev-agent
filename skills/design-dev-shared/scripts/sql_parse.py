@@ -475,6 +475,47 @@ def extract_logic_refs(text: str, registry_cols) -> tuple:
     return qualified, sorted(bare_hits)
 
 
+# SQL 类型名（有限封闭集，不是引用）：语法检查的排除词（int8/timestamptz 等 GaussDB 族）
+_SQL_TYPE_WORDS = {
+    "int", "int2", "int4", "int8", "int16", "integer", "smallint", "bigint",
+    "numeric", "decimal", "dec", "number", "float", "float4", "float8", "real",
+    "double", "precision", "varchar", "nvarchar", "char", "bpchar", "text",
+    "date", "datetime", "time", "timestamp", "timestamptz", "timetz",
+    "boolean", "bool", "bytea", "blob", "clob", "interval", "json",
+}
+
+
+def find_unqualified_refs(text: str) -> list:
+    """产出口径的纯语法检查：未限定的英文标识符（零漏报，不依赖任何登记处）。
+
+    设计产出形态契约的守门原语：design_logic 里字段引用必须'别名.字段'——
+    这是"产出 100% 可结构化解析"的实现方式（限定形态的提取是确定性动作）。
+    剥离 ${...} 参数段与引号串（值不是引用）；'别名.字段' 的两部分不算裸；
+    函数调用形态（后跟'('）不算；噪音词/函数名/SQL 类型词不算；单字母豁免
+    （'N'/'Y' 值在中文行文里常不带引号，真字段名几乎不会单字母）。
+    语义边界：中文提字段（不写英文名）机器不可见——归闸口人审，不假装能拦。
+    """
+    s = re.sub(r'\$\{[^}]*\}', ' ', text or "")
+    s = re.sub(r"'[^']*'", " ", s)
+    s = re.sub(r'"[^"]*"', " ", s)
+    out = set()
+    for m in re.finditer(r'(?<![\w.])([A-Za-z_]\w*)', s):
+        w = m.group(1)
+        rest = s[m.end():]
+        # 程序化判定（不走 lookahead——贪婪匹配遇负向断言会回溯截词，cast( 被截成 cas）
+        if rest.startswith("."):
+            continue  # '别名.' 的别名位（限定引用的限定符）
+        if rest.lstrip().startswith("("):
+            continue  # 函数调用形态（字段引用不会紧跟括号）
+        if len(w) == 1:
+            continue  # 'N'/'Y' 值在行文里常不带引号；真字段名几乎不单字母
+        wl = w.lower()
+        if w.upper() in _LOGIC_NOISE_WORDS or wl in _SQL_TYPE_WORDS:
+            continue
+        out.add(wl)
+    return sorted(out)
+
+
 def diff_logic_refs(raw_refs, logic_texts) -> list:
     """对账：原文引用集（实例形态 "a.del_flag"/裸 "delete_flag" 混排，与 view refs
     同粒度）- design_logic 引用列名集 → 疑似翻译丢引用（列名级比较）。

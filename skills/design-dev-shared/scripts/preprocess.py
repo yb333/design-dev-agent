@@ -1109,7 +1109,7 @@ def validate_target_table(rs_schema: str, rs_table: str,
     return final_schema, final_table, errors, warnings
 
 
-def build_compact(rs_input: dict[str, Any], cache_tables=None) -> dict[str, Any]:
+def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     """从 field_mappings 生成分块紧凑视图（给 designer 读）。
 
     三段结构，各服务一种认知粒度：
@@ -1127,9 +1127,9 @@ def build_compact(rs_input: dict[str, Any], cache_tables=None) -> dict[str, Any]
     source_tables = rs_input.get("source_tables", [])
     from sql_parse import is_trivial_assign_detail, extract_logic_refs
     from dws_standards import STANDARD_AUDIT_NAMES
-    # 引用提示的登记处（列名全集 + 列名→别名集合）：mapping 列名 ∪ schema_cache 源表列
-    # （precheck 连库后 sync view 时带 cache，裸引用归属才完整）
-    _reg_cols, _col_alias = _registry_context(fms, source_tables, cache_tables)
+    # 引用提示的事实基础：mapping 列名（尽力而为）+ 列名→别名集合（只陈述事实，
+    # 不猜归属——未限定字段归属哪个表是 designer 的判断）
+    _reg_cols, _col_alias = _registry_context(fms, source_tables)
 
     # ① 表级清单
     table_list = []
@@ -1227,15 +1227,15 @@ def build_compact(rs_input: dict[str, Any], cache_tables=None) -> dict[str, Any]
         detail = f0.get("transform_detail", "") or f0.get("mapping_expression", "")
         if detail and detail not in ("-", "无", ""):
             entry["logic"] = detail
-            # 引用提示：伪代码的引用骨架 + 裸引用疑似归属（designer 翻译时对照，
-            # 省自己翻 rs_input 查证——识别与支持分离，呈现不拦截）
+            # 引用提示（只陈述事实，不猜归属）：限定引用原样 + 未限定词中性列示
+            # （多表同名是可判事实→标注；单表归属不猜——那是 designer 的判断）
             _q, _b = extract_logic_refs(detail, _reg_cols)
             if _q or _b:
                 _hints = sorted({f"{a}.{c}" for a, c in _q})
                 for _col in _b:
-                    _als = sorted(_col_alias.get(_col, []))
-                    _hints.append(f"{_col}→{_als[0]}.{_col}?" if len(_als) == 1
-                                  else f"{_col}（多表同名，需限定）")
+                    _n = len(_col_alias.get(_col, []))
+                    _hints.append(f"{_col}（未限定，归属自定）" if _n <= 1
+                                  else f"{_col}（未限定，多表有此列名）")
                 entry["refs"] = _hints
         proc_section.append(entry)
 
@@ -1326,12 +1326,12 @@ def _schedule_with_defaults(schedule: dict) -> dict:
     return result
 
 
-def _registry_context(fms, source_tables, cache_tables=None):
-    """裸引用判定/归属提示的登记处：mapping 列名 ∪ schema_cache 源表列。
+def _registry_context(fms, source_tables):
+    """原文裸引用判定的事实基础（确定性，尽力而为）：mapping 列名 + 列名→别名集合。
 
-    mapping 列名对引用字段常不全（加工逻辑引用的字段只是源表的列，常没有自己的
-    mapping 行）——preprocess 首算只有 mapping 列名，precheck 连库后带 cache 重算
-    才完整。返回 (reg_cols, col_alias)。cache_tables={"schema.table": {col,...}}。
+    登记处=mapping 列名（引用字段常无自己的行——只是源表的列，提取是尽力而为，
+    门禁不依赖它）；col_alias 只陈述"该列名出现在哪些别名"的事实，归属判断归
+    designer（脚本不猜表）。返回 (reg_cols, col_alias)。
     """
     reg_cols = {(fm.get("source_column") or "").strip().lower()
                 for fm in fms if (fm.get("source_column") or "").strip()}
@@ -1341,26 +1341,18 @@ def _registry_context(fms, source_tables, cache_tables=None):
         _a = (f.get("source_alias") or "").strip()
         if _c and _a:
             col_alias.setdefault(_c, set()).add(_a)
-    for st in source_tables or []:
-        _key = f"{(st.get('source_schema') or '').lower()}.{(st.get('source_table') or '').lower()}"
-        _alias = (st.get("source_alias") or "").strip()
-        for _c in ((cache_tables or {}).get(_key) or set()):
-            _c = _c.lower()
-            reg_cols.add(_c)
-            if _alias:
-                col_alias.setdefault(_c, set()).add(_alias)
     return reg_cols, col_alias
 
 
-def compute_logic_refs(fms, source_tables, cache_tables=None) -> dict:
-    """加工字段 → 原文引用实例集（_logic_refs 的唯一算子）。
+def compute_logic_refs(fms, source_tables) -> dict:
+    """加工字段 → 原文引用实例集（_logic_refs 的唯一算子，尽力而为）。
 
-    preprocess 首算（无 cache，登记处=mapping 列名）+ precheck 连库后带 cache 重算
-    （登记处补全源表列全集）——两轮同算子，幂等。实例形态 "a.del_flag"/裸 "delete_flag"
-    混排（与 view refs 同粒度）。
+    登记处=mapping 列名（引用字段常无自己的行——裸引用提不全，这是输入侧的
+    诚实边界；N37 完整性对账因此定位为增益提示，门禁可靠性不依赖它）。
+    实例形态 "a.del_flag"/裸 "delete_flag" 混排（与 view refs 同粒度）。
     """
     from sql_parse import extract_logic_refs
-    reg_cols, _ = _registry_context(fms, source_tables, cache_tables)
+    reg_cols, _ = _registry_context(fms, source_tables)
     out = {}
     for fm in fms:
         if (fm.get("transform_rule") or "").strip() != "数据加工":

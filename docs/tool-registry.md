@@ -18,7 +18,7 @@
 ### 预处理 / 输入校验（住 design-dev-shared）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
-| `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本；含加工字段 `_raw_refs` 引用列名提取——对账A 原料）+ rs_input_view.json（compact，给 designer；processed 段含 refs 引用提示） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
+| `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本；含加工字段引用提取存顶层 `_logic_refs`（尽力而为，引用门禁 N37 原料））+ rs_input_view.json（compact，给 designer；processed 段含 refs 引用提示） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
 | `precheck.py` | 输入完整性 + **连库类型检查**（pg_catalog 批量查，24h schema 缓存）+ 类型风险决策骨架 + **关联键类型对账**（join_condition × schema_cache，跨大类→JOIN_TYPE_RISK_PENDING 三选决策：转换/改关联键/接受，双侧采样证据，宁放过不误报） | 步骤 1 | rs_input.json → precheck_report.md / `_internal/schema_cache.json` / `_internal/type_risk_decision.yaml` / `_internal/join_type_decision.yaml`（决策回写 rs_input._join_type_risks/_join_type_decisions） | 不读 ts |
 | `fill_type_risk_decision.py` | 把人的类型风险决策填进 precheck 的骨架（免手写嵌套 YAML） | 步骤 1 | 决策参数 → 改 type_risk_decision.yaml | 不读 ts |
 | `fill_join_risk_decision.py` | 把人的关联键类型决策填进 precheck 的骨架（--pair-decisions '条件=>处置'，免手写 YAML；与类型风险同轮全爆一次问完） | 步骤 1 | 决策参数 → 改 join_type_decision.yaml | 不读 ts |

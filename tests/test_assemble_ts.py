@@ -516,11 +516,18 @@ class TestRefSkeleton:
     def test_fully_qualified_and_covered_passes(self):
         vr = _run(self._dec("a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y"),
                   self._rs())
-        assert "N36" not in _codes(vr) and "N37" not in _codes(vr)
+        assert "N36" not in _codes(vr) and "N37" not in _codes(vr) and "N38" not in _codes(vr)
 
-    def test_bare_reference_hard_blocked(self, tmp_path):
-        """裸引用登记处 = mapping 列名 ∪ schema_cache 源表列（连库常态）——
-        引用字段无 mapping 行也拦得住（真实案例 delete_flag）。"""
+    def test_bare_reference_hard_blocked_without_any_registry(self):
+        """N36 纯语法零漏报：裸标识符即拦，不依赖 cache/登记处（引用字段无 mapping 行
+        也拦得住——真实案例 delete_flag）。"""
+        vr = _run(self._dec("a.del_flag 和 delete_flag 为 N → N"), self._rs())
+        n36 = [i for i in vr.items if i["code"] == "N36"]
+        assert n36 and n36[0]["level"] == "hard" and n36[0]["layer"] == "LG"
+        assert "delete_flag" in n36[0]["msg"] and "格式" in n36[0]["msg"]
+
+    def test_n38_existence_checks_qualified_refs(self, tmp_path):
+        """N38 存在：限定引用查 schema_cache，源表没有即拦（惯例假设字段）。"""
         import json as _json
         cache = tmp_path / "schema_cache.json"
         cache.write_text(_json.dumps({"tables": {
@@ -529,15 +536,15 @@ class TestRefSkeleton:
             encoding="utf-8")
         rs = self._rs()
         field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
-        vr = run_all_validations(self._dec("a.del_flag 和 delete_flag 为 N → N"),
+        vr = run_all_validations(self._dec("a.del_flag、u.start_date 均为 N → N"),
                                  rs, field_map, schema_cache_path=str(cache))
-        n36 = [i for i in vr.items if i["code"] == "N36"]
-        assert n36 and n36[0]["level"] == "hard" and "delete_flag" in n36[0]["msg"]
+        n38 = [i for i in vr.items if i["code"] == "N38" and i["level"] == "hard"]
+        assert any("u.start_date" in i["msg"] for i in n38), [i["msg"] for i in n38]
 
     def test_dropped_reference_warns(self):
         vr = _run(self._dec("a.del_flag 为 N 或空 → N"), self._rs())
         n37 = [i for i in vr.items if i["code"] == "N37"]
-        assert n37 and "delete_flag" in n37[0]["msg"]
+        assert n37 and "delete_flag" in n37[0]["msg"] and n37[0]["layer"] == "LG"
 
     def test_source_fields_completed_from_source_tables(self):
         """补全走 source_tables：引用字段无 mapping 行也能解析表归属——真实案例回归
@@ -2149,8 +2156,8 @@ class TestAssignCarryInAssembly:
         warns = [i for i in vr.items if i["code"] == "N34" and i["level"] == "warn"]
         assert warns and "ghost" in warns[0]["msg"], warns
 
-    def test_n30_checks_design_logic_refs(self, tmp_path):
-        """N30 扩展：design_logic 里的 别名.字段 限定引用也查存在性（SCD2 start_date 假设）。"""
+    def test_n38_gate_checks_design_logic_refs(self, tmp_path):
+        """引用门禁·存在（N38）：design_logic 的限定引用查表（SCD2 start_date 假设案例）。"""
         import json as _json
         rs = make_rs_input(fields=[
             {"source_table": "ods_ht_f", "source_column": "a", "source_type": "varchar(50)",
@@ -2174,8 +2181,9 @@ class TestAssignCarryInAssembly:
         cp.write_text(_json.dumps(cache), encoding="utf-8")
         field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
         vr = run_all_validations(dd, rs, field_map, schema_cache_path=cp)
-        n30 = [i for i in vr.items if i["code"] == "N30" and i["level"] == "hard"]
-        assert any("start_date" in i["msg"] for i in n30), [i["msg"] for i in n30]
+        n38 = [i for i in vr.items if i["code"] == "N38" and i["level"] == "hard"]
+        assert any("start_date" in i["msg"] for i in n38), [i["msg"] for i in n38]
+        assert all(i["layer"] == "LG" for i in n38)
 
 
 class TestCheckField:

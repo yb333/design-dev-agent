@@ -464,6 +464,7 @@ class ValidationResult:
         ("LA", "累积共建"),
         ("LD", "DQ"),
         ("LI", "初始化设计"),
+        ("LG", "引用门禁"),
     ]
 
     def __init__(self):
@@ -1240,59 +1241,21 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             f"→ question 弹源端确认。标准审计字段的值按模板约定处理，无需动作")
 
     # ============================================================
-    # N36（hard）/ N37（warn）：口径引用骨架——语义保真整体不可机检，但引用骨架可机检
-    # （丢字段/幻觉字段这类静默丢数据的翻译事故被结构性抓住。真实案例：del_flag 口径
-    # 引用三字段 a.del_flag/delete_flag/u.del_flag，design_logic 只写一个，coder 丢两个）。
-    # N36：design_logic 的源字段引用必须'别名.字段'限定（翻译产物书写契约——裸引用
-    # 无法被 N30 存在性校验、coder 无法定位表、引用提取不可靠）。
-    # N37：mapping 原文引用集（preprocess 提取存顶层 _logic_refs，脚本专用）vs design_logic 引用集
-    # 对账——原文引用了而翻译产物没有 → 疑似丢引用（designer 多出的不报：合法补充，
-    # 幻觉由 N30 拦）。
-    # ============================================================
-    registry_cols = {(fm.get("source_column") or "").strip().lower()
-                     for fm in (rs_input.get("field_mappings") or [])
-                     if (fm.get("source_column") or "").strip()}
-    # 裸引用登记处补 schema_cache 源表列全集（连库常态）：引用字段常没有自己的
-    # mapping 行（只是源表的列），只查 field_mappings 会漏。无 cache 时按 mapping
-    # 列名拦（不认识的裸词不拦——可能是普通英文词，宁放过）。
-    if schema_cache_path is not None:
-        try:
-            _cand = Path(schema_cache_path)
-            if _cand.exists():
-                _cache_tbls = json.loads(_cand.read_text(encoding="utf-8")).get("tables") or {}
-                for _st in rs_input.get("source_tables", []):
-                    _key = f"{(_st.get('source_schema') or '').lower()}.{(_st.get('source_table') or '').lower()}"
-                    registry_cols.update(c.lower() for c in (_cache_tbls.get(_key) or {}))
-        except Exception:
-            pass
-    from sql_parse import extract_logic_refs, diff_logic_refs
-    for rule in rules:
-        code = rule.get("rule_code", "?")
-        for col, text in (rule.get("field_logics") or {}).items():
-            _q, bare = extract_logic_refs(str(text), registry_cols)
-            if bare:
-                vr.add_hard("L1", "N36",
-                    f"规则 {code} 字段 {col} 的 design_logic 有裸字段引用 {bare}——"
-                    f"口径里的源字段引用必须'别名.字段'限定（查归属：rs_input 源表清单"
-                    f"或 check_field；多表同名 question 弹确认），不能只写列名")
-            raw_refs = (rs_input.get("_logic_refs") or {}).get(col) or []
-            if raw_refs:
-                missing = diff_logic_refs(raw_refs, [str(text)])
-                if missing:
-                    vr.add_warn("L1", "N37",
-                        f"规则 {code} 字段 {col}：mapping 原文引用了 {missing}，"
-                        f"design_logic 未出现——翻译疑似丢引用，对照原文口径补全")
-
-    # ============================================================
-    # N30（hard/warn）：designer 声明的 joins 引用字段必须真实存在（第4层⓪的产物兜底）。
-    # 校验对象是 designer 自己的声明（结构化产物），不是 mapping 原文——先例 N21
-    # （distribution_key ∈ 表字段）。存在性查两处：源表查 schema_cache（precheck 连库产出），
-    # tmp 表查产出规则的 field_targets。降误报：别名解析不了/表不在缓存 → 跳过不猜；
-    # 无 cache 文件 → 整体降为单条 warn（未连库）。专抓 rn=1 类：条件里"裸字段 = 字面量"
-    # （无别名前缀）在规则涉及的表里都查无 → 开窗残留。
+    # 引用门禁（LG）：加工字段的引用来源字段——格式/存在/完整三查一道门。
+    # 事件本质：mapping 加工逻辑是人话，输入侧只尽力而为（_logic_refs/view refs 是
+    # 增益提示）；designer 是唯一语义推理环节（**未限定字段的表归属是他的判断，
+    # 脚本不猜**）；交卷后的产出必须 100% 可结构化解析（引用一律'别名.字段'——
+    # 限定形态的提取是确定性动作），此门保证输出完整、结构、正确。
+    #   N36 格式（hard）：design_logic 有未限定英文标识符 → 拦（纯语法零漏报，
+    #     不依赖登记处；剥引号串/${}，噪音词/函数/SQL类型词/单字母豁免；中文提
+    #     字段机器不可见——语义边界，归闸口①人审）
+    #   N38 存在（hard）：限定的口径引用查表——源表查 schema_cache，tmp 查
+    #     field_targets；无 cache 降单条 warn（未连库）
+    #   N37 完整（warn）：与 mapping 原文提取的引用集对差——尽力而为增益，
+    #     门禁可靠性不依赖它
     # ============================================================
     any_joins_declared = any(rule.get("joins") for rule in rules)
-    # 别名 → schema.table（rs_input 全局源表别名；N30 解析 + N31/N32 绑定校验共用）
+    # 别名 → schema.table（rs_input 全局源表别名；门禁/N30/N31 共用）
     alias_map = {}
     for st in rs_input.get("source_tables") or []:
         al = (st.get("source_alias") or "").strip().lower()
@@ -1314,6 +1277,65 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     cache_tables[k.lower()] = {c.lower() for c in (v or {})}
         except Exception:
             cache_tables = {}
+
+    from sql_parse import extract_logic_refs, diff_logic_refs, find_unqualified_refs
+    has_logic_refs = any(extract_logic_refs(str(t), set())[0]
+                         for rule in rules for t in (rule.get("field_logics") or {}).values())
+    if has_logic_refs and schema_cache_path is not None and not cache_tables:
+        vr.add_warn("LG", "N38",
+            "加工字段口径有限定引用但未连库无 schema_cache——引用存在性未校验"
+            "（闸口①人工确认：口径里每个 别名.字段 要在表里真实存在）")
+    _rs_arg = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        rule_tmp_alias = _rule_tmp_aliases(rule)
+        for col, text in (rule.get("field_logics") or {}).items():
+            text = str(text)
+            # 【格式】未限定标识符（纯语法）
+            bare_ids = find_unqualified_refs(text)
+            if bare_ids:
+                vr.add_hard("LG", "N36",
+                    f"【引用门禁·格式】规则 {code} 字段 {col} 的 design_logic 有未限定标识符 "
+                    f"{bare_ids}——口径里的字段引用必须'别名.字段'（未限定字段归属哪个表是"
+                    f"设计判断，脚本不猜；查 rs_input 源表清单或 check_field，多表同名"
+                    f" question 弹确认）")
+            # 【存在】限定引用查表（源表 cache / tmp field_targets）
+            if cache_tables:
+                for al, c in extract_logic_refs(text, set())[0]:
+                    if al in alias_map:
+                        tbl_key = alias_map[al]
+                        fields = cache_tables.get(tbl_key)
+                        if fields is not None and c not in fields:
+                            vr.add_hard("LG", "N38",
+                                f"【引用门禁·存在】规则 {code} 字段 {col} 的口径引用 {al}.{c}，"
+                                f"源表 {tbl_key} 里没有字段 '{c}'——检查拼写或确认表"
+                                f"\n先查证（下次写前）: python skills/dws-design/scripts/check_field.py "
+                                f"{_rs_arg} --field {al}.{c}")
+                    elif al in rule_tmp_alias:
+                        tbl_key = rule_tmp_alias[al]
+                        if c not in tmp_fields.get(tbl_key, set()):
+                            vr.add_hard("LG", "N38",
+                                f"【引用门禁·存在】规则 {code} 字段 {col} 的口径引用 {al}.{c}，"
+                                f"中间表 {tbl_key} 的 field_targets 里没有 '{c}'——补 targets 或改拼写")
+                    # 别名两头都解析不了 → 跳过不猜（宁放过；无绑定别名归 N32 提示域）
+            # 【完整】与原文对差（尽力而为）
+            raw_refs = (rs_input.get("_logic_refs") or {}).get(col) or []
+            if raw_refs:
+                missing = diff_logic_refs(raw_refs, [text])
+                if missing:
+                    vr.add_warn("LG", "N37",
+                        f"【引用门禁·完整】规则 {code} 字段 {col}：mapping 原文引用了 {missing}，"
+                        f"design_logic 未出现——翻译疑似丢引用（原文提取尽力而为，供参考），"
+                        f"对照原文口径补全")
+
+    # ============================================================
+    # N30（hard/warn）：designer 声明的关联引用（joins 条件/规则 filter/join_safety
+    # 的 join_filter）必须真实存在（第4层⓪的产物兜底）。校验对象是结构化声明不是
+    # mapping 原文——先例 N21。存在性查 schema_cache（源表）/field_targets（tmp）；
+    # 别名解析不了 → 跳过不猜；无 cache → 单条 warn。专抓 rn=1 类开窗残留
+    # （条件里"裸字段 = 字面量"在涉及表里都查无）。加工字段口径引用的存在性
+    # 在引用门禁（LG/N38），此处不重复查。
+    # ============================================================
     if any_joins_declared and schema_cache_path is not None and not cache_tables:
         vr.add_warn("L4", "N30",
             "声明了 joins 但未连库无 schema_cache——关联条件引用字段的存在性未校验"
@@ -1325,14 +1347,12 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             code = rule.get("rule_code", "?")
             # 规则级 tmp 别名绑定（reads 对象形式声明；字符串形式默认别名=表短名）
             rule_tmp_alias = _rule_tmp_aliases(rule)
-            # 待查文本：join 条件 + 规则级 filter + design_logic（designer 声明的产物——
-            # 口径里的 别名.字段 限定引用也查存在性，专抓"业界惯例假设字段名"如 SCD2 的
-            # start_date；裸词不查，中文混排误报不可控）
+            # 待查文本：join 条件 + 规则级 filter + join_safety.join_filter
+            # （design_logic 的口径引用归引用门禁 LG/N38，此处不重复查）
             texts = [((j.get("condition") or "").strip()) for j in rule.get("joins") or []]
             _flt = (rule.get("filter") or "").strip()
             if _flt:
                 texts.append(_flt)
-            texts += [str(v) for v in (rule.get("field_logics") or {}).values() if v]
             # join_safety 的限定条件（如 is_current = 1）也是 designer 声明的引用载体
             texts += [str(js.get("join_filter") or "").strip()
                       for js in rule.get("join_safety") or [] if isinstance(js, dict)]

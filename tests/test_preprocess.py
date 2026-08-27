@@ -1127,9 +1127,10 @@ class TestRawRefs:
         view = build_compact(rsi)
         assert "_logic_refs" not in json.dumps(view, ensure_ascii=False)
 
-    def test_compute_logic_refs_cache_completes_bare_hits(self):
-        """真实缺口回归：裸引用字段无 mapping 行——首算（mapping 列名登记处）漏提，
-        precheck 连库后带 schema_cache 重算才补全（delete_flag 案例）。"""
+    def test_compute_logic_refs_honest_boundary(self):
+        """输入侧尽力而为的诚实边界：裸引用字段无 mapping 行 → 首算漏提（登记处=
+        mapping 列名）。门禁不依赖它——designer 翻译时认出该字段（N36 语法门禁逼限定，
+        N38 查存在），少的只是提前提醒。"""
         from preprocess import compute_logic_refs
         fms = [
             {"target_column": "id", "transform_rule": "直接复制", "transform_detail": "-",
@@ -1140,27 +1141,8 @@ class TestRawRefs:
         ]
         sts = [{"source_schema": "ods", "source_table": "ods_a", "source_alias": "a"},
                {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u"}]
-        cache = {"ods.ods_a": {"id", "del_flag"}, "ods.ods_u": {"delete_flag", "del_flag"}}
-        # 首算：delete_flag 无 mapping 行 → 裸命中登记处失败，漏提（降精度不报错）
+        # delete_flag 无 mapping 行 → 漏提；限定引用 a./u.del_flag 照提（N37 靠这条抓翻译丢失）
         assert compute_logic_refs(fms, sts) == {"flag": ["a.del_flag", "u.del_flag"]}
-        # 带 cache 重算：源表列全集补齐登记处 → 三实例齐
-        assert compute_logic_refs(fms, sts, cache) == {
-            "flag": ["a.del_flag", "delete_flag", "u.del_flag"]}
-
-    def test_compact_refs_hint_with_cache_ownership(self):
-        """view refs 带 cache 时裸引用归属完整（无 mapping 行也能提示 delete_flag→u?）。"""
-        from preprocess import build_compact
-        fms = [
-            {"target_column": "flag", "transform_rule": "数据加工",
-             "transform_detail": "当 a.del_flag 和 delete_flag 都为 n 或空时返回 n",
-             "source_alias": "a", "source_column": "del_flag", "target_type": "char(1)"},
-        ]
-        sts = [{"source_schema": "ods", "source_table": "ods_a", "source_alias": "a"},
-               {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u"}]
-        cache = {"ods.ods_a": {"del_flag"}, "ods.ods_u": {"delete_flag", "del_flag"}}
-        view = build_compact({"field_mappings": fms, "source_tables": sts}, cache_tables=cache)
-        proc = [e for e in view.get("processed", []) if e.get("tgt") == "flag"][0]
-        assert any("delete_flag→u.delete_flag?" in h for h in proc.get("refs", [])), proc.get("refs")
 
     def test_compact_refs_hint_with_bare_ownership(self):
         from preprocess import build_rs_input, build_compact
@@ -1168,8 +1150,8 @@ class TestRawRefs:
         view = build_compact(rsi)
         proc = [e for e in view.get("processed", []) if e.get("tgt") == "flag"][0]
         hints = proc.get("refs", [])
-        # 限定引用原样 + 裸引用 delete_flag 唯一归属 u 表 → 疑似归属提示
-        assert hints == ["a.del_flag", "u.del_flag", "delete_flag→u.delete_flag?"], hints
+        # 限定引用原样 + 未限定词中性列示（归属是 designer 的判断，脚本不猜表）
+        assert hints == ["a.del_flag", "u.del_flag", "delete_flag（未限定，归属自定）"], hints
 
     def test_compact_refs_hint_multi_alias_bare(self):
         """裸 token 多表同名 → 提示需限定（designer 翻译时补归属，N36 兜底硬拦）。"""
@@ -1180,8 +1162,8 @@ class TestRawRefs:
         view = build_compact(rsi)
         proc = [e for e in view.get("processed", []) if e.get("tgt") == "flag"][0]
         hints = proc.get("refs", [])
-        assert any("del_flag（多表同名，需限定）" in h for h in hints), hints
-        assert any("delete_flag→u.delete_flag?" in h for h in hints), hints
+        assert any("del_flag（未限定，多表有此列名）" in h for h in hints), hints
+        assert any("delete_flag（未限定，归属自定）" in h for h in hints), hints
 
 
 
