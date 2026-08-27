@@ -24,6 +24,9 @@ import json
 import argparse
 from pathlib import Path
 
+# shared 库（ts_compat 等）自洽引用：相对路径推算 design-dev-shared（与 check_sql 同款）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+
 try:
     import yaml
 except ImportError:
