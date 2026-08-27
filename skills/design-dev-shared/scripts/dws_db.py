@@ -244,10 +244,8 @@ class PsycopgExecutor(DBExecutor):
     """
 
     def __init__(self, config_path: str, source_name: str = "", role: str = "etl"):
-        if psycopg2 is None:
-            raise ImportError(
-                "psycopg2 未安装。请运行: pip install psycopg2-binary"
-            )
+        # 配置校验先行（源不存在/没配 default 这类错误不需要驱动就能判）；
+        # psycopg2 检查在真正建连时（_get_conn）——错误优先级：配置错 > 驱动缺
         self._config_path = config_path
         self._sources, self._default, self._security, self._schema_mapping = load_db_sources(config_path)
 
@@ -295,6 +293,10 @@ class PsycopgExecutor(DBExecutor):
         return params
 
     def _get_conn(self):
+        if psycopg2 is None:
+            raise ImportError(
+                "psycopg2 未安装。请运行: pip install psycopg2-binary"
+            )
         """获取数据库连接（复用实例缓存的连接，避免每次建连开销）"""
         if self._conn is None or self._conn.closed:
             self._conn = psycopg2.connect(**self._get_conn_params())
