@@ -1818,7 +1818,7 @@ class TestAssemblyFieldLineage:
              "grain": {"input": "中间", "output": "目标", "change": "无"}},
         ])
         ts, _, _ = do_assemble(rs, dd)
-        assert "cx.b" in ts["rules"]["R0002"]["fields"]["direct"]  # join 进来的真源表（同名直取省 AS）
+        assert "cx.b AS b" in ts["rules"]["R0002"]["fields"]["direct"]  # join 进来的真源表（一律带 AS）
         assert any(d.startswith("tmp1.a") for d in ts["rules"]["R0002"]["fields"]["direct"])  # ht 血缘仍搬运
 
     def test_multi_tmp_lineage_precision(self):
@@ -1852,8 +1852,8 @@ class TestAssemblyFieldLineage:
         ])
         ts, _, _ = do_assemble(rs, dd)
         direct = ts["rules"]["R0003"]["fields"]["direct"]
-        assert "tmp_a.a" in direct, direct
-        assert "tmp_b.p" in direct, direct
+        assert "tmp_a.a AS a" in direct, direct
+        assert "tmp_b.p AS p" in direct, direct
 
     def test_explicit_logic_wins(self):
         """designer 显式写了 logic → 原样使用（可用自己的 tmp 别名口径 t1.a）。"""
@@ -1920,13 +1920,13 @@ class TestReadsAliasForm:
         assert pseudo and pseudo[0]["alias"] == "t1"
         by_name = {f["target_field"] for f in ts["tables"]["dwb_test_f"]["fields"]}
         assert "a" in by_name
-        assert "t1.a" in r2["fields"]["direct"], r2["fields"]["direct"]
+        assert "t1.a AS a" in r2["fields"]["direct"], r2["fields"]["direct"]
 
     def test_string_form_default_alias(self):
         """字符串形式 reads：别名默认=表短名（向后兼容）。"""
         rs, dd = self._two_step(["dws.tmp1"])
         ts, _, _ = do_assemble(rs, dd)
-        assert "tmp1.a" in ts["rules"]["R0002"]["fields"]["direct"]
+        assert "tmp1.a AS a" in ts["rules"]["R0002"]["fields"]["direct"]
 
 
 class TestAliasBindingValidation:
@@ -2025,8 +2025,8 @@ class TestAccumulateFieldUnion:
         ts, _, _ = do_assemble(rs, dd)
         field_names = {f["target_field"] for f in ts["tables"]["tmp_c"]["fields"]}
         assert {"x", "y"} <= field_names, f"accumulate 并集丢字段: {field_names}"
-        assert "ta.x" in ts["rules"]["R0001"]["fields"]["direct"]
-        assert "tb.y" in ts["rules"]["R0002"]["fields"]["direct"]
+        assert "ta.x AS x" in ts["rules"]["R0001"]["fields"]["direct"]
+        assert "tb.y AS y" in ts["rules"]["R0002"]["fields"]["direct"]
 
 
 class TestTmpNaming:
@@ -2091,7 +2091,7 @@ class TestAssignCarryInAssembly:
         ])
         ts, _, _ = do_assemble(rs, dd)
         # 赋值类审计字段：R2 = tmp 搬运（direct 桶）；R1 产出规则 = assign（赋值只发生一次）
-        assert "dwb_test_tmp1.del_flag" in ts["rules"]["R0002"]["fields"]["direct"]
+        assert "dwb_test_tmp1.del_flag AS del_flag" in ts["rules"]["R0002"]["fields"]["direct"]
         r1_assign = {e["target"]: e for e in ts["rules"]["R0001"]["fields"]["assign"]}
         assert r1_assign["del_flag"]["value"] == "'N'"
         # tables 两侧都有该列（纯元数据三键）

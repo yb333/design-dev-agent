@@ -164,13 +164,13 @@
       //   processed 优先看（要写表达式的：designer 口径/类型转换/兜底，refs=完整血缘）
       //   assign 固定值（审计3条每规则自动补 + 业务赋值；del_flag 与业务加工同构——
       //     产出规则 assign/processed、搬运规则 direct）
-      //   direct 一把贴（一行一串 "alias.col [AS target]"，同名省 AS，串即完整血缘）
+      //   direct 一把贴（一行一串 "alias.col AS target"，一律带 AS 粘贴零加工，串即完整血缘）
       // designer 输入接口 = design_decisions.field_logics，装配展开成桶；
       // field_logics/source_refs 不落 ts（无双写）
       "fields": {
         "processed": [ { "target": "", "logic": "", "refs": [""] } ],
         "assign":    [ { "target": "", "value": "" } ],
-        "direct":    [ "" ]
+        "direct":    [ "" ]   // 如 "t.order_no AS order_no"（同名也带 AS）
       }
     }
   },

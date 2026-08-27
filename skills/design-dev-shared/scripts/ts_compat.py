@@ -5,7 +5,7 @@
 - tables = 纯表元数据（字段名/类型/注释 + 物理属性），DDL 唯一源
 - rules.fields = 加工三桶 {processed:[{target,logic,refs}], assign:[{target,value}],
   direct:["a.col AS x"]}——coder 唯一消费源；桶名即分类（无细分 transform_type）
-桶判据 = coder 对该字段是粘贴还是写表达式；直取串即完整血缘（同名省 AS）。
+桶判据 = coder 对该字段是粘贴还是写表达式；直取串一律带 AS（粘贴零加工），串即完整血缘。
 旧结构（tables.fields 带加工语义 + rules 带 field_logics/source_refs）由
 normalize_ts 内存升级，opt 读存量 baseline 等场景用。
 """
@@ -23,7 +23,7 @@ def slim_field(f: dict) -> dict:
 def classify_field(f: dict, logic_override: str = None):
     """字段对象（build_field 产物 / 旧 ts 字段，同形态）→ (tables条目, 桶名, 桶条目)。
 
-    - direct 有源 → direct 串 "alias.col [AS target]"（col==target 省 AS）
+    - direct 有源 → direct 串 "alias.col AS target"（一律带 AS，同名也写）
     - assign → {"target", "value"}（value 从"固定赋值 X"提取，否则用 design_logic 原文）
     - 其余（加工 / 无源直取的自建与占位）→ processed {"target","logic","refs"}
       （refs = source_fields 的 "alias.field" 串列表 = 完整血缘）
@@ -50,7 +50,9 @@ def classify_field(f: dict, logic_override: str = None):
         col = (s0.get("field") or "").strip()
         if col:
             ref = f"{alias}.{col}" if alias else col
-            return slim_field(f), "direct", (ref if col == target else f"{ref} AS {target}")
+            # 一律带 AS（coder 规范：输出字段必须显式命名，check_sql 靠 AS 对账——
+            # 同名也写，粘贴零加工）
+            return slim_field(f), "direct", f"{ref} AS {target}"
     if tt == "assign":
         v = str(logic)
         if v.startswith("固定赋值 "):

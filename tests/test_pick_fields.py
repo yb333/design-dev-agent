@@ -18,7 +18,8 @@ def _sliced(fields=None, sources=None):
             "assign": [{"target": "crt_cycle_id", "value": "'${P_CYCLE_ID}'"},
                        {"target": "dw_last_update_date", "value": "CURRENT_TIMESTAMP"},
                        {"target": "del_flag", "value": "'N'"}],
-            "direct": ["t.contract_no", "t.cust_id AS user_id", "u.delete_flag"],
+            "direct": ["t.contract_no AS contract_no", "t.cust_id AS user_id",
+                       "u.delete_flag AS delete_flag"],
         },
         "source_tables": sources or [
             {"schema": "ods", "table": "ods_a", "alias": "t"},
@@ -49,7 +50,7 @@ class TestQueryList:
 class TestQueryAlias:
     def test_returns_pasteable_lines(self):
         out = query_alias(_sliced(), "t")
-        assert "t.contract_no," in out and "t.cust_id AS user_id," in out
+        assert "t.contract_no AS contract_no," in out and "t.cust_id AS user_id," in out
         assert "u.delete_flag" not in out  # 别名隔离
 
     def test_unknown_alias_hints(self):
@@ -73,6 +74,7 @@ class TestQueryField:
 
     def test_direct_shows_line(self):
         assert "t.cust_id AS user_id" in query_field(_sliced(), "user_id")
+        assert "t.contract_no AS contract_no" in query_field(_sliced(), "contract_no")  # 同名也带 AS
 
     def test_case_insensitive(self):
         assert "汇总" in query_field(_sliced(), "TOTAL_AMT")
