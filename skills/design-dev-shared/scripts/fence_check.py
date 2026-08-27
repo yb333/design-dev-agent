@@ -36,7 +36,8 @@ from typing import Dict, List, Optional, Tuple
 SUPPORTED_CHANGE_TYPES = {"add_field"}
 
 # 落位规则允许变化的槽位（除白名单外的一切 aspect 差异 = 越界）
-RULE_MUTABLE_SLOTS = {"field_targets", "joins", "join_safety", "field_logics", "source_tables"}
+# fields 桶（两视图结构）替代 field_logics：桶内容只许为声明字段补 processed 条目
+RULE_MUTABLE_SLOTS = {"field_targets", "joins", "join_safety", "fields", "source_tables"}
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +176,26 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
                 removed = set(old or []) - set(new or [])
                 if removed:
                     over(f"[围栏][规则] {code}.field_targets 丢失存量字段 {sorted(removed)}")
-            elif aspect == "field_logics":
-                added = set(new or {}) - set(old or {})
-                bad = added - declared_fields
+            elif aspect == "fields":
+                # 两视图桶：只许为声明字段新增 processed/assign/direct 条目，存量条目冻结
+                def _bucket_index(b):
+                    out = {}
+                    for kind in ("processed", "assign", "direct"):
+                        for e in (b or {}).get(kind, []):
+                            t = e.get("target") if isinstance(e, dict) else None
+                            if t:
+                                out.setdefault(t, set()).add(kind)
+                    return out
+                old_ix, new_ix = _bucket_index(old), _bucket_index(new)
+                bad = set(new_ix) - set(old_ix) - declared_fields
                 if bad:
-                    over(f"[围栏][规则] {code}.field_logics 增加了未声明字段的口径 {sorted(bad)}")
+                    over(f"[围栏][规则] {code}.fields 增加了未声明字段的条目 {sorted(bad)}")
+                gone = set(old_ix) - set(new_ix)
+                if gone:
+                    over(f"[围栏][规则] {code}.fields 丢失存量字段条目 {sorted(gone)}")
+                for t in set(old_ix) & set(new_ix):
+                    if old_ix[t] != new_ix[t]:
+                        over(f"[围栏][规则] {code}.fields.{t} 桶归属被改 {old_ix[t]}→{new_ix[t]}")
             elif aspect == "joins":
                 # ts 规则 joins 以别名为身份（表归属由 source_tables 承载）
                 old_al = {j.get("alias", "") for j in (old or [])}
@@ -270,7 +286,9 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
 
 
 def check(baseline: dict, v2: dict, change_request: dict) -> List[dict]:
-    """围栏入口：按 change_type 分发矩阵。"""
+    """围栏入口：按 change_type 分发矩阵（两侧先归一到两视图结构再比，幂等）。"""
+    from ts_compat import normalize_ts
+    baseline, v2 = normalize_ts(baseline), normalize_ts(v2)
     ctype = (v2.get("change") or change_request).get("change_type", "")
     if ctype not in SUPPORTED_CHANGE_TYPES:
         return [{"type": "unsupported",

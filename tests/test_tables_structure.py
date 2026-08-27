@@ -89,17 +89,23 @@ class TestTablesGeneration:
         all_fields = ts["tables"]["dwb_test_f"]["fields"]
         business_fields = [f for f in all_fields if f["target_field"] in ("a", "b")]
         assert len(business_fields) == 2
-        # rules 没有 fields，有 field_targets
-        assert "fields" not in ts["rules"]["R0001"]
-        assert "field_targets" in ts["rules"]["R0001"]
-        assert set(ts["rules"]["R0001"]["field_targets"]) == {"a", "b"}
+        # tables.fields 是三键纯元数据（无加工语义键）
+        for f in all_fields:
+            assert set(f.keys()) == {"target_field", "field_type", "field_comment"}
+        # rules 有 fields 三桶 + field_targets 投影；无 field_logics/source_refs
+        r1 = ts["rules"]["R0001"]
+        assert set(r1["fields"].keys()) == {"processed", "assign", "direct"}
+        assert "field_logics" not in r1 and "source_refs" not in r1
+        assert set(r1["field_targets"]) == {"a", "b"}
 
-    def test_field_logics_stay_in_rules(self):
-        """加工口径留在 rules 的 field_logics"""
+    def test_designer_logic_in_processed_bucket(self):
+        """designer 口径落 rules.fields.processed（field_logics 不落 ts）"""
         rs = _make_rs_input(["a", "b"])
         dec = _make_decisions([("R0001", "dwb_test_f", ["a", "b"], {"b": "汇总求和"})])
         ts, _, _ = assemble_ts(rs, dec)
-        assert ts["rules"]["R0001"]["field_logics"]["b"] == "汇总求和"
+        proc = {e["target"]: e for e in ts["rules"]["R0001"]["fields"]["processed"]}
+        assert proc["b"]["logic"] == "汇总求和"
+        assert "field_logics" not in ts["rules"]["R0001"]
 
     def test_distribution_key_per_table(self):
         """per-table 分布键（decisions.tables 声明）"""

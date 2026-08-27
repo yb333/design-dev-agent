@@ -417,28 +417,29 @@ def build_target_fields(ts: dict) -> list[list]:
     字段来源优先级：tables[target_table].fields → rule.fields（旧格式兼容）。
     规则编码 = ts 规则码（占位符，与 RULE 行对应）。
     """
-    rules = ts.get("rules", {})
-    tables = ts.get("tables", {})
+    from ts_compat import normalize_ts
+    rules = normalize_ts(ts).get("rules", {})
     rows = []
     for code, rule in rules.items():
-        # 字段来源：优先 tables 段
-        target_tbl = rule.get("target_table", "")
-        target_short = target_tbl.rsplit(".", 1)[-1] if "." in target_tbl else target_tbl
-        tbl_fields = tables.get(target_short, {}).get("fields", [])
-        fields = tbl_fields if tbl_fields else rule.get("fields", [])
+        fields = rule.get("fields") or {}
+        # 三桶展开为 (target, 源列名) 对；来源列取首个引用/直取列（登记形态固定
+        # s.字段——s 是平台标准别名，与规则 SQL 内表别名无关）；赋值/无源留空
+        pairs = []
+        for _p in fields.get("processed", []):
+            refs = _p.get("refs") or []
+            first = str(refs[0]).rsplit(".", 1)[-1].strip() if refs else ""
+            pairs.append((_p.get("target", ""), first))
+        for _a in fields.get("assign", []):
+            pairs.append((_a.get("target", ""), ""))
+        for _d in fields.get("direct", []):
+            _base = str(_d).split(" AS ")[0].strip()
+            _t = str(_d).rsplit(" AS ", 1)[-1].strip() if " AS " in str(_d) else _base.rsplit(".", 1)[-1].strip()
+            pairs.append((_t, _base.rsplit(".", 1)[-1].strip()))
 
-        for field in fields:
-            target_field = field.get("target_field", "")
+        for target_field, col in pairs:
             if not target_field or target_field.lower() in AUDIT_FIELDS:
                 continue
-            # 来源字段：取 source_fields 第一个；登记形态固定 s.字段（s 是平台
-            # 标准别名，与该规则 SQL 内表别名无关）；无源（表达式派生）留空
-            source_fields = field.get("source_fields", [])
-            src_field = ""
-            if source_fields:
-                f = source_fields[0].get("field", "")
-                if f:
-                    src_field = f"s.{f}"
+            src_field = f"s.{col}" if col else ""
             rows.append([
                 code,               # 规则编码（占位 = ts 规则码）
                 target_field,       # 目标字段名称

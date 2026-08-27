@@ -35,14 +35,13 @@ def ts_data():
 
 class TestSliceTs:
     def test_slice_existing_rule(self, ts_data):
-        """切片存在的规则"""
+        """切片存在的规则：fields 是三桶（processed/assign/direct）"""
         from slice_ts import slice_rule
         result = slice_rule(ts_data, "R0001")
         assert result["rule_code"] == "R0001"
         assert result["target_table"] != ""
-        assert len(result["fields"]) > 0
+        assert set(result["fields"].keys()) == {"processed", "assign", "direct"}
         assert "_global" in result
-        assert "audit_fields" in result["_global"]
 
     def test_slice_nonexistent_rule(self, ts_data):
         """切片不存在的规则应报错"""
@@ -50,88 +49,30 @@ class TestSliceTs:
         with pytest.raises(ValueError, match="不存在"):
             slice_rule(ts_data, "R9999")
 
-    def test_slice_has_design_logic(self, ts_data):
-        """切片应包含 design_logic"""
+    def test_slice_direct_strings_parseable(self, ts_data):
+        """direct 桶是一行一串（alias.col [AS target]），且 assign 桶含审计赋值"""
         from slice_ts import slice_rule
         result = slice_rule(ts_data, "R0001")
-        for f in result["fields"]:
-            assert "design_logic" in f
+        for d in result["fields"]["direct"]:
+            assert isinstance(d, str) and "." in d
+        assign_targets = {a["target"] for a in result["fields"]["assign"]}
+        assert {"del_flag", "crt_cycle_id", "last_upd_cycle_id",
+                "dw_last_update_date"} & assign_targets, assign_targets
+
+    def test_slice_processed_has_logic(self, ts_data):
+        """processed 桶条目带 logic（designer 口径/兜底）"""
+        from slice_ts import slice_rule
+        result = slice_rule(ts_data, "R0001")
+        for proc in result["fields"]["processed"]:
+            assert "target" in proc and "logic" in proc
 
     def test_slice_has_business_key(self, ts_data):
-        """切片全局信息应包含 business_key"""
+        """切片全局信息应包含 business_key（audit 赋值已进桶，不再单列）"""
         from slice_ts import slice_rule
         result = slice_rule(ts_data, "R0001")
         assert "business_key" in result["_global"]
+        assert "audit_fields" not in result["_global"]
 
-    def test_compact_view_compresses_direct(self, ts_data):
-        """compact 模式：direct 字段压成单行字符串"""
-        from slice_ts import slice_rule, to_compact_view
-        sliced = slice_rule(ts_data, "R0001")
-        compact = to_compact_view(sliced)
-        # direct 字段应在 fields_direct（字符串列表）
-        assert "fields_direct" in compact
-        assert "fields_detail" in compact
-        # compact 不应再有旧的 fields 键
-        assert "fields" not in compact
-        # fields_direct 是字符串列表（每个是一行）
-        for line in compact["fields_direct"]:
-            assert isinstance(line, str)
-            assert " | direct | " in line  # 格式: target | type | direct | alias.src
-
-    def test_compact_keeps_non_direct_detail(self, ts_data):
-        """compact 模式：非 direct 字段完整保留在 fields_detail"""
-        from slice_ts import slice_rule, to_compact_view
-        sliced = slice_rule(ts_data, "R0001")
-        compact = to_compact_view(sliced)
-        # 非 direct 字段（aggregate/assign等）应在 fields_detail 完整
-        for f in compact["fields_detail"]:
-            assert isinstance(f, dict)
-            assert "target_field" in f
-            assert f.get("transform_type") != "direct"
-
-    def test_compact_keeps_rule_info(self, ts_data):
-        """compact 模式：规则信息（joins/grain等）原样保留"""
-        from slice_ts import slice_rule, to_compact_view
-        sliced = slice_rule(ts_data, "R0001")
-        compact = to_compact_view(sliced)
-        for key in ("rule_code", "rule_name", "joins", "join_safety", "grain", "_global"):
-            assert key in compact, f"compact 丢了规则信息: {key}"
-
-    def test_compact_direct_field_format(self, ts_data):
-        """compact 的 direct 行格式: target | type | direct | alias.src"""
-        from slice_ts import _compact_direct_field
-        f = {
-            "target_field": "user_name", "field_type": "varchar(100)",
-            "transform_type": "direct",
-            "source_fields": [{"table": "t1", "field": "user_name", "alias": "t"}],
-        }
-        line = _compact_direct_field(f)
-        assert line == "user_name | varchar(100) | direct | t.user_name"
-
-    def test_compact_direct_field_missing_alias(self, ts_data):
-        """compact 的 direct 字段缺 alias → 用 ? 标记（不崩）"""
-        from slice_ts import _compact_direct_field
-        f = {
-            "target_field": "x", "field_type": "int", "transform_type": "direct",
-            "source_fields": [{"table": "t1", "field": "", "alias": ""}],
-        }
-        line = _compact_direct_field(f)
-        assert "?" in line  # 缺 alias/field → ?
-
-    def test_compact_view_smaller_than_full(self, ts_data):
-        """compact 模式 YAML 体积应小于全量（direct 多时明显）"""
-        import yaml
-        from slice_ts import slice_rule, to_compact_view
-        sliced = slice_rule(ts_data, "R0001")
-        full_yaml = yaml.dump(sliced, allow_unicode=True, default_flow_style=False)
-        compact = to_compact_view(sliced)
-        compact_yaml = yaml.dump(compact, allow_unicode=True, default_flow_style=False)
-        assert len(compact_yaml) <= len(full_yaml)
-
-
-# ============================================================
-# slice_ts.py 的 init 规则查找 + derive clone_source（Chunk 2）
-# ============================================================
 
 class TestSliceInit:
     """slice_rule 对 ts.init.rules 的查找 + derive 切片的 clone_source。"""
@@ -911,40 +852,20 @@ class TestResolveAllParams:
 
 
 class TestSliceNewContract:
-    """切片契约补全：dedup_strategy / filter / data_volume / source_refs。"""
+    """切片契约补全：dedup_strategy / filter / data_volume（source_refs 已由 direct 桶承载）。"""
 
     def test_slice_carries_new_fields(self, ts_data):
-        """切片带 dedup_strategy / filter / source_refs / _global.data_volume。"""
+        """切片带 dedup_strategy / filter / _global.data_volume。"""
         from slice_ts import slice_rule
         r1 = ts_data["rules"]["R0001"]
         r1["dedup_strategy"] = {"target": "tmp_a", "key": ["order_id"],
                                 "priority": "R0001 > R0002", "reason": "A是主数据"}
         r1["filter"] = "ht.del_flag = 'N'"
-        r1["source_refs"] = {"user_name": "oub.user_name"}
         ts_data.setdefault("design", {}).setdefault("complexity_analysis", {})["data_volume"] = "百万级"
         result = slice_rule(ts_data, "R0001")
         assert result["dedup_strategy"]["priority"] == "R0001 > R0002"
         assert result["filter"] == "ht.del_flag = 'N'"
-        assert result["source_refs"]["user_name"] == "oub.user_name"
         assert result["_global"]["data_volume"] == "百万级"
-
-    def test_compact_direct_uses_source_refs(self, ts_data):
-        """compact direct 行的引用优先取 rule 级 source_refs（accumulate 各归各的口径）。"""
-        from slice_ts import slice_rule, to_compact_view
-        r1 = ts_data["rules"]["R0001"]
-        r1["source_refs"] = {}
-        # 给第一个 direct 字段塞一个与 source_fields 不同的 rule 级引用（样例是旧格式，fields 在 rule 里）
-        _tbl = r1.get("target_table", "").rsplit(".", 1)[-1]
-        _fields = ts_data.get("tables", {}).get(_tbl, {}).get("fields") or r1.get("fields", [])
-        for f in _fields:
-            if f.get("transform_type") == "direct":
-                fname = f["target_field"]
-                r1["source_refs"][fname] = "t9." + fname
-                break
-        sliced = slice_rule(ts_data, "R0001")
-        compact = to_compact_view(sliced)
-        hit = [line for line in compact["fields_direct"] if "| t9." in line]
-        assert hit, f"direct 行应使用 source_refs 的引用: {compact['fields_direct'][:3]}"
 
 
 class TestCheckSqlNewGuards:
@@ -965,7 +886,10 @@ class TestCheckSqlNewGuards:
         from check_sql import check_sql
         ts = {"rules": {"R0001": {
             "field_targets": ["f1", "flag"],
-            "field_logics": {"flag": "a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y"},
+            "fields": {"processed": [{"target": "flag",
+                                      "logic": "a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y",
+                                      "refs": ["a.del_flag", "u.delete_flag", "u.del_flag"]}],
+                       "assign": [], "direct": []},
             "source_tables": [{"schema": "ods", "table": "ods_a", "alias": "a"},
                               {"schema": "ods", "table": "ods_u", "alias": "u"}],
         }}, "design": {"audit_fields": {}, "business_key": []}, "tables": {}}

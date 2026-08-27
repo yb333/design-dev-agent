@@ -3,23 +3,56 @@
   "spec_type": "ts",
   "generated_at": "2026-07-30T11:31:48Z",
   "generated_by": "dws-designer",
-
   "meta": {
     "target": {
-      "f_table": { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_any_f", "cn": "合同pu分析表" },
-      "i_view":  { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_any_i", "cn": "合同pu分析视图" }
+      "f_table": {
+        "schema": "fin_dwl_cnb",
+        "table": "dwl_con_pu_any_f",
+        "cn": "合同pu分析表"
+      },
+      "i_view": {
+        "schema": "fin_dwl_cnb",
+        "table": "dwl_con_pu_any_i",
+        "cn": "合同pu分析视图"
+      }
     },
     "grain": "每个合同+pu一行（contract_id, pu_id）",
-    "load_strategy": { "strategy": "overwrite", "label": "全量覆盖", "delete_mode": "1" },
-    "field_count": { "business": 12, "audit": 4, "total": 16 },
-
+    "load_strategy": {
+      "strategy": "overwrite",
+      "label": "全量覆盖",
+      "delete_mode": "1"
+    },
+    "field_count": {
+      "business": 12,
+      "audit": 4,
+      "total": 16
+    },
     "source_tables": [
-      { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_mtr_f", "table_cn": "合同pu指标表", "alias": "t" },
-      { "schema": "fin_dwl_cnb", "table": "dwl_con_any_f",   "table_cn": "合同分析表",   "alias": "f" },
-      { "schema": "fin_dwl_cnb", "table": "dwl_inv_mtr_i",   "table_cn": "发票指标表",   "alias": "inv_mtr" },
-      { "schema": "dwrdim_dw1",  "table": "dwr_dim_pu_d",    "table_cn": "pu维表",       "alias": "pu" }
+      {
+        "schema": "fin_dwl_cnb",
+        "table": "dwl_con_pu_mtr_f",
+        "table_cn": "合同pu指标表",
+        "alias": "t"
+      },
+      {
+        "schema": "fin_dwl_cnb",
+        "table": "dwl_con_any_f",
+        "table_cn": "合同分析表",
+        "alias": "f"
+      },
+      {
+        "schema": "fin_dwl_cnb",
+        "table": "dwl_inv_mtr_i",
+        "table_cn": "发票指标表",
+        "alias": "inv_mtr"
+      },
+      {
+        "schema": "dwrdim_dw1",
+        "table": "dwr_dim_pu_d",
+        "table_cn": "pu维表",
+        "alias": "pu"
+      }
     ],
-
     "schedule": {
       "task_name": "task_dwl_con_pu_any_f",
       "cron": "0 0 1 * * ?",
@@ -27,17 +60,37 @@
       "task_group": "GROUP_SPRD",
       "project": "SRP_DAILY",
       "owner": "zhangsan",
-      "exec_params": { "P_CYCLE_ID": "${批次}" },
+      "exec_params": {
+        "P_CYCLE_ID": "${批次}"
+      },
       "upstream": [
-        { "table": "fin_dwl_cnb.dwl_con_pu_mtr_f", "task": "task_dwl_con_pu_mtr_f", "source": "rs" },
-        { "table": "fin_dwl_cnb.dwl_con_any_f",   "task": "task_dwl_con_any_f",   "source": "rs" },
-        { "table": "fin_dwl_cnb.dwl_inv_mtr_i",   "task": "task_dwl_inv_mtr_i",   "source": "rs" },
-        { "table": "dwrdim_dw1.dwr_dim_pu_d",     "task": "task_dwr_dim_pu_d",    "source": "rs" }
+        {
+          "table": "fin_dwl_cnb.dwl_con_pu_mtr_f",
+          "task": "task_dwl_con_pu_mtr_f",
+          "source": "rs"
+        },
+        {
+          "table": "fin_dwl_cnb.dwl_con_any_f",
+          "task": "task_dwl_con_any_f",
+          "source": "rs"
+        },
+        {
+          "table": "fin_dwl_cnb.dwl_inv_mtr_i",
+          "task": "task_dwl_inv_mtr_i",
+          "source": "rs"
+        },
+        {
+          "table": "dwrdim_dw1.dwr_dim_pu_d",
+          "task": "task_dwr_dim_pu_d",
+          "source": "rs"
+        }
       ],
-      "execution_platform": { "project_code": "SRP_ETL", "datasource": "SRP_DWS" }
+      "execution_platform": {
+        "project_code": "SRP_ETL",
+        "datasource": "SRP_DWS"
+      }
     }
   },
-
   "design": {
     "complexity_analysis": {
       "join_count": 3,
@@ -50,14 +103,28 @@
       "segmentation_reason": "JOIN≤12（3）、聚合后关联=否、复杂关联链≤2；行转列与发票收敛均为单步加工，满足CTE内联条件，不建物理中间表"
     },
     "audit_fields": {
-      "del_flag":            { "type": "nvarchar(1)",                    "default": "'N'" },
-      "crt_cycle_id":        { "type": "bigint",                         "default": "'${P_CYCLE_ID}'" },
-      "last_upd_cycle_id":   { "type": "bigint",                         "default": "'${P_CYCLE_ID}'" },
-      "dw_last_update_date": { "type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP" }
+      "del_flag": {
+        "type": "nvarchar(1)",
+        "default": "'N'"
+      },
+      "crt_cycle_id": {
+        "type": "bigint",
+        "default": "'${P_CYCLE_ID}'"
+      },
+      "last_upd_cycle_id": {
+        "type": "bigint",
+        "default": "'${P_CYCLE_ID}'"
+      },
+      "dw_last_update_date": {
+        "type": "timestamp(0) without time zone",
+        "default": "CURRENT_TIMESTAMP"
+      }
     },
-    "distribution_key": ["contract_id", "pu_id"]
+    "distribution_key": [
+      "contract_id",
+      "pu_id"
+    ]
   },
-
   "rules": {
     "R0001": {
       "rule_name": "合同pu分析表写入",
@@ -66,58 +133,174 @@
       "target_table": "fin_dwl_cnb.dwl_con_pu_any_f",
       "is_view_step": false,
       "design_intent": "主查询：将主表 rpt_code 指标行转列收敛为4个金额列，LEFT JOIN 合同分析表取项目key、收敛后的发票指标表（排除非洲发票）取发票总额、pu维表（取最新有效行）取pu_key，按合同+pu粒度写入分析宽表",
-
       "source_tables": [
-        { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_mtr_f", "alias": "t" },
-        { "schema": "fin_dwl_cnb", "table": "dwl_con_any_f",   "alias": "f" },
-        { "schema": "fin_dwl_cnb", "table": "dwl_inv_mtr_i",   "alias": "inv_mtr" },
-        { "schema": "dwrdim_dw1",  "table": "dwr_dim_pu_d",    "alias": "pu" }
+        {
+          "schema": "fin_dwl_cnb",
+          "table": "dwl_con_pu_mtr_f",
+          "alias": "t"
+        },
+        {
+          "schema": "fin_dwl_cnb",
+          "table": "dwl_con_any_f",
+          "alias": "f"
+        },
+        {
+          "schema": "fin_dwl_cnb",
+          "table": "dwl_inv_mtr_i",
+          "alias": "inv_mtr"
+        },
+        {
+          "schema": "dwrdim_dw1",
+          "table": "dwr_dim_pu_d",
+          "alias": "pu"
+        }
       ],
-
       "ctes": [
         {
           "name": "inv_agg",
           "purpose": "对发票指标表按 contract_id+pu_id 收敛求和（排除非洲发票），产出合同+pu粒度的发票总额，避免JOIN发散",
-          "source_tables": ["fin_dwl_cnb.dwl_inv_mtr_i"]
+          "source_tables": [
+            "fin_dwl_cnb.dwl_inv_mtr_i"
+          ]
         }
       ],
-
       "grain": {
         "input": "(contract_id, pu_id, rpt_code) — 主表每个合同+pu含多行rpt_code指标",
         "output": "(contract_id, pu_id) — rpt_code行转列后收敛为单行",
         "change": "行转列（SUM + CASE WHEN rpt_code）"
       },
-
       "joins": [
-        { "alias": "t",       "type": "main",      "condition": "主表（粒度锚点：合同+pu）" },
-        { "alias": "f",       "type": "LEFT JOIN", "condition": "t.contract_key = f.contract_key" },
-        { "alias": "inv_agg", "type": "LEFT JOIN", "condition": "t.contract_id = inv_agg.contract_id AND t.pu_id = inv_agg.pu_id", "filter": "来源发票排除非洲发票" },
-        { "alias": "pu",      "type": "LEFT JOIN", "condition": "t.pu_id = pu.pu_id", "filter": "取最新有效行" }
+        {
+          "alias": "t",
+          "type": "main",
+          "condition": "主表（粒度锚点：合同+pu）"
+        },
+        {
+          "alias": "f",
+          "type": "LEFT JOIN",
+          "condition": "t.contract_key = f.contract_key"
+        },
+        {
+          "alias": "inv_agg",
+          "type": "LEFT JOIN",
+          "condition": "t.contract_id = inv_agg.contract_id AND t.pu_id = inv_agg.pu_id",
+          "filter": "来源发票排除非洲发票"
+        },
+        {
+          "alias": "pu",
+          "type": "LEFT JOIN",
+          "condition": "t.pu_id = pu.pu_id",
+          "filter": "取最新有效行"
+        }
       ],
-
       "join_safety": [
-        { "table": "dwl_con_any_f", "join_key_unique": true,  "strategy": "直接关联", "reason": "合同分析表按合同粒度，与主表合同键一对一" },
-        { "table": "dwl_inv_mtr_i", "join_key_unique": false, "strategy": "GROUP BY收敛", "reason": "发票指标表含发票维度，按合同+pu不唯一，需先按合同+pu SUM收敛后再关联（同时排除非洲发票）" },
-        { "table": "dwr_dim_pu_d",  "join_key_unique": false, "strategy": "取最新有效行", "reason": "维度表含历史版本，取最新有效行保证唯一" }
+        {
+          "table": "dwl_con_any_f",
+          "join_key_unique": true,
+          "strategy": "直接关联",
+          "reason": "合同分析表按合同粒度，与主表合同键一对一"
+        },
+        {
+          "table": "dwl_inv_mtr_i",
+          "join_key_unique": false,
+          "strategy": "GROUP BY收敛",
+          "reason": "发票指标表含发票维度，按合同+pu不唯一，需先按合同+pu SUM收敛后再关联（同时排除非洲发票）"
+        },
+        {
+          "table": "dwr_dim_pu_d",
+          "join_key_unique": false,
+          "strategy": "取最新有效行",
+          "reason": "维度表含历史版本，取最新有效行保证唯一"
+        }
       ],
-
-      "fields": [
-        { "target_field": "contract_no",       "field_type": "nvarchar(500)",   "field_comment": "合同号",          "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"contract_no","alias":"t"}], "design_logic": "直取主表合同号" },
-        { "target_field": "contract_id",       "field_type": "numeric",         "field_comment": "合同ID",          "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"contract_id","alias":"t"}], "design_logic": "直取主表合同ID" },
-        { "target_field": "pu_id",             "field_type": "numeric",         "field_comment": "puID",            "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"pu_id","alias":"t"}], "design_logic": "直取主表pu ID" },
-        { "target_field": "tc_code",           "field_type": "nvarchar(30)",    "field_comment": "币种代码",        "transform_type": "direct",    "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"currency_code","alias":"t"}], "design_logic": "直取主表币种代码字段，映射为 tc_code" },
-        { "target_field": "equip_org_amt_usd", "field_type": "numeric(38,10)",  "field_comment": "设备订货USD金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_usd","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0001' 对应设备订货，取报表值USD，按合同+pu汇总" },
-        { "target_field": "equip_org_amt_rmb", "field_type": "numeric(38,10)",  "field_comment": "设备订货RMB金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_rmb","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0001' 对应设备订货，取报表值RMB，按合同+pu汇总" },
-        { "target_field": "equip_cfm_amt_rmb", "field_type": "numeric(38,10)",  "field_comment": "设备收入RMB金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_rmb","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0002' 对应设备收入，取报表值RMB，按合同+pu汇总" },
-        { "target_field": "equip_cfm_amt_usd", "field_type": "numeric(38,10)",  "field_comment": "设备收入USD金额", "transform_type": "pivot",     "source_fields": [{"table":"dwl_con_pu_mtr_f","field":"rpt_value_usd","alias":"t"}], "design_logic": "行转列：rpt_code='fbt_0002' 对应设备收入，取报表值USD，按合同+pu汇总" },
-        { "target_field": "proj_key",          "field_type": "numeric",         "field_comment": "项目key",         "transform_type": "direct",    "source_fields": [{"table":"dwl_con_any_f","field":"proj_key","alias":"f"}], "design_logic": "直取合同分析表项目key（经合同键关联）" },
-        { "target_field": "inv_tol_amt_usd",   "field_type": "numeric(38,10)",  "field_comment": "发票总额USD",      "transform_type": "aggregate", "source_fields": [{"table":"dwl_inv_mtr_i","field":"inv_inst_amt_usd","alias":"inv_mtr"}], "design_logic": "对发票指标表发票瞬时金额USD求和，排除非洲发票，按合同+pu收敛后关联" },
-        { "target_field": "inv_tol_amt_rmb",   "field_type": "numeric(38,10)",  "field_comment": "发票总额RMB",      "transform_type": "aggregate", "source_fields": [{"table":"dwl_inv_mtr_i","field":"inv_inst_amt_rmb","alias":"inv_mtr"}], "design_logic": "对发票指标表发票瞬时金额RMB求和，排除非洲发票，按合同+pu收敛后关联" },
-        { "target_field": "pu_key",            "field_type": "numeric",         "field_comment": "pu key",          "transform_type": "direct",    "source_fields": [{"table":"dwr_dim_pu_d","field":"pu_key","alias":"pu"}], "design_logic": "直取pu维表pu_key（取最新有效行）" }
-      ],
-      "field_count": 12
+      "fields": {
+        "processed": [
+          {
+            "target": "equip_org_amt_usd",
+            "logic": "行转列：rpt_code='fbt_0001' 对应设备订货，取报表值USD，按合同+pu汇总",
+            "refs": [
+              "t.rpt_value_usd"
+            ]
+          },
+          {
+            "target": "equip_org_amt_rmb",
+            "logic": "行转列：rpt_code='fbt_0001' 对应设备订货，取报表值RMB，按合同+pu汇总",
+            "refs": [
+              "t.rpt_value_rmb"
+            ]
+          },
+          {
+            "target": "equip_cfm_amt_rmb",
+            "logic": "行转列：rpt_code='fbt_0002' 对应设备收入，取报表值RMB，按合同+pu汇总",
+            "refs": [
+              "t.rpt_value_rmb"
+            ]
+          },
+          {
+            "target": "equip_cfm_amt_usd",
+            "logic": "行转列：rpt_code='fbt_0002' 对应设备收入，取报表值USD，按合同+pu汇总",
+            "refs": [
+              "t.rpt_value_usd"
+            ]
+          },
+          {
+            "target": "inv_tol_amt_usd",
+            "logic": "对发票指标表发票瞬时金额USD求和，排除非洲发票，按合同+pu收敛后关联",
+            "refs": [
+              "inv_mtr.inv_inst_amt_usd"
+            ]
+          },
+          {
+            "target": "inv_tol_amt_rmb",
+            "logic": "对发票指标表发票瞬时金额RMB求和，排除非洲发票，按合同+pu收敛后关联",
+            "refs": [
+              "inv_mtr.inv_inst_amt_rmb"
+            ]
+          }
+        ],
+        "assign": [
+          {
+            "target": "del_flag",
+            "value": "'N'"
+          },
+          {
+            "target": "dw_last_update_date",
+            "value": "CURRENT_TIMESTAMP"
+          },
+          {
+            "target": "last_upd_cycle_id",
+            "value": "'${P_CYCLE_ID}'"
+          },
+          {
+            "target": "crt_cycle_id",
+            "value": "'${P_CYCLE_ID}'"
+          }
+        ],
+        "direct": [
+          "t.contract_no",
+          "t.contract_id",
+          "t.pu_id",
+          "t.currency_code AS tc_code",
+          "f.proj_key",
+          "pu.pu_key"
+        ]
+      },
+      "field_count": 12,
+      "field_targets": [
+        "contract_no",
+        "contract_id",
+        "pu_id",
+        "tc_code",
+        "equip_org_amt_usd",
+        "equip_org_amt_rmb",
+        "equip_cfm_amt_rmb",
+        "equip_cfm_amt_usd",
+        "proj_key",
+        "inv_tol_amt_usd",
+        "inv_tol_amt_rmb",
+        "pu_key"
+      ]
     },
-
     "R0002": {
       "rule_name": "消费视图",
       "scenario": "默认场景",
@@ -126,30 +309,100 @@
       "is_view_step": true,
       "design_intent": "纯视图封装，对外提供统一查询接口。命名规则：目标F表后缀 _f 替换为 _i。I视图为F表镜像（SELECT * FROM ..._f），仅生成DDL，无ETL。",
       "source_tables": [
-        { "schema": "fin_dwl_cnb", "table": "dwl_con_pu_any_f" }
+        {
+          "schema": "fin_dwl_cnb",
+          "table": "dwl_con_pu_any_f"
+        }
       ],
-      "fields": [],
-      "field_count": 0
+      "fields": {
+        "processed": [],
+        "assign": [
+          {
+            "target": "del_flag",
+            "value": "'N'"
+          },
+          {
+            "target": "dw_last_update_date",
+            "value": "CURRENT_TIMESTAMP"
+          },
+          {
+            "target": "last_upd_cycle_id",
+            "value": "'${P_CYCLE_ID}'"
+          },
+          {
+            "target": "crt_cycle_id",
+            "value": "'${P_CYCLE_ID}'"
+          }
+        ],
+        "direct": []
+      },
+      "field_count": 0,
+      "field_targets": []
     }
   },
-
   "data_flow": {
     "tables": [
-      { "schema": "fin_dwl_cnb", "name": "dwl_con_pu_mtr_f", "role": "source", "layer": "DWL" },
-      { "schema": "fin_dwl_cnb", "name": "dwl_con_any_f",   "role": "source", "layer": "DWL" },
-      { "schema": "fin_dwl_cnb", "name": "dwl_inv_mtr_i",   "role": "source", "layer": "DWL" },
-      { "schema": "dwrdim_dw1",  "name": "dwr_dim_pu_d",    "role": "source", "layer": "DIM" },
-      { "schema": "fin_dwl_cnb", "name": "dwl_con_pu_any_f","role": "target", "layer": "DWL" },
-      { "schema": "fin_dwl_cnb", "name": "dwl_con_pu_any_i","role": "target", "layer": "DWL", "is_view": true }
+      {
+        "schema": "fin_dwl_cnb",
+        "name": "dwl_con_pu_mtr_f",
+        "role": "source",
+        "layer": "DWL"
+      },
+      {
+        "schema": "fin_dwl_cnb",
+        "name": "dwl_con_any_f",
+        "role": "source",
+        "layer": "DWL"
+      },
+      {
+        "schema": "fin_dwl_cnb",
+        "name": "dwl_inv_mtr_i",
+        "role": "source",
+        "layer": "DWL"
+      },
+      {
+        "schema": "dwrdim_dw1",
+        "name": "dwr_dim_pu_d",
+        "role": "source",
+        "layer": "DIM"
+      },
+      {
+        "schema": "fin_dwl_cnb",
+        "name": "dwl_con_pu_any_f",
+        "role": "target",
+        "layer": "DWL"
+      },
+      {
+        "schema": "fin_dwl_cnb",
+        "name": "dwl_con_pu_any_i",
+        "role": "target",
+        "layer": "DWL",
+        "is_view": true
+      }
     ],
     "dependencies": [
-      { "from": "R0001", "to": "R0002", "type": "data_flow", "intermediate_table": "fin_dwl_cnb.dwl_con_pu_any_f" }
+      {
+        "from": "R0001",
+        "to": "R0002",
+        "type": "data_flow",
+        "intermediate_table": "fin_dwl_cnb.dwl_con_pu_any_f"
+      }
     ],
     "schedule_groups": [
-      { "sequence": 1, "rules": ["R0001"] },
-      { "sequence": 2, "rules": ["R0002"] }
+      {
+        "sequence": 1,
+        "rules": [
+          "R0001"
+        ]
+      },
+      {
+        "sequence": 2,
+        "rules": [
+          "R0002"
+        ]
+      }
     ]
   },
-
-  "dq_rules": []
+  "dq_rules": [],
+  "tables": {}
 }

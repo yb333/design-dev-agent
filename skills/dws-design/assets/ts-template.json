@@ -112,10 +112,10 @@
   },
 
   // ============================================================================
-  // tables —— ★ 表实体（字段定义 + 物理属性）
+  // tables —— ★ 表元数据（纯表实体：字段名/类型/注释 + 物理属性），DDL 生成的唯一源
   // 每张表（目标F表/中间表）各自定义。I视图不在此（无物理属性，字段=F表镜像）
-  // 字段定义由 assemble_ts.py 从 rs_input 按 rule→target_table 分组自动搬入
-  // 物理属性由 designer 在 design_decisions.tables 里声明（主要是 distribution_key）
+  // 字段全集 = 写该表各规则 fields 桶目标并集 + designer 自建声明 + 审计4列（脚本装配）
+  // 加工语义（口径/分类/血缘）不在 tables——在 rules.fields 三桶（两视图分界）
   // ============================================================================
   "tables": {
     "dwb_xxx_f": {
@@ -125,68 +125,52 @@
       "partition": "",                    // 分区表达式（无则空）
       "storage": "column",                // column | row（默认列存）
       "logical_group": "LC_DW1",          // TO GROUP（默认按 schema 推断）
-      "fields": [                         // 字段定义（脚本从 rs_input 自动搬入）
-        {
-          "target_field": "",             // 字段名
-          "field_type": "",               // 字段类型
-          "field_comment": "",            // 字段中文名
-          "transform_type": "",           // direct(直取) | pivot(行转列) | aggregate(聚合) | assign(赋值)
-          "source_fields": [              // 源字段来源
-            { "table": "", "field": "", "alias": "" }
-          ],
-          "design_logic": ""              // 自然语言口径（直取类由脚本自动生成默认值）
-        }
+      "build_mode": "",                   // 空 | accumulate（多规则累积共建同一表）
+      "fields": [                         // 字段定义（三键纯元数据，脚本装配）
+        { "target_field": "", "field_type": "", "field_comment": "" }
       ]
     }
   },
 
   // ============================================================================
   // rules —— ★ 核心实体:规则集合
-  // 一个规则 = 一条 INSERT = 产出一个表(中间表/目标F表/视图I表)
-  // 场景是规则的属性(scenario 字段),不是独立结构层
-  // 按 rule_code 索引,支持切片读取(coder 一次只取一个规则)
+  // 一个规则 = 一条 INSERT = 产出一个表(中间表/目标F表)。按 rule_code 索引,支持切片
   // ============================================================================
   "rules": {
     "R0001": {
       "rule_name": "",
       "scenario": "",                    // ★ 场景(单场景名 / 多场景合并标记)
       "exec_sequence": 1,                // 执行顺序
-      "target_table": "",                // 产出表(中间表/目标F表/视图I表)
+      "target_table": "",                // 产出表(中间表/目标F表)
       "design_intent": "",               // 该规则的设计意图(自然语言)
-      "load_mode": "truncate_table",     // 写入方式: truncate_table(全量覆盖) | no_delete(追加) | delete(按条件删除) | truncate_partition(分区清空) | merge_into(upsert)
-      "write_condition": "",             // 写入条件(对应平台delete_condition)。merge_into/update填ON条件如"T.id=T1.id"(T=目标表,T1=源);truncate_partition填分区名如"P_1001";delete填删除WHERE如"rule_id>0";truncate_table/no_delete留空。designer填,脚本只搬运+校验
-      "step_type": "full",               // ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。详见 design-guide §4.4
-      "target_role": "target",           // ★ 目标角色: intermediate(中间表,供后续规则消费) | target(目标F表)。决定生命周期和依赖
-      "produces_for": [],                // ★ 本规则产出的中间表供哪些规则消费(rule_code列表)。中间表规则填，如 ["R0003"]
-      "reads": [],                       // ★ 本规则读取哪些中间表(表名列表，DAG用)。装配/merge规则填。tmp别名在 source_tables 伪源表(_from_reads)带出；designer声明用 decisions 的对象形式 {table, alias}
-      "filter": "",                     // 规则级行过滤(WHERE，如 "ht.del_flag = 'N'"——"本来就不要"的行排除；join级限定在 joins[].filter)
-
-      "source_tables": [                 // 该规则关联的源表
+      "load_mode": "truncate_table",     // 写入方式: truncate_table | no_delete | delete | truncate_partition | merge_into
+      "write_condition": "",             // 写入条件(平台delete_condition)。designer填,脚本只搬运+校验
+      "step_type": "full",               // ★ full | aggregate | incremental_extract | merge
+      "target_role": "target",           // ★ intermediate(中间表) | target(目标F表)
+      "produces_for": [],                // ★ 中间表规则填：产出供哪些规则消费
+      "reads": [],                       // ★ 装配/merge规则填：读哪些中间表
+      "filter": "",                      // 规则级行过滤(WHERE)；join级限定在 joins[].filter
+      "source_tables": [                 // 该规则关联的源表（reads 的 tmp 以伪源表 _from_reads 带出别名）
         { "schema": "", "table": "", "alias": "" }
       ],
-
-      // grain —— 输入->输出粒度变化
-      "grain": {
-        "input": "",                     // 输入粒度
-        "output": "",                    // 输出粒度
-        "change": ""                     // 粒度变化说明
-      },
-
-      "joins": [                         // 关联策略
-        { "alias": "", "type": "", "condition": "", "filter": "" }
-      ],
-
-      // join_safety —— 关联安全分析。JOIN键唯一性 -> 对齐策略
+      "grain": { "input": "", "output": "", "change": "" },
+      "joins": [ { "alias": "", "type": "", "condition": "", "filter": "" } ],
       "join_safety": [
         { "table": "", "join_filter": "", "join_key_unique": true, "strategy": "", "reason": "" }
       ],
-
-      // ★ 该规则产出哪些字段（字段名列表，引用 tables 段的字段定义）
-      "field_targets": ["field_a", "field_b"],
-      // ★ 加工口径（仅加工类字段写；直取字段不写，脚本自动填默认）
-      // key=字段名，value=自然语言口径（不含SQL表达式，coder 翻译）
-      "field_logics": {
-        "field_b": "口径描述"
+      "dedup_strategy": {},              // 累积共建排重策略（designer 定，coder 翻译）
+      "field_targets": [],               // 字段名投影（三桶目标并集，派生只读）
+      // ★ fields 三桶——coder 唯一消费源（桶名即分类，无细分 transform_type）：
+      //   processed 优先看（要写表达式的：designer 口径/类型转换/兜底，refs=完整血缘）
+      //   assign 固定值（审计3条每规则自动补 + 业务赋值；del_flag 与业务加工同构——
+      //     产出规则 assign/processed、搬运规则 direct）
+      //   direct 一把贴（一行一串 "alias.col [AS target]"，同名省 AS，串即完整血缘）
+      // designer 输入接口 = design_decisions.field_logics，装配展开成桶；
+      // field_logics/source_refs 不落 ts（无双写）
+      "fields": {
+        "processed": [ { "target": "", "logic": "", "refs": [""] } ],
+        "assign":    [ { "target": "", "value": "" } ],
+        "direct":    [ "" ]
       }
     }
   },

@@ -102,6 +102,10 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
     """
     issues = []
 
+    # 旧结构 ts → 新两视图（幂等；opt 读 baseline 等场景同路径）
+    from ts_compat import normalize_ts
+    ts = normalize_ts(ts)
+
     # 1. 规则存在性
     rules = ts.get("rules", {})
     if rule_code not in rules:
@@ -125,12 +129,20 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
     if not ok:
         issues.append(f"[规范] {msg}")
 
-    # 4. 字段覆盖：SELECT 输出的字段 vs ts.json 定义的目标字段
-    # 字段名来源：优先 rule.field_targets，fallback rule.fields（旧格式兼容）
-    if "field_targets" in rule:
-        ts_fields = {t.lower() for t in rule.get("field_targets", [])}
-    else:
-        ts_fields = {f["target_field"].lower() for f in rule.get("fields", [])}
+    # 4. 字段覆盖：SELECT 输出的字段 vs 规则三桶目标（processed/assign/direct 并集，
+    # 桶里已含审计——不再单查审计缺失）
+    _fields = rule.get("fields") or {}
+    ts_fields = set()
+    for _p in _fields.get("processed", []):
+        if _p.get("target"):
+            ts_fields.add(_p["target"].lower())
+    for _a in _fields.get("assign", []):
+        if _a.get("target"):
+            ts_fields.add(_a["target"].lower())
+    for _d in _fields.get("direct", []):
+        _t = str(_d).rsplit(" AS ", 1)[-1].strip() if " AS " in str(_d) else str(_d).rsplit(".", 1)[-1].strip()
+        if _t:
+            ts_fields.add(_t.lower())
     # 加审计字段
     audit_fields = {k.lower() for k in design.get("audit_fields", {}).keys()}
     # 加业务主键字段（中间表需要带关联键，即使不在 fields 列表里）
@@ -160,20 +172,11 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
     # 有 AS 才能校验字段覆盖；无 AS 报提示（统一 AS 写法便于静态对比）
     if select_aliases:
         missing = ts_fields - select_aliases
-        # 审计字段单独检查（可能 coder 用了不同的 AS 写法）
-        missing_audit = audit_fields - select_aliases
-
         if missing:
             issues.append(
-                f"[字段覆盖] SELECT 缺少字段（ts.json 定义了但 SELECT 没输出），"
+                f"[字段覆盖] SELECT 缺少字段（规则三桶定义了但 SELECT 没输出），"
                 f"共 {len(missing)} 个:\n{_format_field_list(missing)}"
             )
-        if missing_audit:
-            issues.append(
-                f"[字段覆盖] SELECT 缺少审计字段，共 {len(missing_audit)} 个:\n"
-                f"{_format_field_list(missing_audit)}\n（检查是否带了 AS 别名）"
-            )
-
         # SELECT 多出的字段（不在 ts.json 里的）
         extra = select_aliases - ts_all_fields
         if extra:
@@ -294,8 +297,8 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
     from sql_parse import extract_logic_refs
     sql_refs = set(extract_qualified_refs(sql_text))
     missing_refs = set()
-    for _t in (rule.get("field_logics") or {}).values():
-        for _al, _c in extract_logic_refs(str(_t), set())[0]:
+    for _p in ((rule.get("fields") or {}).get("processed") or []):
+        for _al, _c in extract_logic_refs(str(_p.get("logic") or ""), set())[0]:
             if (_al, _c) not in sql_refs:
                 missing_refs.add(f"{_al}.{_c}")
     if missing_refs:

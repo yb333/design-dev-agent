@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from slice_ts import slice_rule, slice_rule_opt, to_compact_view
+from slice_ts import slice_rule, slice_rule_opt
 from assemble_ts_baseline import build_ts_baseline
 from assemble_ts_opt import apply_decisions
 from fence_check import check
@@ -52,10 +52,12 @@ class TestSliceOpt:
         # 常规切片信息也在（coder 要的字段/关联上下文）
         assert "channel_name" in json.dumps(sliced, ensure_ascii=False)
 
-    def test_compact_view_keeps_opt(self, v2):
+    def test_opt_slice_carries_buckets(self, v2):
+        """opt 切片同样直出 fields 三桶（normalize 兜底旧 baseline）。"""
         _, v2_ts = v2
-        view = to_compact_view(slice_rule_opt(v2_ts, "R0002", baseline_sql=B_R2))
-        assert "opt" in view and "baseline_sql" in view["opt"]
+        sliced = slice_rule_opt(v2_ts, "R0002", baseline_sql=B_R2)
+        assert set(sliced["fields"].keys()) == {"processed", "assign", "direct"}
+        assert "opt" in sliced and "baseline_sql" in sliced["opt"]
 
     def test_unplaced_rule_gets_empty_decl(self, v2):
         baseline, v2_ts = v2

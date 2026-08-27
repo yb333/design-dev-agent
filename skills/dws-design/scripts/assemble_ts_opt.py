@@ -82,35 +82,33 @@ def validate_decisions(decisions: dict, ts_baseline: dict) -> None:
 
 def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
     """确定性应用：decisions 说的才落，存量不动。返回 ts_v2（含 change 段）。"""
-    v2 = json.loads(json.dumps(ts_baseline))   # 深拷贝，baseline 不被污染
+    from ts_compat import normalize_ts
+    v2 = normalize_ts(json.loads(json.dumps(ts_baseline)))  # 深拷贝 + 升级两视图（幂等）
     v2["generated_by"] = "assemble_ts_opt"
     change_fields = []
 
     for f in decisions["fields"]:
         fname = f["field"]
         # 1. 目标表 + 中间表字段定义
+        # 新字段按两视图落：tables 三键元数据 + 规则桶（designer 写了口径 → processed）
         def make_field(ttype_comment=True):
             return {
                 "target_field": fname,
                 "field_type": f["field_type"] if ttype_comment else "",
                 "field_comment": f["field_comment"] if ttype_comment else "",
-                "transform_type": f.get("transform_type", "direct"),
-                "source_fields": [{
-                    "table": f.get("source", {}).get("table", ""),
-                    "field": f.get("source", {}).get("field", fname),
-                    "alias": f.get("source", {}).get("alias", ""),
-                }] if f.get("source") else [],
-                "design_logic": f["design_logic"],
             }
         v2["tables"][f["target_table"]]["fields"].append(make_field())
         for t in f.get("intermediate_tables", []):
             v2["tables"][t]["fields"].append(make_field(ttype_comment=False))
 
-        # 2. 落位规则：field_targets / field_logics
+        # 2. 落位规则：field_targets 投影 + fields 桶（design_logic → processed）
         for r in f["placed_rules"]:
             rule = v2["rules"][r]
-            rule["field_targets"] = sorted(set(rule["field_targets"]) | {fname})
-            rule["field_logics"][fname] = f["design_logic"]
+            rule["field_targets"] = sorted(set(rule.get("field_targets") or []) | {fname})
+            _src = f.get("source") or {}
+            _ref = f"{_src.get('alias','')}.{_src.get('field', fname)}".strip(".")
+            rule.setdefault("fields", {"processed": [], "assign": [], "direct": []})["processed"].append(
+                {"target": fname, "logic": f["design_logic"], "refs": [_ref] if _ref else []})
 
         # 3. 新 JOIN：joins / source_tables / join_safety / meta 源表 / data_flow 节点
         for j in f.get("new_joins", []):

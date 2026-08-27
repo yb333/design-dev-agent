@@ -57,27 +57,12 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
     design = ts.get("design", {})
     tables = ts.get("tables", {})
 
-    # 字段来源：tables[target_table].fields，按 field_targets 过滤，合并 field_logics 口径
+    # fields = rule 级三桶（coder 唯一消费源；normalize_ts 把旧结构 ts 升级成同形态）
+    from ts_compat import normalize_ts
+    ts = normalize_ts(ts)
+    fields = rule.get("fields") or {"processed": [], "assign": [], "direct": []}
     target_tbl = rule.get("target_table", "")
     target_short = target_tbl.rsplit(".", 1)[-1] if "." in target_tbl else target_tbl
-    tbl_fields = tables.get(target_short, {}).get("fields", [])
-    field_targets = set(rule.get("field_targets", []))
-    field_logics = rule.get("field_logics", {})
-
-    # 旧格式兼容：如果没有 tables，fallback 到 rule.fields
-    if not tbl_fields and "fields" in rule:
-        slice_fields = rule.get("fields", [])
-    else:
-        # 按该规则的 field_targets 过滤，把 field_logics 口径覆盖进去
-        slice_fields = []
-        for f in tbl_fields:
-            fname = f.get("target_field", "")
-            if fname in field_targets:
-                # 合并口径：field_logics 优先（rule 级口径），其次 field 自带的 design_logic
-                merged = dict(f)
-                if fname in field_logics:
-                    merged["design_logic"] = field_logics[fname]
-                slice_fields.append(merged)
 
     # 分布键从 tables 取，fallback design.distribution_key
     tbl_dist = tables.get(target_short, {}).get("distribution_key", [])
@@ -113,17 +98,13 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
         # 粒度变化
         "grain": rule.get("grain", {}),
 
-        # ★ 字段列表（coder 写 SELECT 的核心依据）
-        # 从 tables 段取字段定义，合并 rule 的 field_logics 口径
-        "fields": slice_fields,
-        # rule 级来源映射（accumulate 同表多规则各归各的来源；direct 行的引用优先用这）
-        "source_refs": rule.get("source_refs", {}),
-        "field_count": len(slice_fields),
+        # ★ 字段三桶（coder 写 SELECT 的核心依据）：processed 优先看 / assign 固定值 / direct 一把贴
+        "fields": fields,
+        "field_count": rule.get("field_count")
+        or sum(len(v) for v in fields.values()),
 
-        # 全局信息（coder 需要参考的）
+        # 全局信息（coder 需要参考的；审计赋值已在 fields.assign 桶里，不再单列）
         "_global": {
-            # 审计字段模板（固定4个，coder 写 SELECT 时要带上审计字段赋值）
-            "audit_fields": design.get("audit_fields", {}),
             # 业务主键（coder 写 GROUP BY 时参考，确保不发散）
             "business_key": design.get("business_key", []),
             # 分布键（本表的，从 tables 段取）
@@ -133,7 +114,7 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
             # 可用参数（coder 在 SELECT 里用 ${PARAM} 引用）
             "exec_params": ts.get("meta", {}).get("schedule", {}).get("exec_params", {}),
             # 数据量级（写法参考：亿级慎用行函数/跨键操作）
-            "data_volume": (design.get("complexity_analysis") or {}).get("data_volume", ""),
+            "data_volume": (ts.get("design", {}).get("complexity_analysis") or {}).get("data_volume", ""),
         },
     }
 
@@ -181,36 +162,6 @@ def _compact_direct_field(f: dict, source_refs: dict = None) -> str:
         else:
             src_ref = "?"
     return f"{target} | {ftype} | direct | {src_ref}"
-
-
-def to_compact_view(sliced: dict) -> dict:
-    """生成 compact 视图（给 coder 读，大规则场景省 70%+ 体积）。
-
-    - direct 字段压成单行字符串，放进 fields_direct 列表（一行一个）
-    - 非 direct 字段（aggregate/assign/其他）完整保留在 fields_detail
-    - 其余规则信息（joins/join_safety/grain 等）原样保留
-
-    注意：assign 审计字段既不在 fields_direct 也不在 fields_detail
-    （它们固定4个，codegen 自动处理，coder 不需要看）。
-    若 assign 字段非审计类，保留在 fields_detail。
-    """
-    fields = sliced.get("fields", [])
-    source_refs = sliced.get("source_refs") or {}
-    direct_compact = []
-    detail = []
-    for f in fields:
-        ttype = f.get("transform_type", "")
-        if ttype == "direct":
-            direct_compact.append(_compact_direct_field(f, source_refs))
-        else:
-            detail.append(f)
-
-    # 拷贝切片，替换 fields 段
-    view = dict(sliced)
-    view["fields_direct"] = direct_compact
-    view["fields_detail"] = detail
-    view.pop("fields", None)
-    return view
 
 
 def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
@@ -274,8 +225,6 @@ def main():
     parser.add_argument("--rule", default="", help="规则编号，如 R0001（与 --dq 二选一）")
     parser.add_argument("--dq", action="store_true", help="切 DQ 规则段（dws-dq 流程用）")
     parser.add_argument("--output", default="", help="输出 YAML 路径（默认打印到 stdout）")
-    parser.add_argument("--verbose", action="store_true",
-                        help="完整模式：direct 字段逐个展开（默认 compact 压一行省 70% 体积；需逐字段细节时用）")
     parser.add_argument("--baseline-sql", default="",
                         help="优化模式：baseline SQL 文件路径（etl_baseline/{rule}.sql）——给定时切优化模式")
     args = parser.parse_args()
@@ -310,8 +259,8 @@ def main():
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # 默认 compact（direct 压行）；--verbose 展开完整字段；DQ 切片直出（无 fields 段）
-    output_data = sliced if (args.verbose or args.dq) else to_compact_view(sliced)
+    # 三桶即原生 compact 形态（direct 本就是一行一串），无需再压
+    output_data = sliced
 
     # 输出
     yaml_text = yaml.dump(output_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
@@ -320,12 +269,11 @@ def main():
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(yaml_text, encoding="utf-8")
-        mode = " [DQ]" if args.dq else ("" if args.verbose else " [compact]")
-        print(f"切片产出: {out}{mode}", file=sys.stderr)
-        if not args.dq:
-            print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
-        else:
+        print(f"切片产出: {out}" + (" [DQ]" if args.dq else ""), file=sys.stderr)
+        if args.dq:
             print(f"DQ 规则数: {len(sliced['dq_rules'])}", file=sys.stderr)
+        else:
+            print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
     else:
         print(yaml_text)
 

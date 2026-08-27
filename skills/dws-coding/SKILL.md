@@ -36,7 +36,7 @@ description: >-
 
 ## 1. 编码的核心任务
 
-把 TS 的某个规则（自然语言口径）转化为 SELECT 语句：
+把 TS 的某个规则（fields 三桶：processed 加工口径 / assign 固定值 / direct 直取串）转化为 SELECT 语句：
 
 > **把 design_logic（自然语言）翻译成 SQL（套规范）——这就是你全部的工作。**
 
@@ -174,10 +174,7 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 
 ## 4. 审计字段（标准4个，从切片 _global 取，所有规则必带）
 
-> **每条规则的 SELECT 都必须带这 4 个审计字段——包括中间表/临时表(tmp)规则。**
-> 原因：`assemble_ddl.py` 会给每张产出表（含 tmp 中间表）追加审计列，
-> 若 SELECT 漏带，会导致 SELECT 列数 < DDL 列数，INSERT 时列不匹配。
-> `_global.audit_fields` 在所有规则切片里都存在，不要因为"这是中间表"就省略。
+> **审计赋值在切片 fields 的 assign 桶里（每规则自动补齐 3 条标准 + del_flag 按归属）——照桶写即可，包括中间表/临时表(tmp)规则**（DDL 会给每张产出表追加审计列，SELECT 漏带会列不匹配）。
 
 | 字段 | 赋值 |
 |---|---|

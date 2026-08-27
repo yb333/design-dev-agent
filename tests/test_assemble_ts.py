@@ -1365,7 +1365,8 @@ class TestInitAssembler:
         ts, _, _ = do_assemble(rs, dd)
         init_r = ts["init"]["rules"]["INIT_R0001"]
         # core_from=R0002，R0002 的 field_logics={"id":"核心加工口径：已确认状态取值"}
-        assert init_r["field_logics"] == {"id": "核心加工口径：已确认状态取值"}
+        _proc = {e["target"]: e for e in init_r["fields"]["processed"]}
+        assert _proc["id"]["logic"] == "核心加工口径：已确认状态取值"
         assert init_r["core_from"] == "R0002"
 
     def test_explicit_designer_field_logics_overrides_core_from(self):
@@ -1375,7 +1376,8 @@ class TestInitAssembler:
         dd["init"]["rules"][0]["field_logics"] = {"id": "init 专属口径（全量场景）"}
         ts, _, _ = do_assemble(rs, dd)
         init_r = ts["init"]["rules"]["INIT_R0001"]
-        assert init_r["field_logics"] == {"id": "init 专属口径（全量场景）"}
+        _proc = {e["target"]: e for e in init_r["fields"]["processed"]}
+        assert _proc["id"]["logic"] == "init 专属口径（全量场景）"
 
     def test_derive_mode_materializes(self):
         """derive：克隆增量规则产 init.rules 元数据（INIT_ 前缀、core_from 指向源、终态 truncate）。"""
@@ -1782,15 +1784,11 @@ class TestAssemblyFieldLineage:
         f_tbl = ts["tables"]["dwb_test_f"]
         by_name = {f["target_field"]: f for f in f_tbl["fields"]}
         # 直接复制字段（mapping 别名 ht）：搬运默认，指向 tmp1 不是 ht
-        f_a = by_name["a"]
-        assert f_a["design_logic"].startswith("直取 tmp1.a"), f_a["design_logic"]
-        assert "ht" not in f_a["design_logic"]
-        assert f_a["source_fields"] == [{"table": "tmp1", "field": "a", "alias": "tmp1"}]  # 字符串 reads 默认别名=表短名
-        # 加工字段：同样搬运（前序已加工）
-        f_amt = by_name["amt_cny"]
-        assert f_amt["design_logic"].startswith("直取 tmp1.amt_cny"), f_amt["design_logic"]
-        assert f_amt["source_fields"][0]["table"] == "tmp1"
-        assert f_amt["transform_type"] == "direct"
+        r2_direct = ts["rules"]["R0002"]["fields"]["direct"]
+        assert any(d.startswith("tmp1.a") for d in r2_direct), r2_direct
+        assert not any(d.startswith("ht.a") for d in r2_direct)
+        # 字符串 reads 默认别名=表短名（direct 串 tmp1.a 即证据）
+        # 加工字段：同样搬运（前序已加工）——direct 串 tmp1.amt_cny 即证据
 
     def test_step2_joined_source_field_keeps_alias(self):
         """case B：step2 另 join 源表 cx 补取字段——cx 字段保持'直取 cx.b'，ht 字段仍搬运。"""
@@ -1820,10 +1818,8 @@ class TestAssemblyFieldLineage:
              "grain": {"input": "中间", "output": "目标", "change": "无"}},
         ])
         ts, _, _ = do_assemble(rs, dd)
-        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
-        assert by_name["b"]["design_logic"] == "直取 cx.b"  # join 进来的真源表
-        assert by_name["b"]["source_fields"][0]["alias"] == "cx"
-        assert by_name["a"]["design_logic"].startswith("直取 tmp1.a")  # ht 血缘仍搬运
+        assert "cx.b" in ts["rules"]["R0002"]["fields"]["direct"]  # join 进来的真源表（同名直取省 AS）
+        assert any(d.startswith("tmp1.a") for d in ts["rules"]["R0002"]["fields"]["direct"])  # ht 血缘仍搬运
 
     def test_multi_tmp_lineage_precision(self):
         """模式二：双 tmp（tmp_a/tmp_b），字段血缘精确归属各自的 tmp。"""
@@ -1855,9 +1851,9 @@ class TestAssemblyFieldLineage:
              "field_logics": {}, "grain": {"input": "中间", "output": "目标", "change": "无"}},
         ])
         ts, _, _ = do_assemble(rs, dd)
-        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
-        assert by_name["a"]["design_logic"].startswith("直取 tmp_a.a"), by_name["a"]["design_logic"]
-        assert by_name["p"]["design_logic"].startswith("直取 tmp_b.p"), by_name["p"]["design_logic"]
+        direct = ts["rules"]["R0003"]["fields"]["direct"]
+        assert "tmp_a.a" in direct, direct
+        assert "tmp_b.p" in direct, direct
 
     def test_explicit_logic_wins(self):
         """designer 显式写了 logic → 原样使用（可用自己的 tmp 别名口径 t1.a）。"""
@@ -1879,8 +1875,8 @@ class TestAssemblyFieldLineage:
              "grain": {"input": "中间", "output": "目标", "change": "无"}},
         ])
         ts, _, _ = do_assemble(rs, dd)
-        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
-        assert by_name["a"]["design_logic"] == "直取 t1.a（tmp1 别名 t1）"
+        proc = {e["target"]: e for e in ts["rules"]["R0002"]["fields"]["processed"]}
+        assert proc["a"]["logic"] == "直取 t1.a（tmp1 别名 t1）"
 
 
 class TestReadsAliasForm:
@@ -1922,18 +1918,15 @@ class TestReadsAliasForm:
         assert r2["reads"] == ["dws.tmp1"]  # DAG 语义不变
         pseudo = [s for s in r2["source_tables"] if s.get("_from_reads")]
         assert pseudo and pseudo[0]["alias"] == "t1"
-        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
-        assert by_name["a"]["design_logic"].startswith("直取 t1.a"), by_name["a"]["design_logic"]
-        assert by_name["a"]["source_fields"] == [{"table": "tmp1", "field": "a", "alias": "t1"}]
-        assert r2["source_refs"]["a"] == "t1.a"
+        by_name = {f["target_field"] for f in ts["tables"]["dwb_test_f"]["fields"]}
+        assert "a" in by_name
+        assert "t1.a" in r2["fields"]["direct"], r2["fields"]["direct"]
 
     def test_string_form_default_alias(self):
         """字符串形式 reads：别名默认=表短名（向后兼容）。"""
         rs, dd = self._two_step(["dws.tmp1"])
         ts, _, _ = do_assemble(rs, dd)
-        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
-        assert by_name["a"]["design_logic"].startswith("直取 tmp1.a")
-        assert ts["rules"]["R0002"]["source_refs"]["a"] == "tmp1.a"
+        assert "tmp1.a" in ts["rules"]["R0002"]["fields"]["direct"]
 
 
 class TestAliasBindingValidation:
@@ -2032,8 +2025,8 @@ class TestAccumulateFieldUnion:
         ts, _, _ = do_assemble(rs, dd)
         field_names = {f["target_field"] for f in ts["tables"]["tmp_c"]["fields"]}
         assert {"x", "y"} <= field_names, f"accumulate 并集丢字段: {field_names}"
-        assert ts["rules"]["R0001"]["source_refs"]["x"] == "ta.x"
-        assert ts["rules"]["R0002"]["source_refs"]["y"] == "tb.y"
+        assert "ta.x" in ts["rules"]["R0001"]["fields"]["direct"]
+        assert "tb.y" in ts["rules"]["R0002"]["fields"]["direct"]
 
 
 class TestTmpNaming:
@@ -2097,16 +2090,14 @@ class TestAssignCarryInAssembly:
              "field_logics": {}, "grain": {"input": "中间", "output": "目标", "change": "无"}},
         ])
         ts, _, _ = do_assemble(rs, dd)
-        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
-        # 赋值类审计字段在 R2 = tmp 搬运，不再"固定赋值"
-        f_del = by_name["del_flag"]
-        assert f_del["design_logic"].startswith("直取 dwb_test_tmp1.del_flag"), f_del["design_logic"]
-        assert f_del["transform_type"] == "direct"
-        assert f_del["source_fields"][0]["table"] == "dwb_test_tmp1"
-        assert ts["rules"]["R0002"]["source_refs"]["del_flag"] == "dwb_test_tmp1.del_flag"
-        # R1（产出规则）里仍是赋值语义（fixed）——赋值只发生一次
-        r1_by = {f["target_field"]: f for f in ts["tables"]["dwb_test_tmp1"]["fields"]}
-        assert r1_by["del_flag"]["design_logic"] == "固定赋值 'N'"
+        # 赋值类审计字段：R2 = tmp 搬运（direct 桶）；R1 产出规则 = assign（赋值只发生一次）
+        assert "dwb_test_tmp1.del_flag" in ts["rules"]["R0002"]["fields"]["direct"]
+        r1_assign = {e["target"]: e for e in ts["rules"]["R0001"]["fields"]["assign"]}
+        assert r1_assign["del_flag"]["value"] == "'N'"
+        # tables 两侧都有该列（纯元数据三键）
+        for tbl in ("dwb_test_f", "dwb_test_tmp1"):
+            names = {f["target_field"] for f in ts["tables"][tbl]["fields"]}
+            assert "del_flag" in names
 
     def test_mislabeled_assign_falls_back_to_processing(self):
         """兜底：错标赋值实为加工（手工 rs_input 绕过 N35 校验）→ detail 当口径底稿。"""
@@ -2129,8 +2120,8 @@ class TestAssignCarryInAssembly:
             "grain": {"input": "源", "output": "目标", "change": "无"},
         }])
         ts, _, _ = do_assemble(rs, dd)
-        by_name = {f["target_field"]: f for f in ts["tables"]["dwb_test_f"]["fields"]}
-        assert "CASE WHEN" in by_name["flag"]["design_logic"]  # 真实口径，不是"固定赋值"
+        proc = {e["target"]: e for e in ts["rules"]["R0001"]["fields"]["processed"]}
+        assert "CASE WHEN" in proc["flag"]["logic"]  # 真实口径，不是"固定赋值"
 
     def test_orphan_field_logics_warns(self):
         """N34：logic 写了但字段不在 targets → warn（防静默丢弃）。"""

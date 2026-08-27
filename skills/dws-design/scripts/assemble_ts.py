@@ -22,6 +22,7 @@ designer agent 产出 design_decisions.yaml(纯设计判断),
 
 import sys
 import re
+import copy
 import json
 import argparse
 from pathlib import Path
@@ -1691,6 +1692,8 @@ def build_rule(rule_dec, field_map, rs_source_tables, target_schema=""):
         "join_safety": rule_dec.get("join_safety", []),
         "dedup_strategy": rule_dec.get("dedup_strategy") or {},  # 排重策略（累积共建场景，designer定策略coder翻译）
         "field_targets": targets,
+        # field_logics 仅作内部运输（decisions 口径 → build_tables 分桶），分桶后弹出，不落 ts；
+        # source_refs 不落 ts（直取串由 rule.fields.direct 承载）
         "field_logics": logics,
     }, missing_logic
 
@@ -1705,7 +1708,7 @@ def infer_logical_group(schema: str) -> str:
     return "LC_DW1"
 
 
-def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, target_f_table: str) -> dict:
+def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, target_f_table: str, design: dict = None) -> dict:
     """组装 tables 段（表实体，含字段定义 + 物理属性）。
 
     - 字段定义从 rs_input.field_mappings 按 rule→target_table→field_targets 分组搬入
@@ -1727,6 +1730,9 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         if _al:
             source_alias_map.setdefault(_al, _st)
     source_audit = [fm for fm in all_fm if is_audit_field(fm)]
+    # 审计标准值（与 build_design 同归一口径：非标准写法按模板；供 rule 桶补审计）
+    from ts_compat import classify_field, audit_value_map
+    _audit_values = audit_value_map(design or {})
     source_audit_names = {(fm.get("target_column") or "").lower() for fm in source_audit}
     supplemented_names = STANDARD_AUDIT_NAMES - source_audit_names
 
@@ -1743,7 +1749,7 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         # 字段定义：从 field_map 按 field_targets 组装（design_logic 取规则 field_logics）
         # ★ 每个规则都算（不只首规则）：accumulate 多规则写同表时，各规则字段并集入表 +
         #   rule 级 source_refs 各归各的来源（不互相污染）
-        rule_logics = rule.get("field_logics", {})
+        rule_logics = rule.pop("field_logics", {})  # 分桶后弹出，ts 不落盘
         rule_reads = rule.get("reads") or []
         # reads 的表短名（用于装配规则字段的"直取 tmp.xxx"默认 logic）
         reads_short = [_table_short(r) if ("." in str(r)) else r for r in rule_reads]
@@ -1816,45 +1822,50 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
             import sys as _sys
             print(f"[warn] 表 {tbl_short} 以下字段类型缺失（rs_input 无 + designer 未在 tables.fields 声明）: {missing_types}", file=_sys.stderr)
 
-        # ★ rule 级来源映射（coder 直取行的唯一口径；accumulate 同字段多来源各归各的规则）
-        rule["source_refs"] = {}
+        # ★ rule 级三桶（coder 唯一消费源）：processed 优先看 / assign 固定值 /
+        # direct 一把贴。桶名即分类（无细分 transform_type）；审计缺桶自动补
+        # assign 标准值——切片零拼装，coder 不用再记"另带 4 个审计字段"。
+        buckets = {"processed": [], "assign": [], "direct": []}
+        slim_objs = []
+        bucket_targets = set()
         for _tn, _f in rule_field_objs:
-            _sfs = _f.get("source_fields") or []
-            if _sfs:
-                _sf = _sfs[0]
-                if _sf.get("alias") and _sf.get("field"):
-                    rule["source_refs"][_tn] = f"{_sf['alias']}.{_sf['field']}"
-                elif _sf.get("table") and _sf.get("field"):
-                    rule["source_refs"][_tn] = f"{_sf['table']}.{_sf['field']}"
+            # designer 显式口径（rule_logics）→ processed 优先（classify 内部强制）
+            _slim, _kind, _entry = classify_field(_f, logic_override=rule_logics.get(_tn))
+            buckets[_kind].append(_entry)
+            slim_objs.append(_slim)
+            bucket_targets.add(_tn.lower())
+        from dws_standards import STANDARD_AUDIT_TEMPLATE as _AUDIT_T
+        for _an in _AUDIT_T:  # 模板顺序稳定
+            if _an not in bucket_targets:
+                buckets["assign"].append({"target": _an, "value": _audit_values.get(_an, "")})
+                bucket_targets.add(_an)
+        rule["fields"] = buckets
+        rule["field_count"] = len(bucket_targets)
 
         # ★ accumulate 多规则写同表：字段并集（首声明者赢），物理属性保持首规则
         if tbl_short in tables:
             existing_names = {f["target_field"].lower() for f in tables[tbl_short]["fields"]}
-            for _tn, _f in rule_field_objs:
-                if _tn.lower() not in existing_names:
-                    tables[tbl_short]["fields"].append(_f)
+            for _slim in slim_objs:
+                if _slim["target_field"].lower() not in existing_names:
+                    tables[tbl_short]["fields"].append(_slim)
             continue
 
         # 判断表类型
         is_final = (tbl_short == final_table_short)
         tbl_type = "target" if is_final else "intermediate"
 
-        fields = [_f for _tn, _f in rule_field_objs]
+        fields = list(slim_objs)  # tables 只留三键（名/类型/注释）——纯表元数据，DDL 唯一源
 
-        # 目标表补充审计字段
+        # 目标表补充审计字段（表级：DDL 需要 4 列；加工语义在各规则的桶里）
         if is_final:
             for aname in supplemented_names:
                 spec = STANDARD_AUDIT_TEMPLATE.get(aname, {})
-                # 检查是否已在 fields 里（防重复）
                 existing_names = {f["target_field"].lower() for f in fields}
                 if aname.lower() not in existing_names:
                     fields.append({
                         "target_field": aname,
                         "field_type": spec.get("type", ""),
                         "field_comment": "审计字段（自动补充）",
-                        "transform_type": "assign",
-                        "source_fields": [],
-                        "design_logic": f"固定赋值 {spec.get('default', '')}",
                     })
 
         # 物理属性
@@ -2235,7 +2246,7 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
                 "reads": list(r.get("reads") or []),  # tmp 表名复用，不加前缀
                 "joins": list(r.get("joins") or []),
                 "field_targets": list(r.get("field_targets") or []),
-                "field_logics": dict(r.get("field_logics") or {}),
+                "fields": copy.deepcopy(r.get("fields") or {}),
                 "core_from": code,  # 指向源增量规则，coder 适配时读它的 .sql
                 "design_intent": f"derive 派生：克隆自 {code}，SQL 由 coder 适配（filter→init_filter）",
             }
@@ -2261,12 +2272,14 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
         code = r.get("rule_code") or ""
         target_role = r.get("target_role") or "target"
         core_from = r.get("core_from") or ""
-        # field_logics：designer 没写 + 有 core_from → 从 core_from 抄
-        field_logics = r.get("field_logics")
-        if field_logics is None and core_from and core_from in rules:
-            field_logics = rules[core_from].get("field_logics") or {}
-        if field_logics is None:
-            field_logics = {}
+        # fields 三桶：designer 的 field_logics 没写 + 有 core_from → 从 core_from
+        # 的桶抄；写了则覆盖对应 processed 条目的口径（口径相同时省得重写）
+        own_logics = r.get("field_logics") or {}
+        core_rule = rules.get(core_from) if core_from else None
+        init_fields = copy.deepcopy((core_rule or {}).get("fields") or {})
+        for _p in init_fields.get("processed", []):
+            if _p.get("target") in own_logics:
+                _p["logic"] = own_logics[_p["target"]]
 
         if target_role == "target":
             # 终态：7 不变量补全
@@ -2280,7 +2293,7 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
                 "write_condition": "",
                 "joins": r.get("joins") or [],
                 "field_targets": list(inc_terminal_targets) if inc_terminal_targets else list(r.get("field_targets") or []),
-                "field_logics": field_logics,
+                "fields": init_fields,
                 "core_from": core_from,
                 "design_intent": r.get("design_intent") or "初始化（全量），装配器按不变量补全",
             }
@@ -2299,7 +2312,7 @@ def build_init_section(decisions: dict, rules: dict, target_f_table: str) -> dic
                 "produces_for": r.get("produces_for") or [],
                 "joins": r.get("joins") or [],
                 "field_targets": list(r.get("field_targets") or []),
-                "field_logics": field_logics,
+                "fields": init_fields,
                 "core_from": core_from,
                 "design_intent": r.get("design_intent") or "初始化中间加工（全量）",
             }
@@ -2332,7 +2345,7 @@ def assemble_ts(rs_input, decisions):
 
     # 组装 tables 段（表实体：字段定义 + 物理属性）
     f_table_full = meta.get("target", {}).get("f_table", {}).get("table", "")
-    tables = build_tables(rules, decisions, field_map, rs_input, f_table_full)
+    tables = build_tables(rules, decisions, field_map, rs_input, f_table_full, design=design)
 
     # 组装 init 段（初始化管道，与 rules 平行；无 init 段返回 None → 不含 init key）
     init_section = build_init_section(decisions, rules, f_table_full)
