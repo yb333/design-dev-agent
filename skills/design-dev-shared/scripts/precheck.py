@@ -359,6 +359,25 @@ def precheck(
     if not result.errors:
         _check_db_schema(rs_input, result, cache_path, refresh_schema)
 
+    # 9.1 连库后重算口径引用集：preprocess 首算的登记处只有 mapping 列名——引用字段
+    # 常无自己的 mapping 行（只是源表的列），schema_cache 才有列全集。重算 _logic_refs
+    # 并回写 rs_input + 同步 view（与 _condition_issues 同一回写机制）。
+    if (not result.errors and cache_path is not None and Path(cache_path).exists()
+            and rs_input_path is not None):
+        try:
+            import json
+            from preprocess import compute_logic_refs
+            _cache_tbls = {k.lower(): {c.lower() for c in (v or {})}
+                           for k, v in ((_load_schema_cache(Path(cache_path)).get("tables") or {}).items())}
+            _refs = compute_logic_refs(rs_input.get("field_mappings", []),
+                                       rs_input.get("source_tables", []), _cache_tbls)
+            rs_input["_logic_refs"] = _refs
+            rs_input_path.write_text(
+                json.dumps(rs_input, ensure_ascii=False, indent=2), encoding="utf-8")
+            _sync_compact_view(rs_input, rs_input_path, cache_path=cache_path)
+        except Exception:
+            pass  # 引用集重算失败不阻断（首算结果仍在，对账A 降精度）
+
     # 9.5 入口闸：join_condition 引用字段存在性 + 逻辑字段出处（泛化 rn 案例族；
     # 表结构已知无出处=error 退源端 / 未知=warn）。检出入 view 的 tables 块 ⚠ 标记
     if not result.errors:
@@ -590,17 +609,28 @@ def _apply_type_decision(rs_input: dict, decision_path: Path) -> int:
     return changed
 
 
-def _sync_compact_view(rs_input: dict, rs_input_path: Path):
-    """回写 rs_input 后同步 compact 视图（designer 读 rs_input_view.json，保持一致）。"""
+def _sync_compact_view(rs_input: dict, rs_input_path: Path, cache_path=None):
+    """回写 rs_input 后同步 compact 视图（designer 读 rs_input_view.json，保持一致）。
+
+    view 的 refs 提示带 schema_cache（存在时）——裸引用的归属判断需要源表列全集，
+    precheck 连库后 cache 才有，此处自动带上（调用方无需传）。
+    """
     try:
         import json
         from preprocess import build_compact
+        _cache_file = Path(cache_path) if cache_path else (
+            rs_input_path.parent / "_internal" / "schema_cache.json")
+        cache_tables = {}
+        if _cache_file.exists():
+            _raw = json.loads(_cache_file.read_text(encoding="utf-8"))
+            cache_tables = {k.lower(): {c.lower() for c in (v or {})}
+                            for k, v in (_raw.get("tables") or {}).items()}
         view_path = rs_input_path.parent / "rs_input_view.json"
         view_path.write_text(
-            json.dumps(build_compact(rs_input), ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps(build_compact(rs_input, cache_tables=cache_tables),
+                       ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass  # view 同步失败不阻断（designer 还可读完整 rs_input）
-
 
 def _check_type_risk(rs_input: dict, result: PrecheckResult, decision_path: Path,
                      rs_input_path: Path | None = None):

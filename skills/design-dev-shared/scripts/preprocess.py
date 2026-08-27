@@ -1109,7 +1109,7 @@ def validate_target_table(rs_schema: str, rs_table: str,
     return final_schema, final_table, errors, warnings
 
 
-def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
+def build_compact(rs_input: dict[str, Any], cache_tables=None) -> dict[str, Any]:
     """从 field_mappings 生成分块紧凑视图（给 designer 读）。
 
     三段结构，各服务一种认知粒度：
@@ -1127,15 +1127,9 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     source_tables = rs_input.get("source_tables", [])
     from sql_parse import is_trivial_assign_detail, extract_logic_refs
     from dws_standards import STANDARD_AUDIT_NAMES
-    # 引用提示的登记处（列名全集 + 列名→别名集合：裸引用归属判断用）
-    _reg_cols = {(f.get("source_column") or "").strip().lower()
-                 for f in fms if (f.get("source_column") or "").strip()}
-    _col_alias: dict = {}
-    for f in fms:
-        _c = (f.get("source_column") or "").strip().lower()
-        _a = (f.get("source_alias") or "").strip()
-        if _c and _a:
-            _col_alias.setdefault(_c, set()).add(_a)
+    # 引用提示的登记处（列名全集 + 列名→别名集合）：mapping 列名 ∪ schema_cache 源表列
+    # （precheck 连库后 sync view 时带 cache，裸引用归属才完整）
+    _reg_cols, _col_alias = _registry_context(fms, source_tables, cache_tables)
 
     # ① 表级清单
     table_list = []
@@ -1332,6 +1326,56 @@ def _schedule_with_defaults(schedule: dict) -> dict:
     return result
 
 
+def _registry_context(fms, source_tables, cache_tables=None):
+    """裸引用判定/归属提示的登记处：mapping 列名 ∪ schema_cache 源表列。
+
+    mapping 列名对引用字段常不全（加工逻辑引用的字段只是源表的列，常没有自己的
+    mapping 行）——preprocess 首算只有 mapping 列名，precheck 连库后带 cache 重算
+    才完整。返回 (reg_cols, col_alias)。cache_tables={"schema.table": {col,...}}。
+    """
+    reg_cols = {(fm.get("source_column") or "").strip().lower()
+                for fm in fms if (fm.get("source_column") or "").strip()}
+    col_alias: dict = {}
+    for f in fms:
+        _c = (f.get("source_column") or "").strip().lower()
+        _a = (f.get("source_alias") or "").strip()
+        if _c and _a:
+            col_alias.setdefault(_c, set()).add(_a)
+    for st in source_tables or []:
+        _key = f"{(st.get('source_schema') or '').lower()}.{(st.get('source_table') or '').lower()}"
+        _alias = (st.get("source_alias") or "").strip()
+        for _c in ((cache_tables or {}).get(_key) or set()):
+            _c = _c.lower()
+            reg_cols.add(_c)
+            if _alias:
+                col_alias.setdefault(_c, set()).add(_alias)
+    return reg_cols, col_alias
+
+
+def compute_logic_refs(fms, source_tables, cache_tables=None) -> dict:
+    """加工字段 → 原文引用实例集（_logic_refs 的唯一算子）。
+
+    preprocess 首算（无 cache，登记处=mapping 列名）+ precheck 连库后带 cache 重算
+    （登记处补全源表列全集）——两轮同算子，幂等。实例形态 "a.del_flag"/裸 "delete_flag"
+    混排（与 view refs 同粒度）。
+    """
+    from sql_parse import extract_logic_refs
+    reg_cols, _ = _registry_context(fms, source_tables, cache_tables)
+    out = {}
+    for fm in fms:
+        if (fm.get("transform_rule") or "").strip() != "数据加工":
+            continue
+        _detail = fm.get("transform_detail") or fm.get("mapping_expression") or ""
+        if not str(_detail).strip():
+            continue
+        _q, _b = extract_logic_refs(str(_detail), reg_cols)
+        _instances = sorted({f"{a}.{c}" for a, c in _q} | set(_b))
+        _tc = fm.get("target_column") or ""
+        if _instances and _tc:
+            out[_tc] = _instances
+    return out
+
+
 def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict[str, Any]:
     """合并 mapping 数据和 RS 数据, 产出 rs_input.json 结构。"""
     slim_mapping = slim_mapping_data(mapping_raw)
@@ -1411,22 +1455,12 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
 
     # 口径引用提取（对账A 的机器原料——纯结构提取，不是语义判断）：
     # 加工字段的真来源活在加工逻辑里（mapping 源字段单元格对加工字段只是提示，
-    # 常写不全）。提取伪代码的引用列名集存 _raw_refs，供 assemble_ts 与 designer
-    # 翻译产物对账（原文引用了而 design_logic 没有 → 疑似丢引用 warn）+ view 提示。
-    from sql_parse import extract_logic_refs
-    fms = rs_input["field_mappings"]
-    _reg_cols = {(fm.get("source_column") or "").strip().lower()
-                 for fm in fms if (fm.get("source_column") or "").strip()}
-    for fm in fms:
-        if (fm.get("transform_rule") or "").strip() != "数据加工":
-            continue
-        _detail = fm.get("transform_detail") or fm.get("mapping_expression") or ""
-        if not str(_detail).strip():
-            continue
-        _q, _b = extract_logic_refs(str(_detail), _reg_cols)
-        _raw = {c for _, c in _q} | set(_b)
-        if _raw:
-            fm["_raw_refs"] = sorted(_raw)
+    # 常写不全）。引用集存顶层 _logic_refs（实例形态）——★ 脚本专用通道：不进 view、
+    # 不挂字段行（agent 只看 view refs 一种表达）。首算登记处只有 mapping 列名
+    # （引用字段常无自己的行），precheck 连库后带 schema_cache 重算补全。
+    logic_refs = compute_logic_refs(rs_input["field_mappings"], rs_input.get("source_tables", []))
+    if logic_refs:
+        rs_input["_logic_refs"] = logic_refs
 
     # 可选: 数据探索信息
     if "data_exploration" in rs_data:

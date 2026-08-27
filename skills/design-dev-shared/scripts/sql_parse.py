@@ -475,17 +475,21 @@ def extract_logic_refs(text: str, registry_cols) -> tuple:
     return qualified, sorted(bare_hits)
 
 
-def diff_logic_refs(raw_cols, logic_texts) -> list:
-    """对账：原文引用列名集 - design_logic 引用列名集 → 疑似翻译丢引用（列名级）。
+def diff_logic_refs(raw_refs, logic_texts) -> list:
+    """对账：原文引用集（实例形态 "a.del_flag"/裸 "delete_flag" 混排，与 view refs
+    同粒度）- design_logic 引用列名集 → 疑似翻译丢引用（列名级比较）。
 
-    按列名对齐——原文伪代码的裸引用无别名，(alias,col) 精确对不上。
+    按列名对齐——原文伪代码的裸引用无别名，实例投影到列名再比。
     designer 多出的引用不报（合法补充；幻觉由 N30 存在性校验拦）。
     """
+    def _col(r):
+        return str(r).rsplit(".", 1)[-1].lower()
+    raw_cols = {_col(r) for r in (raw_refs or [])}
     logic_cols = set()
     for t in logic_texts or []:
         qualified, _ = extract_logic_refs(t, set())
         logic_cols.update(c for _, c in qualified)
-    return sorted(set(raw_cols or []) - logic_cols)
+    return sorted(raw_cols - logic_cols)
 
 
 _ASSIGN_TRIVIAL_KEYWORDS = {"CURRENT_TIMESTAMP", "SYSDATE", "CURRENT_DATE", "NULL"}

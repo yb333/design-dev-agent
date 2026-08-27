@@ -101,9 +101,7 @@ def generate_gate1_summary(ts: dict, rs_input: dict = None) -> str:
     # 机器验掉"没变的"，人只审"变的"（丢引用=翻译事故高发区，差异表让人扫一眼就够）
     if rs_input:
         from sql_parse import diff_logic_refs
-        raw_by_col = {fm.get("target_column"): (fm.get("_raw_refs") or [])
-                      for fm in rs_input.get("field_mappings", [])
-                      if fm.get("target_column")}
+        raw_by_col = rs_input.get("_logic_refs") or {}
         diffs = []
         for code, rule in rules.items():
             for col, text in (rule.get("field_logics") or {}).items():

@@ -1080,7 +1080,9 @@ class TestCompactConditionIssues:
 
 
 class TestRawRefs:
-    """口径引用骨架的输入侧：伪代码引用列名提取存 _raw_refs（对账A 原料）+ view refs 提示。"""
+    """口径引用骨架的输入侧：伪代码引用集提取存顶层 _logic_refs（对账A 原料，
+    脚本专用不进 view——agent 唯一可见的表达是 view 的 refs 提示，避免近义双
+    representation 混淆）+ view refs 提示（实例形态+归属判断）。"""
 
     @staticmethod
     def _raw():
@@ -1106,15 +1108,59 @@ class TestRawRefs:
             ],
         }
 
-    def test_raw_refs_extracted_for_processed_fields(self):
+    def test_logic_refs_top_level_instance_form(self):
+        """顶层 _logic_refs 存实例形态（与 view refs 同粒度，同源显然），不挂字段行。"""
+        import json
         from preprocess import build_rs_input
         rsi = build_rs_input(self._raw(), {})
-        flag = next(fm for fm in rsi["field_mappings"] if fm["target_column"] == "flag")
-        # 伪代码的引用列名集（限定引用列名 + 裸 token 命中登记处）——对账A 的原料
-        assert flag.get("_raw_refs") == ["del_flag", "delete_flag"]
-        # 直取字段不提取
-        d2 = next(fm for fm in rsi["field_mappings"] if fm["target_column"] == "d2")
-        assert "_raw_refs" not in d2
+        assert rsi.get("_logic_refs") == {"flag": ["a.del_flag", "delete_flag", "u.del_flag"]}
+        # 字段行上没有任何脚本内部标注（agent 回查字段细节时不撞见）
+        for fm in rsi["field_mappings"]:
+            assert "_raw_refs" not in fm and "_logic_refs" not in fm
+        assert "d2" not in (rsi.get("_logic_refs") or {})  # 直取字段不提取
+
+    def test_compact_does_not_leak_logic_refs(self):
+        """view 全文无 _logic_refs——refs 提示是 agent 唯一可见的原文引用表达。"""
+        import json
+        from preprocess import build_rs_input, build_compact
+        rsi = build_rs_input(self._raw(), {})
+        view = build_compact(rsi)
+        assert "_logic_refs" not in json.dumps(view, ensure_ascii=False)
+
+    def test_compute_logic_refs_cache_completes_bare_hits(self):
+        """真实缺口回归：裸引用字段无 mapping 行——首算（mapping 列名登记处）漏提，
+        precheck 连库后带 schema_cache 重算才补全（delete_flag 案例）。"""
+        from preprocess import compute_logic_refs
+        fms = [
+            {"target_column": "id", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "a", "source_column": "id"},
+            {"target_column": "flag", "transform_rule": "数据加工",
+             "transform_detail": "当 a.del_flag 和 delete_flag 以及 u.del_flag 都为 n 或空时返回 n",
+             "source_alias": "a", "source_column": "del_flag"},
+        ]
+        sts = [{"source_schema": "ods", "source_table": "ods_a", "source_alias": "a"},
+               {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u"}]
+        cache = {"ods.ods_a": {"id", "del_flag"}, "ods.ods_u": {"delete_flag", "del_flag"}}
+        # 首算：delete_flag 无 mapping 行 → 裸命中登记处失败，漏提（降精度不报错）
+        assert compute_logic_refs(fms, sts) == {"flag": ["a.del_flag", "u.del_flag"]}
+        # 带 cache 重算：源表列全集补齐登记处 → 三实例齐
+        assert compute_logic_refs(fms, sts, cache) == {
+            "flag": ["a.del_flag", "delete_flag", "u.del_flag"]}
+
+    def test_compact_refs_hint_with_cache_ownership(self):
+        """view refs 带 cache 时裸引用归属完整（无 mapping 行也能提示 delete_flag→u?）。"""
+        from preprocess import build_compact
+        fms = [
+            {"target_column": "flag", "transform_rule": "数据加工",
+             "transform_detail": "当 a.del_flag 和 delete_flag 都为 n 或空时返回 n",
+             "source_alias": "a", "source_column": "del_flag", "target_type": "char(1)"},
+        ]
+        sts = [{"source_schema": "ods", "source_table": "ods_a", "source_alias": "a"},
+               {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u"}]
+        cache = {"ods.ods_a": {"del_flag"}, "ods.ods_u": {"delete_flag", "del_flag"}}
+        view = build_compact({"field_mappings": fms, "source_tables": sts}, cache_tables=cache)
+        proc = [e for e in view.get("processed", []) if e.get("tgt") == "flag"][0]
+        assert any("delete_flag→u.delete_flag?" in h for h in proc.get("refs", [])), proc.get("refs")
 
     def test_compact_refs_hint_with_bare_ownership(self):
         from preprocess import build_rs_input, build_compact
@@ -1136,6 +1182,7 @@ class TestRawRefs:
         hints = proc.get("refs", [])
         assert any("del_flag（多表同名，需限定）" in h for h in hints), hints
         assert any("delete_flag→u.delete_flag?" in h for h in hints), hints
+
 
 
 class TestAssignFaithfulPassthrough:

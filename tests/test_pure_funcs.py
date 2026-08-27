@@ -675,11 +675,11 @@ class TestLogicRefs:
 
     def test_diff_detects_dropped_reference(self):
         from sql_parse import diff_logic_refs
-        # 翻译覆盖全部原文引用 → 无差异
-        assert diff_logic_refs(["del_flag", "delete_flag"],
+        # 原文引用集是实例形态（与 view refs 同粒度），diff 投影到列名比较
+        assert diff_logic_refs(["a.del_flag", "u.del_flag", "delete_flag"],
                                ["a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N"]) == []
         # 翻译丢了 delete_flag → 对账抓到（真实案例形态）
-        assert diff_logic_refs(["del_flag", "delete_flag"],
+        assert diff_logic_refs(["a.del_flag", "u.del_flag", "delete_flag"],
                                ["a.del_flag 为 N 或空 → N"]) == ["delete_flag"]
 
 

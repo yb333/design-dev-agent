@@ -1245,13 +1245,26 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     # 引用三字段 a.del_flag/delete_flag/u.del_flag，design_logic 只写一个，coder 丢两个）。
     # N36：design_logic 的源字段引用必须'别名.字段'限定（翻译产物书写契约——裸引用
     # 无法被 N30 存在性校验、coder 无法定位表、引用提取不可靠）。
-    # N37：mapping 原文引用集（preprocess 提取存 _raw_refs）vs design_logic 引用集
+    # N37：mapping 原文引用集（preprocess 提取存顶层 _logic_refs，脚本专用）vs design_logic 引用集
     # 对账——原文引用了而翻译产物没有 → 疑似丢引用（designer 多出的不报：合法补充，
     # 幻觉由 N30 拦）。
     # ============================================================
     registry_cols = {(fm.get("source_column") or "").strip().lower()
                      for fm in (rs_input.get("field_mappings") or [])
                      if (fm.get("source_column") or "").strip()}
+    # 裸引用登记处补 schema_cache 源表列全集（连库常态）：引用字段常没有自己的
+    # mapping 行（只是源表的列），只查 field_mappings 会漏。无 cache 时按 mapping
+    # 列名拦（不认识的裸词不拦——可能是普通英文词，宁放过）。
+    if schema_cache_path is not None:
+        try:
+            _cand = Path(schema_cache_path)
+            if _cand.exists():
+                _cache_tbls = json.loads(_cand.read_text(encoding="utf-8")).get("tables") or {}
+                for _st in rs_input.get("source_tables", []):
+                    _key = f"{(_st.get('source_schema') or '').lower()}.{(_st.get('source_table') or '').lower()}"
+                    registry_cols.update(c.lower() for c in (_cache_tbls.get(_key) or {}))
+        except Exception:
+            pass
     from sql_parse import extract_logic_refs, diff_logic_refs
     for rule in rules:
         code = rule.get("rule_code", "?")
@@ -1262,7 +1275,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     f"规则 {code} 字段 {col} 的 design_logic 有裸字段引用 {bare}——"
                     f"口径里的源字段引用必须'别名.字段'限定（查归属：rs_input 源表清单"
                     f"或 check_field；多表同名 question 弹确认），不能只写列名")
-            raw_refs = (field_map.get(col) or {}).get("_raw_refs") or []
+            raw_refs = (rs_input.get("_logic_refs") or {}).get(col) or []
             if raw_refs:
                 missing = diff_logic_refs(raw_refs, [str(text)])
                 if missing:
@@ -1447,7 +1460,7 @@ def _rule_tmp_aliases(rule: dict) -> dict:
 # 组装 ts.json
 # ============================================================
 def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None,
-                all_source_rows=None, tmp_source="", tmp_alias="", ref_registry=None):
+                all_source_rows=None, tmp_source="", tmp_alias="", source_alias_map=None):
     """从 rs_input 的 field_mapping 记录 + design_logic 组装 ts 的 field 对象。
 
     field_rec: rs_input.field_mappings 的一条记录（取 target_type/transform_rule/design_logic 默认）
@@ -1536,19 +1549,22 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
             {"table": source_table, "field": source_column, "alias": alias}
         ] if source_column else []
 
-    # 口径引用补全：design_logic 的限定引用才是加工字段的真来源（mapping 源字段单元格
-    # 对加工字段只是提示，常写不全）。反查登记处补进 source_fields，切片的 source_refs
-    # 与口径对齐——防"清单只一格 → coder 漏实现口径里的其他字段"（真实案例：del_flag
-    # 口径引用三字段，mapping 单元格只写一个，coder 丢了两个）。tmp/CTE 引用不在登记处，
-    # 天然不补（走 carried_from_tmp 机制）。
-    if logic and ref_registry:
+    # 口径引用补全：design_logic 的限定引用是加工字段的真来源（mapping 源字段单元格
+    # 对加工字段只是提示，常写不全）。表归属从 source_tables 解析（完整权威——引用字段
+    # 常无自己的 mapping 行，不能用 field_mappings 当登记处），切片的 source_refs 与
+    # 口径对齐——防"清单只一格 → coder 漏实现口径里的其他字段"（真实案例：del_flag
+    # 口径引用三字段，mapping 单元格只写一个，coder 丢了两个）。tmp/CTE 引用不在
+    # source_tables（走 carried_from_tmp 机制）；别名绑不到表的交给 N32/N30 拦。
+    if logic and source_alias_map:
         from sql_parse import extract_logic_refs
+        _have = {(s.get("alias", ""), s.get("field", "")) for s in source_fields_list}
         for _al, _c in sorted(set(extract_logic_refs(str(logic), set())[0])):
-            _row = ref_registry.get((_al, _c))
-            if _row:
-                _sf = {"table": _row.get("source_table", ""), "field": _c, "alias": _al}
-                if _sf not in source_fields_list:
-                    source_fields_list.append(_sf)
+            if (_al, _c) in _have:
+                continue
+            _st = source_alias_map.get(_al)
+            if _st:
+                source_fields_list.append(
+                    {"table": _st.get("source_table", ""), "field": _c, "alias": _al})
 
     # ★ 审计字段类型强制标准（平台契约，不因 mapping 输入漂移）：
     # mapping 提供的审计字段 target_type 与标准不一致时按 STANDARD_AUDIT_TEMPLATE 覆盖
@@ -1681,14 +1697,15 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
     supplemented = []  # 审计字段补充（由 build_design 算出，这里通过参数传入更解耦，但简化处理从 design 读不到）
     # 审计字段：从 rs_input 识别来源提供的 + 标准模板
     all_fm = rs_input.get("field_mappings", [])
-    # 口径引用登记处：design_logic 的限定引用反查 rs_input 行——补全 source_fields 用
-    # （加工字段的真来源是口径引用集，mapping 源字段单元格对加工字段只是提示，常写不全）
-    ref_registry = {}
-    for _fm in all_fm:
-        _al = (_fm.get("source_alias") or "").strip().lower()
-        _c = (_fm.get("source_column") or "").strip().lower()
-        if _al and _c and (_al, _c) not in ref_registry:
-            ref_registry[(_al, _c)] = _fm
+    # 口径引用补全的表归属解析：rs_input.source_tables（别名→schema.table）——完整且
+    # 权威。不能用 field_mappings 当登记处：加工逻辑引用的字段常没有自己的 mapping 行
+    # （它们只是源表的列，不是任何目标的来源——真实案例 u.del_flag/u.delete_flag 无行，
+    # 查不到就补不上）。列存在性归 N30（cache 门控），与原文冗余校验归 N37 对账A。
+    source_alias_map = {}
+    for _st in rs_input.get("source_tables", []):
+        _al = (_st.get("source_alias") or "").strip().lower()
+        if _al:
+            source_alias_map.setdefault(_al, _st)
     source_audit = [fm for fm in all_fm if is_audit_field(fm)]
     source_audit_names = {(fm.get("target_column") or "").lower() for fm in source_audit}
     supplemented_names = STANDARD_AUDIT_NAMES - source_audit_names
@@ -1749,7 +1766,7 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
                                 all_source_rows=all_source_rows,
                                 tmp_source=_tmp_src,
                                 tmp_alias=tmp_alias_map.get(_tmp_src, ""),
-                                ref_registry=ref_registry)
+                                source_alias_map=source_alias_map)
             elif tname in dec_tbl_fields:
                 # 中间表自建字段（rs_input 没有，designer 在 tables.fields 声明了类型）
                 declared_type = dec_tbl_fields[tname]

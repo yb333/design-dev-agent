@@ -482,7 +482,9 @@ def _codes(vr, layer=None):
 class TestRefSkeleton:
     """口径引用骨架：N36 裸引用硬拦 / N37 翻译丢引用对账 / source_fields 装配补全。
 
-    真实案例：del_flag 口径引用三字段，design_logic 只写一个 → coder 丢两个字段。
+    真实案例形态：del_flag 口径引用三字段，mapping 只有加工行的一格——引用字段
+    u.del_flag/u.delete_flag **没有自己的 mapping 行**（它们只是源表的列），
+    表归属只在 source_tables。fixture 按此造，不便利补齐。
     """
 
     @staticmethod
@@ -490,22 +492,19 @@ class TestRefSkeleton:
         fms = [
             {"target_column": "id", "transform_rule": "直接复制", "transform_detail": "-",
              "source_alias": "a", "source_column": "id", "source_table": "ods_a"},
-            {"target_column": "d1", "transform_rule": "直接复制", "transform_detail": "-",
-             "source_alias": "u", "source_column": "delete_flag", "source_table": "ods_u"},
-            {"target_column": "d2", "transform_rule": "直接复制", "transform_detail": "-",
-             "source_alias": "a", "source_column": "del_flag", "source_table": "ods_a"},
-            {"target_column": "d3", "transform_rule": "直接复制", "transform_detail": "-",
-             "source_alias": "u", "source_column": "del_flag", "source_table": "ods_u"},
             {"target_column": "flag", "transform_rule": "数据加工",
              "transform_detail": "当 a.del_flag 和 delete_flag 以及 u.del_flag 都为 n 或空",
-             "source_alias": "a", "source_column": "del_flag", "source_table": "ods_a",
-             "_raw_refs": ["del_flag", "delete_flag"]},
+             "source_alias": "a", "source_column": "del_flag", "source_table": "ods_a"},
         ]
-        return fms
+        return {"field_mappings": fms,
+                "source_tables": [
+                    {"source_schema": "ods", "source_table": "ods_a", "source_alias": "a"},
+                    {"source_schema": "ods", "source_table": "ods_u", "source_alias": "u"}],
+                "_logic_refs": {"flag": ["a.del_flag", "delete_flag", "u.del_flag"]}}
 
     @staticmethod
     def _dec(logic):
-        cols = ["id", "d1", "d2", "d3", "flag"]
+        cols = ["id", "flag"]
         return make_design_decisions(rules=[{
             "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
             "exec_sequence": 1, "target_table": "dws.dwb_test_f",
@@ -515,35 +514,44 @@ class TestRefSkeleton:
         }])
 
     def test_fully_qualified_and_covered_passes(self):
-        rs = {"field_mappings": self._rs(), "source_tables": []}
-        vr = _run(self._dec("a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y"), rs)
+        vr = _run(self._dec("a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y"),
+                  self._rs())
         assert "N36" not in _codes(vr) and "N37" not in _codes(vr)
 
-    def test_bare_reference_hard_blocked(self):
-        vr = _run(self._dec("a.del_flag 和 delete_flag 为 N → N"),
-                  {"field_mappings": self._rs(), "source_tables": []})
+    def test_bare_reference_hard_blocked(self, tmp_path):
+        """裸引用登记处 = mapping 列名 ∪ schema_cache 源表列（连库常态）——
+        引用字段无 mapping 行也拦得住（真实案例 delete_flag）。"""
+        import json as _json
+        cache = tmp_path / "schema_cache.json"
+        cache.write_text(_json.dumps({"tables": {
+            "ods.ods_a": {"id": "bigint", "del_flag": "char(1)"},
+            "ods.ods_u": {"delete_flag": "char(1)", "del_flag": "char(1)"}}}),
+            encoding="utf-8")
+        rs = self._rs()
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(self._dec("a.del_flag 和 delete_flag 为 N → N"),
+                                 rs, field_map, schema_cache_path=str(cache))
         n36 = [i for i in vr.items if i["code"] == "N36"]
         assert n36 and n36[0]["level"] == "hard" and "delete_flag" in n36[0]["msg"]
 
     def test_dropped_reference_warns(self):
-        vr = _run(self._dec("a.del_flag 为 N 或空 → N"),
-                  {"field_mappings": self._rs(), "source_tables": []})
+        vr = _run(self._dec("a.del_flag 为 N 或空 → N"), self._rs())
         n37 = [i for i in vr.items if i["code"] == "N37"]
         assert n37 and "delete_flag" in n37[0]["msg"]
 
-    def test_source_fields_completed_from_logic(self):
-        fms = self._rs()
-        registry = {}
-        for f in fms:
-            al, c = (f.get("source_alias") or "").lower(), (f.get("source_column") or "").lower()
-            if al and c:
-                registry.setdefault((al, c), f)
+    def test_source_fields_completed_from_source_tables(self):
+        """补全走 source_tables：引用字段无 mapping 行也能解析表归属——真实案例回归
+        （此前用 field_mappings 当登记处，u 侧两字段查不到补不上，ts 仍缺来源）。"""
+        rs = self._rs()
+        alias_map = {st["source_alias"].lower(): st for st in rs["source_tables"]}
         f = build_field(
-            next(x for x in fms if x["target_column"] == "flag"),
+            next(x for x in rs["field_mappings"] if x["target_column"] == "flag"),
             "a.del_flag、u.delete_flag、u.del_flag 均为 N 或空 → N，否则 Y",
-            set(), ref_registry=registry)
-        sf = {(s["alias"], s["field"]) for s in f["source_fields"]}
-        assert {("a", "del_flag"), ("u", "delete_flag"), ("u", "del_flag")} <= sf
+            set(), source_alias_map=alias_map)
+        sf = {(s["alias"], s["field"], s["table"]) for s in f["source_fields"]}
+        assert {("a", "del_flag", "ods_a"), ("u", "del_flag", "ods_u"),
+                ("u", "delete_flag", "ods_u")} <= sf
+
 
 
 class TestAssignTranslationGate:
