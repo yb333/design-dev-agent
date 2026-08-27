@@ -1555,3 +1555,27 @@ class TestDbScopeExpansion:
         _check_join_conditions(rs, r2, cp, None)
         assert any("表不在 schema 缓存" in w for w in r2.warnings), r2.warnings
         assert not any("未连库" in w for w in r2.warnings)
+
+
+class TestCaseInsensitiveIdentifiers:
+    """标识符（表/字段/别名/schema）大小写不敏感——只有值才敏感。"""
+
+    def test_alias_and_table_case_mismatch_passes(self):
+        from precheck import precheck
+        rs = {
+            "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_t_f", "cn": "t"},
+                                "i_view": {"schema": "dws", "table": "dwb_t_i", "cn": "t"}}},
+            "source_tables": [{"source_schema": "ODS", "source_table": "ODS_T", "source_alias": "T",
+                               "source_table_cn": "测试"}],
+            "field_mappings": [{"source_schema": "ods", "source_table": "ods_t", "source_alias": "t",
+                                 "source_column": "id", "source_type": "bigint",
+                                 "transform_rule": "直接复制", "transform_detail": "-",
+                                 "target_column": "id", "target_column_cn": "ID",
+                                 "target_type": "bigint"}],
+            "schedule": {"strategy": "全量调度", "frequency": "T+1",
+                         "incremental_key": "不涉及", "incremental_tables": [], "upstream": []},
+            "_no_rs_mode": True,
+        }
+        result = precheck(rs)
+        alias_errs = [e for e in result.errors if "来源别名" in e or "未定义" in e]
+        assert not alias_errs, alias_errs

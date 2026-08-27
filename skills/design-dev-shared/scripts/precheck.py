@@ -263,12 +263,14 @@ def precheck(
 
     # 6. 别名一致性 + 表别名重复 + 字段级/表级一致性
     # 跳过赋值/序列字段——它们无真实来源表，source_alias 留空是正常的
-    entity_aliases = {st.get("source_alias") for st in source_tables if st.get("source_alias")}
+    # 标识符（表/字段/别名/schema）大小写不敏感——值（过滤/关联/加工里的字面量）才敏感
+    entity_aliases = {(st.get("source_alias") or "").strip().lower()
+                      for st in source_tables if (st.get("source_alias") or "").strip()}
     for fm in field_mappings:
         fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
         if fm_rule in ("赋值", "序列"):
             continue
-        fm_alias = (fm.get("source_alias") or "").strip()
+        fm_alias = (fm.get("source_alias") or "").strip().lower()
         if not fm_alias:
             # 直接复制/数据加工字段该填 source_alias 没填 → error（多表 JOIN 会歧义，单表也无法定位来源）
             result.add_error(
@@ -299,15 +301,15 @@ def precheck(
     # 跳过赋值/序列字段——它们没有真实来源表（赋值是固定值，如 NULL AS），
     # preprocess 可能把表达式的字符解析成 source_table='-'，不该校验
     entity_tables = {
-        ((st.get("source_schema") or "").strip(), (st.get("source_table") or "").strip())
+        ((st.get("source_schema") or "").strip().lower(), (st.get("source_table") or "").strip().lower())
         for st in source_tables
     }
     for fm in field_mappings:
         fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
         if fm_rule in ("赋值", "序列"):
             continue  # 赋值/序列无来源表，跳过
-        fm_sch = (fm.get("source_schema") or "").strip()
-        fm_tbl = (fm.get("source_table") or "").strip()
+        fm_sch = (fm.get("source_schema") or "").strip().lower()
+        fm_tbl = (fm.get("source_table") or "").strip().lower()
         if fm_sch and fm_tbl and (fm_sch, fm_tbl) not in entity_tables:
             result.add_error(
                 f"字段 {fm.get('target_column', '?')} 的来源表 {fm_sch}.{fm_tbl} "

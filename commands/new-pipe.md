@@ -196,6 +196,10 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
 
 ```bash
 python SHARED_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_internal/rs_input.json
+
+> ★ **表名标准映射（不许以此打回）**：输入资产锚点名是 I 视图（`_i`，对外消费名），
+> ts 的物理产出是 F 表（`_f`），I 是 F 的直封镜像视图——`输入 *_i ↔ ts 目标 *_f`
+> 是 preprocess 的标准推导（成对产出），不是漂移。闸口①比对表名时按此映射判断。
 ```
 
 拿到摘要后，**立即调 question 停下等用户确认**（不允许跑完摘要直接进编码段）：
