@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from datetime import datetime
 import re
 import shutil
 import sys
@@ -196,7 +197,7 @@ def _run_pipeline_for(case_dir: Path, deliver: Path, executor: str, skip_ai: boo
         case_dir, deliver, skip_ai=skip_ai, timeout_ai=timeout_ai, timeout_script=timeout_script
     )
     stage_times = {s.step: round(s.duration_seconds, 1) for s in steps}
-    return steps, stage_times, {}, []  # 重放无纪律数据
+    return steps, stage_times, {}, [], {}  # 重放无纪律数据/session
 
 
 def _resolve_appid_quiet(schema: str) -> str:
@@ -305,7 +306,8 @@ def _run_repeat(
             if not keep_artifacts:
                 _clean_deliver(deliver)  # 每轮清场：旧产出会让 AI 复用，污染稳定性
             deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
-            pipeline_steps, stage_times, stage_loops, discipline_violations = _run_pipeline_for(
+            (pipeline_steps, stage_times, stage_loops, discipline_violations,
+             session_info) = _run_pipeline_for(
                 case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
             )
             if executor == "real":
@@ -327,6 +329,7 @@ def _run_repeat(
             snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d, _f in score["deductions"]]
             snapshot.stage_times = stage_times
             snapshot.stage_loops = stage_loops
+            snapshot.session = session_info
             baseline.save_snapshot(snapshot)
 
             stats = result.summary()
@@ -376,7 +379,42 @@ def run_one_case(
     keep_artifacts: bool = False,
     allow_no_golden: bool = False,
 ) -> tuple[int, str]:
-    """跑单个用例。返回 (退出码, 失败摘要行——全过时为空)。"""
+    """跑单个用例（薄壳：接住 Ctrl+C 写中断快照，退出码 130）。"""
+    try:
+        return _run_one_case_inner(
+            case_dir, eval_only, skip_ai, repeat, replay,
+            timeout_ai, timeout_script, timeout_pipe,
+            keep_artifacts, allow_no_golden,
+        )
+    except KeyboardInterrupt:
+        print(f"\n[v2] ⏹ 用户中断 {case_dir.name}（子进程已终止）")
+        try:
+            snap = baseline.BaselineSnapshot(
+                case_name=case_dir.name,
+                timestamp=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                git_sha="", layer_stats={}, checks=[],
+                score=None, passed=False, interrupted=True,
+            )
+            baseline.save_snapshot(snap)
+            print(f"[v2] 中断快照已存档；会话回溯：opencode 会话列表搜 'eval {case_dir.name}'")
+        except Exception as e:
+            print(f"[v2] ⚠️ 中断快照写入失败: {e}")
+        return 130, "用户中断"
+
+
+def _run_one_case_inner(
+    case_dir: Path,
+    eval_only: bool,
+    skip_ai: bool,
+    repeat: int = 1,
+    replay: bool = False,
+    timeout_ai: float = DEFAULT_TIMEOUT_AI,
+    timeout_script: float = DEFAULT_TIMEOUT_SCRIPT,
+    timeout_pipe: float = DEFAULT_TIMEOUT_PIPE,
+    keep_artifacts: bool = False,
+    allow_no_golden: bool = False,
+) -> tuple[int, str]:
+    """跑单个用例（主体）。返回 (退出码, 失败摘要行——全过时为空)。"""
     case_name = case_dir.name
     # 三层产出定位（{appid}/{schema}/{资产}）；无产出时 None——
     # 重放模式由 _prepare_deliver_for 推导，真实入口跑完重定位，eval-only 直接报错
@@ -420,7 +458,8 @@ def run_one_case(
         deliver = _prepare_deliver_for(deliver, executor, case_dir, case_name, timeout_script)
         mode_desc = "真实入口 /new-pipe" if executor == "real" else "重放诊断 --replay"
         print(f"[v2] 跑流水线（{mode_desc}）: {case_name}")
-        pipeline_steps, stage_times, stage_loops, discipline_violations = _run_pipeline_for(
+        (pipeline_steps, stage_times, stage_loops, discipline_violations,
+         session_info) = _run_pipeline_for(
             case_dir, deliver, executor, skip_ai, timeout_ai, timeout_script, timeout_pipe
         )
         if executor == "real":
@@ -460,11 +499,16 @@ def run_one_case(
     snapshot.deductions = [{"cat": c, "weight": w, "desc": d} for c, w, d, _f in score["deductions"]]
     snapshot.stage_times = stage_times
     snapshot.stage_loops = stage_loops
+    snapshot.session = session_info
     saved_path = baseline.save_snapshot(snapshot)
     print(f"[v2] baseline 已存档: {saved_path.name}")
 
     print(render_report(result, diff))
     print(scoring.render_score(score, prev_total=diff.baseline_score if diff.has_baseline else None))
+    if session_info:
+        sid = session_info.get("id", "")
+        print(f"  会话回溯: 标题[{session_info.get('title', '')}]"
+              + (f" id[{sid}]" if sid else "（id未捕获，按标题在 opencode 会话列表搜）"))
 
     # 退出码挂钩及格门（致命项），非致命漂移（含 golden 结构性未命中）不挂退出码
     rc = 0 if score["passed"] else 1

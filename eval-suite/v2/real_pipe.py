@@ -90,6 +90,17 @@ def judge_real_run(deliver: Path | None, code: int, out: str) -> tuple[bool, str
     )
 
 
+_SESSION_ID_RE = re.compile(
+    r"\b(ses_[A-Za-z0-9_-]{6,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b"
+)
+
+
+def _extract_session_id(out: str) -> str:
+    """从输出流尽力抓 opencode 会话 id（抓不到靠 title 检索）。"""
+    m = _SESSION_ID_RE.search(out or "")
+    return m.group(1) if m else ""
+
+
 def run_real_pipe(
     case_dir: Path, deliver_base: Path, timeout: float = DEFAULT_TIMEOUT_PIPE
 ) -> tuple[list[PipelineStepResult], dict[str, float]]:
@@ -103,6 +114,8 @@ def run_real_pipe(
     """
     args = build_command_args(case_dir)
     message = " ".join(args + [NON_INTERACTIVE_CLAUSE])
+    # 会话标签：opencode 会话列表里可搜（异常场景回溯的主入口）
+    session_title = f"eval {case_dir.name} {time.strftime('%m%d-%H%M')}"
     # 双信号：流锚点（顶层 pipe 活动）+ 文件 marker（subagent 写产出的内层活动，
     # 顶层流看不到 designer/coder 内部——设计/编码阶段靠文件事件补）
     tracker = _StageTracker()
@@ -118,13 +131,15 @@ def run_real_pipe(
     def _do() -> tuple[bool, str]:
         # 不带 --format json：降低内网包壳启动器的旗标兼容面，默认格式流式输出更适合看进度
         code, out = _run_stream(
-            opencode_cmd() + ["run", "--command", "new-pipe", message],
+            opencode_cmd() + ["run", "--command", "new-pipe",
+                              "--title", session_title, message],
             timeout,
             label="new-pipe 真实流程",
             stage_provider=tracker.stage_text,
             line_hook=lambda line: (tracker.feed(line), discipline.feed(line)),
             fatal_patterns=_QUESTION_PATTERNS,
         )
+        _do._out_cache = out  # 供 session id 提取（函数属性走闭包外暂存）
         deliver = find_deliver(deliver_base, case_dir.name)
         ok, detail = judge_real_run(deliver, code, out)
         if "[QUESTION]" in out:
@@ -141,7 +156,8 @@ def run_real_pipe(
 
     steps = [_step("new-pipe(真实流程)", _do)]
     stage_times, stage_loops = tracker.finish()
-    return steps, stage_times, stage_loops, discipline.violations
+    session = {"title": session_title, "id": _extract_session_id(getattr(_do, "_out_cache", ""))}
+    return steps, stage_times, stage_loops, discipline.violations, session
 
 
 # ============================================================

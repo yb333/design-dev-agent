@@ -209,53 +209,67 @@ def _run_stream(
             sys.stdout.write("\r" + " " * 60 + "\r")
             sys.stdout.flush()
 
-    while True:
-        try:
-            item = q.get(timeout=0.5)
-        except queue.Empty:
-            if time.monotonic() > deadline:
-                timed_out = True
-                proc.kill()
+    try:
+        while True:
+            try:
+                item = q.get(timeout=0.5)
+            except queue.Empty:
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    proc.kill()
+                    break
+                _spin()
+                continue
+            if item is None:
                 break
-            _spin()
-            continue
-        if item is None:
-            break
-        buf.append(item)
-        out_bytes += len(item)
-        last_output = time.monotonic()
-        if line_hook is not None:
-            try:
-                line_hook(item)
-            except Exception:
-                pass
-        if live_f:
-            try:
-                live_f.write(item)
-            except Exception:
-                pass
-        if VERBOSE:
-            print("    " + item, end="", flush=True)  # 缩进区分子进程输出
-        else:
-            _spin()
-        if fatal_patterns and any(pat.search(item) for pat in fatal_patterns):
-            # 致命流模式（如非交互评测中的 question 调用）= 死锁，立即终止不空等超时
-            print(f"    ⚠ 检测到致命模式（question 类），终止进程: {item.strip()[:100]}",
-                  flush=True)
-            proc.kill()
-            buf.append(f"\n[QUESTION] 检测到 question 调用，已终止: {item.strip()[:120]}")
-            _spin_end()
-            if live_f:
+            buf.append(item)
+            out_bytes += len(item)
+            last_output = time.monotonic()
+            if line_hook is not None:
                 try:
-                    live_f.close()
+                    line_hook(item)
                 except Exception:
                     pass
+            if live_f:
+                try:
+                    live_f.write(item)
+                except Exception:
+                    pass
+            if VERBOSE:
+                print("    " + item, end="", flush=True)  # 缩进区分子进程输出
+            else:
+                _spin()
+            if fatal_patterns and any(pat.search(item) for pat in fatal_patterns):
+                # 致命流模式（如非交互评测中的 question 调用）= 死锁，立即终止不空等超时
+                print(f"    ⚠ 检测到致命模式（question 类），终止进程: {item.strip()[:100]}",
+                      flush=True)
+                proc.kill()
+                buf.append(f"\n[QUESTION] 检测到 question 调用，已终止: {item.strip()[:120]}")
+                _spin_end()
+                if live_f:
+                    try:
+                        live_f.close()
+                    except Exception:
+                        pass
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+                return -3, "".join(buf)
+
+    except BaseException:
+        # Ctrl+C 等中断：杀子进程不留孤儿（Windows 控制台组信号之外的双保险），再抛出
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        _spin_end()
+        if live_f:
             try:
-                proc.wait(timeout=5)
+                live_f.close()
             except Exception:
                 pass
-            return -3, "".join(buf)
-
+        raise
     _spin_end()
     if live_f:
         try:

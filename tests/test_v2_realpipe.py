@@ -128,8 +128,10 @@ class TestRunRealPipe:
         monkeypatch.setattr(real_pipe, "find_deliver", fake_find)
 
         case_dir = tmp_path / "dwb_x"
-        steps, stage_times, stage_loops, violations = real_pipe.run_real_pipe(
+        steps, stage_times, stage_loops, violations, session = real_pipe.run_real_pipe(
             case_dir, tmp_path / "base", timeout=5)
+        assert session["title"].startswith("eval dwb_x")  # 会话标签可检索
+        assert "--title" in " ".join(calls["cmd"])
         assert len(steps) == 1
         assert isinstance(stage_times, dict) and isinstance(stage_loops, dict)
         # 纪律检查经 line_hook 生效：抓到 fix_types.py，preprocess 白名单豁免
@@ -148,7 +150,7 @@ class TestRunRealPipe:
         monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="", stage_provider=None, line_hook=None, fatal_patterns=None: (0, "ran ok"))
         monkeypatch.setattr(real_pipe, "find_deliver", lambda base, name: None)
         case_dir = tmp_path / "dwb_x"
-        steps, _, _, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
+        steps, _, _, _, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
         assert steps[0].status.value == "fail"
 
 
@@ -565,7 +567,7 @@ class TestQuestionDeadlock:
         with mock.patch.object(real_pipe, "_run_stream", fake_q_stream), \
              mock.patch.object(real_pipe, "find_deliver",
                                lambda b, n: d if n == "dwb_x" else None):
-            steps, _, _, violations = real_pipe.run_real_pipe(case, tmp_path / "base", timeout=5)
+            steps, _, _, violations, _sess = real_pipe.run_real_pipe(case, tmp_path / "base", timeout=5)
         assert any("question" in v["script"] for v in violations)
         assert "已终止" in violations[0]["action"]
 
@@ -584,3 +586,57 @@ class TestParamPlaceholderParsing:
         sigs = assert_sql._extract_field_signatures(sql)
         assert sigs["crt_cycle_id"]["consts"] == ["NULL"]  # 占位符归一为 NULL（含exp.Null收集）
         assert sigs["id"]["refs"] == ["a.id"]
+
+
+class TestSessionTrace:
+    """Session 回溯：标题标签 + id 尽力捕获。"""
+
+    def test_extract_session_id(self):
+        assert real_pipe._extract_session_id("session ses_abc123xyz started") == "ses_abc123xyz"
+        assert real_pipe._extract_session_id(
+            "id=550e8400-e29b-41d4-a716-446655440000 running") == "550e8400-e29b-41d4-a716-446655440000"
+        assert real_pipe._extract_session_id("nothing here") == ""
+
+
+class TestCtrlCGraceful:
+    """Ctrl+C 优雅停：杀子进程不留孤儿 + 异常继续抛出由上层写中断快照。"""
+
+    def test_interrupt_kills_child(self):
+        import time as _t
+        proc_ref = {}
+
+        def hook(line):
+            proc_ref["started"] = True
+            raise KeyboardInterrupt
+
+        t0 = _t.time()
+        with pytest.raises(KeyboardInterrupt):
+            pipeline._run_stream(
+                [sys.executable, "-c",
+                 "import time; print('x', flush=True); time.sleep(30)"],
+                timeout=10, label="t", line_hook=hook)
+        assert _t.time() - t0 < 5  # 秒回，没等30s——子进程被杀
+
+    def test_interrupted_snapshot_written(self, tmp_path, monkeypatch):
+        import run as run_mod
+
+        case = tmp_path / "dwb_x"
+        case.mkdir(parents=True)
+        (case / "mapping.xlsx").write_text("x", encoding="utf-8")
+        (case / "golden" / "A").mkdir(parents=True)
+        (case / "golden" / "A" / "ts.json").write_text("{}", encoding="utf-8")
+
+        def boom(*a, **k):
+            raise KeyboardInterrupt
+
+        deliver = tmp_path / "app" / "sch" / "dwb_x" / "ddlc_design_dev"
+        deliver.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(run_mod, "_prepare_deliver_for",
+                            lambda *a, **k: deliver)
+        monkeypatch.setattr(run_mod, "_run_pipeline_for", boom)
+        monkeypatch.setattr(run_mod.baseline, "RESULTS_DIR", tmp_path / "results")
+        rc, line = run_mod.run_one_case(case, eval_only=False, skip_ai=True)
+        assert rc == 130 and "中断" in line
+        import stability
+        snaps = stability.load_recent_snapshots("dwb_x", 1)
+        assert snaps and snaps[0].get("interrupted") is True
