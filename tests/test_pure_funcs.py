@@ -261,11 +261,9 @@ class TestResolveSourceBySchema:
             resolve_source_by_schema(str(cfg), "unknown")
 
     def test_source_not_exist_raises(self, tmp_path):
-        """指定的 source 不在配置里 → raise（不静默换第一个数据源掩盖）。"""
-        try:
-            import psycopg2  # noqa: F401
-        except ImportError:
-            pytest.skip("psycopg2 未安装，跳过 PsycopgExecutor 测试")
+        """指定的 source 不在配置里 → raise（不静默换第一个数据源掩盖）。
+
+        只走构造器配置校验不连库——dws_db 对 psycopg2 优雅降级，无需守卫。"""
         from dws_db import PsycopgExecutor
         cfg = tmp_path / "db-sources.json"
         cfg.write_text(json.dumps({
@@ -277,10 +275,6 @@ class TestResolveSourceBySchema:
 
     def test_no_source_no_default_raises(self, tmp_path):
         """既没传 source 也没配 default → raise（不静默用第一个）。"""
-        try:
-            import psycopg2  # noqa: F401
-        except ImportError:
-            pytest.skip("psycopg2 未安装，跳过 PsycopgExecutor 测试")
         from dws_db import PsycopgExecutor
         cfg = tmp_path / "db-sources.json"
         cfg.write_text(json.dumps({
