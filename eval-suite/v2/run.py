@@ -374,6 +374,7 @@ def run_one_case(
     timeout_script: float = DEFAULT_TIMEOUT_SCRIPT,
     timeout_pipe: float = DEFAULT_TIMEOUT_PIPE,
     keep_artifacts: bool = False,
+    allow_no_golden: bool = False,
 ) -> tuple[int, str]:
     """跑单个用例。返回 (退出码, 失败摘要行——全过时为空)。"""
     case_name = case_dir.name
@@ -389,6 +390,16 @@ def run_one_case(
         return 1, "checks.yaml 键名校验失败"
     if not config.case_name:
         config.case_name = case_name
+
+    # 前置：评测必须有 golden（对照目标）——跑昂贵流水线之前就拦，别跑完才发现白跑
+    if not allow_no_golden and not golden.load_goldens(case_dir):
+        print(
+            f"[v2] ⛔ {case_name} 无 golden（对照目标缺失，评分无效）。\n"
+            f"    先沉淀：菜单[5] 或 promote.py --case {case_name}\n"
+            f"    纯流程冒烟可加 --allow-no-golden 跳过比对（不评分）",
+            file=sys.stderr,
+        )
+        return 1, "无golden（评分无效）"
 
     executor = select_executor(replay, skip_ai)
 
@@ -479,6 +490,8 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true",
                         help="实时流式打印子进程全量输出（默认安静：关键节点+旋转动画，"
                              "全文静默进 log，失败才展示尾部）")
+    parser.add_argument("--allow-no-golden", action="store_true",
+                        help="允许无 golden 跑（纯流程冒烟；评分判无效）")
     parser.add_argument("--keep-artifacts", action="store_true",
                         help="跑前不清空该资产旧产出（默认清空防 AI 复用旧结果；"
                              "留给迭代/优化场景复用旧产出的钩子）")

@@ -495,3 +495,35 @@ class TestDisciplineFileContext:
         d.feed("ERROR: x failed\n")
         d.feed("python fix.py\n")
         assert any("ERROR" in c for c in d.violations[0]["context"])
+
+
+class TestGoldenRequired:
+    """前置拦截：无 golden 跑评测直接退出（指引沉淀），--allow-no-golden 放行。"""
+
+    def _case(self, tmp):
+        case = tmp / "dwb_x"
+        case.mkdir(parents=True, exist_ok=True)
+        (case / "mapping.xlsx").write_text("x", encoding="utf-8")
+        return case
+
+    def test_blocked_without_golden(self, tmp_path, monkeypatch, capsys):
+        import run as run_mod
+
+        monkeypatch.setattr(run_mod, "DELIVER_BASE", tmp_path)
+        rc, line = run_mod.run_one_case(self._case(tmp_path), eval_only=False, skip_ai=True)
+        assert rc == 1 and "无golden" in line
+        assert "promote" in capsys.readouterr().err
+
+    def test_allowed_with_flag(self, tmp_path, monkeypatch):
+        import run as run_mod
+
+        monkeypatch.setattr(run_mod, "DELIVER_BASE", tmp_path)
+        # 放行后走真实流程路径——打桩 pipeline 避免起真进程
+        monkeypatch.setattr(run_mod, "run_pipeline", lambda *a, **k: [])
+        deliver = tmp_path / "app" / "sch" / "dwb_x" / "ddlc_design_dev"
+        deliver.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(run_mod, "_prepare_deliver_for",
+                            lambda d, e, c, n, t: deliver)
+        rc, line = run_mod.run_one_case(self._case(tmp_path), eval_only=False, skip_ai=True,
+                                        replay=True, allow_no_golden=True)
+        assert "无golden" not in line  # 过了前置（后续失败是产出问题，不是拦截）

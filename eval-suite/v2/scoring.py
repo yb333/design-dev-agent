@@ -137,6 +137,7 @@ def score_result(
             deducted_roots.add(root)
 
     # golden 层：按差异维度逐项扣；同根因已扣过（断言层）→ 只展示不重复扣
+    # 无 golden = 无对照目标：评分无效（政策：评测必须有 golden，非打折）
     has_golden = False
     if golden_diffs is None:
         import golden
@@ -147,6 +148,15 @@ def score_result(
             fp = golden.fingerprint(deliver)
             hit, diffs = golden.compare(fp, next(iter(goldens.values())))
             golden_diffs = [] if hit else diffs
+        else:
+            return {
+                "total": None,
+                "deductions": deductions,
+                "fatal": fatal_descs,
+                "passed": False,
+                "has_golden": False,
+                "no_golden": True,
+            }
     if golden_diffs:
         has_golden = True
         for d in golden_diffs:
@@ -172,6 +182,9 @@ def render_score(score: dict, prev_total: int | None = None) -> str:
     """总分块文本（嵌入评测报告）。"""
     lines = ["── 总分 ───────────────────────────────────────────"]
     prev = f"（上轮 {prev_total}）" if prev_total is not None else ""
+    if score.get("no_golden"):
+        lines.append("  ⏸ 未评（无 golden 对照目标）——先 menu[5]/promote.py 沉淀，或 --allow-no-golden 冒烟")
+        return "\n".join(lines)
     if score["passed"]:
         lines.append(f"  ✔及格（交付安全）{score['total']}/100{prev}")
     else:
@@ -180,8 +193,6 @@ def render_score(score: dict, prev_total: int | None = None) -> str:
             lines.append(f"     ✘ {f}")
         if len(score["fatal"]) > 6:
             lines.append(f"     … 其余 {len(score['fatal']) - 6} 项")
-    if not score["has_golden"]:
-        lines.append("  ⚠️ 无golden（致命④加工逻辑无参照，仅自洽兜底，及格含金量打折）")
     non_fatal = [d for d in score["deductions"] if not d[3]]
     if non_fatal:
         lines.append("  非致命扣分（不拦及格，看趋势）:")

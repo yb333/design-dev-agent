@@ -36,23 +36,23 @@ def _mk_result(checks, steps=None, golden_fail=None):
 class TestFatalGate:
     def test_all_pass_100_and_passed(self, tmp_path):
         r = _mk_result([], [("preprocess", "pass"), ("designer", "pass")])
-        s = scoring.score_result(r, tmp_path, tmp_path)
+        s = scoring.score_result(r, tmp_path, tmp_path, golden_diffs=[])
         assert s["total"] == 100 and s["passed"] is True and not s["fatal"]
 
     def test_field_coverage_fatal(self, tmp_path):
         r = _mk_result([("code", "R0001: 字段覆盖契约缺字段: ['amt']")])
-        s = scoring.score_result(r, tmp_path, tmp_path)
+        s = scoring.score_result(r, tmp_path, tmp_path, golden_diffs=[])
         assert s["passed"] is False and "字段覆盖" in s["fatal"][0]
         assert s["total"] == 80
 
     def test_business_key_fatal(self, tmp_path):
         r = _mk_result([("design", "business_key 不符: x")])
-        s = scoring.score_result(r, tmp_path, tmp_path)
+        s = scoring.score_result(r, tmp_path, tmp_path, golden_diffs=[])
         assert s["passed"] is False and s["total"] == 80
 
     def test_type_input_fatal(self, tmp_path):
         r = _mk_result([("design", "类型不符输入要求: [('amt', 'int/decimal')]")])
-        s = scoring.score_result(r, tmp_path, tmp_path)
+        s = scoring.score_result(r, tmp_path, tmp_path, golden_diffs=[])
         assert s["passed"] is False
 
     def test_caliber_logic_fatal_from_golden(self, tmp_path):
@@ -113,8 +113,9 @@ class TestRender:
 
     def test_render_no_golden_warns(self):
         out = scoring.render_score(
-            {"total": 100, "deductions": [], "fatal": [], "passed": True, "has_golden": False})
-        assert "无golden" in out
+            {"total": None, "deductions": [], "fatal": [], "passed": False,
+             "has_golden": False, "no_golden": True})
+        assert "未评" in out and "promote" in out
 
 
 class TestDisciplineScoring:
@@ -122,11 +123,27 @@ class TestDisciplineScoring:
 
     def test_discipline_fail_not_fatal(self):
         r = _mk_result([("discipline", "agent 自建脚本 1 处（绕过流程，待人裁决）")])
-        s = scoring.score_result(r, Path("/tmp"), Path("/tmp"))
+        s = scoring.score_result(r, Path("/tmp"), Path("/tmp"), golden_diffs=[])
         assert s["passed"] is True  # 不进致命门
         assert s["total"] == 90     # -10
 
     def test_discipline_pass_clean(self):
         r = _mk_result([])
-        s = scoring.score_result(r, Path("/tmp"), Path("/tmp"))
+        s = scoring.score_result(r, Path("/tmp"), Path("/tmp"), golden_diffs=[])
         assert s["total"] == 100
+
+
+class TestNoGoldenInvalid:
+    """政策：评测必须有 golden——无对照目标评分无效（非打折）。"""
+
+    def test_no_golden_score_invalid(self, tmp_path):
+        r = _mk_result([])  # 断言全过也没用：无 golden = 无对照
+        s = scoring.score_result(r, tmp_path, tmp_path)  # tmp 无 golden 目录
+        assert s["no_golden"] is True
+        assert s["total"] is None and s["passed"] is False
+
+    def test_render_no_golden(self):
+        out = scoring.render_score(
+            {"total": None, "deductions": [], "fatal": [], "passed": False,
+             "has_golden": False, "no_golden": True})
+        assert "未评" in out and "promote" in out
