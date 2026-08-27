@@ -40,7 +40,7 @@ class TestBackNavigation:
         _feed(monkeypatch, ["1", "b", "7"])
         assert menu.main() == 0
 
-    def test_scope_back_returns_to_source(self, monkeypatch):
-        """跑评测 → 真实案例 → 范围层 b → 回来源层 → b → 主菜单 → 退出。"""
-        _feed(monkeypatch, ["1", "2", "b", "b", "7"])
+    def test_scope_back_straight_to_main(self, monkeypatch):
+        """范围层 b 直达主菜单（不再逐层重问来源）。"""
+        _feed(monkeypatch, ["1", "2", "b", "7"])
         assert menu.main() == 0
