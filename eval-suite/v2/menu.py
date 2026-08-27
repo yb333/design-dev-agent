@@ -57,16 +57,23 @@ def _print_menu(title: str, options: list[tuple[str, str]]) -> None:
     print()
 
 
-def _ask_choice(prompt: str, max_n: int) -> int:
-    """让用户选 1~max_n，返回选中的数字。输入错误重新问。"""
+class _Back(Exception):
+    """菜单逐级返回信号：b 键返回上一级（主菜单处不可再返）。"""
+
+
+def _ask_choice(prompt: str, max_n: int, allow_back: bool = False) -> int:
+    """让用户选 1~max_n。allow_back 时支持 b 返回上一级（抛 _Back 由调用层接）。"""
+    hint = f"1-{max_n}, b返回, q退出" if allow_back else f"1-{max_n}, q退出"
     while True:
-        raw = input(f"{prompt} (1-{max_n}, q退出): ").strip()
-        if raw.lower() == "q":
+        raw = input(f"{prompt} ({hint}): ").strip().lower()
+        if raw == "q":
             print("已退出。")
             sys.exit(0)
+        if allow_back and raw == "b":
+            raise _Back()
         if raw.isdigit() and 1 <= int(raw) <= max_n:
             return int(raw)
-        print(f"  ⚠️ 输入无效，请选 1-{max_n}")
+        print(f"  ⚠️ 输入无效，请选 1-{max_n}" + ("或 b 返回" if allow_back else ""))
 
 
 def _ask_yes_no(prompt: str, default: bool = True) -> bool:
@@ -97,7 +104,7 @@ def _pick_case(cases: list[Path]) -> Path | None:
         return None
     options = [(d.name, "") for d in cases]
     _print_menu("选择用例", options)
-    idx = _ask_choice("选哪个", len(cases))
+    idx = _ask_choice("选哪个", len(cases), allow_back=True)
     return cases[idx - 1]
 
 
@@ -197,7 +204,7 @@ def _pick_source() -> bool:
         ("假设案例 (eval-suite/cases/)", "验证能力用的虚构数据，001-012 + T1~T3 陷阱"),
         ("真实案例", "扫 cases_real/ 输入 + 10_project_deliver/ 产出"),
     ])
-    return _ask_choice("选哪个", 2) == 2
+    return _ask_choice("选哪个", 2, allow_back=True) == 2
 
 
 # ============================================================
@@ -209,6 +216,28 @@ def _run(args: list[str]) -> int:
     """调 run.py / seed.py，带参数。返回退出码。"""
     print(f"\n→ 执行: {' '.join(args)}\n")
     return subprocess.call([sys.executable, str(V2_DIR / args[0])] + args[1:], cwd=str(ROOT))
+
+
+def _history_flow() -> None:
+    """历史分析子流程（b 返回主菜单由调用方接 _Back）。"""
+    _print_menu("历史分析", [
+        ("单案例全量历史", "轮次明细/分数趋势/阶段耗时早期vs晚期/回路统计"),
+        ("跨案例总览", "所有案例的平均分/耗时/回路率对比"),
+    ])
+    h = _ask_choice("看哪个", 2, allow_back=True)
+    if h == 2:
+        _run(["history.py", "--all"])
+        return
+    results_dir = baseline_results_dir()
+    cases = sorted(d.name for d in results_dir.iterdir() if d.is_dir()) \
+        if results_dir.exists() else []
+    if not cases:
+        print("\n  ⚠️ results/ 下无快照（先跑评测）")
+        input("  按回车返回...")
+        return
+    _print_menu("选择案例", [(c, "") for c in cases])
+    ci = _ask_choice("选哪个", len(cases), allow_back=True)
+    _run(["history.py", "--case", cases[ci - 1]])
 
 
 def main() -> int:
@@ -229,123 +258,114 @@ def main() -> int:
             print("再见 👋")
             return 0
         if action == 6:
-            _print_menu("历史分析", [
-                ("单案例全量历史", "轮次明细/分数趋势/阶段耗时早期vs晚期/回路统计"),
-                ("跨案例总览", "所有案例的平均分/耗时/回路率对比"),
-            ])
-            h = _ask_choice("看哪个", 2)
-            if h == 2:
-                _run(["history.py", "--all"])
-            else:
-                cases = sorted(
-                    d.name for d in baseline_results_dir().iterdir()
-                    if d.is_dir()) if baseline_results_dir().exists() else []
-                if not cases:
-                    print("\n  ⚠️ results/ 下无快照（先跑评测）")
-                    input("  按回车继续...")
-                    continue
-                _print_menu("选择案例", [(c, "") for c in cases])
-                ci = _ask_choice("选哪个", len(cases))
-                _run(["history.py", "--case", cases[ci - 1]])
+            try:
+                _history_flow()
+            except _Back:
+                pass  # b → 回主菜单
             input("\n  按回车返回菜单...")
             continue
 
-        # 选用例来源
-        is_real = _pick_source()
+        # ── 逐级返回：来源层(b→主菜单) → 范围层(b→来源层) → 执行层(b→范围层)
+        done = False
+        while not done:
+            try:
+                is_real = _pick_source()
+            except _Back:
+                break  # 回主菜单
 
-        # 发现案例（两种来源路径不同）
-        if is_real:
-            real_cases = _discover_real_cases()
-            if not real_cases:
-                print("\n  ⚠️ 无真实案例（cases_real/ 和 10_project_deliver/ 都没数据）")
-                input("  按回车继续...")
-                continue
-            cases_dir_arg = f"--cases-dir={CASES_REAL_DIR.relative_to(ROOT)}"
-            case_count = len(real_cases)
-        else:
-            case_paths = _list_cases(CASES_DIR)
-            if not case_paths:
-                print("\n  ⚠️ eval-suite/cases/ 下无用例")
-                input("  按回车继续...")
-                continue
-            cases_dir_arg = f"--cases-dir={CASES_DIR.relative_to(ROOT)}"
-            case_count = len(case_paths)
+            while not done:
+                try:
+                    if is_real:
+                        real_cases = _discover_real_cases()
+                        if not real_cases:
+                            print("\n  ⚠️ 无真实案例（cases_real/ 和 10_project_deliver/ 都没数据）")
+                            input("  按回车返回...")
+                            break  # 回来源层
+                        cases_dir_arg = f"--cases-dir={CASES_REAL_DIR.relative_to(ROOT)}"
+                        case_count = len(real_cases)
+                    else:
+                        case_paths = _list_cases(CASES_DIR)
+                        if not case_paths:
+                            print("\n  ⚠️ eval-suite/cases/ 下无用例")
+                            input("  按回车返回...")
+                            break
+                        cases_dir_arg = f"--cases-dir={CASES_DIR.relative_to(ROOT)}"
+                        case_count = len(case_paths)
+                    _print_menu("评测范围", [
+                        ("全部用例", f"共 {case_count} 个"),
+                        ("单个用例", "手动选一个"),
+                    ])
+                    scope = _ask_choice("选哪个", 2, allow_back=True)
+                except _Back:
+                    break  # 回来源层
 
-        # 选哪些用例
-        _print_menu("评测范围", [
-            ("全部用例", f"共 {case_count} 个"),
-            ("单个用例", "手动选一个"),
-        ])
-        scope = _ask_choice("选哪个", 2)
-
-        if action == 3:
-            # seed（一次只处理一个）
-            if scope == 1:
-                print("\n  ℹ️ seed 一次只处理一个用例，请选单个。")
-            if is_real:
-                info = _pick_real_case(real_cases)
-                _ensure_real_case_dir(info)
-                _run(["seed.py", "--case", info.name, cases_dir_arg, "--review"])
-            else:
-                case = _pick_case(case_paths)
-                if case:
-                    _run(["seed.py", "--case", case.name, cases_dir_arg, "--review"])
-        elif action == 4:
-            # 稳定性测试：单案例连跑 N 次（零交互，全程不问）
-            if scope == 1:
-                print("\n  ℹ️ 稳定性测试一次只处理一个用例，请选单个。")
-            if is_real:
-                info = _pick_real_case(real_cases)
-                _ensure_real_case_dir(info)
-                case_name, extra_skip = info.name, _ask_yes_no("跳过 AI 阶段？", default=False)
-            else:
-                case = _pick_case(case_paths)
-                if not case:
-                    continue
-                case_name, extra_skip = case.name, _ask_yes_no("跳过 AI 阶段？", default=False)
-            raw = input("重复次数 (默认5): ").strip()
-            n = int(raw) if raw.isdigit() and int(raw) > 0 else 5
-            # 跳过AI只在重放模式有意义 → 自动带 --replay；默认真实入口连跑
-            extra = ["--replay", "--skip-ai"] if extra_skip else []
-            _run(["run.py", "--case", case_name, cases_dir_arg, "--repeat", str(n)] + extra)
-        elif action == 5:
-            # 沉淀 golden（纯拷贝，认可决定在人）
-            if scope == 1:
-                print("\n  ℹ️ 沉淀 golden 一次只处理一个用例，请选单个。")
-            if is_real:
-                info = _pick_real_case(real_cases)
-                _ensure_real_case_dir(info)
-                case_name = info.name
-            else:
-                case = _pick_case(case_paths)
-                if not case:
-                    continue
-                case_name = case.name
-            gname = input("golden 方案名（回车=自动 方案A/B/C...）: ").strip()
-            name_args = ["--name", gname] if gname else []
-            _run(["promote.py", "--case", case_name, cases_dir_arg] + name_args)
-        else:
-            # 跑评测 / 只评测
-            eval_only = action == 2
-            extra = ["--eval-only"] if eval_only else []
-
-            if scope == 1:
-                # 全部：真实案例先确保占位目录都存在，让 run.py --all 能 resolve
-                if is_real:
-                    for info in real_cases:
-                        _ensure_real_case_dir(info)
-                _run(["run.py", "--all", cases_dir_arg] + extra)
-            else:
-                # 单个：真实入口（默认），无 skip-ai 问题（真实流程不可能跳 AI；
-                # 脚本链路快查走 CLI --replay --skip-ai）
-                if is_real:
-                    info = _pick_real_case(real_cases)
-                    _ensure_real_case_dir(info)
-                    _run(["run.py", "--case", info.name, cases_dir_arg] + extra)
-                else:
-                    case = _pick_case(case_paths)
-                    if case:
-                        _run(["run.py", "--case", case.name, cases_dir_arg] + extra)
+                try:
+                    if action == 3:
+                        if scope == 1:
+                            print("\n  ℹ️ seed 一次只处理一个用例，请选单个。")
+                        if is_real:
+                            info = _pick_real_case(real_cases)
+                            _ensure_real_case_dir(info)
+                            _run(["seed.py", "--case", info.name, cases_dir_arg, "--review"])
+                        else:
+                            case = _pick_case(case_paths)
+                            if case:
+                                _run(["seed.py", "--case", case.name, cases_dir_arg, "--review"])
+                    elif action == 4:
+                        if scope == 1:
+                            print("\n  ℹ️ 稳定性测试一次只处理一个用例，请选单个。")
+                        if is_real:
+                            info = _pick_real_case(real_cases)
+                            _ensure_real_case_dir(info)
+                            case_name = info.name
+                            extra_skip = _ask_yes_no("跳过 AI 阶段？", default=False)
+                        else:
+                            case = _pick_case(case_paths)
+                            if not case:
+                                continue
+                            case_name = case.name
+                            extra_skip = _ask_yes_no("跳过 AI 阶段？", default=False)
+                        raw = input("重复次数 (默认5): ").strip()
+                        n = int(raw) if raw.isdigit() and int(raw) > 0 else 5
+                        extra = ["--replay", "--skip-ai"] if extra_skip else []
+                        _run(["run.py", "--case", case_name, cases_dir_arg,
+                              "--repeat", str(n)] + extra)
+                    elif action == 5:
+                        if scope == 1:
+                            print("\n  ℹ️ 沉淀 golden 一次只处理一个用例，请选单个。")
+                        if is_real:
+                            info = _pick_real_case(real_cases)
+                            _ensure_real_case_dir(info)
+                            case_name = info.name
+                        else:
+                            case = _pick_case(case_paths)
+                            if not case:
+                                continue
+                            case_name = case.name
+                        gname = input("golden 方案名（回车=自动 方案A/B/C...）: ").strip()
+                        name_args = ["--name", gname] if gname else []
+                        _run(["promote.py", "--case", case_name, cases_dir_arg] + name_args)
+                    else:
+                        eval_only = action == 2
+                        extra = ["--eval-only"] if eval_only else []
+                        if scope == 1:
+                            if is_real:
+                                for info in real_cases:
+                                    _ensure_real_case_dir(info)
+                            _run(["run.py", "--all", cases_dir_arg] + extra)
+                        else:
+                            if is_real:
+                                info = _pick_real_case(real_cases)
+                                _ensure_real_case_dir(info)
+                                _run(["run.py", "--case", info.name, cases_dir_arg] + extra)
+                            else:
+                                case = _pick_case(case_paths)
+                                if case:
+                                    _run(["run.py", "--case", case.name, cases_dir_arg] + extra)
+                except _Back:
+                    print("  ← 返回范围选择")
+                    continue  # 回范围层
+                done = True  # 执行完毕
 
         # 跑完问要不要继续
         print(f"\n{SEP}")
