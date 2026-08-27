@@ -226,15 +226,25 @@ def _check_ddl_consistency(output_dir: Path, ts: dict) -> list[CheckResult]:
     view_file = output_dir / "ddl" / f"create_view_{i_view}.sql" if i_view else None
     f_ddl = output_dir / "ddl" / f"create_table_{f_table}.sql" if f_table else None
     if view_file and view_file.exists() and f_ddl and f_ddl.exists():
-        view_cols = {c.lower() for c in assert_sql._extract_select_columns(
-            view_file.read_text(encoding="utf-8"))}
+        view_sql = view_file.read_text(encoding="utf-8")
+        view_cols = {c.lower() for c in assert_sql._extract_select_columns(view_sql)}
         f_cols = set(parse_ddl_columns(f_ddl))
-        miss = f_cols - view_cols
-        if miss:
+        if not view_cols and len(view_sql) > 50:
+            # 提取空集但视图SQL非空——解析失败不是真差异，别误报
             results.append(CheckResult(
                 check_type="artifacts", status=CheckStatus.FAIL,
-                detail=f"I视图列缺F表列[{i_view}]: {sorted(miss)[:6]}（→ assemble_ddl）",
+                detail=f"I视图列提取失败[{i_view}]（视图SQL解析异常，非差异；"
+                       f"请把视图SQL发维护者看解析兼容性）",
             ))
+        else:
+            miss = f_cols - view_cols
+            if miss:
+                results.append(CheckResult(
+                    check_type="artifacts", status=CheckStatus.FAIL,
+                    detail=f"I视图列缺F表列[{i_view}]: 缺{sorted(miss)[:5]} | "
+                           f"F表共{len(f_cols)}列 视图提取到{sorted(view_cols)[:5]}…"
+                           f"（→ assemble_ddl 或视图SQL解析差异）",
+                ))
 
     # 8e. 回退 SQL 必须含 DROP（成对性已有检查，这里查内容）
     rb_dir = output_dir / "ddl_rollback"

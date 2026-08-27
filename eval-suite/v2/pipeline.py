@@ -105,7 +105,7 @@ def opencode_cmd() -> list[str]:
 
 def _run_stream(
     cmd: list[str], timeout: float, cwd: Path | None = None, label: str = "",
-    stage_provider=None, line_hook=None,
+    stage_provider=None, line_hook=None, fatal_patterns=None,
 ) -> tuple[int, str]:
     """运行命令：全量缓存输出；超时 kill 并标记。
 
@@ -238,6 +238,23 @@ def _run_stream(
             print("    " + item, end="", flush=True)  # 缩进区分子进程输出
         else:
             _spin()
+        if fatal_patterns and any(pat.search(item) for pat in fatal_patterns):
+            # 致命流模式（如非交互评测中的 question 调用）= 死锁，立即终止不空等超时
+            print(f"    ⚠ 检测到致命模式（question 类），终止进程: {item.strip()[:100]}",
+                  flush=True)
+            proc.kill()
+            buf.append(f"\n[QUESTION] 检测到 question 调用，已终止: {item.strip()[:120]}")
+            _spin_end()
+            if live_f:
+                try:
+                    live_f.close()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            return -3, "".join(buf)
 
     _spin_end()
     if live_f:

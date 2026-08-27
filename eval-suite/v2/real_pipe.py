@@ -39,9 +39,18 @@ DEFAULT_TIMEOUT_PIPE = 3600
 
 # 非交互声明（new-pipe.md 闸口①② 唯一合法的跳过条件：调用方显式声明）
 NON_INTERACTIVE_CLAUSE = (
-    "【调用方显式声明：非交互批量评测——闸口①②跳过人工确认，"
-    "全程不要 question 停下，需要人决策的事项记录后继续】"
+    "【调用方显式声明：非交互批量评测——闸口①②跳过人工确认；"
+    "全程（含你派发的所有 Task/子agent）禁止调用 question 工具，"
+    "派发子任务时必须把本声明原样附进子任务 prompt；"
+    "需要人决策的事项一律记录到产出说明后继续】"
 )
+
+# 非交互评测中的致命流模式：question 调用=死锁（没人能应答），检测即终止
+_QUESTION_PATTERNS = [
+    re.compile(r"question\s*\(", re.IGNORECASE),          # 工具调用形态
+    re.compile(r"asked\s+user", re.IGNORECASE),
+    re.compile(r"等待用户(输入|确认|回答|选择)"),
+]
 
 
 def build_command_args(case_dir: Path) -> list[str]:
@@ -114,9 +123,21 @@ def run_real_pipe(
             label="new-pipe 真实流程",
             stage_provider=tracker.stage_text,
             line_hook=lambda line: (tracker.feed(line), discipline.feed(line)),
+            fatal_patterns=_QUESTION_PATTERNS,
         )
         deliver = find_deliver(deliver_base, case_dir.name)
-        return judge_real_run(deliver, code, out)
+        ok, detail = judge_real_run(deliver, code, out)
+        if "[QUESTION]" in out:
+            # 子agent/pipe 发起 question = 非交互死锁源，已快速终止——按纪律违规记录
+            qline = next((l.strip()[:120] for l in out.splitlines()
+                          if "[QUESTION]" not in l and l.strip() and any(
+                              pat.search(l) for pat in _QUESTION_PATTERNS)), "")
+            discipline._record(
+                "question",
+                f"发起 question（非交互评测死锁，已终止）: {qline}",
+                from_stream=True,
+            )
+        return ok, detail
 
     steps = [_step("new-pipe(真实流程)", _do)]
     stage_times, stage_loops = tracker.finish()

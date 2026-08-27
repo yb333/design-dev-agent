@@ -12,6 +12,7 @@ for p in (str(_EVAL_SUITE), str(_V2_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import assert_sql
 import pipeline
 import real_pipe
 import run as run_mod
@@ -111,7 +112,7 @@ class TestRunRealPipe:
 
         calls = {}
 
-        def fake_stream(cmd, timeout, cwd=None, label="", stage_provider=None, line_hook=None):
+        def fake_stream(cmd, timeout, cwd=None, label="", stage_provider=None, line_hook=None, fatal_patterns=None):
         # 模拟真实行为：line_hook 喂行（白名单脚本 + 违规脚本各一）
             calls["cmd"] = cmd
             if line_hook:
@@ -144,7 +145,7 @@ class TestRunRealPipe:
     def test_fail_step_when_no_artifacts(self, tmp_path, monkeypatch):
         (tmp_path / "dwb_x").mkdir(exist_ok=True)
         (tmp_path / "dwb_x" / "mapping.xlsx").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="", stage_provider=None, line_hook=None: (0, "ran ok"))
+        monkeypatch.setattr(real_pipe, "_run_stream", lambda cmd, t, cwd=None, label="", stage_provider=None, line_hook=None, fatal_patterns=None: (0, "ran ok"))
         monkeypatch.setattr(real_pipe, "find_deliver", lambda base, name: None)
         case_dir = tmp_path / "dwb_x"
         steps, _, _, _ = real_pipe.run_real_pipe(case_dir, tmp_path / "base", timeout=5)
@@ -527,3 +528,59 @@ class TestGoldenRequired:
         rc, line = run_mod.run_one_case(self._case(tmp_path), eval_only=False, skip_ai=True,
                                         replay=True, allow_no_golden=True)
         assert "无golden" not in line  # 过了前置（后续失败是产出问题，不是拦截）
+
+
+class TestQuestionDeadlock:
+    """④ 非交互评测中 question 调用 = 死锁，检测即快速终止 + 纪律违规记录。"""
+
+    def test_stream_question_kills_fast(self):
+        """子进程输出 question 形态行 → 立即终止（-3），不再空等 3600s 超时。"""
+        import real_pipe as rp
+        code, out = pipeline._run_stream(
+            [sys.executable, "-c",
+             "print('asked user: 请选择处理方式', flush=True); import time; time.sleep(30)"],
+            timeout=10, label="t", fatal_patterns=rp._QUESTION_PATTERNS)
+        assert code == -3
+        assert "[QUESTION]" in out
+
+    def test_question_recorded_as_violation(self, tmp_path):
+        """run_real_pipe 内检测到 [QUESTION] → discipline 记违规。"""
+        def fake_q_stream(cmd, timeout, cwd=None, label="", stage_provider=None,
+                          line_hook=None, fatal_patterns=None):
+            if line_hook:
+                line_hook("python ut_precheck.py\n")
+                line_hook("asked user: 增量字段选哪个?\n")
+            return -3, "\n[QUESTION] 检测到 question 调用，已终止: asked user: 增量字段选哪个?"
+
+        d = tmp_path / "base" / "dwb_x"
+        (d / "_internal").mkdir(parents=True)
+        (d / "etl").mkdir()
+        (d / "ts.json").write_text("{}", encoding="utf-8")
+        (d / "etl" / "R0001.sql").write_text("SELECT 1", encoding="utf-8")
+        case = tmp_path / "cases" / "dwb_x"
+        case.mkdir(parents=True)
+        (case / "mapping.xlsx").write_text("x", encoding="utf-8")
+
+        import unittest.mock as mock
+        with mock.patch.object(real_pipe, "_run_stream", fake_q_stream), \
+             mock.patch.object(real_pipe, "find_deliver",
+                               lambda b, n: d if n == "dwb_x" else None):
+            steps, _, _, violations = real_pipe.run_real_pipe(case, tmp_path / "base", timeout=5)
+        assert any("question" in v["script"] for v in violations)
+        assert "已终止" in violations[0]["action"]
+
+
+class TestParamPlaceholderParsing:
+    """② 回归：${} 占位符不再让提取器空集（全量缺失误报根因）。"""
+
+    def test_join_extraction_with_placeholder(self):
+        sql = ("INSERT INTO slmar.t SELECT a.id FROM sdord.dwd_order_f a "
+               "JOIN sdmar.dim_cust_f b ON a.cust_id=b.cust_id WHERE a.dt=${P_CYCLE_ID}")
+        joins = {t.split(".")[-1] for t in assert_sql._extract_join_tables(sql)}
+        assert "dwd_order_f" in joins and "dim_cust_f" in joins
+
+    def test_field_sigs_with_placeholder(self):
+        sql = "SELECT ${P_CYCLE_ID} AS crt_cycle_id, a.id AS id FROM ods.t a"
+        sigs = assert_sql._extract_field_signatures(sql)
+        assert sigs["crt_cycle_id"]["consts"] == ["NULL"]  # 占位符归一为 NULL（含exp.Null收集）
+        assert sigs["id"]["refs"] == ["a.id"]

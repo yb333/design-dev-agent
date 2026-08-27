@@ -31,8 +31,27 @@ from validators.base import CheckResult, CheckStatus  # type: ignore
 from validators.content import (  # type: ignore
     _extract_case_whens,
     _extract_del_flag_filters,
-    _extract_join_tables,
+    _extract_join_tables as _content_join_tables,
 )
+
+import re as _re
+
+_PARAM_RE = _re.compile(r"\$\{[^}]*\}")
+
+
+def _prep_sql(sql_text: str) -> str:
+    """SQL 预处理：参数占位符 ${...} → NULL。
+
+    真实 ETL SQL 带 ${P_CYCLE_ID} 等占位符，sqlglot 直接 ParseError →
+    提取器静默返回空集 → "全量缺失"误报（实测踩过）。替换成 NULL 后
+    任意位置都可解析，且不改变表/列/口径结构。
+    """
+    return _PARAM_RE.sub("NULL", sql_text or "")
+
+
+def _extract_join_tables(sql_text: str) -> list[str]:
+    """join 表提取（带占位符预处理的包装版）。"""
+    return _content_join_tables(_prep_sql(sql_text))
 
 from _paths import find_select_file, list_select_rules
 
@@ -48,7 +67,7 @@ def _extract_groupby_columns(sql_text: str) -> set[str]:
 
     cols: set[str] = set()
     try:
-        trees = sqlglot.parse(sql_text, dialect="postgres")
+        trees = sqlglot.parse(_prep_sql(sql_text), dialect="postgres")
         for tree in trees:
             if not tree:
                 continue
@@ -175,6 +194,16 @@ def _check_one_rule(code: str, sql_text: str, rule_cfg: dict) -> list[CheckResul
         expected_bare = {t.split(".")[-1] for t in rule_cfg["join_tables"]}
         actual_tables = _extract_join_tables(sql_text)
         actual_bare = {t.split(".")[-1] for t in actual_tables}
+        if not actual_bare and "from" in sql_text.lower():
+            # 提取器空集但 SQL 有 FROM——是解析失败不是真缺失，别误报
+            results.append(
+                CheckResult(
+                    check_type="code",
+                    status=CheckStatus.FAIL,
+                    detail=f"{pfx}JOIN表提取失败（SQL解析异常，非缺失；实际SQL含FROM）",
+                )
+            )
+            return results
         missing = expected_bare - actual_bare
         if missing:
             results.append(
@@ -193,8 +222,8 @@ def _check_one_rule(code: str, sql_text: str, rule_cfg: dict) -> list[CheckResul
                 )
             )
 
-    # 3. del_flag 过滤（默认开）
-    if rule_cfg.get("where_must_contain_del_flag", True):
+    # 3. del_flag 过滤（默认关——多数表无此需求，显式配置才检查）
+    if rule_cfg.get("where_must_contain_del_flag", False):
         aliases = _extract_del_flag_filters(sql_text)
         unfiltered = {a for a, ok in aliases.items() if not ok}
         if unfiltered:
@@ -308,7 +337,7 @@ def _extract_field_signatures(sql_text: str) -> dict[str, dict]:
 
     sigs: dict[str, dict] = {}
     try:
-        trees = sqlglot.parse(sql_text, dialect="postgres")
+        trees = sqlglot.parse(_prep_sql(sql_text), dialect="postgres")
         for tree in trees:
             if not tree:
                 continue
@@ -327,6 +356,8 @@ def _extract_field_signatures(sql_text: str) -> dict[str, dict]:
                         refs.add(ref.lower())
                     elif isinstance(node, exp.AggFunc):
                         aggs.add(node.sql_name().upper())
+                    elif isinstance(node, exp.Null):
+                        consts.add("NULL")  # 字面 NULL（赋值NULL字段）与占位符归一后的形态
                     elif isinstance(node, (exp.Boolean, exp.Literal)):
                         parent = getattr(node, "parent", None)
                         if isinstance(parent, (exp.DataType, exp.DataTypeParam)):
@@ -348,7 +379,7 @@ def _extract_select_columns(sql_text: str) -> set[str]:
 
     cols: set[str] = set()
     try:
-        trees = sqlglot.parse(sql_text, dialect="postgres")
+        trees = sqlglot.parse(_prep_sql(sql_text), dialect="postgres")
         for tree in trees:
             if not tree:
                 continue
