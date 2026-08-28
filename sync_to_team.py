@@ -136,6 +136,8 @@ def main() -> int:
     parser.add_argument("--config", metavar="TEAM_REPO", help="保存配置（含其他已生效选项）后退出")
     parser.add_argument("--src-branch", help="源仓分支（默认 main）")
     parser.add_argument("--team-branch", help="内部仓分支校验（空=用当前 checkout 分支）")
+    parser.add_argument("--switch", metavar="BRANCH",
+                        help="内部仓切到指定分支并更新配置，然后直接同步")
     args = parser.parse_args()
 
     src_repo = Path(__file__).resolve().parent
@@ -161,6 +163,29 @@ def main() -> int:
     if not (team_repo / ".git").exists():
         fail(f"不是 git 仓库: {team_repo}")
 
+    if args.switch:
+        branch = args.switch
+        print(f"[切分支] 内部仓 → {branch}")
+        # config 工作区改动先快照（checkout -f 本地全弃，真实值不能丢）
+        cfg_dir = team_repo / ".opencode" / "_references" / "rules" / resolve_rules_dir(src_repo)
+        snap = snapshot_dir(cfg_dir)
+        if run_git(["fetch", "origin"], cwd=team_repo).returncode != 0:
+            fail("fetch 内部远端失败，请检查网络")
+        r = run_git(["checkout", "-f", branch], cwd=team_repo)
+        if r.returncode != 0:
+            r = run_git(["checkout", "-b", branch, f"origin/{branch}"], cwd=team_repo)
+        if r.returncode != 0:
+            fail(f"切换到 {branch} 失败：本地和远端都没有这个分支（确认内部远端已建 {branch}）")
+        if restore_dir(cfg_dir, snap):
+            print("  config 工作区改动已带过来")
+        team_branch = branch
+        save_config(config_path, {
+            "TEAM_REPO": str(team_repo),
+            "SRC_BRANCH": src_branch,
+            "TEAM_BRANCH": team_branch,
+        })
+        print(f"[OK] 已切换到 {branch} 并更新配置，开始同步...")
+
     print("=" * 60)
     print("  同步设计开发能力 → 内部仓 .opencode/")
     print("=" * 60)
@@ -170,6 +195,36 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="design-dev-sync-") as tmp:
         return do_sync(src_repo, Path(tmp), team_repo, src_branch, team_branch)
+
+
+def resolve_rules_dir(base: Path) -> str:
+    """config 目录名从 config_paths 取（唯一源；取不到回退默认）。"""
+    sys.path.insert(0, str(base / "skills" / "design-dev-shared" / "scripts"))
+    try:
+        from config_paths import RULES_DIR_NAME
+        return RULES_DIR_NAME
+    except Exception:
+        return "dws-design-dev"
+    finally:
+        sys.path.pop(0)
+
+
+def snapshot_dir(d: Path) -> dict:
+    if not d.exists():
+        return {}
+    return {p.relative_to(d): p.read_bytes()
+            for p in sorted(d.rglob("*")) if p.is_file()}
+
+
+def restore_dir(d: Path, snap: dict) -> int:
+    restored = 0
+    for rel, data in snap.items():
+        target = d / rel
+        if not target.exists() or target.read_bytes() != data:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            restored += 1
+    return restored
 
 
 def managed_paths(skills: list, agents: list, commands: list, rules_dir: str) -> list:

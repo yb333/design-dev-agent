@@ -43,7 +43,15 @@ sync_to_team.bat --config D:\path\to\内部仓克隆 --team-branch 8.12
 ```
 
 配置保存在 `%USERPROFILE%\.design-dev-agent-sync.conf`，以后不用再传路径。
-`--team-branch 8.12` 是防呆：内部仓哪天不在 8.12 分支上会直接拦下，防止同步到错误分支。
+`--team-branch` 是防呆：内部仓哪天不在预期分支上会直接拦下，防止同步到错误分支。
+
+**内部仓换分支时**（比如团队从 8.12 改回 master），一条命令搞定——自动切分支 + 更新配置 + 直接跑一次同步：
+
+```bat
+sync_to_team.bat --switch master
+```
+
+（config 的工作区改动会自动带到新分支；若新分支是空的，会全量同步 + config 重新初始化，真实 config 记得重新拷一次。）
 
 ## 四、日常使用（三步）
 
