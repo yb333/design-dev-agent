@@ -2367,7 +2367,8 @@ class TestJoinKeyTypesAndDqContract:
         vr = _run(dec, rs)
         assert any(i["code"] == "N_DQ4" and i["level"] == "warn" for i in vr.items)
 
-    def test_dq5_unknown_field_hard(self):
+    def test_dq5_unknown_field_hard(self, tmp_path):
+        """有 cache：字段拼错在全域查无 → hard（无 cache 的行为见跨表用例）。"""
         rs = self._rs()
         rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
                                   "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
@@ -2375,11 +2376,13 @@ class TestJoinKeyTypesAndDqContract:
             "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
             "violation_condition": "t.order_amount IS NULL",
             "rule_desc": "违规=order_amount 为空"}])
-        vr = _run(dec, rs)
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(dec, rs, field_map,
+                                 schema_cache_path=self._cache(tmp_path))
         hits = [i for i in vr.items if i["code"] == "N_DQ5"]
         assert hits and hits[0]["level"] == "hard" and "order_amount" in hits[0]["msg"]
 
-    def test_dq5_known_field_passes(self):
+    def test_dq5_known_field_passes(self, tmp_path):
         rs = self._rs()
         rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
                                   "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
@@ -2387,9 +2390,59 @@ class TestJoinKeyTypesAndDqContract:
             "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
             "violation_condition": "t.prod_code IS NULL",
             "rule_desc": "违规=prod_code 为空"}])
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        # 有 cache：干净通过；无 cache：降 warn（存在性未校验的提示）不硬拦
+        vr = run_all_validations(dec, rs, field_map,
+                                 schema_cache_path=self._cache(tmp_path))
+        assert not any(i["code"] in ("N_DQ4", "N_DQ5") for i in vr.items)
+        vr2 = run_all_validations(dec, rs, field_map)
+        assert not any(i["code"] == "N_DQ4" for i in vr2.items)
+        assert any(i["code"] == "N_DQ5" and i["level"] == "warn" for i in vr2.items)
+
+    def test_dq5_cross_table_count_compare_passes_with_cache(self, tmp_path):
+        """跨表级 DQ（比对来源表与目标表数据量）：schema.table 子查询 + 源表字段
+        引用都合法——真实案例反馈的误拦场景（表名位被当字段查目标表必炸）。"""
+        rs = self._rs()
+        rs["dq_requirements"] = [{"scope": "跨表级", "check_type": "数据量核对",
+                                  "rule_name": "行数一致", "rule_desc": "两边行数相等"}]
+        dec = self._dec(dq_rules=[{
+            "scope": "跨表级", "check_type": "数据量核对", "rule_name": "行数一致",
+            "violation_condition":
+                "(select count(1) from ods.ods_b s) <> (select count(1) from dws.dwb_test_f t)"
+                " or s.prod_id is null",
+            "rule_desc": "违规=行数不等"}])
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(dec, rs, field_map,
+                                 schema_cache_path=self._cache(tmp_path))
+        assert not any(i["code"] == "N_DQ5" and i["level"] == "hard" for i in vr.items)
+
+    def test_dq5_cross_table_without_cache_downgrades_to_warn(self):
+        """无 cache：源表字段查不到，硬拦会误伤跨表引用 → 降 warn 放行（宁放过）。"""
+        rs = self._rs()
+        rs["dq_requirements"] = [{"scope": "跨表级", "check_type": "数据量核对",
+                                  "rule_name": "行数一致", "rule_desc": "两边行数相等"}]
+        dec = self._dec(dq_rules=[{
+            "scope": "跨表级", "check_type": "数据量核对", "rule_name": "行数一致",
+            "violation_condition":
+                "(select count(1) from ods.ods_b s) - (select count(1) from dws.dwb_test_f t) <> 0"
+                " or s.src_cnt is null",
+            "rule_desc": "违规=行数不等"}])
         vr = _run(dec, rs)
-        assert not any(i["code"] == "N_DQ5" for i in vr.items)
-        assert not any(i["code"] == "N_DQ4" for i in vr.items)
+        assert not any(i["code"] == "N_DQ5" and i["level"] == "hard" for i in vr.items)
+        assert any(i["code"] == "N_DQ5" and i["level"] == "warn" for i in vr.items)
+
+    def test_dq5_unknown_table_hard_even_without_cache(self):
+        """schema.table 形态查表名集合（rs_input 就有）——表名拼错无 cache 也拦。"""
+        rs = self._rs()
+        rs["dq_requirements"] = [{"scope": "跨表级", "check_type": "数据量核对",
+                                  "rule_name": "行数一致", "rule_desc": "两边行数相等"}]
+        dec = self._dec(dq_rules=[{
+            "scope": "跨表级", "check_type": "数据量核对", "rule_name": "行数一致",
+            "violation_condition": "(select count(1) from ods.ods_nosuch_f) <> 100",
+            "rule_desc": "违规=行数不等"}])
+        vr = _run(dec, rs)
+        hits = [i for i in vr.items if i["code"] == "N_DQ5" and i["level"] == "hard"]
+        assert hits and "ods_nosuch_f" in hits[0]["msg"]
 
     # ---------- design_logic 单行归一（落盘形态） ----------
 

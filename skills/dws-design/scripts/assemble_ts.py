@@ -1137,8 +1137,12 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     # N_DQ4/N_DQ5：violation_condition（DQ 版 design_logic——违规条件写成 SQL
     # 表达式，coder WHERE 直搬，消除 rule_desc 自然语言的翻译漂移）。
     # N_DQ4（warn）：有 dq_rules 但全缺 violation_condition（存量兼容，软引导补）。
-    # N_DQ5（hard）：violation_condition 里的字段引用查目标 F 表字段集——字段不在
-    # 目标表=必错（检查对象是目标表）。别名不猜（t.x 的字段位与裸 x 同查）。
+    # N_DQ5：violation_condition 的引用存在性。**跨表级 DQ 合法引用资产内任何表**
+    # （如比对来源表与目标表的数据量——子查询里必有 schema.table），登记处按形态分：
+    #   - `schema.table` 形态（限定符位是已知 schema 名）→ 表名查资产表名集合
+    #     （目标 F 表 + rs_input 源表，rs_input 就有——无 cache 也查）
+    #   - `别名.字段` 形态 → 字段查全域（目标表字段 ∪ schema_cache 全部表字段）；
+    #     无 cache → 源表字段查不到，只降 warn 不硬拦（宁放过：跨表引用可能合法）
     # ============================================================
     if dec_dq:
         no_cond = [d.get("rule_name") or d.get("check_type") or "?" for d in dec_dq
@@ -1161,22 +1165,60 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
         _f_fields = set()
         for _r in _target_rules:
             _f_fields.update(str(c).lower() for c in (_r.get("field_targets") or []))
+        # 资产表名 / schema 名（rs_input 就有，无 cache 也可靠）
+        _src_tables = rs_input.get("source_tables") or []
+        _tbl_names = {_table_short(str(st.get("source_table") or "")).lower() for st in _src_tables}
+        _tbl_names.discard("")
+        if _ftbl_short:
+            _tbl_names.add(_ftbl_short)
+        _schemas = {str(st.get("source_schema") or "").strip().lower() for st in _src_tables}
+        if str(_ftbl.get("schema") or "").strip():
+            _schemas.add(str(_ftbl.get("schema")).strip().lower())
+        _schemas.discard("")
+        # cache 源表字段全域（无 cache 为空集 → 降级只查 schema.table 形态）
+        _cache_fields = set()
+        if schema_cache_path is not None:
+            try:
+                _cand = Path(schema_cache_path)
+                if _cand.exists():
+                    for _cols in (json.loads(_cand.read_text(encoding="utf-8"))
+                                  .get("tables") or {}).values():
+                        _cache_fields |= {str(_c).lower() for _c in (_cols or {})}
+            except Exception:
+                _cache_fields = set()
+        _field_all = _f_fields | _cache_fields
+        _has_vc = any((d.get("violation_condition") or "").strip() for d in dec_dq)
+        if _has_vc and _f_fields and not _cache_fields:
+            vr.add_warn("LD", "N_DQ5",
+                        "有 violation_condition 但未连库无 schema_cache——源表字段的引用"
+                        "存在性未校验（跨表 DQ 的源表侧引用无法核对，闸口①人工确认）")
+        _rs_argd = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
         for i, d in enumerate(dec_dq, 1):
             vc = (d.get("violation_condition") or "").strip()
             if not vc or not _f_fields:
                 continue
             from sql_parse import extract_logic_refs
-            _rs_argd = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
-            _q, _b = extract_logic_refs(vc, _f_fields)
-            _vc_cols = {c for _, c in _q} | set(_b)
-            _bad = sorted(_vc_cols - _f_fields)
+            _q, _b = extract_logic_refs(vc, _field_all)
+            # bare_hits 只含命中登记处的（extract_logic_refs 语义），要查的是 qualified：
+            # schema.table 形态查表名；别名.字段查字段全域（无 cache 时全域=目标表字段，
+            # 源表侧引用放过——上面已统一 warn）
+            _bad = []
+            for al, c in _q:
+                if al in _schemas:
+                    if c not in _tbl_names:
+                        _bad.append(f"{al}.{c}（表不在资产源表/目标表内）")
+                elif _cache_fields and c not in _field_all:
+                    # 字段全域判存在仅在有 cache 时（无 cache 源表字段查不到，
+                    # 别名引用可能是源表字段——放过，上面已统一 warn）
+                    _bad.append(f"{al}.{c}")
             if _bad:
                 vr.add_hard("LD", "N_DQ5",
                             f"dq_rules[{i}]（{d.get('rule_name', '?')}）的 violation_condition "
-                            f"引用了目标表没有的字段 {_bad}——检查对象是目标 F 表"
-                            f"（{_ftbl_short or 'target'}），对照 field_targets 改拼写"
+                            f"引用不存在：{_bad}——合法域=目标表字段"
+                            f"{' + 资产源表字段/表名（跨表级）' if _cache_fields else ' + 资产表名'}，"
+                            f"对照 rs_input 源表清单/field_targets 改拼写"
                             f"\n先查证: python skills/dws-design/scripts/check_field.py "
-                            f"{_rs_argd} --field {_bad[0]}")
+                            f"{_rs_argd} --field {_bad[0].split('（')[0]}")
 
     # ============================================================
     # 初始化设计（LI 层）—— init 管道（与增量管道 rules 平行）
