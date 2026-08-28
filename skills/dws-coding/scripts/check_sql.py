@@ -28,6 +28,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from sql_parse import read_sql, split_cte_main, extract_select_aliases, extract_from_tables
 
+# 提示级前缀（不阻断）：表达式口径对账匹配不上可能是保语义的方言机械转写
+# （decode→case when 等，契约允许），与真错误同权输出会让 coder 误以为必须改回。
+# main 按此分组打印，退出码只由真问题决定。
+WARN_PREFIXES = ("[表达式口径]",)
+
 
 def check_bracket_balance(sql: str) -> tuple[bool, str]:
     """检查括号平衡"""
@@ -325,14 +330,123 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
     return issues
 
 
+def _dq_output_columns(sql_text: str) -> set:
+    """主查询 SELECT 输出列名（AS 别名优先；t.col 裸形态取列名）——DQ 业务键校验用。
+
+    extract_select_aliases 只认 AS 形态（规则 SELECT 的统一规范），DQ 输出列是
+    业务键+违规字段的裸形态（t.order_no），这里单独提取：顶层逗号切分（括号深度
+    感知），每段取 AS 别名或裸标识符的列名位；函数表达式列（无名）跳过。
+    """
+    _cte, main = split_cte_main(sql_text)
+    body = main if main else sql_text
+    m = re.search(r'\bSELECT\b(.*?)\bFROM\b', body, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return set()
+    seg = m.group(1)
+    cols, depth, cur = [], 0, ""
+    for ch in seg:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            cols.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        cols.append(cur)
+    out = set()
+    for c in cols:
+        c = c.strip()
+        am = re.search(r'\bAS\s+([A-Za-z_]\w*)\s*$', c, re.IGNORECASE)
+        if am:
+            out.add(am.group(1).lower())
+        elif re.fullmatch(r'[A-Za-z_]\w*', c):
+            out.add(c.lower())
+        elif re.fullmatch(r'[A-Za-z_]\w*\.[A-Za-z_]\w*', c):
+            out.add(c.rsplit(".", 1)[1].lower())
+    return out
+
+
+def check_dq_sql(sql_text: str, ts: dict, cache_path=None) -> list[str]:
+    """DQ 检查 SQL 的静态校验（dws-dq 流程，--dq 模式；DQ 不是规则，无 rule_code）。
+
+    校验资产级契约（dws-dq SKILL）：
+    - 基础三项：括号平衡 / 无 SELECT * / 无 -- 行注释
+    - FROM 表引用 ⊆ {目标 F 表} ∪ 资产级源表并集（跨表检查也只许碰资产内的表）
+    - schema 前缀（裸表名报错，CTE 名豁免）
+    - 输出列含 business_key（违规行要能回溯到业务对象）
+    """
+    issues = []
+
+    ok, msg = check_bracket_balance(sql_text)
+    if not ok:
+        issues.append(f"[语法] {msg}")
+    ok, msg = check_no_select_star(sql_text)
+    if not ok:
+        issues.append(f"[规范] {msg}")
+    ok, msg = check_no_line_comment(sql_text)
+    if not ok:
+        issues.append(f"[规范] {msg}")
+
+    from ts_compat import normalize_ts
+    ts = normalize_ts(ts)
+
+    f_table = ts.get("meta", {}).get("target", {}).get("f_table", {}) or {}
+    target_short = str(f_table.get("table") or "").rsplit(".", 1)[-1].lower()
+    allowed = {target_short} if target_short else set()
+    for r in (ts.get("rules") or {}).values():
+        for st in (r.get("source_tables") or []):
+            t = (st.get("table") or "").split(".")[-1].lower()
+            if t:
+                allowed.add(t)
+
+    cte_names, _main = split_cte_main(sql_text)
+    cte_lower = {c.lower() for c in cte_names}
+    select_tables = {t.lower() for t in extract_from_tables(sql_text)}
+    unknown = select_tables - allowed - cte_lower
+    if unknown:
+        issues.append(
+            f"[表引用] DQ SELECT 引用了不在检查对象/资产源表里的表: {sorted(unknown)}"
+            f"（检查对象=目标 F 表，跨表检查用切片 source_tables 里的表）"
+        )
+
+    from sql_parse import extract_table_refs_raw
+    bare_refs = sorted({
+        ref for ref in extract_table_refs_raw(sql_text)
+        if "." not in ref and ref.lower() not in cte_lower
+    })
+    if bare_refs:
+        issues.append(
+            f"[schema] FROM/JOIN 引用必须带 schema 前缀（schema.table）: {bare_refs}"
+        )
+
+    bk = [str(k).lower() for k in ts.get("design", {}).get("business_key", [])]
+    aliases = _dq_output_columns(sql_text)
+    missing_bk = [k for k in bk if k not in aliases]
+    if bk and missing_bk:
+        issues.append(
+            f"[输出列] 缺业务键列 {missing_bk}——违规行要能回溯到业务对象"
+            f"（输出列 = 业务键 + 违规字段值，见 dws-dq SKILL）"
+        )
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="SELECT 静态对比: SELECT vs ts.json 规则切片"
+        description="SELECT 静态对比: SELECT vs ts.json 规则切片（--dq 校验 DQ 检查 SQL）"
     )
     parser.add_argument("--sql", required=True, help="SELECT SQL 文件路径")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
-    parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
+    parser.add_argument("--rule", default="", help="规则编号，如 R0001（与 --dq 二选一）")
+    parser.add_argument("--dq", action="store_true", help="DQ 检查 SQL 模式（dws-dq 流程用）")
     args = parser.parse_args()
+
+    if args.dq and args.rule:
+        parser.error("--dq 与 --rule 互斥（DQ 不带规则号）")
+    if not args.dq and not args.rule.strip():
+        parser.error("--rule 与 --dq 必须给一个")
 
     # 读 SQL
     sql_path = Path(args.sql)
@@ -349,18 +463,35 @@ def main():
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
     # 检查（schema_cache 在 ts 同级 _internal/——precheck 连库产出；没有则源表层跳过）
-    issues = check_sql(sql_text, ts, args.rule,
-                       cache_path=ts_path.parent / "_internal" / "schema_cache.json")
+    if args.dq:
+        issues = check_dq_sql(sql_text, ts,
+                              cache_path=ts_path.parent / "_internal" / "schema_cache.json")
+        label = "DQ"
+    else:
+        issues = check_sql(sql_text, ts, args.rule,
+                           cache_path=ts_path.parent / "_internal" / "schema_cache.json")
+        label = args.rule
 
-    if issues:
-        print(f"[静态对比未通过] {args.rule} 有 {len(issues)} 个问题:", file=sys.stderr)
-        for i, issue in enumerate(issues, 1):
+    errors = [i for i in issues if not i.startswith(WARN_PREFIXES)]
+    warns = [i for i in issues if i.startswith(WARN_PREFIXES)]
+
+    if errors:
+        print(f"[静态对比未通过] {label} 有 {len(errors)} 个问题:", file=sys.stderr)
+        for i, issue in enumerate(errors, 1):
             print(f"  {i}. {issue}", file=sys.stderr)
             print(file=sys.stderr)  # issue 之间空行，避免多行字段列表粘连
+    if warns:
+        print(f"[提示·不阻断] {len(warns)} 条（闸口②人工核对；方言机械转写属合法，勿改回）:",
+              file=sys.stderr)
+        for i, issue in enumerate(warns, 1):
+            print(f"  {i}. {issue}", file=sys.stderr)
+            print(file=sys.stderr)
+
+    if errors:
         sys.exit(1)
-    else:
-        print(f"[静态对比通过] {args.rule}: 字段覆盖完整, 表引用正确, 语法OK")
-        sys.exit(0)
+    if not warns:
+        print(f"[静态对比通过] {label}: 字段覆盖完整, 表引用正确, 语法OK")
+    sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -215,12 +215,15 @@
   // ============================================================================
   // dq_rules —— DQ（RS 驱动：RS L06 有需求 designer 翻译产入，RS 无则留空）
   // designer 是翻译者（类比 field_logics）：scope/check_type/rule_name 跟 RS 一致，
-  // rule_desc 写技术口径（检查字段/条件/阈值/告警级）给 coder 写 SQL。
+  // violation_condition 写违规条件的 SQL 表达式（检查对象=目标 F 表，coder WHERE 直搬），
+  // rule_desc 写口径说明（阈值来历/告警级/方向备注）。
   // DQ 完全跟随 RS，无"标准三项系统兜底"（主键/审计/记录数不再无条件产）。
-  // assemble_ts 硬校验 N_DQ1：RS 有 DQ 但 dq_rules 空 → fail-loud（漏翻译）。
+  // assemble_ts 校验：N_DQ1（硬）RS 有 DQ 但 dq_rules 空；N_DQ4（warn）缺 violation_condition；
+  // N_DQ5（硬）violation_condition 引用目标表没有的字段。
   // ============================================================================
   "dq_rules": []
   // 示例：
   // [{ "scope": "字段级", "check_type": "空值检查", "rule_name": "订单金额非空",
-  //    "rule_desc": "检查 dwb_order_f.order_amount IS NOT NULL，空值告警" }]
+  //    "violation_condition": "t.order_amount IS NULL",
+  //    "rule_desc": "违规=order_amount 为空（有空值即告警）" }]
 }

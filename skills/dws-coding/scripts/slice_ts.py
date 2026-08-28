@@ -204,18 +204,30 @@ def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
 def slice_dq(ts: dict) -> dict:
     """切 DQ 规则段（dws-dq 流程用）——不整读 ts.json。
 
-    内容：契约 + 目标表全名（检查对象）+ business_key（输出业务键列用）+ dq_rules 全量。
+    内容：契约 + 目标表全名（检查对象）+ business_key（输出业务键列）
+    + source_tables（资产级源表并集，跨表检查用）+ dq_rules 全量。
     dq_rules 为空时报错（执行计划 dq=true 才发起 DQ 任务，空=上游错位）。
     """
     dq_rules = ts.get("dq_rules") or []
     if not dq_rules:
-        raise ValueError("ts.dq_rules 为空——DQ 切片无内容（执行计划 dq=true 才发起 DQ 任务）")
+        raise ValueError("ts.dq_rules 为空——DQ 切片无内容（执行计划 dq=true 才发起 DQ 任务，空=上游错位）")
     f_table = ts.get("meta", {}).get("target", {}).get("f_table", {}) or {}
     target = f"{f_table.get('schema', '')}.{f_table.get('table', '')}".strip(".")
+    # 资产级源表并集（全规则 source_tables 按 schema+table+alias 去重）——
+    # 跨表/源表级检查时 coder 要 schema 全名，切片不给就得回头读 ts.json
+    seen: set = set()
+    source_tables = []
+    for r in (ts.get("rules") or {}).values():
+        for st in (r.get("source_tables") or []):
+            key = (st.get("schema", ""), st.get("table", ""), st.get("alias", ""))
+            if key[1] and key not in seen:
+                seen.add(key)
+                source_tables.append({"schema": key[0], "table": key[1], "alias": key[2]})
     return {
         "contract": "DQ SELECT = 违规行探测器：0 行=通过，非 0 行=告警",
         "target_table": target,
         "business_key": ts.get("design", {}).get("business_key", []),
+        "source_tables": source_tables,
         "dq_rules": dq_rules,
     }
 

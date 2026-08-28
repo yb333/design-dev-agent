@@ -273,13 +273,16 @@ data_flow:
 dq_rules: []
 # 翻译规则（不是原样搬运 RS）：
 #   - scope / check_type / rule_name：跟 RS 保持一致（分类不变）
-#   - rule_desc：★ 翻译后的技术口径（检查字段/条件/阈值/告警级），给 coder 写 SQL 用，不是 RS 原文
-# 例：RS rule_desc="订单金额不能为空" → 翻译 rule_desc="检查 dwb_order_f.order_amount IS NOT NULL，空值告警"
+#   - violation_condition：★ 违规条件的 SQL 表达式（检查对象=目标 F 表，别名自定）——
+#     DQ 版 design_logic，coder WHERE 直搬不再翻译；字段引用查目标表（N_DQ5 硬拦拼写错）
+#   - rule_desc：口径说明（阈值来历/告警级/方向备注），不是 RS 原文
+# 例：RS rule_desc="订单金额不能为空" →
 #   - rule_id: "DQ_001"
 #     scope: "字段级"                          # 跟 RS 一致
 #     check_type: "空值检查"                    # 跟 RS 一致
 #     rule_name: "订单金额非空"                 # 跟 RS 一致
-#     rule_desc: "检查 dwb_order_f.order_amount IS NOT NULL，空值告警"  # ★ 翻译后的技术口径
+#     violation_condition: "t.order_amount IS NULL"   # ★ 违规=探测行的 WHERE（coder 直搬）
+#     rule_desc: "违规=order_amount 为空（有空值即告警）"  # 口径说明（别写正向"检查 IS NOT NULL"，方向易译反）
 
 # === 软阻断豁免（可选）===
 # 某些校验是"软阻断"（默认拦，但有合法通道可放行）。

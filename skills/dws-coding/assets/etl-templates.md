@@ -264,6 +264,27 @@ COALESCE(inv_agg.total, 0) AS total
 ```
 > 主键/外键不要 COALESCE（NULL→0 会掩盖关联失败）；可选字段保留 NULL。详见 coding-standards §1.3。
 
+### 多层 CASE WHEN 嵌套
+
+条件有层级（先判大类、再判细分）时用嵌套，缩进一层一级、每层都有 ELSE：
+
+```sql
+CASE
+    WHEN t.order_type = 'A' THEN
+        CASE
+            WHEN t.sub_type = 'A1' THEN 'A1-普通'
+            WHEN t.sub_type = 'A2' THEN 'A2-加急'
+            ELSE 'A-其他'
+        END
+    WHEN t.order_type = 'B' THEN 'B-直供'
+    ELSE '未知类型'
+END AS order_type_name,
+```
+
+- 每层 CASE 必须写 ELSE（不写会落 NULL，与"业务要 NULL"混在一起分不清是漏判还是真无值）
+- design_logic 里已是表达式时**原样直搬**（含嵌套结构），不重组层级
+- 层级超过 3 层考虑是否该拆维度字段或映射表（回报闸口②，不自行改设计）
+
 ### 字段别名
 
 每个输出字段必须用 `AS` 显式命名，且和切片的 target_field 一致：

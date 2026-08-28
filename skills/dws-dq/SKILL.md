@@ -17,20 +17,37 @@ description: >-
 python {dws-coding 的 scripts 目录}/slice_ts.py --ts {ts路径} --dq
 ```
 
-slice_ts 住在**同级 dws-coding skill** 的 `scripts/` 下（用注入的 location 推同级路径——工具共享，边界在 SKILL）。切片含：契约 / `target_table`（检查对象，schema 全名）/ `business_key`（输出业务键列）/ `dq_rules` 全量。
+slice_ts 住在**同级 dws-coding skill** 的 `scripts/` 下（用注入的 location 推同级路径——工具共享，边界在 SKILL）。切片含：契约 / `target_table`（检查对象，schema 全名）/ `business_key`（输出业务键列）/ `source_tables`（资产级源表并集，跨表检查用）/ `dq_rules` 全量。
 
 ## 2. 逐条生成
 
 每条 dq_rule 一个文件 `dq_{check_type}.sql`（UT 按此确定名找文件，缺失即发现项）：
 
-- **方向**：rule_desc 已写明什么情况算违规，照口径定 WHERE——查空值就 `WHERE col IS NULL`（有空值=告警行），别写反
-- **阈值/比例逻辑全收进 WHERE/HAVING**，SQL 只负责吐违规行
-- **输出列 = 业务键（切片 business_key）+ 违规值字段**——不 SELECT *，不带审计字段（DQ 是探测不是装载）
+- **WHERE**：`violation_condition`（违规条件的 SQL 表达式）**存在则直搬禁改口径**（不加不减条件，与 design_logic 同规矩）；缺失才按 rule_desc 写——**方向照 rule_desc 的"违规="描述**（查空值就 `WHERE col IS NULL`，有空值=告警行，别写反），疑义上报不自行演绎。阈值/比例逻辑全收进 WHERE/HAVING
+- **输出列 = 业务键（切片 business_key）+ 违规字段本身**（SELECT 该字段，列名=字段名——输出的是违规字段的**值**，不是字段名清单）——不 SELECT *，不带审计字段（DQ 是探测不是装载）
+- **跨表/源表级检查**：引用表用切片 `source_tables`（schema 全名）；只许碰检查对象和资产内源表
 - 参数直接写 `${参数名}`（UT 执行前替换测试值）
-- 检查对象是切片的 target_table——UT 灌数后执行验证，上线后平台按调度跑同一份 SQL
+- 检查对象默认是切片 target_table——UT 灌数后执行验证，上线后平台按调度跑同一份 SQL
 - SQL 规范同 dws-coding 的 coding-standards（同级 `references/dws-coding-standards.md`）：方言 §0（CAST 首选/类型转换细则）、注释一律 `/* */`、对象引用 schema 全限定
 
-## 3. 边界
+模板（单表检查）：
 
-- 不跑 check_sql——它按 rule_code 查 ts.rules，DQ 不是规则；DQ 的执行验证归 UT 的 DQ 阶段（0 行=过，非 0 行=告警阻断闸口② 人判）
+```sql
+/* DQ-空值检查: 订单金额非空 —— 违规=order_amount 为空 */
+SELECT
+    t.order_id,
+    t.order_amount
+FROM {schema}.{target_table} t
+WHERE t.order_amount IS NULL;
+```
+
+## 3. 写完自检 + 边界
+
+- **静态检查**（写完即跑，不连库秒级）：
+
+```bash
+python {dws-coding 的 scripts 目录}/check_sql.py --ts {ts路径} --sql {dq文件} --dq
+```
+
+- **执行验证归 UT 的 DQ 阶段**（0 行=过，非 0 行=告警阻断闸口② 人判），不要自己连库试跑
 - 不做 ETL 规则编码（那是 dws-coding 的活）；任务混了两者 → question 回报调用方

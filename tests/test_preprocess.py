@@ -1250,3 +1250,50 @@ class TestAssignSeamNoFalseAliasError:
         alias_errs = [e for e in result.errors if "source_alias" in e or "来源别名" in e]
         assert not alias_errs, alias_errs
 
+
+
+class TestCompactExploreAndDecision:
+    """view 的 explore 段（缺失也标注）+ 类型风险决策字段标记。"""
+
+    @staticmethod
+    def _rs():
+        return {"field_mappings": [
+            {"target_column": "id", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "a", "source_column": "id", "source_table": "ods_a"},
+            {"target_column": "amt", "transform_rule": "数据加工",
+             "transform_detail": "类型转换：varchar→numeric（跨大类；改 ETL 不改 DDL）",
+             "target_type": "numeric", "source_alias": "a",
+             "source_column": "amt", "source_table": "ods_a"}],
+            "source_tables": [{"source_schema": "ods", "source_table": "ods_a",
+                               "source_alias": "a"}]}
+
+    def test_explore_present(self):
+        from preprocess import build_compact
+        rs = self._rs()
+        rs["data_exploration"] = {
+            "table_stats": [{"表名": "ods_a", "量级": "千万级"}],
+            "null_rates": [{"字段": "amt", "空值率": "0.1%"}]}
+        c = build_compact(rs)
+        assert c["explore"]["table_stats"][0]["量级"] == "千万级"
+        assert c["explore"]["null_rates"][0]["字段"] == "amt"
+
+    def test_explore_missing_marked(self):
+        """RS 缺数据探索也要出段——designer 知道'没有'而不是'不知道有没有'。"""
+        from preprocess import build_compact
+        c = build_compact(self._rs())
+        assert "未提供数据探索" in c["explore"]["说明"]
+
+    def test_type_decision_marked_in_processed(self):
+        """决策回写字段（类型转换：/类型安全处理：打头）标'决策'——已人定勿再质疑。"""
+        from preprocess import build_compact
+        c = build_compact(self._rs())
+        entry = [e for e in c["processed"] if e["tgt"] == "amt"][0]
+        assert "决策" in entry and "勿推翻方向" in entry["决策"]
+
+    def test_normal_processed_not_marked(self):
+        from preprocess import build_compact
+        rs = self._rs()
+        rs["field_mappings"][1]["transform_detail"] = "金额按 a.amt 汇总"
+        c = build_compact(rs)
+        entry = [e for e in c["processed"] if e["tgt"] == "amt"][0]
+        assert "决策" not in entry

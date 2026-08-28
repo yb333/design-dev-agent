@@ -1134,6 +1134,51 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     f"DQ 是业务决策归 RS，请确认")
 
     # ============================================================
+    # N_DQ4/N_DQ5：violation_condition（DQ 版 design_logic——违规条件写成 SQL
+    # 表达式，coder WHERE 直搬，消除 rule_desc 自然语言的翻译漂移）。
+    # N_DQ4（warn）：有 dq_rules 但全缺 violation_condition（存量兼容，软引导补）。
+    # N_DQ5（hard）：violation_condition 里的字段引用查目标 F 表字段集——字段不在
+    # 目标表=必错（检查对象是目标表）。别名不猜（t.x 的字段位与裸 x 同查）。
+    # ============================================================
+    if dec_dq:
+        no_cond = [d.get("rule_name") or d.get("check_type") or "?" for d in dec_dq
+                   if not (d.get("violation_condition") or "").strip()]
+        if no_cond:
+            vr.add_warn("LD", "N_DQ4",
+                        f"{len(no_cond)} 条 dq_rules 缺 violation_condition（{no_cond[:5]}"
+                        f"{'…' if len(no_cond) > 5 else ''}）——违规条件写成 SQL 表达式"
+                        f"（如 t.order_amount IS NULL），coder WHERE 直搬不再翻译 rule_desc")
+        # 目标 F 表字段集（tables 纯表元数据是 DDL 唯一源，字段必在）；
+        # meta 有 F 表名按名匹配，否则取 target_role=target 的规则（无 meta 的兜底）
+        _ftbl = (rs_input.get("meta", {}).get("target", {}) or {}).get("f_table", {}) or {}
+        _ftbl_short = str(_ftbl.get("table") or "").rsplit(".", 1)[-1].lower()
+        if _ftbl_short:
+            _target_rules = [r for r in rules
+                             if _table_short(r.get("target_table", "")).lower() == _ftbl_short]
+        else:
+            _target_rules = [r for r in rules
+                             if (r.get("target_role") or "target") != "intermediate"]
+        _f_fields = set()
+        for _r in _target_rules:
+            _f_fields.update(str(c).lower() for c in (_r.get("field_targets") or []))
+        for i, d in enumerate(dec_dq, 1):
+            vc = (d.get("violation_condition") or "").strip()
+            if not vc or not _f_fields:
+                continue
+            from sql_parse import extract_logic_refs
+            _rs_argd = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
+            _q, _b = extract_logic_refs(vc, _f_fields)
+            _vc_cols = {c for _, c in _q} | set(_b)
+            _bad = sorted(_vc_cols - _f_fields)
+            if _bad:
+                vr.add_hard("LD", "N_DQ5",
+                            f"dq_rules[{i}]（{d.get('rule_name', '?')}）的 violation_condition "
+                            f"引用了目标表没有的字段 {_bad}——检查对象是目标 F 表"
+                            f"（{_ftbl_short or 'target'}），对照 field_targets 改拼写"
+                            f"\n先查证: python skills/dws-design/scripts/check_field.py "
+                            f"{_rs_argd} --field {_bad[0]}")
+
+    # ============================================================
     # 初始化设计（LI 层）—— init 管道（与增量管道 rules 平行）
     # load_mode 装不下 init/增量两种写入 → init 单独成段。
     # 校验 designer 的 init 声明（装配器 build_init_section 按不变量补全输出）。
@@ -1196,7 +1241,8 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             detail = (fm.get("transform_detail") or fm.get("mapping_expression") or "").strip()
             if not detail or detail in ("-", "无"):
                 continue
-            if str(logic).strip() == detail:
+            from sql_parse import normalize_logic_line
+            if normalize_logic_line(logic) == normalize_logic_line(detail):
                 vr.add_warn("L1", "N29",
                     f"规则 {code} 字段 {col} 的 design_logic 与 mapping 原文完全一致——"
                     f"原文是表达式则缺口径说明句（补括号理解，如 NULL/空串边界），"
@@ -1277,7 +1323,9 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             if _cand.exists():
                 _raw = json.loads(_cand.read_text(encoding="utf-8"))
                 for k, v in (_raw.get("tables") or {}).items():
-                    cache_tables[k.lower()] = {c.lower() for c in (v or {})}
+                    # 保留类型 {col: type}（N_JOIN2 键类型比对用）；`in` 判断与集合语义一致
+                    _cols = v if isinstance(v, dict) else {c: "" for c in (v or [])}
+                    cache_tables[k.lower()] = {str(c).lower(): str(t) for c, t in _cols.items()}
         except Exception:
             cache_tables = {}
 
@@ -1418,6 +1466,77 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                             f"{_rs_arg} --field {bcol}")
 
     # ============================================================
+    # N_JOIN2（hard）：designer 自设关联的键类型比对（cache 门控全量）。
+    # N_JOIN1 只对账 precheck 检出对（mapping 声明域）；designer 自设 joins（含 tmp 侧）
+    # 此前只有存在性校验（N30），无类型可比性——案例实证：join 两侧类型跨大类，
+    # 裸等值 UT 才炸（operator does not exist）。比对只取裸等值对 alias.col = alias.col
+    # （parse_join_pairs 提取；函数包裹/cast 的跳过——宁放过不误报）；类型登记处：
+    # 源表 schema_cache（col→type），tmp 侧 field_map 的 target_type + decisions
+    # .tables 声明类型；判档唯一源 type_compat.join_key_pair_risky（跨大类才算）。
+    # 放行通道：joins 声明 cast / 条件内联 cast 语法 / N_JOIN1 豁免（决策=接受）/ N_JOIN1
+    # 已报的检出对（避免双报）。类型查不到（无 cache/tmp 无类型）→ 跳过不猜。
+    # ============================================================
+    if cache_tables:
+        from sql_parse import parse_join_pairs
+        from type_compat import join_key_pair_risky
+        # N_JOIN1 的检出对与豁免（同口径复用，避免双报/误拦已豁免对）
+        risky_quals = {}
+        for rk in (rs_input.get("_join_type_risks") or []):
+            key = frozenset(((rk.get("left") or "").lower(), (rk.get("right") or "").lower()))
+            risky_quals[key] = rk
+        exempt_conds = {
+            (d.get("condition") or "").strip()
+            for d in (rs_input.get("_join_type_decisions") or [])
+            if (d.get("decision") or "").strip() == "接受"
+        }
+        # tmp 表字段类型：rules 的 field_targets × field_map.target_type，
+        # designer 的 tables.fields 声明优先（自建字段 rs_input 没有）
+        dec_tbl_types: dict = {}
+        for _t, _cfg in (decisions.get("tables") or {}).items():
+            if isinstance(_cfg, dict) and isinstance(_cfg.get("fields"), dict):
+                dec_tbl_types[_t.lower()] = {str(k).lower(): str(v) for k, v in _cfg["fields"].items()}
+        tmp_types: dict = {}
+        for r in rules:
+            tt = _table_short(r.get("target_table", "")).lower()
+            bucket = tmp_types.setdefault(tt, {})
+            for c in (r.get("field_targets") or []):
+                decl = (dec_tbl_types.get(tt) or {}).get(c.lower())
+                bucket[c.lower()] = decl or str((field_map.get(c) or {}).get("target_type") or "")
+        _rs_arg2 = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
+        for rule in rules:
+            code = rule.get("rule_code", "?")
+            rule_tmp_alias = _rule_tmp_aliases(rule)
+            for j in rule.get("joins") or []:
+                cond = (j.get("condition") or "").strip()
+                if not cond or cond in exempt_conds:
+                    continue
+                if (j.get("cast") or "").strip() or "::" in cond or "cast(" in cond.lower():
+                    continue  # 已声明/内联 cast → 放行
+                for (la, lc), (ra, rc) in parse_join_pairs(cond):
+                    lq = f"{alias_map.get(la, '')}.{lc}".lower()
+                    rq = f"{alias_map.get(ra, '')}.{rc}".lower()
+                    if frozenset((lq, rq)) in risky_quals:
+                        continue  # precheck 检出对归 N_JOIN1 报（文案带采样与豁免指引）
+                    def _type_of(al, ccol):
+                        if al in alias_map:
+                            return cache_tables.get(alias_map[al], {}).get(ccol, "")
+                        tk = rule_tmp_alias.get(al)
+                        if tk:
+                            return tmp_types.get(tk, {}).get(ccol, "")
+                        return ""
+                    ta, tb = _type_of(la, lc), _type_of(ra, rc)
+                    if not ta or not tb:
+                        continue  # 类型查不到（表不在 cache/tmp 无声明）→ 跳过不猜
+                    if join_key_pair_risky(ta, tb):
+                        vr.add_hard("L4", "N_JOIN2",
+                            f"规则 {code} 的关联 {j.get('alias', '?')}（{cond}）键类型跨大类："
+                            f"{la}.{lc} {ta} ↔ {ra}.{rc} {tb}——裸等值会报 operator does not exist。"
+                            f"在 joins 里声明 cast（如 {la}.{lc}::{tb.split('(')[0]}），"
+                            f"或业务确认豁免（到 precheck 关联键决策选'接受'后重跑）"
+                            f"\n先查证: python skills/dws-design/scripts/check_field.py {_rs_arg2} "
+                            f"--field {la}.{lc}")
+
+    # ============================================================
     # N31/N32 别名绑定（结构校验，不依赖 schema_cache）。
     # 别名是字段来源/关联条件的引用键：规则内一个别名只许指一张表（SQL 查询语义）。
     # N31（hard）：同一别名绑定到不同表（rs_input 源表 vs tmp、或 reads 内冲突）。
@@ -1513,7 +1632,9 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
     #   （step2 join 进来的真源表直取）→ 保持源表直取。血缘归属的 tmp 由调用方精确传入。
     carried_from_tmp = False
     if logic:
-        design_logic = logic
+        # 落盘形态归一：designer 的 YAML 块标量常带换行/缩进，压成单行（引号串保护）
+        from sql_parse import normalize_logic_line
+        design_logic = normalize_logic_line(logic)
         # designer 显式写了口径 → 按原 transform_type（加工）走，不改
     elif is_assembly:
         # ★ 装配判断必须在 assign 之前：装配/merge 规则的无 logic 字段（含赋值类）一律默认
@@ -1751,7 +1872,11 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         # 字段定义：从 field_map 按 field_targets 组装（design_logic 取规则 field_logics）
         # ★ 每个规则都算（不只首规则）：accumulate 多规则写同表时，各规则字段并集入表 +
         #   rule 级 source_refs 各归各的来源（不互相污染）
-        rule_logics = rule.pop("field_logics", {})  # 分桶后弹出，ts 不落盘
+        # 落盘形态归一单点：logic 压单行（build_field 与 classify_field 的 logic_override
+        # 两路都吃这份归一后的值——designer YAML 块标量的换行不落 ts）
+        from sql_parse import normalize_logic_line
+        rule_logics = {k: normalize_logic_line(v)
+                       for k, v in rule.pop("field_logics", {}).items()}  # 分桶后弹出，ts 不落盘
         rule_reads = rule.get("reads") or []
         # reads 的表短名（用于装配规则字段的"直取 tmp.xxx"默认 logic）
         reads_short = [_table_short(r) if ("." in str(r)) else r for r in rule_reads]

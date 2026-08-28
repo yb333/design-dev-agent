@@ -1227,6 +1227,10 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         detail = f0.get("transform_detail", "") or f0.get("mapping_expression", "")
         if detail and detail not in ("-", "无", ""):
             entry["logic"] = detail
+            # 类型风险决策回写的字段（transform_detail 以'类型安全处理：/'类型转换：'打头）：
+            # 标记已人定——designer 按此译守卫式转换表达式，不重新质疑方向
+            if str(detail).startswith(("类型安全处理：", "类型转换：")):
+                entry["决策"] = "类型风险已人定（勿推翻方向）——译成守卫式转换 design_logic（版本无关写法，见 dws-coding-standards §0）"
             # 引用提示（只陈述事实，不猜归属）：限定引用原样 + 未限定词中性列示
             # （多表同名是可判事实→标注；单表归属不猜——那是 designer 的判断）
             _q, _b = extract_logic_refs(detail, _reg_cols)
@@ -1265,6 +1269,24 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
                      "I 视图是 F 表的固定镜像，由 assemble_ddl 按 meta.target.i_view 自动生成（i_view 为空则不建）。"),
         }
 
+    # 数据探索（RS L01：表量级/空值率/发散说明——设计第4层的输入事实；缺失也要标注，
+    # 让 designer 知道"没有"而不是"不知道有没有"）
+    de = rs_input.get("data_exploration") or {}
+    if de:
+        compact["explore"] = {
+            "table_stats": de.get("table_stats", []),
+            "null_rates": de.get("null_rates", []),
+            **({"divergence_note": de["divergence_note"]}
+               if de.get("divergence_note") else {}),
+            "说明": "RS 数据探索（L01）。量级决定写法（亿级慎用行函数/跨键操作）；"
+                    "空值率高的字段设计口径要处理 NULL；关联唯一性不确定时调 explore.py 试算",
+        }
+    else:
+        compact["explore"] = {
+            "说明": "RS 未提供数据探索（L01 缺失）——量级/空值率未知。关联键唯一性"
+                    " 不确定时调 explore.py 试算（JOIN 发散在设计层拦截，别等 UT）",
+        }
+
     if null_fields:
         compact["null_in_scene"] = sorted(set(null_fields))
 
@@ -1291,7 +1313,9 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "requirements": dq_reqs,
             "说明": ("RS 有 DQ 需求，designer 必须翻译成 coder 可执行的 DQ 规格写进 dq_rules。"
                      "scope/check_type/rule_name 跟 RS 保持一致（分类不变），"
-                     "rule_desc 写技术口径（检查字段/条件/阈值/告警级），给 coder 写 SQL 用。"
+                     "violation_condition 写违规条件的 SQL 表达式（检查对象=目标 F 表，"
+                     "如 t.order_amount IS NULL——coder WHERE 直搬不再翻译），"
+                     "rule_desc 写口径说明（阈值来历/告警级别/方向备注）。"
                      "翻译后条数可增加（一条模糊需求可拆多条），但不应少于 RS。"),
         }
     else:

@@ -68,9 +68,9 @@ permission:
 **落盘走 write/edit，失败即上报**：SELECT 文件一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。check_sql 反复修不过、且确认自己的 SQL 没问题而疑似工具产出有误（如解析出错列）→ 用 question 报原始错误，**不自创替代路径**（自写脚本修 SQL、shell 花招绕工具）——工具的 bug 交回维护者修。
 
 三个工具的分工（用法细节见 SKILL.md §2）：
-- `slice_ts.py`——拿规则切片（**不要直接读 ts.json**，大表会上下文爆炸）
-- `pick_fields.py`——随写随查直取字段（省逐字段手写取值表达式的机械劳动）
-- `check_sql.py`——写完 SELECT 后静态对比自检
+- `slice_ts.py`——拿规则切片（**不要直接读 ts.json**，大表会上下文爆炸；DQ 任务用 --dq）
+- `pick_fields.py`——随写随查直取字段（省逐字段手写取值表达式的机械劳动；多表逗号分隔或 --all-direct 一次取）
+- `check_sql.py`——写完 SELECT 后静态对比自检（DQ 检查 SQL 用 --dq）
 
 # 输入
 

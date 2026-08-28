@@ -82,3 +82,22 @@ class TestQueryField:
     def test_unknown_fuzzy_hint(self):
         out = query_field(_sliced(), "contract")
         assert "未找到" in out and "contract_no" in out
+
+
+class TestMultiAliasAndAllDirect:
+    """--alias 多值 / --all-direct：字段少表多时一次取（减少多轮调用）。"""
+
+    def test_query_aliases_multi(self):
+        from pick_fields import query_aliases
+        out = query_aliases(_sliced(), ["t", "u"])
+        assert "t.contract_no AS contract_no," in out
+        assert "u.delete_flag AS delete_flag," in out
+        assert out.index("contract_no") < out.index("delete_flag")
+
+    def test_query_all_direct_groups_by_table(self):
+        from pick_fields import query_all_direct
+        out = query_all_direct(_sliced())
+        assert "ods.ods_a (t)" in out and "ods.ods_u (u)" in out
+        assert "t.cust_id AS user_id," in out
+        assert query_all_direct(_sliced(fields={"processed": [], "assign": [], "direct": []})) \
+            .startswith("/* 此规则无直取字段")

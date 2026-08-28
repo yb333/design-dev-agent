@@ -833,3 +833,28 @@ class TestCaseWhenExtraction:
     def test_norm_expr(self):
         from sql_parse import norm_expr
         assert norm_expr("CASE   WHEN\nx=1 THEN 'N'") == "case when x=1 then 'n'"
+
+
+class TestLogicFormPrimitives:
+    """design_logic 形态原语：全角括号说明段剥离（N36）/ 单行归一（落盘形态）。"""
+
+    def test_fullwidth_paren_note_stripped(self):
+        """说明放全角括号（）里：说明内提到的英文字段名不是产出的引用——N36 不拦。"""
+        from sql_parse import find_unqualified_refs
+        assert find_unqualified_refs(
+            "nvl(a.del_flag,'N')（del_flag 为空表示已删除）") == []
+        assert find_unqualified_refs(
+            "case when a.s='X' then 1 else 0 end（口径：s 为 X 记 1）") == []
+        # 半角括号是 SQL 表达式的一部分——里面的裸标识符照拦
+        assert find_unqualified_refs("coalesce(a.x, del_flag)") == ["del_flag"]
+
+    def test_normalize_logic_line(self):
+        from sql_parse import normalize_logic_line as n
+        # 多行压单行（表达式与全角说明段都压）
+        assert n("case when a.x = '1'\n   then 'Y'\n   else 'N' end（说明）") == \
+            "case when a.x = '1' then 'Y' else 'N' end（说明）"
+        # 连续空白（换行+缩进+tab）压一个空格
+        assert n("  a.x\t||\n\n  b.y  ") == "a.x || b.y"
+        # 引号串内的空白/多空格原样保留
+        assert n("concat(a.x, '保 留  空白')") == "concat(a.x, '保 留  空白')"
+        assert n("") == "" and n(None) == ""

@@ -2254,3 +2254,169 @@ class TestPickTargets:
         entry = _yaml.safe_load(RULE_SKELETON.format(
             scenario="default", targets_block=fmt_targets(["id", "f1"])))[0]
         assert entry["field_targets"] == ["id", "f1"] and entry["field_logics"] == {}
+
+
+class TestJoinKeyTypesAndDqContract:
+    """N_JOIN2 自设关联键类型比对 / N_DQ4·N_DQ5 violation_condition / design_logic 单行归一。
+
+    N_JOIN2 补的是 N_JOIN1 的空档：mapping 声明的关联 precheck 检出过，designer
+    自设 joins 此前只有存在性（N30）无类型可比——案例实证 varchar=numeric 到 UT 才炸。
+    """
+
+    @staticmethod
+    def _rs():
+        fms = [
+            {"target_column": "id", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "a", "source_column": "id", "source_table": "ods_a"},
+            {"target_column": "prod_code", "transform_rule": "直接复制", "transform_detail": "-",
+             "source_alias": "a", "source_column": "prod_code", "source_table": "ods_a"},
+        ]
+        return {"field_mappings": fms,
+                "source_tables": [
+                    {"source_schema": "ods", "source_table": "ods_a", "source_alias": "a"},
+                    {"source_schema": "ods", "source_table": "ods_b", "source_alias": "b"}],
+                "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_test_f"}}}}
+
+    @staticmethod
+    def _dec(joins=None, dq_rules=None, extra_targets=None):
+        targets = ["id", "prod_code"] + (extra_targets or [])
+        rule = {
+            "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "design_intent": "测试",
+            "field_targets": targets,
+            "source_aliases": ["a"],
+            "joins": joins or [],
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }
+        return make_design_decisions(rules=[rule], dq_rules=dq_rules)
+
+    @staticmethod
+    def _cache(tmp_path, prod_id_type="numeric(18,0)"):
+        import json as _json
+        cache = tmp_path / "schema_cache.json"
+        cache.write_text(_json.dumps({"tables": {
+            "ods.ods_a": {"id": "bigint", "prod_code": "varchar(20)"},
+            "ods.ods_b": {"prod_id": prod_id_type}}}), encoding="utf-8")
+        return str(cache)
+
+    def _run(self, tmp_path, joins, prod_id_type="numeric(18,0)", **kw):
+        rs = self._rs()
+        dec = self._dec(joins=joins, **kw)
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        return run_all_validations(dec, rs, field_map,
+                                   schema_cache_path=self._cache(tmp_path, prod_id_type))
+
+    # ---------- N_JOIN2 ----------
+
+    def test_join2_cross_family_hard(self, tmp_path):
+        vr = self._run(tmp_path, [{"alias": "b", "table": "ods_b",
+                                   "condition": "a.prod_code = b.prod_id"}])
+        hits = [i for i in vr.items if i["code"] == "N_JOIN2"]
+        assert hits and hits[0]["level"] == "hard" and "prod_code" in hits[0]["msg"]
+
+    def test_join2_cast_declared_passes(self, tmp_path):
+        vr = self._run(tmp_path, [{"alias": "b", "table": "ods_b",
+                                   "condition": "a.prod_code = b.prod_id",
+                                   "cast": "a.prod_code::numeric"}])
+        assert "N_JOIN2" not in _codes(vr)
+
+    def test_join2_inline_cast_passes(self, tmp_path):
+        vr = self._run(tmp_path, [{"alias": "b", "table": "ods_b",
+                                   "condition": "a.prod_code::numeric = b.prod_id"}])
+        assert "N_JOIN2" not in _codes(vr)
+
+    def test_join2_same_family_passes(self, tmp_path):
+        """varchar↔varchar（长度不同）等值成立——同 family 放行（type_compat 口径）。"""
+        vr = self._run(tmp_path, [{"alias": "b", "table": "ods_b",
+                                   "condition": "a.prod_code = b.prod_id"}],
+                       prod_id_type="varchar(50)")
+        assert "N_JOIN2" not in _codes(vr)
+
+    def test_join2_no_cache_skips(self):
+        """无 schema_cache → 类型查不到跳过不猜（宁放过）。"""
+        rs = self._rs()
+        dec = self._dec(joins=[{"alias": "b", "table": "ods_b",
+                                "condition": "a.prod_code = b.prod_id"}])
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(dec, rs, field_map)
+        assert "N_JOIN2" not in _codes(vr)
+
+    def test_join2_exempted_pair_skips(self, tmp_path):
+        """precheck 关联键决策=接受 的条件不拦（与 N_JOIN1 同口径）。"""
+        rs = self._rs()
+        cond = "a.prod_code = b.prod_id"
+        rs["_join_type_risks"] = [
+            {"left": "a.prod_code", "right": "b.prod_id",
+             "left_type": "varchar(20)", "right_type": "numeric(18,0)"}]
+        rs["_join_type_decisions"] = [{"condition": cond, "decision": "接受"}]
+        dec = self._dec(joins=[{"alias": "b", "table": "ods_b", "condition": cond}])
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(dec, rs, field_map,
+                                 schema_cache_path=self._cache(tmp_path))
+        assert "N_JOIN2" not in _codes(vr)
+
+    # ---------- N_DQ4 / N_DQ5 ----------
+
+    def test_dq4_missing_violation_condition_warns(self):
+        rs = self._rs()
+        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
+                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
+        dec = self._dec(dq_rules=[{"scope": "字段级", "check_type": "空值检查",
+                                   "rule_name": "产品编码非空",
+                                   "rule_desc": "违规=prod_code 为空（有空值即告警）"}])
+        vr = _run(dec, rs)
+        assert any(i["code"] == "N_DQ4" and i["level"] == "warn" for i in vr.items)
+
+    def test_dq5_unknown_field_hard(self):
+        rs = self._rs()
+        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
+                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
+        dec = self._dec(dq_rules=[{
+            "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+            "violation_condition": "t.order_amount IS NULL",
+            "rule_desc": "违规=order_amount 为空"}])
+        vr = _run(dec, rs)
+        hits = [i for i in vr.items if i["code"] == "N_DQ5"]
+        assert hits and hits[0]["level"] == "hard" and "order_amount" in hits[0]["msg"]
+
+    def test_dq5_known_field_passes(self):
+        rs = self._rs()
+        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
+                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
+        dec = self._dec(dq_rules=[{
+            "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+            "violation_condition": "t.prod_code IS NULL",
+            "rule_desc": "违规=prod_code 为空"}])
+        vr = _run(dec, rs)
+        assert not any(i["code"] == "N_DQ5" for i in vr.items)
+        assert not any(i["code"] == "N_DQ4" for i in vr.items)
+
+    # ---------- design_logic 单行归一（落盘形态） ----------
+
+    def test_build_field_normalizes_multiline_logic(self):
+        rec = {"target_column": "flag", "transform_rule": "数据加工",
+               "transform_detail": "原文", "target_type": "varchar(10)",
+               "source_alias": "a", "source_column": "del_flag", "source_table": "ods_a"}
+        f = build_field(rec, "case when a.x = '1'\n   then 'Y'\n   else 'N' end（说明）", {"a"})
+        assert "\n" not in f["design_logic"]
+        assert f["design_logic"].startswith("case when a.x = '1' then 'Y'")
+
+    def test_assemble_produces_single_line_logic(self):
+        rs = self._rs()
+        rs["field_mappings"].append({
+            "target_column": "flag", "transform_rule": "数据加工",
+            "transform_detail": "原始描述", "target_type": "varchar(10)",
+            "source_alias": "a", "source_column": "del_flag", "source_table": "ods_a"})
+        rule = {
+            "rule_code": "R0001", "rule_name": "单规则", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "design_intent": "测试",
+            "field_targets": ["id", "prod_code", "flag"],
+            "field_logics": {"flag": "case when a.x = '1'\n   then 'Y'\n   else 'N' end（说明）"},
+            "source_aliases": ["a"], "joins": [],
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }
+        dec = make_design_decisions(rules=[rule])
+        ts, _, _ = do_assemble(rs, dec)
+        logic = [p["logic"] for p in ts["rules"]["R0001"]["fields"]["processed"]
+                 if p.get("target") == "flag"][0]
+        assert "\n" not in logic

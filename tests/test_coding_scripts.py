@@ -1054,3 +1054,76 @@ class TestSliceDq:
         from slice_ts import slice_dq
         with pytest.raises(ValueError, match="为空"):
             slice_dq({"dq_rules": []})
+
+
+class TestSliceDqSources:
+    """slice_dq 附资产级 source_tables 并集（跨表检查要 schema 全名）。"""
+
+    def test_slice_dq_collects_source_tables_union(self):
+        from slice_ts import slice_dq
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
+              "design": {"business_key": ["order_no"]},
+              "rules": {
+                  "R0001": {"source_tables": [
+                      {"schema": "ods", "table": "ods_a", "alias": "a"}]},
+                  "R0002": {"source_tables": [
+                      {"schema": "ods", "table": "ods_a", "alias": "a"},
+                      {"schema": "dwd", "table": "dwd_b", "alias": "b"}]}},
+              "dq_rules": [{"check_type": "空值检查", "rule_name": "金额非空",
+                            "violation_condition": "t.amt IS NULL",
+                            "rule_desc": "违规=amt 为空"}]}
+        s = slice_dq(ts)
+        assert [(st["schema"], st["table"]) for st in s["source_tables"]] == \
+            [("ods", "ods_a"), ("dwd", "dwd_b")]  # 并集去重
+
+
+class TestCheckDqSql:
+    """check_sql --dq：DQ 检查 SQL 的资产级静态校验（无 rule_code）。"""
+
+    @staticmethod
+    def _ts():
+        return {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
+                "design": {"business_key": ["order_no"]},
+                "rules": {"R0001": {"source_tables": [
+                    {"schema": "ods", "table": "ods_src", "alias": "a"}]}},
+                "dq_rules": []}
+
+    def test_valid_dq_passes(self):
+        from check_sql import check_dq_sql
+        sql = ("/* DQ-空值检查: 金额非空 */\n"
+               "SELECT t.order_no, t.amt FROM dws.dwb_x_f t WHERE t.amt IS NULL;")
+        assert check_dq_sql(sql, self._ts()) == []
+
+    def test_missing_business_key_reported(self):
+        from check_sql import check_dq_sql
+        sql = "SELECT t.amt FROM dws.dwb_x_f t WHERE t.amt IS NULL;"
+        issues = check_dq_sql(sql, self._ts())
+        assert any("业务键" in i and "order_no" in i for i in issues)
+
+    def test_unknown_table_reported(self):
+        from check_sql import check_dq_sql
+        sql = ("SELECT t.order_no, t.amt FROM dws.dwb_other_f t "
+               "WHERE t.amt IS NULL;")
+        issues = check_dq_sql(sql, self._ts())
+        assert any("表引用" in i and "dwb_other_f" in i for i in issues)
+
+    def test_cross_table_uses_asset_sources_ok(self):
+        """跨表检查：资产内源表（切片 source_tables）合法引用。"""
+        from check_sql import check_dq_sql
+        sql = ("SELECT t.order_no, t.amt FROM dws.dwb_x_f t "
+               "JOIN ods.ods_src a ON t.order_no = a.order_no "
+               "WHERE t.amt IS NULL AND a.order_no IS NULL;")
+        assert check_dq_sql(sql, self._ts()) == []
+
+    def test_bare_table_and_select_star_reported(self):
+        from check_sql import check_dq_sql
+        sql = "SELECT t.order_no, t.amt FROM dwb_x_f t WHERE t.amt IS NULL;"
+        issues = check_dq_sql(sql, self._ts())
+        assert any("[schema]" in i for i in issues)
+        star = "SELECT * FROM dws.dwb_x_f t WHERE t.amt IS NULL;"
+        assert any("SELECT *" in i for i in check_dq_sql(star, self._ts()))
+
+    def test_warn_prefixes_only_expression(self):
+        """分级口径：WARN_PREFIXES 只含表达式口径对账（方言机械转写不阻断）。"""
+        from check_sql import WARN_PREFIXES
+        assert WARN_PREFIXES == ("[表达式口径]",)

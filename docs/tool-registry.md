@@ -66,9 +66,9 @@
 
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
-| `slice_ts.py` | 切单规则上下文为 YAML（fields 三桶直出；normalize_ts 兜底旧结构）；**--dq 切 DQ 规则段**（契约/target_table/business_key/dq_rules，dws-dq 流程用）；`--baseline-sql` 切**优化模式**（带 baseline SQL 原文+落位声明+硬约束，加法扩展零动存量路径） | coder 每规则起手 | ts.json + rule_code [+baseline-sql] → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter；opt 模式读 ts.change；--dq 模式读 ts.dq_rules） |
-| `pick_fields.py` | 直取字段查询（list/alias/field/table-fields）；import slice_rule；`--table-fields` 的查缓存能力来自 shared/schema_query 库 | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **ts.rules + ts.init.rules**（随 slice_ts 接通 init） |
-| `check_sql.py` | coder 的 SELECT vs ts 切片静态对比（字段覆盖/FROM 表/schema 前缀/CTE 投影一致性/**字段存在性三层核对**（schema_cache 源表/ts tmp 字段/CTE 已另查）/**口径引用对账**（design_logic 限定引用 ⊆ SQL 引用，漏实现当场抓）/**表达式口径对账**（design_logic 的 case when 归一化后应原样出现在 SQL——防 coder 演绎改口径；不匹配不硬拦，提示闸口②人工核对）/括号引号/无 SELECT *） | coder 写完自检 | SELECT.sql + ts.json + rule_code → PASS/FAIL | **仅 ts.rules**（Chunk 2） |
+| `slice_ts.py` | 切单规则上下文为 YAML（fields 三桶直出；normalize_ts 兜底旧结构）；**--dq 切 DQ 规则段**（契约/target_table/business_key/**source_tables 资产级源表并集**/dq_rules，dws-dq 流程用）；`--baseline-sql` 切**优化模式**（带 baseline SQL 原文+落位声明+硬约束，加法扩展零动存量路径） | coder 每规则起手 | ts.json + rule_code [+baseline-sql] → YAML 切片 | **ts.rules + ts.init.rules**（查两处；derive init 切片带 clone_source：源 .sql + filter/init_filter；opt 模式读 ts.change；--dq 模式读 ts.dq_rules + 全规则 source_tables 并集） |
+| `pick_fields.py` | 直取字段查询（list/**alias 单个或逗号分隔多个**/**all-direct 全部直取一次取按表分组**/field/table-fields）；import slice_rule；`--table-fields` 的查缓存能力来自 shared/schema_query 库 | coder 写直取字段时 | ts.json + rule_code → 字段行；读 schema_cache.json | **ts.rules + ts.init.rules**（随 slice_ts 接通 init） |
+| `check_sql.py` | coder 的 SELECT vs ts 切片静态对比（字段覆盖/FROM 表/schema 前缀/CTE 投影一致性/**字段存在性三层核对**（schema_cache 源表/ts tmp 字段/CTE 已另查）/**口径引用对账**（design_logic 限定引用 ⊆ SQL 引用，漏实现当场抓）/**表达式口径对账**（design_logic 的 case when 归一化后应原样出现在 SQL——防 coder 演绎改口径；不匹配**归提示级不阻断**，闸口②人工核对）/括号引号/无 SELECT *）；**--dq 模式**校验 DQ 检查 SQL（括号/无 SELECT */行注释/表引用 ⊆ 检查对象+资产源表/schema 前缀/输出列含 business_key） | coder 写完自检（ETL 与 DQ 同入口） | SELECT.sql + ts.json + rule_code 或 --dq → PASS/FAIL | **仅 ts.rules**（Chunk 2）；--dq 读 meta/design/dq_rules + 全规则 source_tables |
 
 ---
 
@@ -77,9 +77,9 @@
 | 模块 | 干啥 | 被谁 import | 所在 |
 |------|------|------------|------|
 | `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
-| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行）+ **join_key_pair_risky**（JOIN 键对保守谓词：跨大类风险，integer↔numeric/同族放行） | precheck / ut_diagnose | design-dev-shared/scripts |
+| `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行）+ **join_key_pair_risky**（JOIN 键对保守谓词：跨大类风险，integer↔numeric/同族放行） | precheck / ut_diagnose / assemble_ts(N_JOIN2) | design-dev-shared/scripts |
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样 / INSERT 列重复终检） | ut_precheck / ut_execute | design-dev-shared/scripts |
-| `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / parse_cte_bodies（均字符串字面量感知）/ extract_select_aliases / extract_from_tables / extract_table_refs_raw / cte_projection_names / extract_qualified_refs / extract_condition_field_refs / find_field_provenance / is_trivial_assign_detail / extract_case_when_exprs+norm_expr（表达式口径对账的提取原语，词边界防误匹配） | run_ut / check_sql / precheck / assemble_ts(N30) | design-dev-shared/scripts |
+| `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / parse_cte_bodies（均字符串字面量感知）/ extract_select_aliases / extract_from_tables / extract_table_refs_raw / cte_projection_names / extract_qualified_refs / extract_condition_field_refs / find_field_provenance / is_trivial_assign_detail / extract_case_when_exprs+norm_expr（表达式口径对账的提取原语，词边界防误匹配）/ parse_join_pairs / extract_logic_refs / find_unqualified_refs（N36 守门原语，剥全角括号说明段）/ **normalize_logic_line**（design_logic 落盘单行归一，引号串保护） | run_ut / check_sql / precheck / assemble_ts(N30/N36/N_JOIN2) | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
 | `ts_compat.py` | ts 结构兼容层：classify_field 分桶原语 + normalize_ts 旧结构内存升级（幂等，认远古 rule.fields-only）——两视图重构后读旧 ts 的下游全走此路 | slice_ts / check_sql / assemble_export / fence_check / assemble_ts / assemble_ts_opt | design-dev-shared/scripts |
 | `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline / tests/test_baseline_v1_contract | design-dev-shared/scripts |

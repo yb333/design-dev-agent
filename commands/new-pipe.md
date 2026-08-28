@@ -180,7 +180,7 @@ designer 内部会自行完成"产 design_decisions.yaml → 调 assemble_ts.py 
 Task(
   subagent_type="dws-designer",
   description="产出TS制品包",
-  prompt="读取 {deliver}/_internal/rs_input_view.json（分块紧凑视图），产出 TS 制品包（ts.json + ts.md）到 {deliver}/。需要某字段精确细节时再查同目录 rs_input.json。"
+  prompt="读取 {deliver}/_internal/rs_input_view.json（分块紧凑视图），产出 TS 制品包（ts.json + ts.md）到 {deliver}/。需要某字段精确细节时再查同目录 rs_input.json。视图中 join_type_risk 段与字段『决策』标记是已人工拍板的输入事实，按其口径设计，不重新质疑方向。"
 )
 ```
 

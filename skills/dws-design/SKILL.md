@@ -165,7 +165,7 @@ description: >-
   → 依赖类型选择见 `references/design-guide.md` §二
 
 **产出**：`tables.{表}.distribution_key`、`join_safety`、`schedule`
-**闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在；joins 引用的字段在源表/tmp 表真实存在（N30，有 schema_cache 时硬校验——⓪的产物兜底）；join_type_risk 检出对的 cast/豁免核对（N_JOIN1）
+**闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在；joins 引用的字段在源表/tmp 表真实存在（N30，有 schema_cache 时硬校验——⓪的产物兜底）；join_type_risk 检出对的 cast/豁免核对（N_JOIN1）；自设关联的键两侧类型可比（N_JOIN2，跨大类须声明 cast）
 
 ### 字段加工逻辑（贯穿第1-2层）
 
@@ -174,7 +174,7 @@ description: >-
   → 完整规则条目骨架（field_targets 预填、判断位留空），贴进 rules 后填口径/拆分；
   `--alias 别名` 拆多步骤时按来源挑字段；`--audit` 附审计4字段（多步骤规则 targets 需含）。
   输出即最终格式，贴入零调整；禁 python/powershell 拼 yaml 写文件（编码坑）。
-- **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic。**design_logic 的产出形态统一为：可执行 SQL 表达式 + 简短口径说明（括号）**，例如 `case when nvl(a.del_flag,'N')='N' then 'N' else 'Y' end（三标识均非删除且无 NULL 为 N；空串按 else 走 Y）`：
+- **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic。**design_logic 的产出形态统一为：可执行 SQL 表达式 + 简短口径说明**，说明**一律放全角括号（）里**（表达式只用半角括号——这是形态契约：N36 门禁剥全角括号段后检查，说明里提到的字段名不会被当成未限定引用误拦），例如 `case when nvl(a.del_flag,'N')='N' then 'N' else 'Y' end（三标识均非删除且无 NULL 为 N；空串按 else 走 Y）`：
   - **mapping 原文是 SQL 表达式**（case when/函数调用等）→ **审查后原样保留**，只在括号里写你的理解句（它同时是审查工具：理解与表达式或业务描述有出入，说明原文有问题——修正表达式并注明，或标"需业务确认"）。**不转述表达式**——人话表达不了 NULL/空串边界，转述必然失真（实证案例：del_flag 口径转述后 coder 加了空串条件，语义反转）。方言不用管（nvl/decode 等 DWS 兼容；真不兼容 UT 会暴露，coder 机械转写）
   - **mapping 原文是自然语言** → 翻译成 SQL 表达式（这才是真正的"翻译者职责"）；歧义点当场做决定并写进括号（如"'空'按 NULL 处理"），业务语境也定不了的标"需业务确认"
   - **宁可输出带假设标注的表达式，绝不退回纯人话**——纯人话把不确定性隐式传给 coder 自由发挥（漂移源头）；带标注的表达式把不确定性显式传给闸口①人裁决
@@ -198,7 +198,7 @@ description: >-
 
 - 写 `design_decisions.yaml`（骨架见 `assets/design-decisions-template.yaml`）
 - 调 `assemble_ts.py` 组装出 ts.json + ts.md
-- 校验失败 → 看报错的 `[第X层]` 标识定位到对应 playbook 修正后重跑
+- 校验失败 → 看报错的 `[第X层]` 标识定位到对应 playbook 修正后重跑；warn 不是你的行动项（闸口①人审材料）——不为消 warn 改设计
 
 ### 路由段：什么时候读哪个 playbook
 
@@ -217,11 +217,12 @@ DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规�
 
 - **RS 有 DQ 需求**（`rs_input_view.json` 的 `dq.requirements` 非空）→ designer **翻译**成 coder 可执行的 DQ 规格写进 `dq_rules`
   - `scope`/`check_type`/`rule_name` 跟 RS 保持一致（分类不变）
-  - `rule_desc` 是**翻译后的技术口径**（检查哪个字段、什么条件、阈值、告警级），不是 RS 原文复制
-  - **必须写明违规方向**（什么情况算违规）——coder 照此定 WHERE，UT 按行数判（0 行通过，非 0 行告警）
-  - 例：RS `rule_desc="订单金额不能为空"` → 翻译 `rule_desc="违规=dwb_order_f.order_amount IS NULL（有空值即告警）"`——别写"检查 IS NOT NULL"这种正向描述，方向容易译反
-  - 阈值非 0/100% 极端值（中间阈值）→ rule_desc 保留精确口径并标注"结果依赖数据分布"（UT 零结果也证不了绝对合理性，闸口② 人工确认预期）
-  - 翻译后条数可增加（一条模糊需求拆多条），但不应少于 RS（assemble_ts 会 warn）
+  - `violation_condition` 写**违规条件的 SQL 表达式**（检查对象=目标 F 表，别名自定如 `t.order_amount IS NULL`）——DQ 版 design_logic：coder WHERE 直搬不再翻译自然语言；字段引用查目标表（N_DQ5 硬拦拼写错）
+  - `rule_desc` 是**口径说明**（阈值来历/告警级/方向备注），不是 RS 原文复制
+  - **必须写明违规方向**（什么情况算违规）——coder 照 violation_condition 定 WHERE，UT 按行数判（0 行通过，非 0 行告警）
+  - 例：RS `rule_desc="订单金额不能为空"` → 翻译 `violation_condition="t.order_amount IS NULL"` + `rule_desc="违规=order_amount 为空（有空值即告警）"`——别写"检查 IS NOT NULL"这种正向描述，方向容易译反
+  - 阈值非 0/100% 极端值（中间阈值）→ violation_condition 写精确条件，rule_desc 标注"结果依赖数据分布"（UT 零结果也证不了绝对合理性，闸口② 人工确认预期）
+  - 翻译后条数可增加（一条模糊需求拆多条），但不应少于 RS（assemble_ts 会 warn；全缺 violation_condition 也 warn N_DQ4）
 - **RS 无 DQ 需求**（`dq.requirements` 为空，标注"无 DQ"）→ `dq_rules` 留空，**不产任何 DQ**（coder 不调、无 DQ 调度任务）
 - designer **不自主决定产不产**（DQ 是业务决策归 RS），RS 有就翻译、没有就不干
 - 无"标准三项系统兜底"（主键唯一/审计非空/记录数不再无条件产）——UT 阶段 `ut_execute` 已查主键重复，上线后要不要持续监控是业务决策
@@ -266,7 +267,7 @@ DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规�
 - [ ] rules 里每个规则有 rule_code / rule_name / field_targets
 - [ ] 每个 target_column 归属且仅归属一个规则（目标表规则并集覆盖 rs_input 全字段）
 - [ ] field_logics 只写加工类业务字段（直取字段不写，脚本自动填）
-- [ ] design_logic = SQL 表达式 + 括号口径说明（原文是表达式则原样保留+理解句；是人话则翻译+歧义决策记录；拿不准标"需业务确认"）
+- [ ] design_logic = SQL 表达式 + 全角括号（）口径说明（原文是表达式则原样保留+理解句；是人话则翻译+歧义决策记录；拿不准标"需业务确认"）
 - [ ] 如果 mapping 提供了审计字段（备注标"审计字段"），field_targets 要包含它们；审计字段不用写 field_logics（assemble 自动处理）
 
 **第2层 加工路径**

@@ -490,12 +490,15 @@ def find_unqualified_refs(text: str) -> list:
 
     设计产出形态契约的守门原语：design_logic 里字段引用必须'别名.字段'——
     这是"产出 100% 可结构化解析"的实现方式（限定形态的提取是确定性动作）。
-    剥离 ${...} 参数段与引号串（值不是引用）；'别名.字段' 的两部分不算裸；
-    函数调用形态（后跟'('）不算；噪音词/函数名/SQL 类型词不算；单字母豁免
-    （'N'/'Y' 值在中文行文里常不带引号，真字段名几乎不会单字母）。
+    剥离 ${...} 参数段与引号串（值不是引用）；全角括号（…）说明段先剥——
+    表达式用半角括号、口径说明用全角括号是形态契约（结构规则封闭，SQL 表达式
+    不可能含全角括号），说明句里提到的英文字段名不是产出的引用；'别名.字段'
+    的两部分不算裸；函数调用形态（后跟'('）不算；噪音词/函数名/SQL 类型词不算；
+    单字母豁免（'N'/'Y' 值在中文行文里常不带引号，真字段名几乎不会单字母）。
     语义边界：中文提字段（不写英文名）机器不可见——归闸口人审，不假装能拦。
     """
-    s = re.sub(r'\$\{[^}]*\}', ' ', text or "")
+    s = re.sub(r'（[^）]*）', ' ', text or "")
+    s = re.sub(r'\$\{[^}]*\}', ' ', s)
     s = re.sub(r"'[^']*'", " ", s)
     s = re.sub(r'"[^"]*"', " ", s)
     out = set()
@@ -514,6 +517,39 @@ def find_unqualified_refs(text: str) -> list:
             continue
         out.add(wl)
     return sorted(out)
+
+
+def normalize_logic_line(text: str) -> str:
+    """design_logic 落盘形态归一：压成单行（引号串保护）。
+
+    designer 的 YAML 块标量常带换行/缩进，落盘原样进 ts.json 后消费者（slice 给
+    coder、check_sql 对账）都要手工去换行。归一在装配侧单点做：引号串外的一切
+    空白（含换行+缩进）压成单空格，引号串内的内容原样保留（字面量可能含空白）。
+    """
+    s = str(text or "")
+    out = []
+    pending_space = False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch in ("'", '"'):
+            if pending_space and out:
+                out.append(" ")
+            pending_space = False
+            j = s.find(ch, i + 1)
+            j = len(s) - 1 if j == -1 else j
+            out.append(s[i:j + 1])
+            i = j + 1
+        elif ch.isspace():
+            pending_space = True
+            i += 1
+        else:
+            if pending_space and out:
+                out.append(" ")
+            pending_space = False
+            out.append(ch)
+            i += 1
+    return "".join(out).strip()
 
 
 def diff_logic_refs(raw_refs, logic_texts) -> list:

@@ -8,13 +8,16 @@
    SQL 的所有结构决策（FROM/JOIN/WHERE/CTE/del_flag/聚合）都由 coder 做。
 
 三个查询命令：
-  --list          规则总览：每个源表有多少直取字段 + 加工字段数
-  --alias <别名>  该表的直取字段行（别名.字段 AS 目标，可直接粘贴）
-  --field <字段>  单字段详情（类型/来源/design_logic/是否直取）
+  --list              规则总览：每个源表有多少直取字段 + 加工字段数
+  --alias <别名>      表的直取字段行（别名.字段 AS 目标，可直接粘贴；逗号分隔多表一次取）
+  --all-direct        全部直取一次取（按源表分组——字段少表多时免多轮）
+  --field <字段>      单字段详情（类型/来源/design_logic/是否直取）
 
-用法:
+用法：
   python pick_fields.py --ts ts.json --rule R0001 --list
   python pick_fields.py --ts ts.json --rule R0001 --alias duf
+  python pick_fields.py --ts ts.json --rule R0001 --alias duf,dub
+  python pick_fields.py --ts ts.json --rule R0001 --all-direct
   python pick_fields.py --ts ts.json --rule R0001 --field order_status
 
 退出码: 0=成功, 1=规则不存在/找不到, 2=文件错误
@@ -133,6 +136,26 @@ def query_alias(sliced: dict, alias: str) -> str:
     return "\n".join(lines)
 
 
+def query_aliases(sliced: dict, aliases: list) -> str:
+    """多别名一次取（逗号分隔传入的形态），每别名一段。"""
+    return "\n\n".join(query_alias(sliced, a) for a in aliases)
+
+
+def query_all_direct(sliced: dict) -> str:
+    """全部直取一次取，按源表分组（字段少表多时免多轮调用）。"""
+    fields = sliced.get("fields") or {}
+    ordered: list[str] = []
+    seen: set = set()
+    for d in fields.get("direct", []):
+        a = str(d).split(".", 1)[0].strip()
+        if a and a not in seen:
+            seen.add(a)
+            ordered.append(a)
+    if not ordered:
+        return "/* 此规则无直取字段，纯聚合/加工规则 */"
+    return "\n\n".join(query_alias(sliced, a) for a in ordered)
+
+
 def query_field(sliced: dict, field_name: str) -> str:
     """查单字段详情（桶归属 + 口径/值/直取行）。"""
     fields = sliced.get("fields") or {}
@@ -163,13 +186,15 @@ def query_field(sliced: dict, field_name: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="字段查询器: coder 写 SQL 时随取随用（--list/--alias/--field/--table-fields）"
+        description="字段查询器: coder 写 SQL 时随取随用（--list/--alias/--field/--table-fields/--all-direct）"
     )
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--list", action="store_true", help="规则总览：源表直取字段分布 + 加工字段清单")
-    group.add_argument("--alias", help="查某表的直取字段行（别名，如 duf）")
+    group.add_argument("--alias", help="查表直取字段行（别名；逗号分隔多表一次取，如 duf,dub）")
+    group.add_argument("--all-direct", action="store_true",
+                       help="全部直取一次取（按源表分组——字段少表多时免多轮）", dest="all_direct")
     group.add_argument("--field", help="查单字段详情（字段名）")
     group.add_argument("--table-fields", help="查源表完整字段清单（别名/表名，如 dub/dwd_user_behavior_f）",
                        dest="table_fields")
@@ -190,7 +215,10 @@ def main():
     if args.list:
         print(query_list(sliced))
     elif args.alias:
-        print(query_alias(sliced, args.alias))
+        aliases = [a.strip() for a in args.alias.split(",") if a.strip()]
+        print(query_aliases(sliced, aliases))
+    elif args.all_direct:
+        print(query_all_direct(sliced))
     elif args.field:
         print(query_field(sliced, args.field))
     elif args.table_fields:
