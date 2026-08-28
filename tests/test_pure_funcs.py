@@ -792,3 +792,44 @@ class TestDeployAllDdl:
         assert errors == []  # 回退失败被容忍，建表成功
 
 
+
+
+class TestCaseWhenExtraction:
+    """extract_case_when_exprs/norm_expr——表达式口径对账的提取原语。"""
+
+    def test_simple_expr(self):
+        from sql_parse import extract_case_when_exprs
+        t = "case when nvl(a.del_flag,'N')='N' then 'N' else 'Y' end（口径说明）"
+        assert extract_case_when_exprs(t) == ["case when nvl(a.del_flag,'N')='N' then 'N' else 'Y' end"]
+
+    def test_nested_expr_takes_outer(self):
+        """嵌套 case 取最外层整块（内层包含其中，包含匹配覆盖）。"""
+        from sql_parse import extract_case_when_exprs
+        t = "case when x=1 then case when y=2 then 1 else 2 end else 0 end"
+        assert extract_case_when_exprs(t) == [t]
+
+    def test_plain_text_no_match(self):
+        from sql_parse import extract_case_when_exprs
+        assert extract_case_when_exprs("均为 N 或空 → N，否则 Y") == []
+        assert extract_case_when_exprs("") == []
+
+    def test_word_boundary_no_false_positive(self):
+        """lowercase/weekend 等子串不误匹配（词边界）。"""
+        from sql_parse import extract_case_when_exprs
+        assert extract_case_when_exprs("lowercase something weekend") == []
+        assert extract_case_when_exprs("lowercasewhen endcase") == []
+
+    def test_multiple_exprs(self):
+        from sql_parse import extract_case_when_exprs
+        t = ("case when a=1 then 'x' else 'y' end，case when b=2 then 'p' else 'q' end（两个口径）")
+        assert len(extract_case_when_exprs(t)) == 2
+
+    def test_unterminated_skipped(self):
+        """未闭合的 case（只有 case 无 end）跳过不死循环。"""
+        from sql_parse import extract_case_when_exprs
+        assert extract_case_when_exprs("case when broken") == []
+        assert extract_case_when_exprs("case when a then case when b") == []
+
+    def test_norm_expr(self):
+        from sql_parse import norm_expr
+        assert norm_expr("CASE   WHEN\nx=1 THEN 'N'") == "case when x=1 then 'n'"

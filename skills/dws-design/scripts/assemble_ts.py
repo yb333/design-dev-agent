@@ -1181,9 +1181,11 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                                 f"核心加工口径为空（field_logics 空时 coder 无口径可参考），确认是否需要")
 
     # ============================================================
-    # N29（warn）：design_logic 照抄 mapping 原文（翻译者原则的产物探测）。
-    # 只对"数据加工"类字段查（赋值/直取的 detail 本来就是字面量，查了全是噪音）；
-    # 完全一致才报（改写过=拆解过的证据），warn 不拦，闸口①可见。
+    # N29（warn）：design_logic 与 mapping 原文完全一致 = 保留了原文但未附口径说明。
+    # 新形态下（表达式+（说明））：原文是表达式 → 保留是正确动作，但**缺说明句** =
+    # 缺审查证据（designer 没写理解=没逼自己读懂）→ warn 提示补说明；原文是人话 →
+    # 完全一致=没翻译 → 同样该报。只对"数据加工"类字段查（赋值/直取是字面量，全是
+    # 噪音）；完全一致才报，warn 不拦，闸口①可见。
     # ============================================================
     for rule in rules:
         code = rule.get("rule_code", "?")
@@ -1196,9 +1198,9 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                 continue
             if str(logic).strip() == detail:
                 vr.add_warn("L1", "N29",
-                    f"规则 {code} 字段 {col} 的 design_logic 与 mapping 的 transform_detail 完全一致"
-                    f"——疑似照抄原文。design_logic 应是拆解后的技术口径（收敛时机/过滤/去重/排序），"
-                    f"不是业务描述搬运（翻译者原则）")
+                    f"规则 {code} 字段 {col} 的 design_logic 与 mapping 原文完全一致——"
+                    f"原文是表达式则缺口径说明句（补括号理解，如 NULL/空串边界），"
+                    f"是人话则未翻译成表达式（翻译者职责）")
 
     # ============================================================
     # N34（warn）：孤儿 field_logics——designer 写了口径但字段不在本规则 field_targets。

@@ -38,7 +38,7 @@ description: >-
 
 把 TS 的某个规则（fields 三桶：processed 加工口径 / assign 固定值 / direct 直取串）转化为 SELECT 语句：
 
-> **把 design_logic（自然语言）翻译成 SQL（套规范）——这就是你全部的工作。**
+> **把 TS 装配成 SQL：design_logic 里的表达式直接搬用，你来搭框架、做工程**——这就是你全部的工作。
 
 你不写 DDL（assemble_ddl.py 生成）、不拼 INSERT（run_ut.py 包装）、不做 UT（run_ut.py 检查）。
 
@@ -73,7 +73,11 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 - `aggregate` → `SUM(...)` / `COUNT(...)` + GROUP BY
 - `pivot` → `SUM(CASE WHEN ...)`
 - CTE 收敛 → 按 join_safety.strategy（GROUP BY 收敛 / ROW_NUMBER 去重）
-- 计算字段 → 按 design_logic 实现完整逻辑（禁止硬编码 0）
+- 计算字段 → **design_logic 是"SQL 表达式 +（括号口径说明）"**：
+  - **表达式是唯一执行依据，原样搬进 SELECT**（调整别名/排版可以，不动逻辑）；括号说明是给闸口人的审查注，**不参与演绎**——不要按说明句的文字重新发明 SQL
+  - **禁止改口径**：不加不减条件、不动 NULL/空串边界（实证案例：口径写"或空"，coder 自己加进 `in('N','')` 兜空串——原文空串应走 else，语义反转出 bug）
+  - **允许机械转写**：方言函数不兼容时的保语义映射（`decode(x,a,1,d)` → `case when x=a then 1 else d end`），映射唯一无发挥空间
+  - **疑义上报**：说明句与表达式明显矛盾、或表达式跑不通且改法不唯一 → 停下上报，不自行取舍
 
 搭好框架：WITH...CTE...SELECT(...)FROM...JOIN...WHERE...
 
@@ -152,23 +156,25 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 
 ## 3. 字段加工逻辑翻译指南
 
-| transform_type | design_logic 示例 | SQL 翻译 |
+| transform_type | design_logic 示例 | SQL 实现 |
 |---|---|---|
 | direct | "直取主表 contract_no" | `t.contract_no` |
-| pivot | "rpt_code='fbt_0001' 对应金额，按合同+pu汇总" | `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)` |
-| aggregate | "对金额求和，排除非洲发票" | `COALESCE(SUM(inv_amt), 0)` + NOT EXISTS 过滤 |
+| pivot | `SUM(CASE WHEN t.rpt_code='fbt_0001' THEN t.rpt_value_usd ELSE 0 END)`（按合同+pu汇总） | 表达式原样进 SELECT，GROUP BY 按括号说明 |
+| aggregate | `SUM(CASE WHEN inv.region <> '非洲' THEN inv_amt ELSE 0 END)`（排除非洲发票） | 表达式原样进 SELECT + GROUP BY |
 | assign | "审计字段，固定 'N'" | `'N'` |
-| process（类型转换） | "源 update_time varchar 转 date" | `CAST(t.update_time AS date)` / `TO_DATE(t.update_time,'YYYYMMDD')` |
+| process（类型转换） | "类型转换：update_time varchar→date" | `CAST(t.update_time AS date)` / `TO_DATE(t.update_time,'YYYYMMDD')` |
 | process（长度/精度） | "长度超长截取到50" / "精度收窄到2位" | `LEFT(t.col, 50)` / `ROUND(t.col, 2)` |
+| process（表达式口径） | `case when nvl(a.del_flag,'N')='N' then 'N' else 'Y' end（…口径说明）` | **表达式原样搬**（含 NULL/空串边界，一个字符都不改） |
 
 > **类型转换字段**（precheck 类型决策回写的"数据加工"字段，design_logic 标"类型转换：X→Y"）：
 > 在 SELECT 里加转换函数（CAST/TO_DATE/LEFT/ROUND），**改 ETL 不改 DDL（目标类型不变）**。
 > 转大类（varchar→date）用 CAST/TO_DATE；长度超长用 LEFT；精度收窄用 ROUND。
 
-**翻译原则**：
-- design_logic 描述"算什么口径"，SQL 实现"怎么算"
-- NULL 处理跟 design_logic 走：logic 没要求处理就**保留 NULL**（数仓 NULL/0 各有业务意义，不无脑 COALESCE）；logic 明确"空值补 0/补空串"才加 COALESCE
-- 不改变业务口径，只做技术翻译
+**实现原则**：
+- 表达式口径：**搬，不译**——design_logic 已是可执行表达式（designer 审查过的），直接进 SELECT；括号说明不参与演绎
+- 简述口径（直取/类型转换/固定值等短形态）：按上表等价实现
+- NULL 处理：**表达式里有什么用什么**——表达式含 nvl/COALESCE 就带上，不含就保留 NULL（数仓 NULL/0 各有业务意义，不无脑 COALESCE）；括号说明明确"空值补 0"才加 COALESCE
+- 不改变业务口径：不加不减条件、不动 NULL/空串边界；方言函数不兼容做保语义机械转写（映射唯一）
 
 ---
 

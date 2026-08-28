@@ -306,6 +306,22 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
             f"[口径引用] design_logic 引用了 {sorted(missing_refs)} 但 SQL 未引用——"
             f"疑似漏实现（对照切片 source_refs 与口径逐字段核对；确认不用则回报口径可疑）")
 
+    # 7. 表达式口径对账：design_logic 里的 case when 表达式（"表达式+（说明）"形态的
+    # 表达式部分）应原样出现在 SQL 中——coder 被要求表达式直搬（禁改口径：不加不减
+    # 条件、不动 NULL/空串边界）。真实案例：del_flag 口径被 coder 自行演绎成
+    # in('N','') or is null，多兜了空串、语义反转。匹配不上不硬拦：可能是保语义
+    # 机械转写（decode→case when）或排版改写，提示闸口②人工核对。
+    from sql_parse import extract_case_when_exprs, norm_expr
+    sql_norm = norm_expr(sql_text)
+    for _p in ((rule.get("fields") or {}).get("processed") or []):
+        _col = _p.get("target") or _p.get("column") or "?"
+        for _expr in extract_case_when_exprs(str(_p.get("logic") or "")):
+            if norm_expr(_expr) not in sql_norm:
+                issues.append(
+                    f"[表达式口径] 字段 {_col} 的 case when 表达式未在 SQL 中原样出现——"
+                    f"可能被等价改写/方言转写（decode→case when 等）或漏实现/改口径，"
+                    f"逐字对照 design_logic 与 SQL 核对，闸口②人工确认")
+
     return issues
 
 

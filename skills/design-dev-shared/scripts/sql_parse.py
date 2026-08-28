@@ -556,3 +556,58 @@ def is_trivial_assign_detail(detail: str) -> bool:
     if d.upper() in _ASSIGN_TRIVIAL_KEYWORDS:
         return True
     return False
+
+
+def _word_at(s: str, j: int, word: str) -> bool:
+    """s[j:] 是否以独立单词 word 开头（前后非字母数字下划线）。"""
+    n = len(word)
+    if not s[j:j + n].lower() == word:
+        return False
+    before = s[j - 1] if j > 0 else " "
+    after = s[j + n] if j + n < len(s) else " "
+    if before.isalnum() or before == "_":
+        return False
+    if after.isalnum() or after == "_":
+        return False
+    return True
+
+
+def norm_expr(s: str) -> str:
+    """表达式归一化：压空白、统一小写（对账用）。"""
+    return " ".join((s or "").lower().split())
+
+
+def extract_case_when_exprs(text: str) -> list[str]:
+    """提取文本中的 case ... end 表达式块（嵌套配对计数，词边界防 weekend/toLowerCase 误匹配）。
+
+    check_sql 表达式口径对账用：design_logic 是"表达式+（说明）"形态，case when
+    是最易漂移的结构（coder 改条件/动 NULL 空串边界），提取后与 SQL 归一化包含匹配。
+    """
+    results = []
+    s = text or ""
+    i = 0
+    while i < len(s):
+        if not _word_at(s, i, "case"):
+            i += 1
+            continue
+        depth = 0
+        j = i
+        end = -1
+        while j < len(s):
+            if _word_at(s, j, "case"):
+                depth += 1
+                j += 4
+            elif _word_at(s, j, "end"):
+                depth -= 1
+                if depth == 0:
+                    end = j + 3
+                    break
+                j += 3
+            else:
+                j += 1
+        if end > 0:
+            results.append(s[i:end])
+            i = end
+        else:
+            i += 4
+    return results

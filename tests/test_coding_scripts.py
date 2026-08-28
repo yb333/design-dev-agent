@@ -925,6 +925,62 @@ class TestCheckSqlNewGuards:
         assert not any("[CTE引用]" in i for i in issues), issues
 
 
+class TestCheckSqlExprGuard:
+    """check_sql 表达式口径对账：design_logic（表达式+说明形态）的 case when 应原样出现在 SQL。"""
+
+    LOGIC = ("case when nvl(a.del_flag,'N')='N' and nvl(a.delete_flag,'N')='N' "
+             "and nvl(u2.del_flag,'N')='N' then 'N' else 'Y' end"
+             "（三标识均非删除且无 NULL 为 N；空串按 else 走 Y）")
+
+    def _ts(self):
+        return {"rules": {"R0001": {
+            "field_targets": ["id", "del_flag"],
+            "fields": {"processed": [{"target": "del_flag", "logic": self.LOGIC,
+                                      "refs": ["a.del_flag", "a.delete_flag", "u2.del_flag"]}],
+                       "assign": [], "direct": []},
+            "source_tables": [{"schema": "ods", "table": "ods_a", "alias": "a"},
+                              {"schema": "ods", "table": "ods_u2", "alias": "u2"}],
+        }}, "design": {"audit_fields": {}, "business_key": []}, "tables": {}}
+
+    def test_expr_verbatim_passes(self):
+        """表达式原样直搬（含换行/大小写排版差异）→ 无 [表达式口径] 提示。"""
+        from check_sql import check_sql
+        good = ("SELECT a.id AS id,\n CASE   WHEN NVL(a.del_flag,'N')='N'\n"
+                "  AND NVL(a.delete_flag,'N')='N' AND NVL(u2.del_flag,'N')='N'\n"
+                "  THEN 'N' ELSE 'Y' END AS del_flag "
+                "FROM ods.ods_a a LEFT JOIN ods.ods_u2 u2 ON a.id=u2.id")
+        assert not any("[表达式口径]" in i for i in check_sql(good, self._ts(), "R0001"))
+
+    def test_expr_drift_reported(self):
+        """coder 自行演绎改口径（多兜空串条件）→ [表达式口径] 提示（真实 del_flag 案例）。"""
+        from check_sql import check_sql
+        drifted = ("SELECT a.id AS id, CASE WHEN (a.delete_flag IN('N','') OR a.delete_flag IS NULL) "
+                   "AND (a.del_flag IN('N','') OR a.del_flag IS NULL) "
+                   "AND (u2.del_flag IN('N','') OR u2.del_flag IS NULL) "
+                   "THEN 'N' ELSE 'Y' END AS del_flag "
+                   "FROM ods.ods_a a LEFT JOIN ods.ods_u2 u2 ON a.id=u2.id")
+        issues = check_sql(drifted, self._ts(), "R0001")
+        assert any("[表达式口径]" in i and "del_flag" in i for i in issues), issues
+
+    def test_expr_missing_reported(self):
+        """表达式整体漏实现（coder 简化成直取）→ 提示。"""
+        from check_sql import check_sql
+        lazy = ("SELECT a.id AS id, a.del_flag AS del_flag "
+                "FROM ods.ods_a a LEFT JOIN ods.ods_u2 u2 ON a.id=u2.id")
+        assert any("[表达式口径]" in i for i in check_sql(lazy, self._ts(), "R0001"))
+
+    def test_plain_language_logic_no_expr_check(self):
+        """design_logic 是纯人话（无 case when 结构）→ 表达式对账不参与（引用对账管）。"""
+        from check_sql import check_sql
+        ts = self._ts()
+        ts["rules"]["R0001"]["fields"]["processed"][0]["logic"] = (
+            "a.del_flag、u2.del_flag 均为 N 或 NULL → N，否则 Y")
+        sql = ("SELECT a.id AS id, CASE WHEN NVL(a.del_flag,'N')='N' "
+               "AND NVL(u2.del_flag,'N')='N' THEN 'N' ELSE 'Y' END AS del_flag "
+               "FROM ods.ods_a a LEFT JOIN ods.ods_u2 u2 ON a.id=u2.id")
+        assert not any("[表达式口径]" in i for i in check_sql(sql, ts, "R0001"))
+
+
 class TestCheckSqlFieldRef:
     """check_sql 5.3 字段存在性核对（三层登记处：schema_cache 源表 / ts tmp 字段；CTE 层已另有检查）。"""
 
