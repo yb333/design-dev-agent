@@ -169,6 +169,11 @@ description: >-
 
 ### 字段加工逻辑（贯穿第1-2层）
 
+- **写 yaml 用取料器，不手抄字段清单**（誊写归工具、判断归你；落盘 write 初版短头 + 逐规则粘贴，修改用 edit 不全量重写）：
+  `python {skill目录}/scripts/pick_targets.py --rs {deliver}/_internal/rs_input.json --rule --scenario {场景}`
+  → 完整规则条目骨架（field_targets 预填、判断位留空），贴进 rules 后填口径/拆分；
+  `--alias 别名` 拆多步骤时按来源挑字段；`--audit` 附审计4字段（多步骤规则 targets 需含）。
+  输出即最终格式，贴入零调整；禁 python/powershell 拼 yaml 写文件（编码坑）。
 - **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic（自然语言口径，不含 SQL）；design_logic 是拆解后的技术口径，**禁止照抄 mapping 的 transform_detail 原文**（翻译者原则见岗位定义；照抄会被 N29 warn 提示）
 - **★ 口径里的源字段引用一律 `别名.字段`**（a.del_flag），不能只写列名——**未限定字段归属哪个表是你的设计判断，脚本不猜**（view 的 refs 只列未限定词与"多表有此列名"的事实，归属自查：rs_input 源表清单/check_field，多义 question）。产出过**引用门禁**三查：未限定标识符（N36 硬拦）/ 限定引用查表存在（N38 硬拦，未连库降提示）/ 与原文对差疑似丢引用（N37 提示）。**口径引用集就是规则 fields 桶的真来源**（mapping 源字段单元格对加工字段只是提示，脚本按你的引用自动补全）——引用写全 = coder 的字段清单对。ts 两视图：tables=表元数据（DDL），rules.fields 三桶=加工（coder 唯一源；你的 field_logics 装配展开成桶，不落 ts）
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"

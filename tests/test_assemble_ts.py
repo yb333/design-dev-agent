@@ -2236,3 +2236,21 @@ class TestCheckField:
         vr = run_all_validations(dd, rs, field_map, schema_cache_path=cp, rs_path=cp.parent / "rs_input.json")
         n30 = [i for i in vr.items if i["code"] == "N30" and "is_current" in i["msg"]]
         assert n30 and "check_field" in n30[0]["msg"]  # 拦截 + 教学命令
+
+
+class TestPickTargets:
+    """designer 字段清单取料器：确定性输出、贴入即合法 yaml（零调整）。"""
+
+    def test_targets_and_rule_skeleton(self, tmp_path):
+        import yaml as _yaml
+        from pick_targets import pick, fmt_targets, RULE_SKELETON
+        fms = [{"target_column": "id", "scene_group": "default", "source_alias": "ht"},
+               {"target_column": "f1", "scene_group": "default", "source_alias": "ht"},
+               {"target_column": "f2", "scene_group": "vip", "source_alias": "cx"},
+               {"target_column": "del_flag"}]
+        assert pick(fms) == ["id", "f1", "f2"]          # 审计默认排除
+        assert pick(fms, alias="ht") == ["id", "f1"]
+        assert fmt_targets(["id", "f1"]) == "field_targets: [id, f1]"
+        entry = _yaml.safe_load(RULE_SKELETON.format(
+            scenario="default", targets_block=fmt_targets(["id", "f1"])))[0]
+        assert entry["field_targets"] == ["id", "f1"] and entry["field_logics"] == {}
