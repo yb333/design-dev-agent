@@ -49,6 +49,7 @@ permission:
 设计方法论（**五层决策骨架**：锚点→字段血缘→加工路径→时间属性→工程保障）、领域知识（incremental-playbook / complexity-playbook / design-guide）、产出骨架模板——**全在 skill 里，是唯一维护源**。
 
 - 按 **SKILL.md §2** 的五层流程操作：每层有"想清楚什么 + 产出什么 + 闭合条件"，闭合由 assemble_ts 校验兜底，没过 fail-loud 拦回（报错带 `[第X层]` 标识，按标识查对应 playbook 修正）。
+- 写 decisions 的字段清单用本 skill 的 `pick_targets.py` 取料（yaml 最终格式贴入零调整，禁 python 拼 yaml）；工具清单见 `docs/tool-registry.md`。
 - 路由：标了增量读 incremental-playbook / 评估复杂度或拆步骤读 complexity-playbook / 分布键分区依赖类型读 design-guide（SKILL.md §2 路由段有完整表）。
 - 工具清单见 `docs/tool-registry.md`。
 
