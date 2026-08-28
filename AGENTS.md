@@ -33,7 +33,11 @@ skills/
                          #   assemble_ddl.py assemble_export.py ut_precheck.py ut_execute.py check_db.py（原 dws-coding）
                          #   ★ 被 shared 消费的函数库（2026-08 下沉，消 shared↔skill 依赖环）：
                          #   run_ut.py(UT函数库,无main) ut_diagnose.py(类型诊断) type_compat.py(类型兼容)
-                         #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量)
+                         #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量) ts_compat.py(ts结构兼容:分桶原语+旧结构升级)
+                         #   ★ opt-pipe 调的（对存量零接触，详见 tool-registry ⑤）：
+                         #   preprocess_opt.py fence_check.py sql_fence.py sql_fence_check.py ut_opt.py
+                         #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py
+                         #   archive_writer.py baseline_contract.py
                          #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import dws-design/dws-coding；
                          #     design/coding 只能向下 import shared（箭头单向）
 agents/                  # dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
@@ -43,7 +47,7 @@ skills/dws-design-opt/   # 优化设计 skill（薄：读 baseline_view+change_r
 skills/dws-coding-opt/   # 优化编码 skill（薄：以 baseline SQL 为底稿加列，老列不动）
 archives/                # ★ 资产档案（唯一锚点：{schema}/{资产}/{NNN_日期}/，文本小件入 git）
 install.py               # 装 skill/agent/command 到 ~/.config/opencode/
-eval-suite/              # 评测套件（v1 + v2，独立工程）
+eval-suite/              # 评测套件（v1 + v2，独立工程；eval.sh/eval.bat 交互式菜单入口）
 tests/                   # pytest（conftest.py 把三个 scripts 目录加进 sys.path）
 10_project_deliver/      # 运行时产出（gitignore，本地重跑覆盖）
 docs/                    # architecture/specs/templates/output 示例 + tool-registry.md(★ 工具注册表)
@@ -55,7 +59,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 
 | agent | 职责 | skill | 能调的工具（详见 tool-registry.md） | 能写 |
 |-------|------|-------|----------------------------------|------|
-| **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design | assemble_ts（组装）/ explore（JOIN键唯一性）/ check_field（字段查证）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
+| **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（JOIN键唯一性）/ check_field（字段查证）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
 | **dws-coder** | 单规则 SELECT + DQ 检查 SQL | dws-coding / dws-dq / dws-coding-opt（按任务路由） | slice_ts（含 --dq）/ pick_fields / check_sql | `etl/*.sql`、`dq/*.sql` |
 
 > ★ 其余管线脚本（preprocess / precheck / gate_summary / assemble_ddl / assemble_export / run_ut / ut_* / check_db 等）**调用方都是 command（new-pipe.md 编排）**，不是 agent——它们统一住在 `design-dev-shared/scripts`（2026-08 按调用方归位）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。

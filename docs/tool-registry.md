@@ -81,6 +81,7 @@
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样 / INSERT 列重复终检） | ut_precheck / ut_execute | design-dev-shared/scripts |
 | `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / parse_cte_bodies（均字符串字面量感知）/ extract_select_aliases / extract_from_tables / extract_table_refs_raw / cte_projection_names / extract_qualified_refs / extract_condition_field_refs / find_field_provenance / is_trivial_assign_detail / extract_case_when_exprs+norm_expr（表达式口径对账的提取原语，词边界防误匹配） | run_ut / check_sql / precheck / assemble_ts(N30) | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
+| `ts_compat.py` | ts 结构兼容层：classify_field 分桶原语 + normalize_ts 旧结构内存升级（幂等，认远古 rule.fields-only）——两视图重构后读旧 ts 的下游全走此路 | slice_ts / check_sql / assemble_export / fence_check / assemble_ts / assemble_ts_opt | design-dev-shared/scripts |
 | `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline / tests/test_baseline_v1_contract | design-dev-shared/scripts |
 
 ---
