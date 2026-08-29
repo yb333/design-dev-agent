@@ -13,6 +13,11 @@ permission:
   task: allow                  # 起 dws-designer/dws-coder（不显式 allow 会被框架默认 deny）
   question: allow              # 闸口①②
   read: allow
+  # skill 资源目录的递归放行：external allow 的弹窗 pattern 是"目录+\*"单层
+  # （源码 path.join(dir, "*")），盖不住 assets/references 子目录——显式递归
+  # 一次覆盖（~ 展开支持；仓内/项目级形态下 skill 在 worktree 内不触发本权限，加了无害）
+  external_directory:
+    "~/.config/opencode/skills/**": allow
   edit:
     "*": deny
     "**/ddlc_design_dev/**": allow
