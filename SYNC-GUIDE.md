@@ -53,6 +53,14 @@ sync_to_team.bat --switch master
 
 （config 的工作区改动会自动带到新分支；若新分支是空的，会全量同步 + config 重新初始化，真实 config 记得重新拷一次。）
 
+**只拉别人的提交**（想看看同事的进展、暂不做我们的同步）：
+
+```bat
+sync_to_team.bat --pull
+```
+
+内部仓对齐远端最新（拉到的提交会列清单），不 mirror、不产生任何本地提交；config 工作区改动照常保护。
+
 ## 四、日常使用（三步）
 
 1. **（外网）** 本仓 commit 并 push 到 GitHub main

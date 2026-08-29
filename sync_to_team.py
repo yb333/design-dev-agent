@@ -138,6 +138,8 @@ def main() -> int:
     parser.add_argument("--team-branch", help="内部仓分支校验（空=用当前 checkout 分支）")
     parser.add_argument("--switch", metavar="BRANCH",
                         help="内部仓切到指定分支并更新配置，然后直接同步")
+    parser.add_argument("--pull", action="store_true",
+                        help="只拉别人的提交：内部仓对齐远端，不 mirror 不提交不推送")
     args = parser.parse_args()
 
     src_repo = Path(__file__).resolve().parent
@@ -185,6 +187,49 @@ def main() -> int:
             "TEAM_BRANCH": team_branch,
         })
         print(f"[OK] 已切换到 {branch} 并更新配置，开始同步...")
+
+    if args.pull:
+        # 只拉别人的提交：fetch + 本地对齐远端（同款"本地全弃、config 保护"语义），
+        # 不 mirror / 不提交 / 不推送。打印这次拉到的提交清单。
+        print("[拉取] 内部仓对齐远端（只拉别人的提交，不做同步）...")
+        for state, abort_cmd in (
+            ("rebase-merge", ["rebase", "--abort"]),
+            ("rebase-apply", ["rebase", "--abort"]),
+            ("MERGE_HEAD", ["merge", "--abort"]),
+        ):
+            r = run_git(["rev-parse", "-q", "--verify", state], cwd=team_repo, capture=True)
+            if r.returncode == 0 and r.stdout.strip():
+                print(f"  检测到未完成的 {abort_cmd[0]} 现场，自动放弃回退")
+                run_git(abort_cmd, cwd=team_repo)
+        r = run_git(["symbolic-ref", "--short", "HEAD"], cwd=team_repo, capture=True)
+        cur = r.stdout.strip()
+        if not cur:
+            fail("内部仓处于 detached HEAD，请先 git checkout <分支>")
+        if team_branch and cur != team_branch:
+            fail(f"内部仓当前分支是 {cur}，配置要求 {team_branch}（或用 --switch 切换）")
+        old_head = run_git(["rev-parse", "--short", "HEAD"], cwd=team_repo,
+                           capture=True).stdout.strip()
+        if run_git(["fetch", "origin", cur], cwd=team_repo).returncode != 0:
+            fail("fetch 内部远端失败，请检查网络")
+        r = run_git(["log", f"HEAD..FETCH_HEAD", "--oneline"], cwd=team_repo, capture=True)
+        incoming = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        cfg_dir = team_repo / ".opencode" / "_references" / "rules" / resolve_rules_dir(src_repo)
+        snap = snapshot_dir(cfg_dir)
+        if run_git(["reset", "--hard", "FETCH_HEAD"], cwd=team_repo).returncode != 0:
+            restore_dir(cfg_dir, snap)
+            fail("reset 到远端最新失败")
+        if restore_dir(cfg_dir, snap):
+            print("  config 工作区改动已保留恢复")
+        if incoming:
+            print(f"  拉到 {len(incoming)} 个新提交:")
+            for l in incoming[:20]:
+                print(f"    {l}")
+            if len(incoming) > 20:
+                print(f"    ...（共 {len(incoming)} 个）")
+        else:
+            print("  远端无新提交，本地已是最新")
+        print(f"[OK] 已对齐远端（{old_head} → {run_git(['rev-parse', '--short', 'HEAD'], cwd=team_repo, capture=True).stdout.strip()}），未产生任何本地提交")
+        return 0
 
     print("=" * 60)
     print("  同步设计开发能力 → 内部仓 .opencode/")
