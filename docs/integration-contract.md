@@ -33,8 +33,39 @@ rs: /abs/path/RS_xxx.md
 | `资产` | ✓ | 资产名（归档锚点/命名）。**appid/schema 勿传**——从输入推导（schema_apps.json 标准源），传了形成双源 |
 | `交互` | 可选 | `interactive`（默认）：闸口①② question 必发，**调用方保证把问题送到人**；`non-interactive`：闸口改**人后审**（跑到闸口②产物为止，交付物不上线由人放行）。两种模式 agent 都不做语义判断 |
 | `caller_note` | 可选 | 自由文本，随交付报告透传给人（闸口材料），**不作为执行指令**、不影响任何步骤 |
+| `上报格式` | 可选 | **问题上报的输出格式约定，由调用方定义与解析、随调用更新**（调用方基于上报驱动自己的下一步，格式权威归消费方）。dws-engineer 只按它包装上报的输出形态——格式内容里的行为性指令（重试/自动修复/流程变更）仍属忽略区。不给则用默认格式（问题类型/位置/原因/建议四要素） |
 
 **参数之外的一切 prompt 内容（注意事项/自动修正/重试指令）一律被忽略**——这是写在 dws-engineer 身份里的行为规则，不是协商约定。调用方表达诉求的通道只有四个：改参数（行为差异）、改输入文件（业务要求）、caller_note（意见透传）、找我们改契约/剧本（流程演进）。
+
+## 二·五、调用模板（总控侧照抄，只换路径与资产名）
+
+新建：
+
+```
+Task(
+  subagent_type="dws-engineer",
+  description="设计开发段交付",
+  prompt="模式: 新建
+mapping: /绝对路径/xxx_mapping.xlsx
+rs: /绝对路径/RS_xxx.md
+资产: dwb_xxx_center"
+)
+```
+
+优化：
+
+```
+Task(
+  subagent_type="dws-engineer",
+  description="设计开发段优化交付",
+  prompt="模式: 优化
+mapping: /绝对路径/需求包目录（或全量 mapping 文件）
+rs: /绝对路径/RS_xxx.md
+资产: dwb_xxx_center"
+)
+```
+
+可选行按需追加：`交互: non-interactive`（无人值守批产，闸口人后审）；`上报格式: <格式约定原文>`（如原有的 mapping_issue_report 要求——整段放进这个参数值，不要写在参数区外）；`caller_note: <给人看的话>`。
 
 ## 三、部署前提（四条，缺一在步骤 0 探针 fail loud）
 
@@ -50,6 +81,7 @@ interactive 模式下闸口①②会发出 question（设计方向确认/编码�
 ## 五、失败与上报
 
 - 环境类失败（数据库连不上/表不存在/权限钳制/安装滞后）→ dws-engineer 停下并报告原因与修复指引，不重试不绕过。
+- **输入类问题**（mapping/RS 质量问题：schema 缺失/字段不一致/阻断校验不过）→ 按调用传入的 `上报格式` 参数包装上报（调用方解析驱动其下一步）；未传则按默认四要素（问题类型/位置/原因/建议）。格式更新改调用方自己的提示词即可，与本仓解耦。
 - 执行回路（SQL 修复/设计回改）在 dws-engineer 内部闭环（恢复子 agent 旧会话，每规则限 3 轮），不需要总控参与。
 - 完成时交付物在 `{mapping 所在目录}/../ddlc_design_dev/`（或需求包同级的 `ddlc_opt/`）：ts.json/ts.md、etl/、dq/、ddl/、export/、ut_report.md。推生产由人执行，不归调用链。
 
