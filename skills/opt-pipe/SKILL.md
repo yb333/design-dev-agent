@@ -56,7 +56,7 @@ python SHARED_SCRIPTS/preprocess_opt.py \
 - 版本锚点：默认取 RS 变更记录最新"优化"行日期归一 YYYYMM（撞车/缺行 → --version 显式指定）；
 - 变更提取：mapping 备注列 `{YYYYMM}版本{动词}` 匹配本次版本——属性级"新增"= 新增字段候选、实体级"新增"= 新来源；**其他动词（修改/下线…）识别归类并报告"待扩展"，不是非法输入**；
 - exit 2 = 阻断（冲突/别名悬空/资产不一致/版本定位失败）→ 报告人改输入，不自动修；
-- exit 1 = 有 warn（漏标漂移/RS 未提及）→ **question 问人**是否继续；
+- exit 1 = 有 warn（漏标漂移/RS 未提及）→ 展示后**直接继续**（信息性告知非决策项——警告随 change_request 汇进闸口①'材料，那里人扫一眼）；
 - 产出 `input_manifest.json`（分拣依据，可追溯）+ `change_request.json`（含 version/变更记录摘要——闸口①'把简述与提取字段并排亮给人扫漏标）。
 
 ## 步骤 2：designer（优化模式，显式声明）

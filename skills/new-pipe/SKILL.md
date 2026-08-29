@@ -113,7 +113,7 @@ python SHARED_SCRIPTS/precheck.py \
 
 **校验返回码**：
 - 0（PASS）→ 继续
-- 1（WARNING）→ 显示警告，问用户是否继续
+- 1（WARNING）→ 展示警告文本后**直接继续**（警告是信息性告知非决策项——有默认行为、随流程汇进闸口①材料；交互模式展示给人知情，不问不停。真正要人定的在 exit 2 的决策类阻断里）
 - 2（INCOMPLETE）→ 看阻断原因分三种：
   - **普通阻断**（schema/字段缺失等，stdout 不含任何 `_PENDING`）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
   - **★ 决策类阻断**（stdout 含 `TYPE_RISK_PENDING` 和/或 `JOIN_TYPE_RISK_PENDING`——检测同轮全爆）→ 按下方流程分域提问
