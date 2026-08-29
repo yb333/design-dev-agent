@@ -1504,11 +1504,17 @@ def main():
     parser = argparse.ArgumentParser(description="输入预处理: mapping.xlsx + RS.md -> rs_input.json (只做转换)")
     parser.add_argument("--mapping", required=True, help="mapping.xlsx 路径")
     parser.add_argument("--rs", help="RS.md 路径(可选, 无则只解析 mapping)")
-    parser.add_argument("--output", required=True, help="rs_input.json 输出路径")
+    parser.add_argument("--output", default="", help="rs_input.json 输出路径（--probe 模式下不需要）")
     parser.add_argument("--view-output", default="",
                         help="rs_input_view.json 输出路径（compact 视图，给 designer 读）。"
                              "默认 output 同目录的 rs_input_view.json")
+    parser.add_argument("--probe", action="store_true",
+                        help="探测模式：只解析输入输出资产定位（schema/f表/资产名/appid），"
+                             "不产 rs_input——编排者在正式预处理前定位 deliver 用（资产名从输入推导，"
+                             "调用方不传，幂等不信任输入）")
     args = parser.parse_args()
+    if not args.probe and not args.output:
+        parser.error("--output 必填（或用 --probe 探测模式）")
 
     # 1. 解析 mapping.xlsx
     print(f"解析 mapping: {args.mapping}")
@@ -1562,6 +1568,24 @@ def main():
 
     # 3. 合并
     rs_input = build_rs_input(mapping_raw, rs_data)
+
+    # 3.5 探测模式：只输出资产定位（编排者定位 deliver 用），不产 rs_input
+    if args.probe:
+        meta_t = rs_input.get("meta", {}).get("target", {}).get("f_table", {}) or {}
+        schema = meta_t.get("schema", "")
+        table = meta_t.get("table", "")
+        asset = table[:-2] if table.lower().endswith("_f") else table
+        appid = ""
+        try:
+            from config_paths import resolve_appid as _ra
+            appid = _ra(schema) or ""
+        except Exception:
+            pass  # 查不到 appid 不阻断探测（层为空 warn 归正流程处理）
+        print(json.dumps({
+            "schema": schema, "f_table": table, "asset": asset, "appid": appid,
+            "deliver_hint": f"10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev",
+        }, ensure_ascii=False))
+        return
 
     # 4. 写出
     output_path = Path(args.output)

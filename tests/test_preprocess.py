@@ -1297,3 +1297,41 @@ class TestCompactExploreAndDecision:
         c = build_compact(rs)
         entry = [e for e in c["processed"] if e["tgt"] == "amt"][0]
         assert "决策" not in entry
+
+
+class TestProbeMode:
+    """preprocess --probe：资产定位探测（编排者定位 deliver 用，不产 rs_input）。
+
+    契约的资产参数已收掉——资产名/schema/appid 全从输入推导（幂等不信任输入），
+    probe 是编排者在正式预处理前的唯一定位入口。
+    """
+
+    def test_probe_outputs_asset_triple(self, tmp_path):
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path
+        xlsx = tmp_path / "m.xlsx"
+        _build_xlsx_with_assign_null(xlsx)
+        script = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "scripts" / "preprocess.py"
+        r = _sp.run([_sys.executable, str(script), "--mapping", str(xlsx), "--probe"],
+                    capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, r.stderr
+        import json as _json
+        payload = _json.loads(r.stdout.strip().splitlines()[-1])
+        assert payload["schema"] == "dws"
+        assert payload["f_table"] == "dwb_test_f"
+        assert payload["asset"] == "dwb_test"      # _f 后缀剥掉=资产名
+        assert "deliver_hint" in payload and "ddlc_design_dev" in payload["deliver_hint"]
+        # 探测不产 rs_input（未给 --output 也不报错——定位动作零副作用）
+        assert not (tmp_path / "rs_input.json").exists()
+
+    def test_output_still_required_without_probe(self, tmp_path):
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path
+        xlsx = tmp_path / "m.xlsx"
+        _build_xlsx_with_assign_null(xlsx)
+        script = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "scripts" / "preprocess.py"
+        r = _sp.run([_sys.executable, str(script), "--mapping", str(xlsx)],
+                    capture_output=True, text=True, timeout=120)
+        assert r.returncode != 0 and "--output" in r.stderr

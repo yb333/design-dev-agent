@@ -15,14 +15,14 @@ description: >-
 - **唯一锚点 = 资产档案**（`archives/{schema}/{资产}/{NNN_日期}/`）：有档 → 档案即 baseline（零组装）；无档 → 收 json 入料建档。**不调用逆向脚本**（peer agent，文件交接）。
 - **两级声明**：change_request（业务说了什么，脚本产）+ ts.change（落位，designer 产）→ 围栏许可 = 两者合体。
 - **三段审计**：意图→落位（fence 内含）→ 结构（fence_check）→ 代码（sql_fence，**闸门单点在你**）。
-- 产出目录 `{deliver}` = `10_project_deliver/{appid}/{schema}/{资产}/ddlc_opt/`（appid 按 schema 查 resolve_appid）。
+- 产出目录 `{deliver}` = `10_project_deliver/{appid}/{schema}/{资产}/ddlc_opt/`（资产名/schema/appid 全从输入推导：preprocess --probe，同 new-pipe——调用方不传）。
 - 脚本路径定位：同 new-pipe 剧本的「脚本路径定位」段——从本 skill 的 Base directory 推算（`{SKILL_BASE}/../design-dev-shared/scripts` 等，bash 用绝对路径）。
 
 ---
 
 ## 步骤 0：入口与基线
 
-1. 按资产定位 `{deliver}`（同 new-pipe 的 resolve_appid 流程）。
+1. 按资产定位 `{deliver}`：`python SHARED_SCRIPTS/preprocess.py --mapping {需求包内mapping} --rs {RS} --probe` → asset/appid/schema 定位（同 new-pipe）。
 2. **查基线（三段式）** `archives/{schema}/{资产表}/`：
    - **有档案** → 最新目录即基线：`ts_baseline.json` = 档案 ts，`etl_baseline/` = 档案 etl/。跳到步骤 1。
    - **无档案，但 `10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/` 有 new-pipe 产出** → **懒归档**（建档案的成本只在真正优化时付，new-pipe 不做归档步骤）：

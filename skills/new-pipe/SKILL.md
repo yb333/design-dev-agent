@@ -53,7 +53,7 @@ python3 {SKILL_BASE}/scripts/check_env.py
 ```
 
 > 下文用 `{deliver}` 代指 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev`。
-> **资产名**从 RS 资产信息或 mapping 目标表推导；**schema** 从 rs_input 的 meta.target.f_table.schema 取；**appid** 按 schema 用 resolve_appid 查（步骤 1 预处理后能拿到 schema）。
+> **资产名/schema/appid 全从输入推导**（preprocess --probe，见下节）——调用方不传，双源即漂移。
 
 ### 脚本路径定位
 
@@ -73,17 +73,15 @@ bash 调用时用推算出的**绝对路径**（会话 cwd 不在 skill 目录�
 下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录，`SHARED_SCRIPTS` 代指公共脚本目录（pipe 管线脚本 + 公共库所在）。
 调用时把变量替换为实际路径，例如：`python <SHARED_SCRIPTS>/preprocess.py ...`
 
-### 确定 {deliver}（先查 appid）
+### 确定 {deliver}（probe 先行，资产定位全从输入推导）
 
-{deliver} 含 appid/schema 两层，**步骤 1 之前**先确定：
-1. **schema + 资产名**：从用户输入（mapping 目标表 / RS L1.1）识别目标表的 schema 和资产名（表名）。
-2. **appid**：按 schema 查（schema_apps.json 标准源）：
+**资产名/schema/appid 一律从输入推导（调用方不传——幂等设计，不信任输入）**。步骤 1 之前先探测：
 
 ```bash
-python SHARED_SCRIPTS/resolve_appid.py --schema {schema}
+python SHARED_SCRIPTS/preprocess.py --mapping {mapping路径} --rs {RS路径} --probe
 ```
 
-3. **{deliver}** = `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev`。appid 查不到时层为空（warn 不阻断），但建议先填 schema_apps.json。
+输出一行 JSON：`{schema, f_table, asset, appid, deliver_hint}`。`{deliver}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`（appid 查不到时层为空 warn 不阻断，建议先填 schema_apps.json）。探测与正式预处理幂等（同一输入必同一定位）；probe 结果与后续 preprocess 的 meta 不一致属输入自相矛盾，fail loud 报调用方。
 
 ---
 

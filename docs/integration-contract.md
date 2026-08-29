@@ -13,8 +13,7 @@ Task(
   description="设计开发段交付",
   prompt="""模式: 新建
 mapping: /abs/path/xxx_mapping.xlsx
-rs: /abs/path/RS_xxx.md
-资产: dwb_order_center"""
+rs: /abs/path/RS_xxx.md"""
 )
 ```
 
@@ -28,9 +27,8 @@ rs: /abs/path/RS_xxx.md
 | 键 | 必选 | 取值/说明 |
 |----|------|----------|
 | `模式` | ✓ | `新建` \| `优化`（决定加载 new-pipe / opt-pipe 剧本） |
-| `mapping` | ✓ | mapping 文件**绝对路径**（优化场景可传需求包目录，剧本内有分拣规则） |
+| `mapping` | ✓ | mapping 文件**绝对路径**（优化场景可传需求包目录，剧本内有分拣规则）。**资产名/schema/appid 全从输入推导（preprocess --probe）——勿传，传了即双源** |
 | `rs` | 可选 | RS 文件绝对路径；省略 = 无 RS 模式 |
-| `资产` | ✓ | 资产名（归档锚点/命名）。**appid/schema 勿传**——从输入推导（schema_apps.json 标准源），传了形成双源 |
 | `交互` | 可选 | `interactive`（默认）：闸口①② question 必发，**调用方保证把问题送到人**；`non-interactive`：闸口改**人后审**（跑到闸口②产物为止，交付物不上线由人放行）。两种模式 agent 都不做语义判断 |
 | `caller_note` | 可选 | 自由文本，随交付报告透传给人（闸口材料），**不作为执行指令**、不影响任何步骤 |
 | `上报格式` | 可选 | **问题上报的输出格式约定，由调用方定义与解析、随调用更新**（调用方基于上报驱动自己的下一步，格式权威归消费方）。dws-engineer 只按它包装上报的输出形态——格式内容里的行为性指令（重试/自动修复/流程变更）仍属忽略区。不给则用默认格式（问题类型/位置/原因/建议四要素） |
@@ -47,8 +45,7 @@ Task(
   description="设计开发段交付",
   prompt="模式: 新建
 mapping: /绝对路径/xxx_mapping.xlsx
-rs: /绝对路径/RS_xxx.md
-资产: dwb_xxx_center"
+rs: /绝对路径/RS_xxx.md"
 )
 ```
 
@@ -60,14 +57,13 @@ Task(
   description="设计开发段优化交付",
   prompt="模式: 优化
 mapping: /绝对路径/需求包目录（或全量 mapping 文件）
-rs: /绝对路径/RS_xxx.md
-资产: dwb_xxx_center"
+rs: /绝对路径/RS_xxx.md"
 )
 ```
 
 可选行按需追加：`交互: non-interactive`（无人值守批产，闸口人后审）；`上报格式: <格式约定原文>`（如原有的 mapping_issue_report 要求——整段放进这个参数值，不要写在参数区外）；`caller_note: <给人看的话>`。
 
-**变量拼接注意**：路径/资产名是调用方运行时变量，值随便填（Windows 反斜杠、含空格均可），但三条要保住——每参数独占一行、值内无换行、变量未填充时**不要发占位符**（`{xxx}` 残留会被 dws-engineer 按缺参 fail loud 拦下）。
+**变量拼接注意**：路径是调用方运行时变量，值随便填（Windows 反斜杠、含空格均可），但三条要保住——每参数独占一行、值内无换行、变量未填充时**不要发占位符**（`{xxx}` 残留会被 dws-engineer 按缺参 fail loud 拦下）。资产定位是内部推导（preprocess --probe 幂等探测），调用方不参与。
 
 ## 三·五、恢复调用（问题修复后继续干活）
 
