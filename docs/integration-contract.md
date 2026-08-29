@@ -69,6 +69,23 @@ rs: /绝对路径/RS_xxx.md
 
 **变量拼接注意**：路径/资产名是调用方运行时变量，值随便填（Windows 反斜杠、含空格均可），但三条要保住——每参数独占一行、值内无换行、变量未填充时**不要发占位符**（`{xxx}` 残留会被 dws-engineer 按缺参 fail loud 拦下）。
 
+## 三·五、恢复调用（问题修复后继续干活）
+
+首次调用后**记下 Task 返回文本里的 `<task id="...">`**（会话 id，dws-engineer 自身不知晓）。上游（修复 agent）处理完问题后续命：
+
+```
+Task(
+  subagent_type="dws-engineer",
+  task_id="{首次调用返回的 task id}",
+  description="设计开发段继续",
+  prompt="继续：上游已修复 {一句话说明修了什么}"
+)
+```
+
+- **prompt 极简**——参数在原会话记忆里，不重传；带 task_id 的调用跳过契约参数解析
+- **起点由 dws-engineer 自判**：输入类修复（改了 mapping/RS）→ 从步骤 1 重新走（重新预处理，闸口①重过——输入变了设计可能要变）；环境类修复 → 从失败点继续。判不了按输入类处理（宁重跑不基于旧状态）
+- 备选：不传 task_id 新起（同参数原样再发）= 幂等全量重跑，语义干净但闸口/子 agent 全部重来，仅在丢失 task id 时用
+
 ## 三、部署前提（四条，缺一在步骤 0 探针 fail loud）
 
 1. **安装**：在本机跑我们仓的 `install.py`（装 agents/skills/commands 到 `~/.config/opencode/`），并落安装指纹 `_install_meta.json`——探针对账安装版本，装旧了第一秒报"重跑 install.py"。
