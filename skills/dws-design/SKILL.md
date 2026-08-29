@@ -10,6 +10,8 @@ description: >-
 
 本 skill 的所有文件（scripts/ 下的脚本、assets/ 下的模板、references/ 下的指导知识）都在 **skill 安装目录** 下，不在你的工作目录下。
 
+> **附属文件以本文件的路由为准，不要依赖 skill_files 清单**——skill 加载附带的文件清单是采样的（上限 10 个，本 skill 有 17 个附属文件），清单里没有 ≠ 文件不存在；本文件提到的每个 assets/references 相对路径都真实存在，按 `{location所在目录}` 拼绝对路径直接 Read。
+
 ### 怎么拿到 skill 安装目录的真实路径
 
 加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找文件——location 的同级目录下分三类：
