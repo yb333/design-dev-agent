@@ -125,6 +125,47 @@ def copy_md(src_dir: Path, dst_dir: Path):
             shutil.copy2(p, target)
 
 
+def run_menu() -> list | None:
+    """交互菜单：返回要执行的参数列表（[] = 直接同步），None = 退出。"""
+    print()
+    print("═" * 46)
+    print("  sync_to_team — 请选择要做什么")
+    print("═" * 46)
+    print("  [1] 同步（日常：源头最新能力 → 内网仓提交推送）")
+    print("  [2] 只拉别人的提交（对齐远端，不做我们的同步）")
+    print("  [3] 切换内网仓分支")
+    print("  [4] 配置内部仓路径")
+    print("  [0] 退出")
+    print("─" * 46)
+    try:
+        choice = input("  选择: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if choice == "1":
+        return []
+    if choice == "2":
+        return ["--pull"]
+    if choice == "3":
+        try:
+            b = input("  切到哪个分支（如 master / 8.12）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return ["--switch", b] if b else None
+    if choice == "4":
+        try:
+            repo = input("  内部仓本地克隆路径: ").strip()
+            branch = input("  内部仓分支校验（直接回车=不校验）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if not repo:
+            return None
+        args = ["--config", repo]
+        if branch:
+            args += ["--team-branch", branch]
+        return args
+    return None
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -140,7 +181,14 @@ def main() -> int:
                         help="内部仓切到指定分支并更新配置，然后直接同步")
     parser.add_argument("--pull", action="store_true",
                         help="只拉别人的提交：内部仓对齐远端，不 mirror 不提交不推送")
+    parser.add_argument("--menu", action="store_true", help="交互菜单（bat 双击默认入口）")
     args = parser.parse_args()
+
+    if args.menu:
+        extra = run_menu()
+        if extra is None:
+            return 0
+        args = parser.parse_args(extra)
 
     src_repo = Path(__file__).resolve().parent
     config_path = Path.home() / CONFIG_NAME

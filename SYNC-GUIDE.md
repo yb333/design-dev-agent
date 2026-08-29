@@ -38,6 +38,9 @@
 
 打开 cmd，cd 到本仓克隆目录（`sync_to_team.bat` 所在目录）：
 
+双击 `sync_to_team.bat` 出**交互菜单**（选数字即可：1 同步 / 2 只拉别人的提交 / 3 切分支 / 4 配置路径 / 0 退出）。
+首次配置选 4，或命令行：
+
 ```bat
 sync_to_team.bat --config D:\path\to\内部仓克隆 --team-branch 8.12
 ```
