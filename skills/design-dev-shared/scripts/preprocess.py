@@ -1574,7 +1574,10 @@ def main():
         meta_t = rs_input.get("meta", {}).get("target", {}).get("f_table", {}) or {}
         schema = meta_t.get("schema", "")
         table = meta_t.get("table", "")
-        asset = table[:-2] if table.lower().endswith("_f") else table
+        # ★ 资产名 = 输入的目标表名原样（mapping 实体级"目标表物理名称"写什么就是什么，
+        # _i/_f/裸名都按人写的算）——不从 f_table 反剥后缀（二次加工会弄丢原始后缀，
+        # 实证：_i 输入被剥成裸名，deliver 资产层目录错位）
+        asset = (mapping_raw.get("target_table") or "").strip() or table
         appid = ""
         try:
             from config_paths import resolve_appid as _ra

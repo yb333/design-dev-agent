@@ -1320,7 +1320,7 @@ class TestProbeMode:
         payload = _json.loads(r.stdout.strip().splitlines()[-1])
         assert payload["schema"] == "dws"
         assert payload["f_table"] == "dwb_test_f"
-        assert payload["asset"] == "dwb_test"      # _f 后缀剥掉=资产名
+        assert payload["asset"] == "dwb_test_f"    # 资产名=输入目标表名原样（不剥后缀——_i/_f 按人写的算）
         assert "deliver_hint" in payload and "ddlc_design_dev" in payload["deliver_hint"]
         # 探测不产 rs_input（未给 --output 也不报错——定位动作零副作用）
         assert not (tmp_path / "rs_input.json").exists()
