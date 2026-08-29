@@ -53,6 +53,10 @@ def check(skill_root_arg: str = "") -> list[str]:
     # 2. 布局定位：--skill-root（本地仓）或安装布局（脚本自身路径推算）
     skill_base = (Path(skill_root_arg).resolve() / "new-pipe") if skill_root_arg else HERE.parent
     skills_root = skill_base.parent
+    # 部署形态：项目仓内（生产——启动目录=项目 git 仓，内容随仓走，无安装动作）
+    # vs 全局安装（自测——install.py 到 ~/.config/opencode/，有安装版本漂移）
+    repo = _find_repo_root(skill_base)
+    fix_hint = "更新项目仓（git pull）" if repo else "重跑 install.py"
 
     # 3. 关键文件存在性（skills 侧）
     must_exist = [
@@ -63,15 +67,14 @@ def check(skill_root_arg: str = "") -> list[str]:
     ]
     for f in must_exist:
         if not f.exists():
-            problems.append(f"缺文件: {f}（安装不完整——重跑 install.py）")
+            problems.append(f"缺文件: {f}（内容不完整——{fix_hint}）")
 
-    # 4. agents 定义存在（安装布局：config/agents；本地仓：agents/）
+    # 4. agents 定义存在（项目仓：repo/agents；全局安装：config/agents）
     agent_candidates = [_find_config_dir(skill_base) / "agents" / "dws-engineer.md"]
-    repo = _find_repo_root(skill_base)
     if repo:
         agent_candidates.append(repo / "agents" / "dws-engineer.md")
     if not any(p.exists() for p in agent_candidates):
-        problems.append("缺 agents/dws-engineer.md（编排 agent 未安装——重跑 install.py）")
+        problems.append(f"缺 agents/dws-engineer.md（编排 agent 缺失——{fix_hint}）")
 
     # 5. 安装指纹（安装环境由 install.py 写 _install_meta.json；本地仓直接对账 git）
     meta_path = _find_config_dir(skill_base) / "_install_meta.json"

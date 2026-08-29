@@ -85,7 +85,7 @@ Task(
 
 ## 三、部署前提（四条，缺一在步骤 0 探针 fail loud）
 
-1. **安装**：在本机跑我们仓的 `install.py`（装 agents/skills/commands 到 `~/.config/opencode/`），并落安装指纹 `_install_meta.json`——探针对账安装版本，装旧了第一秒报"重跑 install.py"。
+1. **部署形态二选一**：**生产（总控）= 项目仓内启动**——启动目录为包含本仓内容的项目 git 仓（内容随仓走、无安装动作、版本=checkout 版本，符合总控既有习惯，零成本满足）；自测 = 全局安装（`install.py` 到 `~/.config/opencode/`，落安装指纹 `_install_meta.json` 供探针对账——仅此形态有安装版本漂移问题）。
 2. **opencode 版本对齐**：≥ 我们验证过的版本（1.2.27）。
 3. **`subagent_depth ≥ 2`**：opencode.json 配置（默认 1 会拦"engineer→designer"第二层）。
 4. **上游不排除工具面**：总控自身（及其会话链）对 `bash / write / edit / task` 不得 deny/排除（直连时总控是 primary 全工具，天然满足；若日后插入任何中间层，此条对该层生效）。

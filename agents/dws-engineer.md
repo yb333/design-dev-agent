@@ -73,7 +73,7 @@ permission:
 
 # 步骤 0：环境自检（动任何输入之前）
 
-1. 跑探针脚本：`python3 {本 skill base}/scripts/check_env.py`（base 见 skill 加载输出）——安装/依赖不符即停，报"环境安装滞后，重跑 install.py"
+1. 跑探针脚本：`python3 {本 skill base}/scripts/check_env.py`（base 见 skill 加载输出）——环境不符即停（报错带修复指引：**项目仓部署（生产）=更新仓 git pull；全局安装（自测）=重跑 install.py**）
 2. 工具面自检：python 可执行、write 可写 `{deliver}` 目录、task 可起子 agent——任一缺失即停，报"调用链权限被钳制（缺 X）：按调用契约部署前提，上游不得排除 bash/write/edit/task"
 
 自检通过 → 按模式用 Skill tool 加载 `new-pipe` 或 `opt-pipe`，逐字执行剧本。

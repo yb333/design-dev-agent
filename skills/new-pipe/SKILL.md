@@ -17,7 +17,7 @@ description: >-
 python3 {SKILL_BASE}/scripts/check_env.py
 ```
 
-- exit 1 = 安装/依赖不符（报错带原因）→ 停，报"环境安装滞后，重跑 install.py"，不改环境继续
+- exit 1 = 环境/依赖不符（报错带原因与修复指引：项目仓部署=更新仓，全局安装=重跑 install.py）→ 停，不改环境继续
 - 工具面自检（脚本测不了的行为项）：确认 python 可执行、write 可写 `{deliver}`、task 可起子 agent——任一缺失停，报"调用链权限被钳制，按调用契约部署前提放开上游 bash/write/edit/task"
 
 ---
