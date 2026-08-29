@@ -9,6 +9,7 @@
 
 import os
 import sys
+import json
 import shutil
 import subprocess
 import traceback
@@ -245,7 +246,8 @@ def run():
         dst = skills_dir / s
         copy_dir(src, dst)
         print(f"  ✓ {s}")
-    # design-dev-shared 无 SKILL.md，scan_skills 扫不到，单独拷。
+    # design-dev-shared 是纯代码库（无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe
+    # skill 的 Base directory 承接），scan_skills 扫不到，必须单独拷。
     # 它是 pipe 管线脚本（preprocess/assemble_* 等）+ 公共库，全局安装的 skill 脚本
     # 靠 ../../design-dev-shared 相对路径推算它，不拷会 import 失败/脚本缺失。
     shared_src = SCRIPT_DIR / "skills" / "design-dev-shared"
@@ -328,16 +330,35 @@ def run():
     sa_example = SCRIPT_DIR / "skills" / "dws-design" / "assets" / "schema_apps.example.json"
     if not sa_config.exists() and sa_example.exists():
         shutil.copy2(str(sa_example), str(sa_config))
-        print("[9/9] schema↔appid 映射初始化...")
+        print("[9/10] schema↔appid 映射初始化...")
         print(f"  ✓ 已创建 {sa_config}")
         print(f"  ⚠️  请编辑此文件，填入每个 appid 下的 schemas（一个 appid 多个 schema；deliver 目录层 + 平台 appid 都从这读）")
         print()
     elif sa_config.exists():
-        print("[9/9] schema↔appid 映射已存在，跳过（不覆盖）")
+        print("[9/10] schema↔appid 映射已存在，跳过（不覆盖）")
         print()
     else:
-        print("[9/9] schema↔appid example 未找到，跳过")
+        print("[9/10] schema↔appid example 未找到，跳过")
         print()
+
+    # ── 10. 安装指纹（dws-engineer 步骤 0 探针对账用：装的哪个 commit、何时装）──
+    import datetime
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=SCRIPT_DIR,
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        commit = "unknown"
+    meta = {
+        "commit": commit,
+        "installed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "skills": skills,
+        "agents": agents,
+        "commands": commands,
+    }
+    (config_dir / "_install_meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[10/10] 安装指纹: {config_dir / '_install_meta.json'}（commit={commit}）")
+    print()
 
     # ── 完成 ──
     print("=" * 55)

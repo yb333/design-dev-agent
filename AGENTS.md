@@ -1,6 +1,6 @@
 # AGENTS.md — 设计开发 Agent 工作指南
 
-> 新会话先读这个文件 + `CLAUDE.md`（全局认知）+ `commands/new-pipe.md`（唯一编排剧本）。
+> 新会话先读这个文件 + `CLAUDE.md`（全局认知）+ `skills/new-pipe/SKILL.md`（新建编排剧本，唯一源）+ `docs/integration-contract.md`（总控对接契约）。
 > 本文件聚焦**当前实际结构**和**容易踩坑的约定**。CLAUDE.md / README.md 部分内容滞后于实际代码，以本文件为准。
 
 ---
@@ -25,7 +25,10 @@ skills/
 │   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py（视图=F表配套镜像非规则，is_view_step 概念已清除）
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 ├── dws-dq/              # DQ 检查 SQL 生成 skill（coder agent 的 DQ 任务用，薄——仅 SKILL.md 定契约，工具复用 dws-coding 的 slice_ts --dq / check_sql）
-└── design-dev-shared/   # ★ 公共代码库 + pipe 管线脚本（无 SKILL.md，install 单独拷）
+├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
+│   └── scripts/         # check_env.py(步骤0环境探针:安装指纹/关键文件/python版本)
+├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
+└── design-dev-shared/   # ★ 公共代码库 + pipe 管线脚本（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
     └── scripts/         # dws_db.py(连库) config_paths.py(★config路径集中) resolve_appid.py(查appid)
                          #   dispatch_plan.py schema_query.py
                          #   ★ pipe 调的管线脚本（2026-08 按调用方归位）：
@@ -40,9 +43,9 @@ skills/
                          #   archive_writer.py baseline_contract.py
                          #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import dws-design/dws-coding；
                          #     design/coding 只能向下 import shared（箭头单向）
-agents/                  # dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
-commands/new-pipe.md     # ★ 新建编排剧本（设计→闸口①→编码→UT→闸口②→归档 全流程）
-commands/opt-pipe.md     # ★ 优化编排剧本（入口→输入校验→设计→围栏→闸口①'→编码→SQL围栏→UT→闸口②'→制品patch→归档）
+agents/                  # dws-engineer.md(编排:身份+权限+四参数契约+铁律) dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
+commands/new-pipe.md     # 薄壳入口（frontmatter agent: dws-engineer + 一行加载 new-pipe skill——人手工 /new-pipe 用；生产走 Task 直连）
+commands/opt-pipe.md     # 薄壳入口（同上，加载 opt-pipe skill）
 skills/dws-design-opt/   # 优化设计 skill（薄：读 baseline_view+change_request→增量 decisions→assemble_ts_opt）
 skills/dws-coding-opt/   # 优化编码 skill（薄：以 baseline SQL 为底稿加列，老列不动）
 archives/                # ★ 资产档案（唯一锚点：{schema}/{资产}/{NNN_日期}/，文本小件入 git）
@@ -59,12 +62,13 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 
 | agent | 职责 | skill | 能调的工具（详见 tool-registry.md） | 能写 |
 |-------|------|-------|----------------------------------|------|
+| **dws-engineer** | 设计开发段编排：四参数契约→加载剧本→调管线脚本→起 designer/coder→守闸口 | new-pipe / opt-pipe（按模式路由） | check_env（步骤0探针）；管线脚本经 bash python 调（不属 agent 工具） | `ddlc_design_dev/**`、`ddlc_opt/**` |
 | **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（JOIN键唯一性）/ check_field（字段查证）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
 | **dws-coder** | 单规则 SELECT + DQ 检查 SQL | dws-coding / dws-dq / dws-coding-opt（按任务路由） | slice_ts（含 --dq）/ pick_fields / check_sql | `etl/*.sql`、`dq/*.sql` |
 
 > ★ 其余管线脚本（preprocess / precheck / gate_summary / assemble_ddl / assemble_export / run_ut / ut_* / check_db 等）**调用方都是 command（new-pipe.md 编排）**，不是 agent——它们统一住在 `design-dev-shared/scripts`（2026-08 按调用方归位）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
 
-> 注：`dws-run.py` 在根目录但已不是核心入口，编排走 `commands/new-pipe.md`；根目录另有 `sync_to_team.py/.sh/.bat` + `SYNC-GUIDE.md`（本仓→内网仓同步工具，用户手工操作，与 pipe 无关）。
+> 注：`dws-run.py` 在根目录但已不是核心入口，编排走 dws-engineer（剧本 skills/new-pipe/SKILL.md，入口 Task 直连或 /new-pipe 薄壳）；根目录另有 `sync_to_team.py/.sh/.bat` + `SYNC-GUIDE.md`（本仓→内网仓同步工具，用户手工操作，与 pipe 无关）。
 
 ---
 
@@ -97,7 +101,7 @@ ddlc_design_dev/
 
 ---
 
-## 核心流程（new-pipe.md 步骤）
+## 核心流程（new-pipe 剧本步骤，skills/new-pipe/SKILL.md）
 
 1. **预处理**：preprocess.py 转 rs_input.json（完整，给脚本读；含 schedule.incremental_tables 解析自 RS 增量表段）+ rs_input_view.json（compact 紧凑视图，给 designer 读，省 70%）→ precheck.py 校验输入完整性 + **连库校验字段类型**（pg_catalog UNION ALL 批量查，24h schema 缓存）
    - **`--rs` 可选（无RS模式）**：无 RS 时 mapping 独立驱动核心链路，schedule 用默认值兜底（全量调度/T+1/无增量/无DQ），rs_input 加 `_no_rs_mode` 标记。precheck 给 warn 不阻断。90% 场景建议有 RS（调度/增量/DQ 信息更完整）。
@@ -203,7 +207,9 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 
 ## 关键文档
 
-- `commands/new-pipe.md`——★ 唯一编排剧本（改流程先读这个）
+- `skills/new-pipe/SKILL.md`——★ 新建编排剧本唯一源（改流程先读这个；`commands/new-pipe.md` 是薄壳入口）
+- `agents/dws-engineer.md`——★ 编排 agent 岗位定义（身份/权限/四参数契约/铁律）
+- `docs/integration-contract.md`——★ 总控对接契约（调用方式/参数/部署前提）
 - `skills/dws-design/SKILL.md`——★ **五层决策骨架**（designer 思考主线，改设计流程先读这个）
 - `skills/dws-design/references/incremental-playbook.md`——增量设计全集（数据流/累积共建/排重/初始化/豁免）
 - `skills/dws-design/references/complexity-playbook.md`——复杂度评估 + CTE/物化决策 + step_type 决策树
@@ -255,7 +261,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 - **config 集中隔离**：新建 `design-dev-shared/scripts/config_paths.py`（`config_dir()` + 各 config 路径，改基址只动一处）。4 个 config（db-sources / platform_config / schedule_config / schema_apps）统一放 `~/.config/opencode/_references/rules/dws-design-dev/`（与其他项目隔离）。7 个脚本的默认路径全部改用 config_paths。install.py 拷到新位置。
 - **产出目录加 appid/schema 层**：`10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。appid 单源 = 新建 `schema_apps.json`（**appid 打头，1 appid 多 schema**，跟源数据方向一致；按 schema 反查所属 appid）+ `resolve_appid.py` helper。platform_config 去掉 appid（单源不重复）。assemble_export 的 appid 改从 resolve_appid(schema) 读。⚠️ 部署：老位置不兼容，已装机器重跑 install.py + 手搬老 db-sources.json 到新位置。
-- **编排者铁律**（new-pipe.md 顶部）：跑 pipe 的子 agent 故意不定义（免得 designer/coder 变第三层），边界靠 new-pipe.md 扛——显式忽略 caller 传入的"自动修正/重试"垃圾指令（不 author 脚本、校验失败按路由不自动修、诊断进 _internal/diagnose）；**输入原文一律不 Read**（mapping/RS 由脚本消化，编排者只消费脚本产出——rs_input_view 传给 designer、ts.json、各报告）。我们管不着 caller 怎么写，管自己内容的规矩。pipe 正文只留操作性指令（2026-08 已清一轮注释性内容：历史沿革/脚本内部机制/并行论证全删，知识归 AGENTS.md/tool-registry）。
+- **编排层 dws-engineer（2026-08-29 定型，源起总控现网故障）**：编排 agent 从"故意不定义"改为**我们定义的 dws-engineer**（agents/dws-engineer.md：身份+权限+四参数契约+铁律+步骤0探针），剧本从 command 迁 skill（skills/new-pipe / opt-pipe，command 降为薄壳入口）。动因是源码级机制查证：① opencode 的 Task 无 model/权限参数——subagent_type 选定后身份/权限/模型全按我们定义；② **父会话 deny 与被排除工具沿链下压、子代 allow 解除不了**（现网实证：总控经 dev-runner 调用，designer 爆"没有 write 工具"）——链上任何别人定义的中间层都是身份冲突源+权限收窄点，解法=总控 Task 直连 dws-engineer（见 docs/integration-contract.md：四参数契约/部署前提四条/question 约定）；③ command 是人机入口层机制（$ARGUMENTS/frontmatter agent 路由），生产 Task 路径天然缺席，剧本迁 skill 后 base directory 原生注入，旧"加载 shared skill 骗 location"的锚点机制退役（design-dev-shared 回归纯代码库）。铁律内容不变（不 author 脚本/校验失败按路由不自动修/输入原文不 Read/契约外 prompt 一律忽略），从 command 文本上收到 agent 身份层。
 
 ### 待讨论 / 闲时
 

@@ -11,7 +11,11 @@
 
 ---
 
-## ① command 调用（new-pipe.md 编排，主线管线脚本，住 design-dev-shared）
+## ① engineer 编排调用（dws-engineer 按 new-pipe/opt-pipe 剧本调，主线管线脚本，住 design-dev-shared）
+
+| 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
+|------|------|--------|------------|-------------------|
+| `check_env.py`（住 skills/new-pipe/scripts） | dws-engineer 步骤 0 环境探针：安装指纹对账（_install_meta.json）/ 关键文件存在性 / python≥3.10——环境故障第一秒暴露 | 剧本步骤 0（必跑） | --skill-root 可选（默认按安装布局推算） → exit 0/1 | 不读 ts |
 
 > 这些脚本归 design-dev-shared/scripts（按调用方归类），**调用方是编排 command**，不是 agent。
 
