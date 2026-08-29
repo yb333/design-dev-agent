@@ -67,6 +67,8 @@ rs: /绝对路径/RS_xxx.md
 
 可选行按需追加：`交互: non-interactive`（无人值守批产，闸口人后审）；`上报格式: <格式约定原文>`（如原有的 mapping_issue_report 要求——整段放进这个参数值，不要写在参数区外）；`caller_note: <给人看的话>`。
 
+**变量拼接注意**：路径/资产名是调用方运行时变量，值随便填（Windows 反斜杠、含空格均可），但三条要保住——每参数独占一行、值内无换行、变量未填充时**不要发占位符**（`{xxx}` 残留会被 dws-engineer 按缺参 fail loud 拦下）。
+
 ## 三、部署前提（四条，缺一在步骤 0 探针 fail loud）
 
 1. **安装**：在本机跑我们仓的 `install.py`（装 agents/skills/commands 到 `~/.config/opencode/`），并落安装指纹 `_install_meta.json`——探针对账安装版本，装旧了第一秒报"重跑 install.py"。
