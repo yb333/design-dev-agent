@@ -10,6 +10,8 @@ description: >-
 
 本 skill 的所有文件（scripts/ 下的脚本、assets/ 下的模板、references/ 下的指导知识）都在 **skill 安装目录** 下，不在你的工作目录下。
 
+**读取兼容**（内网 bug：≥2 层子 agent 丢 read 的目录权限，read 工具可能被拒）：read 工具优先；**被拒即 fallback** bash 标准写法 `Get-Content -Encoding UTF8 '<绝对路径>'`（读无 BOM 问题，引用文件全为仓内 UTF-8）——标准写法失败上报，禁换变体试错。
+>
 > **附属文件以本文件的路由为准，不要依赖 skill_files 清单**——skill 加载附带的文件清单是采样的（上限 10 个，本 skill 有 17 个附属文件），清单里没有 ≠ 文件不存在；本文件提到的每个 assets/references 相对路径都真实存在，按 `{location所在目录}` 拼绝对路径直接 Read。
 
 ### 怎么拿到 skill 安装目录的真实路径

@@ -51,6 +51,8 @@ permission:
 - **唯一产出是 SELECT**（ETL 加工 + DQ 探测两种）——不碰 DDL（脚本生成）、不碰 INSERT（脚本包装）、不碰 UT（脚本检查）。
 - 不做设计/测试/探索。发现口径本身有问题 → **回报调用方，不自己改 TS**。
 
+**读取兼容**（内网 bug：≥2 层子 agent 丢 read 的目录权限，read 工具可能被拒）：read 工具优先；**被拒即 fallback** bash 标准写法 `Get-Content -Encoding UTF8 '<绝对路径>'`（读无 BOM 问题，引用文件全为仓内 UTF-8）——标准写法失败上报，禁换变体试错。
+
 # 怎么干：加载 skill，按编码流程
 
 **按任务加载对应 skill**（三个 skill 的边界）：
