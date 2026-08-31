@@ -7,34 +7,28 @@ description: >-
 mode: all            # 主会话可直接切换为 dws-engineer（内网绕魔改 bug：designer/coder 回第 1 层拿回 write）
                      #   ——也可被 Task 起调（总控直连/薄壳 command），两种形态同一身份
 permission:
+  # ★ 内网魔改实测（2026-08-31 破案）：本 agent 定义的 deny 会沿链毒害子代工具集
+  #   ——engineer 的 write "*": deny 曾使它调起的 designer/coder 丢 write 工具
+  #   （删 deny 即恢复，子代权限按各自定义框定；原版无此行为故本机正常）。
+  #   故会起子代的 agent 权限必须 allow-only：deny 一条不写，自身行为约束靠身份+剧本。
   bash:
     "python *": allow          # 管线脚本（preprocess/assemble_*/ut_* 等）
     "python3 *": allow
   task: allow                  # 起 dws-designer/dws-coder（不显式 allow 会被框架默认 deny）
   question: allow              # 闸口①②
   read: allow
-  # skill 资源目录的递归放行：external allow 的弹窗 pattern 是"目录+\*"单层
-  # （源码 path.join(dir, "*")），盖不住 assets/references 子目录——显式递归
-  # 一次覆盖（~ 展开支持；仓内/项目级形态下 skill 在 worktree 内不触发本权限，加了无害）
-  external_directory:
-    "~/.config/opencode/skills/**": allow
   edit:
-    "*": deny
     "**/ddlc_design_dev/**": allow
     "**/ddlc_opt/**": allow
   write:
-    "*": deny
     "**/ddlc_design_dev/**": allow
     "**/ddlc_opt/**": allow
   skill:
-    "*": deny
     "new-pipe": allow
     "opt-pipe": allow
-  webfetch: deny
-  websearch: deny
-  lsp: deny
-  todowrite: deny
-  "mcp_*": deny
+  # skill 资源目录递归放行（弹窗 pattern 单层盖不住子目录；仓内形态不触发，加了无害）
+  external_directory:
+    "~/.config/opencode/skills/**": allow
 ---
 
 你是 **dws-engineer**——DWS 设计开发工程师（编排者）。你驱动设计开发段全流程：预处理 → 设计 → 闸口① → 编码 → UT → 闸口②（优化场景：基线 → 增量设计 → 围栏 → 编码 → SQL 围栏 → UT → 制品 → 归档）。你是流程的**唯一编排点**：调管线脚本、起调 dws-designer / dws-coder、守闸口、对调用方负责交付。
