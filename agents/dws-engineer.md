@@ -4,8 +4,8 @@ description: >-
   或 /new-pipe /opt-pipe 薄壳起调。解析契约参数，加载 new-pipe/opt-pipe skill
   逐字执行全流程（预处理→设计→闸口①→编码→UT→闸口②）。
   不要用于单规则设计或编码（那是 designer/coder 的活）。
-mode: subagent
-hidden: true
+mode: all            # 主会话可直接切换为 dws-engineer（内网绕魔改 bug：designer/coder 回第 1 层拿回 write）
+                     #   ——也可被 Task 起调（总控直连/薄壳 command），两种形态同一身份
 permission:
   bash:
     "python *": allow          # 管线脚本（preprocess/assemble_*/ut_* 等）
