@@ -73,17 +73,19 @@ permission:
 
 # 落盘（design_decisions.yaml）
 
-**分层落盘**：有 write/edit 工具用 write/edit（首选）。**环境没有 write 工具时**（黑盒运行时第二层子 agent 实证缺失）用官方降级模板（PowerShell 无 BOM，多行内容 here-string 原样）：
+**分层落盘**：有 write/edit 工具用 write/edit（首选）。**环境没有 write 工具时**（内网魔改 bug：≥2 层子 agent 丢 write/edit——平台修复后本段退役）用**唯一标准写法**（内网团队实证定稿，勿换变体）：
 
 ```powershell
 [IO.Directory]::CreateDirectory("<父目录绝对路径>") | Out-Null
 $c = @'
-（文件内容原样；只要内容不出现行首 '@ 即安全）
+（内容原样——中文/英文/${PARAM}/单引号/换行全部安全）
 '@
 [IO.File]::WriteAllText("<文件绝对路径>", $c, (New-Object System.Text.UTF8Encoding($false)))
 ```
 
-**禁**裸 `>` 重定向 / `Out-File` / `Set-Content`（默认编码带 BOM——BOM 进 yaml/json 后下游脚本全炸，实证事故源）。
+三要素缺一不可：① **单引号** here-string（`@'`）——双引号 `@"` 会把 `${...}` 插值吞掉；② `WriteAllText` + `UTF8Encoding($false)`——精确无 BOM；③ 结束标记 `'@` **顶行首独占一行**（缩进或同行内容都会破坏语法）。
+
+**黑名单（全部实证踩过）**：`Out-File -Encoding utf8`（BOM）、`Set-Content -Encoding utf8`（BOM）、`echo > file`（中文乱码）、`@"..."@` 双引号 here-string（`${}` 占位符被插值丢失）。标准写法失败 → 上报换人查环境，**禁止换黑名单变体试错**。内容万一出现行首 `'@`（YAML/SQL 几乎不可能）→ 上报走 python 通道，不硬写。
 
 > 有 write 工具的环境（本仓验证环境）大概率用不到降级模板；黑盒运行时无 write 时按模板落盘，写完 Read 回读首行自检无 BOM（﻿ 字符）。
 

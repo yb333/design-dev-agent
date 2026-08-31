@@ -74,32 +74,19 @@ permission:
 
 **落盘走 write/edit，失败即上报**：SELECT 文件优先用 write/edit 工具创建和修改。
 
-**分层落盘**：有 write/edit 工具用 write/edit（首选）。**环境没有 write 工具时**（黑盒运行时第二层子 agent 实证缺失）用官方降级模板（PowerShell 无 BOM，多行内容 here-string 原样）：
+**分层落盘**：有 write/edit 工具用 write/edit（首选）。**环境没有 write 工具时**（内网魔改 bug：≥2 层子 agent 丢 write/edit——平台修复后本段退役）用**唯一标准写法**（内网团队实证定稿，勿换变体）：
 
 ```powershell
 [IO.Directory]::CreateDirectory("<父目录绝对路径>") | Out-Null
 $c = @'
-（文件内容原样；只要内容不出现行首 '@ 即安全）
+（内容原样——中文/英文/${PARAM}/单引号/换行全部安全）
 '@
 [IO.File]::WriteAllText("<文件绝对路径>", $c, (New-Object System.Text.UTF8Encoding($false)))
 ```
 
-**禁**裸 `>` 重定向 / `Out-File` / `Set-Content`（默认编码带 BOM——BOM 进 yaml/json 后下游脚本全炸，实证事故源）。
+三要素缺一不可：① **单引号** here-string（`@'`）——双引号 `@"` 会把 `${...}` 插值吞掉；② `WriteAllText` + `UTF8Encoding($false)`——精确无 BOM；③ 结束标记 `'@` **顶行首独占一行**（缩进或同行内容都会破坏语法）。
 
-check_sql 反复修不过、且确认自己的 SQL 没问题而疑似工具产出有误check_sql 反复修不过、且确认自己的 SQL 没问题而疑似工具产出有误（如解析出错列）→ 用 question 报原始错误，**不自创替代路径**（自写脚本修 SQL、shell 花招绕工具）——工具的 bug 交回维护者修。
-
-三个工具的分工（用法细节见 SKILL.md §2）：
-- `slice_ts.py`——拿规则切片（**不要直接读 ts.json**，大表会上下文爆炸；DQ 任务用 --dq）
-- `pick_fields.py`——随写随查直取字段（省逐字段手写取值表达式的机械劳动；多表逗号分隔或 --all-direct 一次取）
-- `check_sql.py`——写完 SELECT 后静态对比自检（DQ 检查 SQL 用 --dq）
-
-# 输入
-
-调用方告诉你：
-- TS 路径：`10_project_deliver/{资产名}/ddlc_design_dev/ts.json`
-- 要编码的规则：`R0001`
-
-```bash
+**黑名单（全部实证踩过）**：`Out-File -Encoding utf8`（BOM）、`Set-Content -Encoding utf8`（BOM）、`echo > file`（中文乱码）、`@"..."@` 双引号 here-string（`${}` 占位符被插值丢失）。标准写法失败 → 上报换人查环境，**禁止换黑名单变体试错**。内容万一出现行首 `'@`（YAML/SQL 几乎不可能）→ 上报走 python 通道，不硬写。
 python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 ```
 
