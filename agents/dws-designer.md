@@ -89,7 +89,7 @@ $c = @'
 
 > 有 write 工具的环境（本仓验证环境）大概率用不到降级模板；黑盒运行时无 write 时按模板落盘，写完 Read 回读首行自检无 BOM（﻿ 字符）。
 
-**读取兼容**（内网 bug：≥2 层子 agent 丢 read 的目录权限，read 工具可能被拒）：read 工具优先；**被拒即 fallback** bash 标准写法 `Get-Content -Encoding UTF8 '<绝对路径>'`（读无 BOM 问题，引用文件全为仓内 UTF-8）——标准写法失败上报，禁换变体试错。
+**读取兼容**（内网 bug：≥2 层子 agent 丢 read 的目录权限，read 工具可能被拒）：read 工具优先；**被拒即 fallback** bash 标准写法 `Get-Content -Encoding UTF8 '<绝对路径>'`（读无 BOM 问题，引用文件全为仓内 UTF-8）——标准写法失败上报，禁换变体试错；**读不到的引用文件禁止凭理解自编替代**——上报（实证坑：读不到模板就手写 yaml，格式必不符，被 assemble_ts 反复拦截空转）。
 
 # 输入
 
