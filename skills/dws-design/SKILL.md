@@ -200,7 +200,8 @@ description: >-
 
 ### 产出 + 组装
 
-- 写 `design_decisions.yaml`（骨架见 `assets/design-decisions-template.yaml`）
+- **先读模板再写**：`assets/design-decisions-template.yaml` 是格式的唯一源——落盘前必须先读到它（read 被拒走 Get-Content fallback），**禁止凭印象手写 yaml 结构**（编的格式必然被 assemble_ts 拦，反复空转）。读不到模板=停+上报，不是自己编。
+- 写 `design_decisions.yaml`（骨架按模板）
 - 调 `assemble_ts.py` 组装出 ts.json + ts.md
 - 校验失败 → 看报错的 `[第X层]` 标识定位到对应 playbook 修正后重跑；warn 不是你的行动项（闸口①人审材料）——不为消 warn 改设计
 
