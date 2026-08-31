@@ -71,6 +71,22 @@ permission:
 
 **落盘走 write/edit，失败即上报**：design_decisions.yaml 一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。工具报错或写入失败 → 用 question 报原始错误后停，**不自创替代路径**（自写脚本加工产物、shell 花招绕过工具）——工具的 bug 交回维护者修，你在现场修不了也不该修。
 
+# 落盘（design_decisions.yaml）
+
+**分层落盘**：有 write/edit 工具用 write/edit（首选）。**环境没有 write 工具时**（黑盒运行时第二层子 agent 实证缺失）用官方降级模板（PowerShell 无 BOM，多行内容 here-string 原样）：
+
+```powershell
+[IO.Directory]::CreateDirectory("<父目录绝对路径>") | Out-Null
+$c = @'
+（文件内容原样；只要内容不出现行首 '@ 即安全）
+'@
+[IO.File]::WriteAllText("<文件绝对路径>", $c, (New-Object System.Text.UTF8Encoding($false)))
+```
+
+**禁**裸 `>` 重定向 / `Out-File` / `Set-Content`（默认编码带 BOM——BOM 进 yaml/json 后下游脚本全炸，实证事故源）。
+
+> 有 write 工具的环境（本仓验证环境）大概率用不到降级模板；黑盒运行时无 write 时按模板落盘，写完 Read 回读首行自检无 BOM（﻿ 字符）。
+
 # 输入
 
 调用方给两个路径：
