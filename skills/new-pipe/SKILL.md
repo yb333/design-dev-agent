@@ -14,7 +14,7 @@ description: >-
 ## 步骤 0：环境自检（动任何输入之前，一次）
 
 ```bash
-python3 {SKILL_BASE}/scripts/check_env.py
+python {SKILL_BASE}/scripts/check_env.py
 ```
 
 - exit 1 = 环境/依赖不符（报错带原因与修复指引：项目仓部署=更新仓，全局安装=重跑 install.py）→ 停，不改环境继续

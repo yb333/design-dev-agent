@@ -6,8 +6,8 @@
   2. Python 解释器不满足（<3.10，管线脚本用了新语法）
 
 用法:
-  python3 check_env.py            # 安装环境（~/.config/opencode/skills/... 布局）
-  python3 check_env.py --skill-root /path/to/repo/skills   # 本地仓布局（.git 对账当前 commit）
+  python check_env.py              # 安装环境（Win/Unix 通用）（~/.config/opencode/skills/... 布局）
+  python check_env.py --skill-root /path/to/repo/skills   # 本地仓布局（.git 对账当前 commit）
 
 退出码: 0=通过, 1=不符（报错带原因与修复指引）
 """

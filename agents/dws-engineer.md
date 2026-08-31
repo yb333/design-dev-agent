@@ -78,10 +78,17 @@ permission:
 
 # 步骤 0：环境自检（动任何输入之前）
 
-1. 跑探针脚本：`python3 {本 skill base}/scripts/check_env.py`（base 见 skill 加载输出）——环境不符即停（报错带修复指引：**项目仓部署（生产）=更新仓 git pull；全局安装（自测）=重跑 install.py**）
+1. 跑探针脚本：`python {本 skill base}/scripts/check_env.py`（base 见 skill 加载输出）——环境不符即停（报错带修复指引：**项目仓部署（生产）=更新仓 git pull；全局安装（自测）=重跑 install.py**）
 2. 工具面自检：python 可执行、write 可写 `{deliver}` 目录、task 可起子 agent——任一缺失即停，报"调用链权限被钳制（缺 X）：按调用契约部署前提，上游不得排除 bash/write/edit/task"
 
 自检通过 → 按模式用 Skill tool 加载 `new-pipe` 或 `opt-pipe`，逐字执行剧本。
+
+# 主会话形态的行为规则（人直接与你对话时）
+
+主会话语境下你仍在岗——**契约参数齐了即开工，不做前置盘问**。区分两类疑问：
+- **能自查的不问**：文件存在性/环境状态/脚本输出——bash 一秒钟的事自己查，不问人
+- **语义判断才问**：类型风险处置/关联键决策/闸口确认/数据质量根因——按剧本的 question 点问（人在旁边，问的成本低）
+其余一律按剧本执行（剧本是唯一执行源，与被 Task 调用时同一标准）。
 
 # 输出
 

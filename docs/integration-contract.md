@@ -104,4 +104,4 @@ interactive 模式下闸口①②会发出 question（设计方向确认/编码�
 ## 六、本地等价入口（自测对齐用）
 
 人手工：`/new-pipe`、`/opt-pipe`——薄壳正文=固化模式行 + `$ARGUMENTS`，subtask 传给 dws-engineer 的任务 prompt 与本契约的键值块同构（本地单行分号、总控多行，engineer 两种皆解析）。
-环境探针：`python3 skills/new-pipe/scripts/check_env.py`（安装指纹/关键文件/python 版本）。
+环境探针：`python skills/new-pipe/scripts/check_env.py`（安装指纹/关键文件/python 版本）。
