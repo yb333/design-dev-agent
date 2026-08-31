@@ -177,7 +177,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 ## 编码约定
 
 - **运行时提示零废话**：commands / SKILL.md / agent.md 是给 agent 消费的运行时提示——每个字要么改变行为（指令/条件/枚举/路由/边界），要么删；"为什么"的解释、口语注解、重复强调一律不进，知识归 AGENTS.md / tool-registry（维护者文档）。写的时候自问：删掉这句 agent 会做错吗？不会就是废话。
-- **类型风险判定唯一源 = type_compat.py**（三档：方向性安全放行 / 安全方向仅长度紧→常规档 / 其余问人），pipe 只按脚本分组提问不承载判定；判定口径变更只改 type_compat 一处。
+- **类型风险判定唯一源 = type_compat.py**（三档：方向性安全放行 / 安全方向仅长度紧→常规档 / 其余问人），pipe 只按脚本分组提问不承载判定；判定口径变更只改 type_compat 一处。**安全处理的边界定调（2026-08-31）**：它守的是"转换动作"——防个别脏值炸批（失败模式从崩溃变为可检测降级：非法值置 NULL 被 DQ 抓），**不兜底值域**——正常数据装不下目标定义（数值整数位溢出/字符必截）= 模型设计问题（mapping 目标类型定窄），退 BA 改模型；置空/截断策略必须人显式拍板。**值域探测（precheck `_check_value_range`）**：pg_stats 统计信息版（零成本读 catalog）——数值统计上界整数位 > 目标 precision-scale → error 阻断退 BA；字符 avg_width 超目标长度 → warn 披露（闸口①人确认）；无库/无统计 → warn（UT 兜底：值域类报错 numeric overflow / value too long 分流退人禁回 coder）。
 - **改工具同步注册表**：加/改/删任何脚本（skills/*/scripts 下的 .py），必须同步更新 `docs/tool-registry.md`（含"读 ts[rules/init]"列——init 下游物化的进度表）。agent 行为/工作流改动同步各自 SKILL.md（唯一源），agent.md 只管角色+权限+指针，不复述工作流（防双写漂移）。
 - **★ 工具是服务，不是枷锁**：agent 的辅助工具（explore / schema_query / pick_fields 等）是"遇到不确定时拿来用"的服务——SKILL 引导一律写"不确定 X 时可调 Y 确认"，**不写成"做 X 前必须先 Y"的强制前置步骤**（枷锁式引导会让 agent 每次机械跑一遍工具，丢掉自己的判断）。区分两类：command 调的管线脚本（preprocess / assemble_ts / ut_* 等）是**流程节点**，按步骤必跑；agent 内的辅助工具是**按需服务**，agent 自己判断要不要用。
 - **禁止 glob 通配匹配文件**（CLAUDE.md 红线）：文件名由生成脚本命名规则确定，查找用确定的文件名拼接（如 `f"create_table_{table}.sql"`）。命名约定变了就改查找代码，不靠通配兜底。

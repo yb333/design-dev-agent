@@ -1335,3 +1335,107 @@ class TestProbeMode:
         r = _sp.run([_sys.executable, str(script), "--mapping", str(xlsx)],
                     capture_output=True, text=True, timeout=120)
         assert r.returncode != 0 and "--output" in r.stderr
+
+
+class TestValueRangeHelpers:
+    """值域探测纯函数：统计边界解析 / 整数位宽。"""
+
+    def test_parse_stats_bounds(self):
+        from precheck import _parse_stats_bounds
+        assert _parse_stats_bounds("{1,5,10,123.456}") == ("1", "123.456")
+        assert _parse_stats_bounds("{-99.5,-1,0,88}") == ("-99.5", "88")
+        assert _parse_stats_bounds("{}") == (None, None)
+        assert _parse_stats_bounds(None) == (None, None)
+        assert _parse_stats_bounds("not-a-bounds") == (None, None)
+
+    def test_integer_digits(self):
+        from precheck import _integer_digits
+        assert _integer_digits("123.456") == 3      # 实证案例：3 位整数
+        assert _integer_digits("-12.3") == 2
+        assert _integer_digits("0.5") == 1
+        assert _integer_digits("0") == 1
+        assert _integer_digits("abc") == -1
+
+
+class TestValueRangeCheck:
+    """值域探测主入口（fake executor，不连库）。
+
+    实证案例回归：numeric→numeric(7,6)，源统计上界 123.456（3 位整数 > 目标 1 位整数位）
+    → error 阻断退 BA。字符 avg_width 超长 → warn 披露。无库 → warn 跳过。
+    """
+
+    @staticmethod
+    def _rs():
+        return {"field_mappings": [
+            {"target_column": "ratio", "transform_rule": "直接复制",
+             "source_type": "numeric", "target_type": "numeric(7,6)",
+             "source_schema": "ods", "source_table": "ods_test_f", "source_column": "ratio"},
+            {"target_column": "name_cut", "transform_rule": "直接复制",
+             "source_type": "varchar", "target_type": "varchar(10)",
+             "source_schema": "ods", "source_table": "ods_test_f", "source_column": "name"},
+            {"target_column": "id", "transform_rule": "直接复制",
+             "source_type": "bigint", "target_type": "bigint",
+             "source_schema": "ods", "source_table": "ods_test_f", "source_column": "id"},
+        ], "meta": {"target": {"f_table": {"schema": "dws"}}}}
+
+    @staticmethod
+    def _fake_executor(rows_by_table):
+        class R:
+            def __init__(self, rows):
+                self.success, self.rows = True, rows
+        class E:
+            def test_connection(self):
+                return True
+            def execute(self, sql):
+                for (sch, tbl), rows in rows_by_table.items():
+                    if sch in sql and tbl in sql:
+                        return R(rows)
+                return R([])
+            def close(self):
+                pass
+        return E()
+
+    def test_numeric_overflow_blocks(self, monkeypatch):
+        from precheck import _check_value_range, PrecheckResult
+        result = PrecheckResult()
+        ex = self._fake_executor({("ods", "ods_test_f"): [
+            {"attname": "ratio", "avg_width": 8, "hb": "{0.1,1.5,123.456}"},
+            {"attname": "name", "avg_width": 5, "hb": None},
+        ]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", lambda *a, **k: ex)
+        _check_value_range(self._rs(), result)
+        errs = [e for e in result.errors if "值域溢出" in e]
+        assert errs and "ratio" in errs[0] and "BA" in errs[0]
+        # avg 5 <= 10 不披露
+        assert not any("截断披露" in w for w in result.warnings)
+
+    def test_char_truncation_discloses(self, monkeypatch):
+        from precheck import _check_value_range, PrecheckResult
+        result = PrecheckResult()
+        ex = self._fake_executor({("ods", "ods_test_f"): [
+            {"attname": "ratio", "avg_width": 8, "hb": "{0.1,0.9}"},
+            {"attname": "name", "avg_width": 16, "hb": None},
+        ]})
+        monkeypatch.setattr("dws_db.create_executor_for_schema", lambda *a, **k: ex)
+        _check_value_range(self._rs(), result)
+        assert not result.errors
+        warns = [w for w in result.warnings if "截断披露" in w]
+        assert warns and "name_cut" in warns[0]
+
+    def test_no_db_degrades_to_warn(self, monkeypatch):
+        from precheck import _check_value_range, PrecheckResult
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda *a, **k: (_ for _ in ()).throw(ConnectionError("no db")))
+        result = PrecheckResult()
+        _check_value_range(self._rs(), result)
+        assert any("值域探测跳过" in w for w in result.warnings)
+        assert not result.errors
+
+    def test_no_stats_warns_unverified(self, monkeypatch):
+        from precheck import _check_value_range, PrecheckResult
+        result = PrecheckResult()
+        ex = self._fake_executor({("ods", "ods_test_f"): []})  # 无统计行
+        monkeypatch.setattr("dws_db.create_executor_for_schema", lambda *a, **k: ex)
+        _check_value_range(self._rs(), result)
+        assert not result.errors
+        assert any("值域未验" in w for w in result.warnings)

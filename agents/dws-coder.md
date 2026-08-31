@@ -70,6 +70,8 @@ permission:
 
 **对象引用全限定**：你写的每个 FROM/JOIN 都是 `schema.table`，没有例外——包括自产中间表（tmp，与目标表同 schema；切片的 source_tables 都带了 schema，照着写）。裸表名是错误不是风格（check_sql 静态拦）。
 
+**值域类报错（numeric field overflow / value too long）不打补丁**——目标是模型定义装不下数据，置空/截断=静默丢数据掩埋根因（你修不了模型，补丁只会掩盖）。上报调用方退人/BA；人显式拍板的置空/截断策略按 designer 写的口径实现。
+
 **落盘走 write/edit，失败即上报**：SELECT 文件一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。check_sql 反复修不过、且确认自己的 SQL 没问题而疑似工具产出有误（如解析出错列）→ 用 question 报原始错误，**不自创替代路径**（自写脚本修 SQL、shell 花招绕工具）——工具的 bug 交回维护者修。
 
 三个工具的分工（用法细节见 SKILL.md §2）：

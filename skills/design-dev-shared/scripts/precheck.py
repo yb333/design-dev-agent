@@ -373,6 +373,7 @@ def precheck(
     if not structural_errors and decision_path is not None:
         _check_type_risk(rs_input, result, decision_path, rs_input_path)
         _check_join_type_risk(rs_input, result, decision_path, rs_input_path, cache_path)
+        _check_value_range(rs_input, result, rs_input_path)
 
     return result
 
@@ -734,6 +735,169 @@ def _sample_join_key_values(executor, schema: str, table: str, col: str, limit: 
     return []
 
 
+# ============================================================
+# 值域探测（pg_stats 统计信息版，≈零成本：读 catalog 不扫表）
+#
+# 事件边界（2026-08-31 定调）：安全处理（守卫式转换/CAST）守的是"转换动作"
+# ——防个别脏值炸批（失败模式从崩溃变可检测降级）；**不兜底值域**——正常数据
+# 装不下目标定义 = 模型设计问题（BA 的 mapping 目标类型定窄了），退源端改模型。
+# 实证案例：numeric → numeric(7,6)，源值 123.456——整数 3 位 > 目标整数位 1 位，
+# CAST/ROUND 均无解，UT 才炸且被 coder 打"超长置空"补丁掩埋根因。
+#
+# 判定（"直接复制"字段中目标定义收窄于源的候选）：
+#   - 数值：目标 numeric(p,s) 整数位 p-s < 源统计上界整数位 → error 阻断
+#     （退 BA 改 mapping 目标类型；置空/截断=静默丢数据，必须人显式拍板，本闸只认改模型）
+#   - 字符：目标 varchar(n) < 源统计 avg_width → warn 披露（会发生截断，闸口①人确认）
+#   - 无库/无统计 → warn 汇总（值域未验，UT 兜底：值域类报错分流退人禁回 coder）
+# ============================================================
+
+
+def _parse_stats_bounds(histogram_text):
+    """pg_stats.histogram_bounds 文本（'{a,b,...}'）→ (首元素, 末元素) 字符串。
+
+    无统计（None/'{}'/空）或解析失败返回 (None, None)——统计是近似增益，坏了不猜。
+    """
+    if not histogram_text:
+        return None, None
+    t = str(histogram_text).strip()
+    if not (t.startswith("{") and t.endswith("}")):
+        return None, None
+    inner = t[1:-1].strip()
+    if not inner:
+        return None, None
+    parts = [p.strip().strip('"') for p in inner.split(",")]
+    return parts[0], parts[-1]
+
+
+def _integer_digits(value_text) -> int:
+    """数值文本的整数位宽：'123.456'→3、'-12.3'→2、'0.5'→1。非法返回 -1。"""
+    try:
+        import decimal
+        d = decimal.Decimal(str(value_text).strip())
+        return 1 if d == 0 else len(str(int(abs(d))))
+    except Exception:
+        return -1
+
+
+def _fetch_pg_stats(executor, schema: str, table: str, cols: list) -> dict:
+    """按表批量查 pg_stats → {列名: (avg_width, histogram_bounds文本)}。异常返回 {}。"""
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", f"{schema}.{table}"):
+        return {}
+    try:
+        cols_sql = ", ".join(f"'{c}'" for c in cols)
+        sql = ("SELECT attname, avg_width, histogram_bounds::text AS hb "
+               f"FROM pg_stats WHERE schemaname='{schema}' AND tablename='{table}' "
+               f"AND attname IN ({cols_sql})")
+        r = executor.execute(sql)
+        if r.success and r.rows:
+            return {str(row.get("attname", "")).lower():
+                    (row.get("avg_width"), row.get("hb")) for row in r.rows}
+    except Exception:
+        pass
+    return {}
+
+
+def _check_value_range(rs_input: dict, result: PrecheckResult, rs_input_path=None):
+    """值域探测主入口：有库走 pg_stats 统计判定，无库降 warn（UT 兜底）。"""
+    from type_compat import parse_type_info
+
+    numeric_candidates = []   # 目标 numeric(p,s)：源实际整数位可能超目标整数位
+    char_candidates = []      # 目标 varchar(n)：源更宽/无长度，可能截断
+    for fm in rs_input.get("field_mappings", []):
+        rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        if rule != "直接复制":
+            continue
+        st, tt = (fm.get("source_type") or "").strip(), (fm.get("target_type") or "").strip()
+        if not st or not tt:
+            continue
+        ti_src, ti_tgt = parse_type_info(st), parse_type_info(tt)
+        common = {
+            "target_column": (fm.get("target_column") or "").strip(),
+            "schema": (fm.get("source_schema") or "").strip(),
+            "table": (fm.get("source_table") or "").strip(),
+            "col": (fm.get("source_column") or "").strip(),
+            "source_type": st, "target_type": tt,
+        }
+        if (ti_tgt.get("family") == "numeric" and ti_tgt.get("length") is not None
+                and ti_tgt.get("scale") is not None and ti_src.get("family") == "numeric"):
+            common["int_limit"] = ti_tgt["length"] - ti_tgt["scale"]
+            if common["int_limit"] >= 0:
+                numeric_candidates.append(common)
+        elif (ti_tgt.get("family") == "varchar" and ti_tgt.get("length")
+              and ti_src.get("family") == "varchar"
+              and (ti_src.get("length") is None or ti_src["length"] > ti_tgt["length"])):
+            common["n"] = ti_tgt["length"]
+            char_candidates.append(common)
+    if not numeric_candidates and not char_candidates:
+        return  # 无候选（无收窄场景）不打扰
+
+    target_schema = ((rs_input.get("meta", {}).get("target", {}) or {})
+                     .get("f_table", {}) or {}).get("schema", "")
+    executor = None
+    try:
+        from dws_db import create_executor_for_schema
+        executor = create_executor_for_schema(target_schema, role="etl")
+        if not executor.test_connection():
+            executor.close()
+            executor = None
+    except Exception:
+        executor = None
+    if executor is None:
+        result.add_warn("[值域探测跳过] 无库/连不上：值域未验（UT 阶段值域类报错兜底，"
+                        "分流规则见 new-pipe 剧本步骤 6——退人禁回 coder）")
+        return
+
+    try:
+        by_table: dict = {}
+        for c in numeric_candidates + char_candidates:
+            by_table.setdefault((c["schema"].lower(), c["table"].lower()), []).append(c)
+        stats_cache: dict = {}
+        for (sch, tbl), items in by_table.items():
+            cols = list({c["col"] for c in items if c["col"]})
+            if cols:
+                stats_cache[(sch, tbl)] = _fetch_pg_stats(executor, sch, tbl, cols)
+
+        no_stats = []
+        for c in numeric_candidates:
+            stats = stats_cache.get((c["schema"].lower(), c["table"].lower()), {}).get(c["col"].lower())
+            if not stats:
+                no_stats.append(c["target_column"] or c["col"])
+                continue
+            first, last = _parse_stats_bounds(stats[1])
+            digits = max(_integer_digits(first), _integer_digits(last))
+            if digits > c["int_limit"]:
+                result.add_error(
+                    f"[值域溢出·模型问题] {c['target_column']}（{c['source_type']}→{c['target_type']}）："
+                    f"源统计上界整数位 {digits} 位 > 目标整数位 {c['int_limit']} 位"
+                    f"（precision-scale）——目标定义装不下源数据。CAST/截取对整数位溢出无解，"
+                    f"置空=静默丢数据。退 BA 修改 mapping 目标类型后重跑 1a+1b；"
+                    f"确要置空/截断策略必须人显式拍板（本闸只认改模型）")
+        for c in char_candidates:
+            stats = stats_cache.get((c["schema"].lower(), c["table"].lower()), {}).get(c["col"].lower())
+            if not stats:
+                no_stats.append(c["target_column"] or c["col"])
+                continue
+            try:
+                avg_w = float(stats[0] or 0)
+            except (TypeError, ValueError):
+                continue
+            if avg_w > c["n"]:
+                result.add_warn(
+                    f"[截断披露] {c['target_column']}（{c['source_type']}→{c['target_type']}）："
+                    f"源统计平均宽度 {avg_w:.0f} > 目标长度 {c['n']}——安全截取会发生截断"
+                    f"（静默丢尾部）。闸口①确认业务可接受，或退 BA 改长度")
+        if no_stats:
+            result.add_warn(f"[值域未验] {len(no_stats)} 个收窄字段无统计信息（{no_stats[:5]}"
+                            f"{'…' if len(no_stats) > 5 else ''}）——表未 analyze 或统计过期，"
+                            f"UT 阶段值域类报错兜底")
+    finally:
+        try:
+            executor.close()
+        except Exception:
+            pass
+
+
 def _generate_join_risk_skeleton(decision_path: Path, risks: list[dict]):
     """生成关联键类型决策骨架（全中文 key，处置留空待人/agent 填）。"""
     lines = [
@@ -908,8 +1072,6 @@ def _check_join_type_risk(rs_input: dict, result: PrecheckResult,
             pass
 
     join_decision = decision_path.with_name("join_type_decision.yaml")
-
-    # 决策已填全 → 放行 + 回写 rs_input（事实+决策，designer 可见）
     if join_decision.exists():
         if _validate_join_risk_decision(join_decision, risks, result):
             released = _apply_join_decision(rs_input, risks, join_decision)
