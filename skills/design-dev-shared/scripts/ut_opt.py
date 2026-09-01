@@ -137,6 +137,22 @@ def render_report(ts_v2: dict, alters: List[str], compare: List[dict],
     return "\n".join(lines) + "\n"
 
 
+def build_insert_plan(ts_v2: dict, schema: str) -> List[Tuple[str, str, List[str]]]:
+    """INSERT 执行计划 [(rule_code, 目标全名, 字段清单)]。
+
+    表名容忍两种形态（rsplit 剥 schema，与 ts_compat 的查找容忍同款）：
+    json 路径 baseline 产短名 target_table；档案路径 baseline 是 new-pipe 新版 ts
+    （target_table 带 schema 如 dws.dwb_x）——统一剥成短名再拼全名/查 tables 键。
+    """
+    plan: List[Tuple[str, str, List[str]]] = []
+    for rule_code, rule in ts_v2.get("rules", {}).items():
+        tshort = str(rule.get("target_table") or "").rsplit(".", 1)[-1].lower()
+        fields = [f["target_field"] for f in
+                  ts_v2.get("tables", {}).get(tshort, {}).get("fields", [])]
+        plan.append((rule_code, f"{schema}.{tshort}", fields))
+    return plan
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="优化模式 UT：ALTER + 输出对比 + INSERT")
     ap.add_argument("--ts", required=True, help="ts_v2.json")
@@ -176,13 +192,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 4. INSERT 全量执行（老列+新列全量写一遍，验证写路径）
     inserts = []
-    for rule_code, rule in ts_v2.get("rules", {}).items():
+    for rule_code, target, fields in build_insert_plan(ts_v2, schema):
         select_sql = read_select(Path(args.etl_dir), rule_code)
         if not select_sql:
             continue
-        target = f"{schema}.{rule['target_table']}"
-        fields = [f["target_field"] for f in
-                  ts_v2.get("tables", {}).get(rule["target_table"], {}).get("fields", [])]
         try:
             sql = wrap_insert(select_sql, target, fields)
             executor.execute(sql)

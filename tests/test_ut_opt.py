@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ut_opt import build_compare_sql, _frozen_columns, run_output_compare
+from ut_opt import build_compare_sql, _frozen_columns, run_output_compare, build_insert_plan
 
 B_R2 = ("SELECT t.order_id, t.cust_id, SUM(t.amount) AS total_amount "
         "FROM dws.tmp_trade_order t GROUP BY t.order_id, t.cust_id")
@@ -100,3 +100,17 @@ class TestCompareVerdict:
         ex = FakeExecutor({})
         res = run_output_compare(ex, self._ts(), etl, base, {})
         assert res[0]["status"] == "FENCE_FAIL"
+
+
+class TestInsertPlan:
+    """表名两种形态（json 路径短名 / 档案路径 new-pipe 新版带 schema）产出同一 INSERT 计划。"""
+
+    def _ts(self, prefixed: bool):
+        tt = "dws.dwb_trade_order_d" if prefixed else "dwb_trade_order_d"
+        return {"rules": {"R0002": {"target_table": tt}},
+                "tables": {"dwb_trade_order_d": {"fields": [{"target_field": "order_id"}]}}}
+
+    def test_short_and_prefixed_agree(self):
+        short = build_insert_plan(self._ts(False), "dws")
+        prefixed = build_insert_plan(self._ts(True), "dws")
+        assert short == prefixed == [("R0002", "dws.dwb_trade_order_d", ["order_id"])]
