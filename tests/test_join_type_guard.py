@@ -160,7 +160,7 @@ class TestFillJoinRiskDecision:
         import subprocess, sys as _sys
         p = self._write_skeleton(tmp_path)
         rc = subprocess.run([
-            _sys.executable, "skills/dws-design/scripts/fill_join_risk_decision.py",
+            _sys.executable, "skills/new-pipe/scripts/fill_join_risk_decision.py",
             "--decision", str(p),
             "--pair-decisions", "a.prod_code = b.prod_id=>接受",
             "--reasons", "a.prod_code = b.prod_id=>业务确认",
@@ -176,7 +176,7 @@ class TestFillJoinRiskDecision:
         import subprocess, sys as _sys
         p = self._write_skeleton(tmp_path)
         rc = subprocess.run([
-            _sys.executable, "skills/dws-design/scripts/fill_join_risk_decision.py",
+            _sys.executable, "skills/new-pipe/scripts/fill_join_risk_decision.py",
             "--decision", str(p),
             "--pair-decisions", "a.prod_code = b.prod_id=>随便填",
         ], capture_output=True, text=True)
@@ -187,7 +187,7 @@ class TestFillJoinRiskDecision:
         import subprocess, sys as _sys
         p = self._write_skeleton(tmp_path)
         rc = subprocess.run([
-            _sys.executable, "skills/dws-design/scripts/fill_join_risk_decision.py",
+            _sys.executable, "skills/new-pipe/scripts/fill_join_risk_decision.py",
             "--decision", str(p),
             "--pair-decisions", "a.x = b.y=>接受",
         ], capture_output=True, text=True)

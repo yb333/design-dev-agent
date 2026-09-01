@@ -18,7 +18,7 @@
 ```
 skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
-│   ├── scripts/         # assemble_ts.py assemble_ts_opt.py(opt侧用) explore.py check_field.py(字段查证,designer自有入口) pick_targets.py(字段清单取料,designer自有入口) fill_type_risk_decision.py fill_join_risk_decision.py
+│   ├── scripts/         # assemble_ts.py assemble_ts_opt.py(opt侧用) explore.py check_field.py(字段查证,designer自有入口) pick_targets.py(字段清单取料,designer自有入口)
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schedule_config.example.json schema_apps.example.json
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
@@ -26,7 +26,7 @@ skills/
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 ├── dws-dq/              # DQ 检查 SQL 生成 skill（coder agent 的 DQ 任务用，薄——仅 SKILL.md 定契约，工具复用 dws-coding 的 slice_ts --dq / check_sql）
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
-│   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py
+│   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py fill_type_risk_decision.py fill_join_risk_decision.py(决策填值器,剧本步骤1b)
                          #   dispatch_plan.py assemble_export.py ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
@@ -175,6 +175,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 
 - **运行时提示零废话**：commands / SKILL.md / agent.md 是给 agent 消费的运行时提示——每个字要么改变行为（指令/条件/枚举/路由/边界），要么删；"为什么"的解释、口语注解、重复强调一律不进，知识归 AGENTS.md / tool-registry（维护者文档）。写的时候自问：删掉这句 agent 会做错吗？不会就是废话。
 - **类型风险判定唯一源 = type_compat.py**（三档：方向性安全放行 / 安全方向仅长度紧→常规档 / 其余问人），pipe 只按脚本分组提问不承载判定；判定口径变更只改 type_compat 一处。**安全处理的边界定调（2026-08-31）**：它守的是"转换动作"——防个别脏值炸批（失败模式从崩溃变为可检测降级：非法值置 NULL 被 DQ 抓），**不兜底值域**——正常数据装不下目标定义（数值整数位溢出/字符必截）= 模型设计问题（mapping 目标类型定窄），退 BA 改模型；置空/截断策略必须人显式拍板。**值域探测（precheck `_check_value_range`）**：pg_stats 统计信息版（零成本读 catalog）——数值统计上界整数位 > 目标 precision-scale → error 阻断退 BA；字符 avg_width 超目标长度 → warn 披露（闸口①人确认）；无库/无统计 → warn（UT 兜底：值域类报错 numeric overflow / value too long 分流退人禁回 coder）。
+- **脚本归位章程（2026-09-01 定调）**：**消费单元 = 拥有自己 scripts 目录的 skill**（薄指针 skill 如 dws-design-opt/dws-coding-opt 不是单元——opt 设计对设计知识复用 90% 故薄指针共池，opt 管线对 new-pipe 脚本复用少故各自成单元；复用深度决定单元划分）。脚本住其消费单元的 scripts 目录；**被 ≥2 个目录单元 import/调用的进 design-dev-shared**（跨 agent 是自然子集；engineer 的跨剧本共用入口 preprocess/check_db/assemble_ddl/resolve_appid 即此——曾议"挂 new-pipe 主 skill"未采纳：中立位置免跨 pipe import）。骑墙错位（如 fill_* 曾住角色目录但消费者是剧本）由 tree_sync+registry 对账防回归。
 - **改工具同步注册表**：加/改/删任何脚本（skills/*/scripts 下的 .py），必须同步更新 `docs/tool-registry.md`（含"读 ts[rules/init]"列——init 下游物化的进度表）。agent 行为/工作流改动同步各自 SKILL.md（唯一源），agent.md 只管角色+权限+指针，不复述工作流（防双写漂移）。
 - **★ 工具是服务，不是枷锁**：agent 的辅助工具（explore / schema_query / pick_fields 等）是"遇到不确定时拿来用"的服务——SKILL 引导一律写"不确定 X 时可调 Y 确认"，**不写成"做 X 前必须先 Y"的强制前置步骤**（枷锁式引导会让 agent 每次机械跑一遍工具，丢掉自己的判断）。区分两类：command 调的管线脚本（preprocess / assemble_ts / ut_* 等）是**流程节点**，按步骤必跑；agent 内的辅助工具是**按需服务**，agent 自己判断要不要用。
 - **内网魔改版 deny 下压毒害子代工具（2026-08-31 用户实测破案，权限设计铁律）**：内网 codeagent（基于 1.2.27 魔改）会把**父 agent 定义的 deny 规则传导给子代工具集**——engineer 的 write `"*": deny`（白名单式兜底）曾使其调起的 designer/coder 直接丢 write 工具，删 deny 即恢复（子代权限按各自定义框定）。原版只下压会话层 deny（agent 层 deny 不进下压链）故本机同版本正常。**铁律：会起子代的 agent（当前=engineer）权限必须 allow-only——deny 一条不写**，自身行为约束靠身份+剧本；designer/coder 的 deny 保留（不起子代，无毒害对象）。兜底标准写法（write 恢复前的过渡/异常通道，三要素）：单引号 here-string + `[IO.File]::WriteAllText(path, $c, UTF8Encoding($false))` + 结束标记 `'@` 顶行首独占一行。**黑名单（实证坑）**：Out-File/Set-Content 的 utf8（BOM）、`echo >`（中文乱码）、双引号 here-string `@"`（`${}` 被插值吞）。读 skill 引用：read 工具优先，被拒即 fallback bash `Get-Content -Encoding UTF8 '<绝对路径>'`（环境自适应，不预设 bug 边界）。**读不到禁止凭理解自编替代**（实证：designer 读不到 decisions 模板就手写 yaml，被 assemble_ts 反复拦截空转）——decisions 落盘前必须先读到模板（格式唯一源）。标准在 dws-coder.md/dws-designer.md；失败上报禁换变体试错。
@@ -265,7 +266,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 修正 2026-08"pipe 脚本集中住 shared"的粗归位——当时剧本还是 command（无目录无 base），集中安置是唯一解；**剧本迁 skill 后（有 base directory 有 scripts/）各归各 pipe 才可行**，这是迁移链收尾不是翻烧饼。判据一句话：**多于一个消费者 → shared（公共设施）；单一消费者 → 消费者自己的 scripts**（"谁的工具给谁"，用户定调）。
 
-- **new-pipe/scripts**：precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose + check_env（步骤0 探针，opt-pipe 跨剧本引用 `../new-pipe/scripts/check_env.py`——先例 dws-dq 借 slice_ts）。
+- **new-pipe/scripts**：precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose + check_env（步骤0 探针，opt-pipe 跨剧本引用 `../new-pipe/scripts/check_env.py`——先例 dws-dq 借 slice_ts）+ fill_type_risk_decision/fill_join_risk_decision（2026-09-01 二轮搬正：原骑墙住 dws-design，消费者实为剧本步骤1b）。
 - **opt-pipe/scripts + schemas**：preprocess_opt/fence_check/sql_fence(库)/sql_fence_check/ut_opt/assemble_ddl_opt/assemble_ts_baseline/baseline_contract(库)/artifact_patcher/archive_writer + baseline_v1.schema.json（伴生数据随脚本走）。
 - **shared 瘦身为真公共设施**：共用入口（preprocess 两剧本共用 / check_db 两剧本共用 / assemble_ddl 被 new-pipe 直调+opt 侧 assemble_ddl_opt import / resolve_appid 被 preprocess·assemble_export import）+ 公共库（dws_db/config_paths/run_ut/sql_parse/dws_standards/ts_compat/type_compat/schema_query）。
 - **步骤0 双写收敛**：删 engineer.md 步骤0 段（曾带"skill 加载前就要 skill base"的时序死结），改"开工第一动作=加载剧本"——探针+工具面自检唯一源在剧本 SKILL 步骤0（opt-pipe 本轮补上）。

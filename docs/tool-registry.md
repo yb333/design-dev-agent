@@ -19,7 +19,7 @@
 
 > 调用方是**剧本（new-pipe/opt-pipe SKILL）**，不是 agent。住址：new-pipe 专属管线脚本住 `skills/new-pipe/scripts`（下述各节标注）；共用入口（preprocess/check_db/assemble_ddl/resolve_appid）+ 公共库住 `design-dev-shared/scripts`。
 
-### 预处理 / 输入校验（preprocess 住 shared 共用；precheck/gate_summary 住 new-pipe）
+### 预处理 / 输入校验（preprocess 住 shared 共用；precheck/gate_summary/fill_* 住 new-pipe）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本；含加工字段引用提取存顶层 `_logic_refs`（尽力而为，引用门禁 N37 原料））+ rs_input_view.json（compact，给 designer；processed 段含 refs 引用提示） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |

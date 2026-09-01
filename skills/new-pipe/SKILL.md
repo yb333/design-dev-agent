@@ -57,8 +57,8 @@ python {SKILL_BASE}/scripts/check_env.py
 
 ### 脚本路径定位
 
-脚本按**消费者**分布（归位判据：多于一个消费者 → shared 公共设施；单一消费者 → 自己的 scripts）：
-- **本剧本 `scripts/`（PIPE_SCRIPTS = `{SKILL_BASE}/scripts`）**：new-pipe 专属管线脚本（precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose + check_env 步骤0 探针）。
+脚本按**消费单元**分布（单元=拥有自己 scripts 目录的 skill，薄指针 skill 不算单元；被 ≥2 个目录单元复用 → shared，单一单元 → 自己的 scripts——章程见 AGENTS 编码约定）：
+- **本剧本 `scripts/`（PIPE_SCRIPTS = `{SKILL_BASE}/scripts`）**：new-pipe 专属管线脚本（precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose/fill_type_risk_decision/fill_join_risk_decision + check_env 步骤0 探针）。
 - `design-dev-shared/scripts`（SHARED_SCRIPTS = `{SKILL_BASE}/../design-dev-shared/scripts`）：**共用入口**（preprocess——两剧本共用 / check_db——两剧本共用 / assemble_ddl——new-pipe 直调+opt 侧 assemble_ddl_opt import / resolve_appid）+ **公共库**（dws_db/config_paths/run_ut/sql_parse/dws_standards/ts_compat/type_compat/schema_query——schema_query 是字段查询能力层，designer 入口 check_field / coder 入口 pick_fields 的内核）。
 - `dws-design/scripts`（DESIGN_SCRIPTS = `{SKILL_BASE}/../dws-design/scripts`）：designer 调的（assemble_ts/explore/check_field/pick_targets/fill_*_decision）。
 - `dws-coding/scripts`（CODING_SCRIPTS = `{SKILL_BASE}/../dws-coding/scripts`）：coder 调的（slice_ts/check_sql/pick_fields）。
@@ -134,7 +134,7 @@ precheck 检出关联键类型跨大类（如字符↔数值），输出 `JOIN_T
 **调脚本填值**（不手写 yaml）：
 
 ```bash
-python DESIGN_SCRIPTS/fill_join_risk_decision.py \
+python PIPE_SCRIPTS/fill_join_risk_decision.py \
   --decision {deliver}/_internal/join_type_decision.yaml \
   --pair-decisions 'a.prod_code = b.prod_id=>接受' \
   --reasons 'a.prod_code = b.prod_id=>业务确认就这么关联'
@@ -161,7 +161,7 @@ precheck 检测到"直接复制"字段有源→目标类型转换风险时阻断
 **调脚本填值**（不手写 yaml，避免中文 key/枚举值写错）：
 
 ```bash
-python DESIGN_SCRIPTS/fill_type_risk_decision.py \
+python PIPE_SCRIPTS/fill_type_risk_decision.py \
   --decision {deliver}/_internal/type_risk_decision.yaml \
   --batch-strategy "加安全处理" \
   --field-decisions 'biz_date:转换,amount_str:返源端' \
