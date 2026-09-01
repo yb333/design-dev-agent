@@ -157,7 +157,7 @@ def run():
                 m = _re.match(r"^([A-Za-z0-9_.-]+)(.*)$", req)
                 pkg, constraint = (m.group(1), m.group(2).strip()) if m else (req, "")
                 r_chk = subprocess.run(
-                    [f"{python_cmd}", "-c", f"import importlib.metadata as im; print(im.version('{pkg}'))"],
+                    py_parts + ["-c", f"import importlib.metadata as im; print(im.version('{pkg}'))"],
                     capture_output=True, text=True)
                 if r_chk.returncode != 0:
                     print(f"  ✗ {pkg}: 未安装")
@@ -174,7 +174,7 @@ def run():
             if need:
                 print(f"  安装/升级: {', '.join(need)}")
                 r_req = subprocess.run(
-                    [f"{python_cmd}", "-m", "pip", "install", "--upgrade"] + need,
+                    py_parts + ["-m", "pip", "install", "--upgrade"] + need,
                     capture_output=True, text=True)
                 if r_req.returncode != 0:
                     print(f"  ✗ 依赖安装失败!")
