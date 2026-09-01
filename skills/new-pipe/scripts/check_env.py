@@ -4,9 +4,10 @@
 抓的故障类（都在流程第一秒暴露，不等到 designer 写盘时半路爆）：
   1. 安装滞后：装的仓版本旧/缺文件（_install_meta.json 对账 + 关键文件存在性）
   2. Python 解释器不满足（<3.10，管线脚本用了新语法）
-  3. 运行时依赖不满足（本解释器逐包对账 requirements.txt——实证案例：openpyxl
-     3.1.2 + 新 pandas 在 pd.ExcelFile() 即抛 ImportError，被 preprocess 包成
-     "mapping 无法加载"才暴露）
+  3. 运行时依赖不满足（**开关式**：config 目录放 requirements.txt 才查，没放
+     静默跳过零输出——自测 install.py 自动放；内网环境依赖由部署侧统一管默认
+     不查，想开启放一个文件即开。实证案例：openpyxl 3.1.2 + 新 pandas 在
+     pd.ExcelFile() 即抛 ImportError，被 preprocess 包成"mapping 无法加载"才暴露）
 
 用法:
   python check_env.py              # 安装环境（Win/Unix 通用）（~/.config/opencode/skills/... 布局）
@@ -139,28 +140,19 @@ def check(skill_root_arg: str = "") -> list[str]:
     else:
         problems.append("缺 _install_meta.json（非 install.py 安装或安装损坏——重跑 install.py）")
 
-    # 6. 运行时依赖对账（当前解释器逐包查——install 曾对自建 venv 检测，运行时真身无人看）。
-    # 清单位置：install 布局 = config 目录（与其他 config 同目录，install.py 拷入，
-    # config_paths.requirements_path 唯一定位）；仓布局 = 仓根（本机开发自用）。
-    # 内网生产仓不携带清单（环境依赖由部署侧统一管）——找不到降提示不阻断。
-    req_candidates = []
+    # 6. 运行时依赖对账（开关式：config 目录放清单才查，没放静默跳过零输出——
+    # 内网环境依赖由部署侧统一管默认不查，想开启放文件即开；自测 install 自动放）。
     _bs = str(skills_root / "design-dev-shared" / "scripts")
     sys.path.insert(0, _bs)
     try:
         from config_paths import requirements_path
-        req_candidates.append(requirements_path())
+        req_path = requirements_path()
     except Exception:
-        pass
+        req_path = None
     finally:
         sys.path.remove(_bs)
-    if repo:
-        req_candidates.append(repo / "requirements.txt")
-    req_path = next((p for p in req_candidates if p and Path(p).exists()), None)
-    if req_path:
+    if req_path and Path(req_path).exists():
         problems.extend(check_requirements(Path(req_path).read_text(encoding="utf-8")))
-    else:
-        print("[提示] 未找到 requirements.txt（内网生产仓不携带属正常——环境依赖由部署侧"
-              "统一管；自测环境重跑 install.py 补齐）；依赖对账跳过")
 
     return problems
 
@@ -176,7 +168,7 @@ def main():
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         sys.exit(1)
-    print("[环境OK] 安装指纹/关键文件/python 版本/依赖均符合，继续执行剧本")
+    print("[环境OK] 安装指纹/关键文件/python 版本均符合，继续执行剧本")
 
 
 if __name__ == "__main__":

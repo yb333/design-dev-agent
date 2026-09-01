@@ -85,8 +85,9 @@ def schema_apps_path() -> Path:
 def requirements_path() -> Path:
     """requirements.txt（check_env 依赖对账清单，与其他 config 同目录）。
 
-    install 布局由 install.py 从仓根拷入；内网生产仓不携带（环境依赖由部署侧
-    统一管）——check_env 找不到时降提示不阻断。
+    开关式：此文件存在 check_env 才做逐包对账，不存在静默跳过。自测由
+    install.py 从仓根拷入；内网默认不放（环境依赖部署侧统一管），想开启
+    查证放一个文件即开。
     """
     return config_dir() / "requirements.txt"
 
