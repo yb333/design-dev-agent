@@ -327,6 +327,9 @@ def managed_paths(skills: list, agents: list, commands: list, rules_dir: str) ->
         + [f".opencode/agents/{a}" for a in agents]
         + [f".opencode/commands/{c}" for c in commands]
         + [f".opencode/_references/rules/{rules_dir}"]
+        # 根文件两件（覆盖式，非目录镜像）：install.py=自测安装器；
+        # requirements.txt=check_env 依赖对账清单（生产仓布局读仓根，不带则依赖防线降级提示）
+        + ["install.py", "requirements.txt"]
     )
 
 
@@ -344,7 +347,8 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     export_dir = tmp / "src"
     export_dir.mkdir()
     r = subprocess.run(
-        ["git", "-C", str(src_repo), "archive", src_branch, "--", "skills", "agents", "commands"],
+        ["git", "-C", str(src_repo), "archive", src_branch, "--",
+         "skills", "agents", "commands", "install.py", "requirements.txt"],
         capture_output=True,
     )
     if r.returncode != 0:
@@ -492,6 +496,12 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         for s in skills:
             mirror_dir(export_dir / "skills" / s, oc / "skills" / s,
                        tracked=tracked, repo_prefix=f".opencode/skills/{s}")
+        for rootf in ("install.py", "requirements.txt"):
+            src_f = export_dir / rootf
+            if src_f.exists():
+                dst_f = team_repo / rootf
+                if not dst_f.exists() or dst_f.read_bytes() != src_f.read_bytes():
+                    shutil.copy2(src_f, dst_f)
         copy_md(export_dir / "agents", oc / "agents")
         copy_md(export_dir / "commands", oc / "commands")
         inited = []
@@ -524,8 +534,10 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         cap_files = []
         for l in changed:
             p = l.split(maxsplit=2)[-1].strip('"')
-            if not p.startswith(".opencode/_references"):
-                cap_files.append(p[len(".opencode/"):])  # .opencode/x/y → x/y
+            if p.startswith(".opencode/_references"):
+                continue  # config 不在源仓
+            # .opencode/x/y → x/y；根文件（install.py/requirements.txt）原样
+            cap_files.append(p[len(".opencode/"):] if p.startswith(".opencode/") else p)
         entries = list(dict.fromkeys(  # 去重保序
             r.stdout.strip()
             for f in cap_files
