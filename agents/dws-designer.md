@@ -118,6 +118,7 @@ python {skill目录}/scripts/assemble_ts.py \
 
 - 校验失败 → 按报错 `[第X层]` 标识查对应 playbook 修正后重跑
 - 直到成功产出 ts.json + ts.md
+- **组装成功即收工：ts.json/ts.md 是脚本产物，禁止回读**——成功与否以脚本 stdout 为准；质量由 ~40 条校验结构化兜底（回读眼查是更弱的验证，且 300+ 字段全文必炸上下文）。核对/确认需求走校验报错与闸口①摘要（gate_summary 产），不亲自翻 ts
 
 # 硬约束
 
