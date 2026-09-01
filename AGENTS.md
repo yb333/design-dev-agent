@@ -26,7 +26,7 @@ skills/
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 ├── dws-dq/              # DQ 检查 SQL 生成 skill（coder agent 的 DQ 任务用，薄——仅 SKILL.md 定契约，工具复用 dws-coding 的 slice_ts --dq / check_sql）
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
-│   └── scripts/         # check_env.py(步骤0环境探针,两剧本共用/opt跨引用) precheck.py gate_summary.py
+│   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py
                          #   dispatch_plan.py assemble_export.py ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
@@ -269,6 +269,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 - **opt-pipe/scripts + schemas**：preprocess_opt/fence_check/sql_fence(库)/sql_fence_check/ut_opt/assemble_ddl_opt/assemble_ts_baseline/baseline_contract(库)/artifact_patcher/archive_writer + baseline_v1.schema.json（伴生数据随脚本走）。
 - **shared 瘦身为真公共设施**：共用入口（preprocess 两剧本共用 / check_db 两剧本共用 / assemble_ddl 被 new-pipe 直调+opt 侧 assemble_ddl_opt import / resolve_appid 被 preprocess·assemble_export import）+ 公共库（dws_db/config_paths/run_ut/sql_parse/dws_standards/ts_compat/type_compat/schema_query）。
 - **步骤0 双写收敛**：删 engineer.md 步骤0 段（曾带"skill 加载前就要 skill base"的时序死结），改"开工第一动作=加载剧本"——探针+工具面自检唯一源在剧本 SKILL 步骤0（opt-pipe 本轮补上）。
+- **依赖防线补口（同轮，实证案例驱动）**：check_env 步骤0 补**运行时依赖逐包对账**（requirements.txt vs 当前解释器——openpyxl 3.1.2+新 pandas 在 pd.ExcelFile 即炸、被 preprocess 吞成"mapping 无法加载"才暴露；`>=3.1.5` 是 pandas 引擎硬下限**不是可放宽项**）；install 删自建 venv 死件（装检对象曾是 venv、运行时真身无人对账）改对 find_python 解释器便利安装 + 拷 requirements.txt 进安装布局（探针对账清单）；preprocess 加载失败把 load_error 诊断（原始异常全文）并入 RuntimeError 不再吞。
 - 12 个搬动脚本加标准 bootstrap（`parent.parent.parent/"design-dev-shared"/"scripts"`）；**test_layering 扩规**：shared 禁上翻任何 skill 目录 + pipe 脚本禁跨 pipe/跨角色 import（AST 含 lazy）；conftest sys.path 五目录。
 
 ### 待讨论 / 闲时

@@ -4,6 +4,9 @@
 抓的故障类（都在流程第一秒暴露，不等到 designer 写盘时半路爆）：
   1. 安装滞后：装的仓版本旧/缺文件（_install_meta.json 对账 + 关键文件存在性）
   2. Python 解释器不满足（<3.10，管线脚本用了新语法）
+  3. 运行时依赖不满足（本解释器逐包对账 requirements.txt——实证案例：openpyxl
+     3.1.2 + 新 pandas 在 pd.ExcelFile() 即抛 ImportError，被 preprocess 包成
+     "mapping 无法加载"才暴露）
 
 用法:
   python check_env.py              # 安装环境（Win/Unix 通用）（~/.config/opencode/skills/... 布局）
@@ -13,6 +16,7 @@
 """
 
 import sys
+import re
 import json
 import subprocess
 import argparse
@@ -41,6 +45,42 @@ def _git_commit(root: Path) -> str:
                               capture_output=True, text=True, timeout=10).stdout.strip()
     except Exception:
         return "unknown"
+
+
+def _ver_tuple(v: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else x for x in re.split(r"[.-]", v))
+
+
+def check_requirements(req_text: str) -> list[str]:
+    """运行时解释器逐包对账 requirements 文本（本函数就跑在运行时解释器里，零歧义）。
+
+    缺包/版本不满足 → 带精确修复命令的 problem。约束只判 `>=`（requirements
+    现状全为此形态）；其他形态不判（宁放过）。
+    """
+    import importlib.metadata as im
+    problems, missing, upgrade = [], [], []
+    for raw in req_text.splitlines():
+        line = raw.split("#")[0].strip()
+        if not line:
+            continue
+        m = re.match(r"^([A-Za-z0-9_.-]+)\s*(.*)$", line)
+        if not m:
+            continue
+        pkg, constraint = m.group(1), m.group(2).strip()
+        try:
+            installed = im.version(pkg)
+        except Exception:
+            missing.append(pkg)
+            continue
+        cm = re.match(r"^>=\s*([\d.]+)$", constraint) if constraint else None
+        if cm and _ver_tuple(installed) < _ver_tuple(cm.group(1)):
+            upgrade.append(f"{pkg}（已装 {installed}，需 {constraint}）")
+    if missing:
+        problems.append(f"缺依赖包: {', '.join(missing)}——修复: python -m pip install {' '.join(missing)}")
+    if upgrade:
+        pkgs = [u.split("（")[0] for u in upgrade]
+        problems.append(f"依赖版本不满足: {'; '.join(upgrade)}——修复: python -m pip install --upgrade {' '.join(pkgs)}")
+    return problems
 
 
 def check(skill_root_arg: str = "") -> list[str]:
@@ -99,6 +139,13 @@ def check(skill_root_arg: str = "") -> list[str]:
     else:
         problems.append("缺 _install_meta.json（非 install.py 安装或安装损坏——重跑 install.py）")
 
+    # 6. 运行时依赖对账（当前解释器逐包查——install 曾对自建 venv 检测，运行时真身无人看）
+    req_path = (repo / "requirements.txt") if repo else (_find_config_dir(skill_base) / "requirements.txt")
+    if req_path.exists():
+        problems.extend(check_requirements(req_path.read_text(encoding="utf-8")))
+    else:
+        print("[提示] 未找到 requirements.txt（老安装布局）——重跑 install.py 补齐；依赖对账跳过")
+
     return problems
 
 
@@ -113,7 +160,7 @@ def main():
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         sys.exit(1)
-    print("[环境OK] 安装指纹/关键文件/python 版本均符合，继续执行剧本")
+    print("[环境OK] 安装指纹/关键文件/python 版本/依赖均符合，继续执行剧本")
 
 
 if __name__ == "__main__":

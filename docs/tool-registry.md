@@ -15,7 +15,7 @@
 
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
-| `check_env.py`（住 skills/new-pipe/scripts） | dws-engineer 步骤 0 环境探针：安装指纹对账（_install_meta.json）/ 关键文件存在性 / python≥3.10——环境故障第一秒暴露 | 剧本步骤 0（必跑） | --skill-root 可选（默认按安装布局推算） → exit 0/1 | 不读 ts |
+| `check_env.py`（住 skills/new-pipe/scripts） | dws-engineer 步骤 0 环境探针：安装指纹对账（_install_meta.json）/ 关键文件存在性 / python≥3.10 / **运行时依赖逐包对账（requirements.txt vs 当前解释器——install 只对找到的解释器便利安装，权威闸门在此）**——环境故障第一秒暴露 | 剧本步骤 0（必跑） | --skill-root 可选（默认按安装布局推算） → exit 0/1 | 不读 ts |
 
 > 调用方是**剧本（new-pipe/opt-pipe SKILL）**，不是 agent。住址：new-pipe 专属管线脚本住 `skills/new-pipe/scripts`（下述各节标注）；共用入口（preprocess/check_db/assemble_ddl/resolve_appid）+ 公共库住 `design-dev-shared/scripts`。
 

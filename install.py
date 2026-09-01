@@ -142,99 +142,51 @@ def run():
         ver = subprocess.run(py_parts + ["--version"], capture_output=True, text=True)
         print(f"  {python_cmd} ({ver.stdout.strip()})")
 
-        # venv
-        venv_dir = config_dir / "venv"
-        if not venv_dir.exists():
-            print(f"  创建虚拟环境: {venv_dir}")
-            r = subprocess.run(py_parts + ["-m", "venv", str(venv_dir)], capture_output=True, text=True)
-            if r.returncode != 0:
-                print(f"  ✗ 创建 venv 失败: {r.stderr}")
-                return 1
-
-        if os.name == "nt":
-            venv_py = venv_dir / "Scripts" / "python.exe"
-        else:
-            venv_py = venv_dir / "bin" / "python"
-
-        if not venv_py.exists():
-            print(f"  ✗ venv python 不存在: {venv_py}")
-            print("  尝试删除 venv 目录后重新运行")
-            return 1
-
+        # 依赖装进 find_python 找到的解释器（= PATH 上跑运行时的那个）。
+        # ★ 曾用自建 venv 装检——venv 装完无任何运行时路径使用（死件），检测对象
+        #   错位：环境真身（agent bash 的 python）无人对账。权威闸门=check_env
+        #   步骤0（跑在运行时解释器里逐包对账），install 只是便利安装。
         reqs = collect_requirements(SCRIPT_DIR)
-        if reqs:
-            # 检测已安装的依赖版本，跳过已满足的
-            print(f"  检查依赖: {', '.join(reqs)}")
-
-            # 解析 requirements 里的包名（去掉版本约束）
-            pkg_names = []
+        if not reqs:
+            print("  无额外依赖")
+        else:
+            print(f"  检查依赖（对 {python_cmd}）: {', '.join(reqs)}")
+            import re as _re
+            need = []
             for req in reqs:
-                # openpyxl>=3.1.5 → openpyxl
-                import re as _re
-                m = _re.match(r"^([a-zA-Z0-9_-]+)", req)
-                if m:
-                    pkg_names.append(m.group(1))
-
-            # 检查每个包是否已安装且版本满足
-            need_install = False
-            for req in reqs:
-                import re as _re
-                m = _re.match(r"^([a-zA-Z0-9_-]+)(.*)$", req)
-                pkg = m.group(1) if m else req
-                # 查已安装版本
+                m = _re.match(r"^([A-Za-z0-9_.-]+)(.*)$", req)
+                pkg, constraint = (m.group(1), m.group(2).strip()) if m else (req, "")
                 r_chk = subprocess.run(
-                    [str(venv_py), "-c", f"import importlib.metadata; print(importlib.metadata.version('{pkg}'))"],
-                    capture_output=True, text=True
-                )
+                    [f"{python_cmd}", "-c", f"import importlib.metadata as im; print(im.version('{pkg}'))"],
+                    capture_output=True, text=True)
                 if r_chk.returncode != 0:
-                    print(f"  ✗ {pkg}: 未安装，需要安装")
-                    need_install = True
-                    break
-                installed_ver = r_chk.stdout.strip()
-                # 检查版本是否满足约束（简单比较，够用）
-                constraint = m.group(2).strip() if m else ""
-                if constraint:
-                    # 用 packaging 检查，没有就简单判断
-                    r_sat = subprocess.run(
-                        [str(venv_py), "-c",
-                         f"from packaging.requirements import Requirement; "
-                         f"r=Requirement('{req}'); "
-                         f"import importlib.metadata; "
-                         f"exit(0 if r.specifier.contains(importlib.metadata.version('{pkg}')) else 1)"],
-                        capture_output=True, text=True
-                    )
-                    if r_sat.returncode != 0:
-                        print(f"  ⚠ {pkg}: 已装 {installed_ver}，但需要 {constraint}，需升级")
-                        need_install = True
-                    else:
-                        print(f"  ✓ {pkg}: {installed_ver}（满足 {constraint}）")
+                    print(f"  ✗ {pkg}: 未安装")
+                    need.append(pkg)
+                    continue
+                installed = r_chk.stdout.strip()
+                cm = _re.match(r"^>=\s*([\d.]+)$", constraint) if constraint else None
+                vt = lambda v: tuple(int(x) if x.isdigit() else x for x in _re.split(r"[.-]", v))
+                if cm and vt(installed) < vt(cm.group(1)):
+                    print(f"  ⚠ {pkg}: 已装 {installed}，需 {constraint}，升级")
+                    need.append(pkg)
                 else:
-                    print(f"  ✓ {pkg}: {installed_ver}")
-
-            if need_install:
-                print(f"  安装/升级依赖: {', '.join(reqs)}")
-                subprocess.run(
-                    [str(venv_py), "-m", "pip", "install", "--upgrade", "pip"],
-                    capture_output=True, text=True
-                )
+                    print(f"  ✓ {pkg}: {installed}（满足 {constraint or '已装'}）")
+            if need:
+                print(f"  安装/升级: {', '.join(need)}")
                 r_req = subprocess.run(
-                    [str(venv_py), "-m", "pip", "install", "--upgrade"] + reqs,
-                    capture_output=True, text=True
-                )
+                    [f"{python_cmd}", "-m", "pip", "install", "--upgrade"] + need,
+                    capture_output=True, text=True)
                 if r_req.returncode != 0:
                     print(f"  ✗ 依赖安装失败!")
                     print(f"  stderr: {r_req.stderr[:500]}")
                     print(f"  stdout: {r_req.stdout[:300]}")
                     print()
                     print("  请手动运行:")
-                    print(f"    {venv_py} -m pip install --upgrade {' '.join(reqs)}")
+                    print(f"    {python_cmd} -m pip install --upgrade {' '.join(need)}")
                     return 1
-                else:
-                    print(f"  ✓ 依赖安装完成")
+                print("  ✓ 依赖安装完成")
             else:
-                print(f"  ✓ 所有依赖版本满足，跳过安装")
-        else:
-            print("  无额外依赖")
+                print("  ✓ 所有依赖版本满足，跳过安装")
     print()
 
     # ── 4. 安装 skill ──
@@ -273,6 +225,11 @@ def run():
         dst = commands_dir / c
         shutil.copy2(src, dst)
         print(f"  ✓ command: {c}")
+    # requirements.txt 进安装布局（check_env 步骤0 依赖对账的清单——不拷则探针无处可读）
+    req_src = SCRIPT_DIR / "requirements.txt"
+    if req_src.exists():
+        shutil.copy2(str(req_src), str(config_dir / "requirements.txt"))
+        print("  ✓ requirements.txt（依赖对账清单）")
     print()
 
     # ── 6. 数据库配置初始化 ──（config 跟 skill 同根：global→~/.config/opencode，local→<cwd>/.opencode）

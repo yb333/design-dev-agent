@@ -568,7 +568,10 @@ def parse_mapping(xlsx_path: str) -> dict[str, Any]:
     """解析 mapping.xlsx, 返回原始 dict(含 source_tables + field_mappings + 目标表信息)"""
     parser = ExcelMappingParser(xlsx_path)
     if not parser.load():
-        raise RuntimeError(f"mapping.xlsx 加载失败: {xlsx_path}")
+        # 真实原因必须带出来（load_error 诊断含原始异常全文——曾吞成光秃秃的
+        # "加载失败"：openpyxl 版本不满足的 ImportError 第一秒可见才对）
+        causes = "; ".join(d["message"] for d in parser.diagnostics if d["type"] == "load_error")
+        raise RuntimeError(f"mapping.xlsx 加载失败: {xlsx_path}" + (f"（原因: {causes}）" if causes else ""))
     entity_mappings = parser.parse_entity_mapping()
     attribute_mappings = parser.parse_attribute_mapping()
 

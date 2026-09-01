@@ -1439,3 +1439,13 @@ class TestValueRangeCheck:
         _check_value_range(self._rs(), result)
         assert not result.errors
         assert any("值域未验" in w for w in result.warnings)
+
+
+class TestLoadErrorSurfaced:
+    """mapping 加载失败的真实原因必须带出来（曾吞成光秃秃的"加载失败"——
+    openpyxl 版本不满足的 ImportError 第一秒可见）。"""
+
+    def test_parse_mapping_missing_file_raises_with_cause(self, tmp_path):
+        from preprocess import parse_mapping
+        with pytest.raises(RuntimeError, match=r"原因.*No such file|加载失败"):
+            parse_mapping(str(tmp_path / "not_exist.xlsx"))
