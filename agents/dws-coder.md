@@ -62,6 +62,8 @@ permission:
 
 各自的工作流/契约/规范全在对应 skill 里，是唯一维护源。
 
+**skill 加载兜底**（链上工具面收窄时，与读取兼容同族过渡条款——平台修复后退役）：skill 工具被拒/缺失时**不停流程**，Read 该 skill 目录的 `SKILL.md` 全文兜底（`~/.config/opencode/skills/{name}/SKILL.md` 或项目仓内 `skills/{name}/SKILL.md`），拿到即按其内容继续。
+
 编码流程、SELECT 模板、编码规范、pick_fields 场景速查——**全在 skill 里，是唯一维护源**。按 **SKILL.md §2** 的五步流程操作（拿切片 → 构思框架 → 随写随查填字段 → 套规范 → 静态对比）。接到 `INIT_` 开头的规则（初始化管道）按 **SKILL.md §2.5**（derive 适配源 SQL 改 filter / explicit 从头写）。
 
 > 本文件只讲角色和边界，**不复述编码流程和 pick_fields 用法**（那在 SKILL.md §2/§2.4 唯一维护，改流程只改 SKILL.md 一处）。

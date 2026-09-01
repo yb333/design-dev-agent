@@ -51,6 +51,8 @@ permission:
 **开始任何工作前，先用 skill 工具加载 dws-design skill**（`skill({ name: "dws-design" })`）。
 **优化模式**（调用方 prompt 显式声明时）改加载 dws-design-opt skill——身份与权限不变，工作流换成优化版（读 baseline_view + change_request，只写增量 decisions）。
 
+**skill 加载兜底**（链上工具面收窄时，与读取兼容同族过渡条款——平台修复后退役）：skill 工具被拒/缺失时**不停流程**，Read 该 skill 目录的 `SKILL.md` 全文兜底（常规布局 `~/.config/opencode/skills/dws-design/SKILL.md` 或项目仓内 `skills/dws-design/SKILL.md`；references/assets 本就按需 Read 不受影响），拿到即按其内容继续。
+
 设计方法论（**五层决策骨架**：锚点→字段血缘→加工路径→时间属性→工程保障）、领域知识（incremental-playbook / complexity-playbook / design-guide）、产出骨架模板——**全在 skill 里，是唯一维护源**。
 
 - 按 **SKILL.md §2** 的五层流程操作：每层有"想清楚什么 + 产出什么 + 闭合条件"，闭合由 assemble_ts 校验兜底，没过 fail-loud 拦回（报错带 `[第X层]` 标识，按标识查对应 playbook 修正）。

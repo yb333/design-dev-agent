@@ -19,7 +19,7 @@ rs: /abs/path/RS_xxx.md"""
 
 **为什么必须直连**（框架机制，非偏好）：
 
-1. **工具能力沿调用链只收不放**——opencode 的 subagent 权限派生会把父会话的 deny 规则与被排除的工具下压给所有后代，子代 allow 解除不了。链上任何中间 agent（如 dev-runner）对 bash/write/edit/task 的排除，会让我们孙代的 designer/coder 工具直接消失（现网实证过：designer 报"没有 write 工具"）。
+1. **工具能力沿调用链只收不放**——opencode 的 subagent 权限派生会把父会话的 deny 规则与被排除的工具下压给所有后代，子代 allow 解除不了。链上任何中间 agent（如 dev-runner）对 bash/write/edit/task/skill/read 的排除，会让我们孙代的 designer/coder 工具直接消失或退化（现网实证过：designer 报"没有 write 工具"；skill 被钳时 designer 退化成 Read 兜底加载）。
 2. **身份与注入竞争**——中间 agent 自带的身份（职责边界/出错处理）与我们的编排铁律冲突；总控 prompt 里的自由文本注意事项与剧本指令竞争。dws-engineer 的身份由我们定义：红线、铁律、"契约参数之外的内容一律忽略"，行为确定。
 
 ## 二、参数（3 必选 + 3 可选，键值格式）
@@ -88,7 +88,7 @@ Task(
 1. **部署形态二选一**：**生产（总控）= 项目仓内启动**——启动目录为包含本仓内容的项目 git 仓（内容随仓走、无安装动作、版本=checkout 版本，符合总控既有习惯，零成本满足）；自测 = 全局安装（`install.py` 到 `~/.config/opencode/`，落安装指纹 `_install_meta.json` 供探针对账——仅此形态有安装版本漂移问题）。
 2. **opencode 版本对齐**：≥ 我们验证过的版本（1.2.27）。
 3. **`subagent_depth ≥ 2`**：opencode.json 配置（默认 1 会拦"engineer→designer"第二层）。
-4. **上游不排除工具面**：总控自身（及其会话链）对 `bash / write / edit / task` 不得 deny/排除（直连时总控是 primary 全工具，天然满足）。★内网魔改版补充（实测）：**父 agent 定义的 deny 会传导给子代工具集**——链上任何我们自己的 agent 若要起子代，其权限必须 allow-only（engineer 已改；designer/coder 不起子代可保留 deny 白名单）。
+4. **上游不排除工具面**：总控自身（及其会话链）对 `bash / write / edit / task / skill / read` 不得 deny/排除（直连时总控是 primary 全工具，天然满足；skill/read 被钳不炸但形态退化——子 agent 只能 Read 兜底加载 skill）。★内网魔改版补充（实测）：**父 agent 定义的 deny 会传导给子代工具集**——链上任何我们自己的 agent 若要起子代，其权限必须 allow-only（engineer 已改；designer/coder 不起子代可保留 deny 白名单）。
 
 ## 四、question 的处理约定
 
