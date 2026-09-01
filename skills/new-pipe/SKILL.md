@@ -112,7 +112,7 @@ python PIPE_SCRIPTS/precheck.py \
 - 0（PASS）→ 继续
 - 1（WARNING）→ 展示警告文本后**直接继续**（警告是信息性告知非决策项——有默认行为、随流程汇进闸口①材料；交互模式展示给人知情，不问不停。真正要人定的在 exit 2 的决策类阻断里）
 - 2（INCOMPLETE）→ 看阻断原因分三种：
-  - **普通阻断**（schema/字段缺失等，stdout 不含任何 `_PENDING`）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b
+  - **普通阻断**（schema/字段缺失等，stdout 不含任何 `_PENDING`）→ 停止，让用户修改**源文件**（mapping.xlsx 或 RS.md）后重新执行 1a+1b。**例外：值域溢出类 error**（`[值域溢出·模型问题]`）不是纯改源文件问题——按下方「值域溢出处理菜单」分角色二选一
   - **★ 决策类阻断**（stdout 含 `TYPE_RISK_PENDING` 和/或 `JOIN_TYPE_RISK_PENDING`——检测同轮全爆）→ 按下方流程分域提问
 
 > ⚠️ 用户修改的是 mapping.xlsx 或 RS.md（源文件），不是 rs_input.json（产物）。
@@ -147,7 +147,7 @@ python PIPE_SCRIPTS/fill_join_risk_decision.py \
 precheck 检测到"直接复制"字段有源→目标类型转换风险时阻断，输出 `TYPE_RISK_PENDING {JSON}` 摘要行（含 batch 常规风险字段 + individual 跨大类/字符语义差异风险字段 + decision_file 路径）。
 
 **用 question 收集决策**（不让用户手填 YAML），两类分别问：
-- **batch（常规风险：长度超长/精度收窄）**：一问定策略。选项 `加安全处理`（ETL 截取/转换保不出错）/ `不加`（接受风险，数据问题以报错暴露）。
+- **batch（常规风险：长度超长/精度收窄）**：一问定策略。选项 `加安全处理`（守卫式转换防脏值炸批：非法值置 NULL 被 DQ 抓——**不覆盖值域溢出**，整数位溢出无解另见值域 error）/ `不加`（接受风险，数据问题以报错暴露）。
 - **individual（跨大类不兼容/字符语义差异）**：**按类型对归并提问**——同 源类型→目标类型 的字段合并为一问（同类字段处置几乎总相同），问题文案给字段数+类型对。选项 `全部转换`（ETL SELECT 加 TO_DATE/TO_CHAR/CAST）/ `全部不加`（接受风险）/ `全部返源端`（源端改类型更合适，追问原因）/ `拆开逐个定`（选它再逐字段问）。单次 question ≤4 问，组多分多轮。示例：
   ```
   question("检出 12 个 varchar→numeric 跨大类字段（amount_str、qty_txt 等）怎么处理？",
@@ -169,6 +169,15 @@ python PIPE_SCRIPTS/fill_type_risk_decision.py \
 ```
 
 参数细节见 `fill_type_risk_decision.py --help`（脚本校验枚举值和字段名，错了 exit 1）。填完**重跑步骤 1b** → 放行继续。
+
+### 值域溢出处理菜单（预检 `[值域溢出·模型问题]` error / UT `numeric field overflow`·`value too long` 共用）
+
+目标定义装不下源数据（整数位溢出——与类型风险决策无关，"加安全处理"对它无效）。**分角色二选一**：
+
+1. **源输入问题 → BA**：改 mapping 目标类型/长度，重跑 1a+1b（确定性解法，默认推荐）；
+2. **设计/实现决策 → SE 拍板**：显式拍板置空/截断（不改业务需求，静默丢数据须明知）→ designer 写显式口径（N35 语义）→ coder 实现。
+
+> 角色边界：源输入问题（mapping/RS 内容错或定窄）归 **BA**；过程中需要拍板的设计/实现决策（不动业务需求，如置空/截断取舍）归 **SE**（人）。无论哪条都**禁回 coder**——coder 对这类问题只会打"超长置空/截断"补丁，静默丢数据掩埋根因（ROW_NUMBER 反模式同族）。
 
 ---
 
@@ -336,7 +345,7 @@ python PIPE_SCRIPTS/ut_execute.py \
 > ⚠️ 数据质量类失败（主键重复/空值/行数异常）一律**不回 coder**——coder 会用 ROW_NUMBER 去"消除症状"掩盖根因（关联发散）。这类根因在设计层，退回 designer。
 
 > ⚠️ **类型转换类报错（含 invalid input syntax / operator does not exist）先看报告的"嫌疑报告"段再分流**：有关联键嫌疑（类型跨大类的 JOIN 对）→ 退 designer/人核对关联逻辑，**★禁止用改字段类型来"修复"**（掩盖根因，同 ROW_NUMBER 反模式）；无关联嫌疑才走 6a/6b。
-> ⚠️ **值域溢出类报错（numeric field overflow / value too long）退人/BA，禁回 coder**——目标是定义装不下源数据（模型设计问题：mapping 目标类型/长度定窄了）。coder 对这类报错只会打"超长置空/截断"补丁=静默丢数据掩埋根因（ROW_NUMBER 反模式同族）。人二选一：退 BA 改 mapping 目标类型（重跑 1a+1b）；或人显式拍板置空/截断策略（此时才回 designer 写显式口径→coder 实现）。
+> ⚠️ **值域溢出类报错（numeric field overflow / value too long）禁回 coder**——处理按步骤 1b「值域溢出处理菜单」分角色二选一（①BA 改 mapping 目标类型重跑 1a+1b；②SE 拍板置空/截断→designer 写显式口径→coder 实现）。菜单唯一源在 1b，此处不复述。
 
 **6a. SQL 问题 → coder**（INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST，或预检 FAIL；**DQ 段的 FAIL/MISSING 同类**——DQ SQL 执行报错或 dq_{NN}_{检查类型}.sql 文件缺失）。
 恢复该规则 coder 旧会话（task_id 在步骤4b 记的映射里）：

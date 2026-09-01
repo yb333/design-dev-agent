@@ -870,12 +870,15 @@ def _check_value_range(rs_input: dict, result: PrecheckResult, rs_input_path=Non
             first, last = _parse_stats_bounds(stats[1])
             digits = max(_integer_digits(first), _integer_digits(last))
             if digits > c["int_limit"]:
+                bound = last if _integer_digits(last) >= _integer_digits(first) else first
                 result.add_error(
                     f"[值域溢出·模型问题] {c['target_column']}（{c['source_type']}→{c['target_type']}）："
-                    f"源统计上界整数位 {digits} 位 > 目标整数位 {c['int_limit']} 位"
-                    f"（precision-scale）——目标定义装不下源数据。CAST/截取对整数位溢出无解，"
-                    f"置空=静默丢数据。退 BA 修改 mapping 目标类型后重跑 1a+1b；"
-                    f"确要置空/截断策略必须人显式拍板（本闸只认改模型）")
+                    f"pg_stats 统计上界 {bound}（整数位 {digits} 位）> 目标 {c['target_type']} "
+                    f"整数位 {c['int_limit']} 位（precision-scale）——目标定义装不下源数据。"
+                    f"与类型风险决策无关（\"加安全处理\"防的是脏值炸批，对整数位溢出无效）。二选一："
+                    f"① 源输入问题退 BA——改 mapping 目标类型后重跑 1a+1b（确定性解法）；"
+                    f"② SE 显式拍板置空/截断（设计/实现决策不改业务需求，静默丢数据须明知）"
+                    f"→ designer 写显式口径→coder 实现")
         for c in char_candidates:
             stats = stats_cache.get((c["schema"].lower(), c["table"].lower()), {}).get(c["col"].lower())
             if not stats:

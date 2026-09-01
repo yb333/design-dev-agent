@@ -1406,6 +1406,9 @@ class TestValueRangeCheck:
         _check_value_range(self._rs(), result)
         errs = [e for e in result.errors if "值域溢出" in e]
         assert errs and "ratio" in errs[0] and "BA" in errs[0]
+        # 证据值必须带出来（统计上界原值，更有说服力——2026-09-01 测试反馈）
+        assert "123.456" in errs[0] and "与类型风险决策无关" in errs[0]
+        assert "SE" in errs[0]  # 菜单②角色（分角色二选一）
         # avg 5 <= 10 不披露
         assert not any("截断披露" in w for w in result.warnings)
 
