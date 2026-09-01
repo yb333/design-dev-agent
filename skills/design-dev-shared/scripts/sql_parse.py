@@ -485,6 +485,26 @@ _SQL_TYPE_WORDS = {
 }
 
 
+_THREE_PART_CHAIN = re.compile(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
+
+
+def find_three_part_refs(text: str) -> list:
+    """三段式引用（x.y.z）检查——设计产物里的非法引用形态，纯语法硬拦。
+
+    口径表达式里字段引用一律'别名.字段'（两段）；表引用 schema.table 只出现在
+    coder 的 FROM/JOIN 位置。三段式（schema.table.field）没有合法场景，且两两
+    配对提取（_QUALIFIED_REF）恰好取到 (schema, 表名) 而漏掉真正的字段——
+    存在性校验全程看不见它，coder 直搬后 DWS 不认三段式，UT 阶段才炸。
+    剥 ${}/引号串/全角说明段与 find_unqualified_refs 同口径。
+    """
+    s = re.sub(r'（[^）]*）', ' ', text or "")
+    s = re.sub(r'\$\{[^}]*\}', ' ', s)
+    s = re.sub(r"'[^']*'", " ", s)
+    s = re.sub(r'"[^"]*"', " ", s)
+    return sorted({f"{m.group(1)}.{m.group(2)}.{m.group(3)}".lower()
+                   for m in _THREE_PART_CHAIN.finditer(s)})
+
+
 def find_unqualified_refs(text: str) -> list:
     """产出口径的纯语法检查：未限定的英文标识符（零漏报，不依赖任何登记处）。
 

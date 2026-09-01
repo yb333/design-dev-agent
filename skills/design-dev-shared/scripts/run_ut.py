@@ -280,13 +280,27 @@ def read_select(select_dir: Path, rule_code: str) -> str:
     return ""
 
 
+def dq_filename(idx: int, check_type: str) -> str:
+    """DQ 检查 SQL 文件确定名：dq_{NN}_{清洗check_type}.sql。
+
+    唯一键是 dq_rules 数组序号（check_type 是"检查类型"不是规则身份，重复是
+    常态——两条空值检查同名文件会互相覆盖静默丢检查）；check_type 清洗后保留
+    在文件名里（闸口② 人看文件友好）：去首尾空格，非字母/数字/中文/下划线换 `_`。
+    单点在本函数：UT 侧（run_dq_checks）与 coder 侧（slice_ts --dq 附 _file）
+    同源派生，两侧不自拼。序号两侧按同一 ts.json 的 dq_rules 顺序（闸口①后冻结）。
+    """
+    safe = re.sub(r"[^\w\u4e00-\u9fff]+", "_", (check_type or "").strip())
+    return f"dq_{idx:02d}_{safe}.sql"
+
+
 def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
                   sample_limit: int = 5) -> list[dict]:
     """执行 DQ 检查 SQL（对 UT 已灌数的目标表）——DQ 是上生产的制品，交付前必须执行验证。
 
     契约：DQ SELECT = **违规行探测器**——0 行通过，非 0 行告警；阈值/比例逻辑全收在
-    SQL 的 WHERE/HAVING 里，这里只判行数。文件按 dq_rules 的 check_type 确定名拼接
-    （dq_{check_type}.sql），缺文件 = 发现项（coder 未按契约产出）。
+    SQL 的 WHERE/HAVING 里，这里只判行数。文件名 = dq_filename（dq_{NN}_{清洗
+    check_type}.sql，序号消重名、清洗消非法字符），缺文件 = 发现项（coder 未按
+    切片 _file 契约产出）。
 
     行数用 COUNT 包裹查（不拉全量结果集），告警才追加 LIMIT 采样抓违规行样例。
     返回 [{rule_name, check_type, file, status, detail, rows, samples}]，status：
@@ -295,10 +309,10 @@ def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
     不合理回 designer / 数据真脏人定）。
     """
     results = []
-    for rule in dq_rules or []:
+    for i, rule in enumerate(dq_rules or [], 1):
         check_type = (rule.get("check_type") or "").strip()
         rule_name = rule.get("rule_name") or check_type
-        fname = f"dq_{check_type}.sql"
+        fname = dq_filename(i, check_type)
         entry = {"rule_name": rule_name, "check_type": check_type, "file": fname,
                  "status": "PASS", "detail": "", "rows": 0, "samples": []}
         fpath = Path(dq_dir) / fname

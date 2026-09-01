@@ -39,7 +39,7 @@ rules:
     rule_name: ""                       # 规则名（简短中文）
     scenario: ""                        # 场景（单场景名 / 多场景合并标记；场景是规则的属性）
     exec_sequence: 1                    # 执行顺序
-    target_table: ""                    # 产出表名（中间表/目标F表/视图I表）。tmp 命名规范：目标表主体+_tmp+序号
+    target_table: ""                    # 产出表名（中间表/目标F表/视图I表），带 schema 如 dws.tmp_x1。tmp 命名规范：目标表主体+_tmp+序号
                                         #   （dwb_x_f → dwb_x_tmp1）；不建议 tmp 前置，特殊命名一般不建议（N33 warn）
     design_intent: ""                   # 该规则的设计意图（自然语言，一句话说清为什么这样拆）
     load_mode: "truncate_table"         # ★ 写入方式（增量管道的写入方式，≠ init 的写入方式）:
@@ -56,9 +56,9 @@ rules:
     step_type: "full"                   # ★ 步骤类型: full(简单直灌/装配) | aggregate(聚合中间表) | incremental_extract(增量取数到tmp) | merge(合并tmp到目标)。决策树见 design-guide §4.4
     target_role: "target"               # ★ 目标角色: intermediate(中间表) | target(目标F表)
     produces_for: []                    # ★ 中间表规则填：产出供哪些规则消费（rule_code列表），如 ["R0003"]
-    reads: []                           # ★ 装配/merge规则填：读哪些中间表。两种写法：
-                                         #   字符串 ["tmp1"]              → 别名默认=表短名
-                                         #   对象 [{table: tmp1, alias: t1}] → 别名显式声明（规则内唯一，N31 校验冲突）
+    reads: []                           # ★ 装配/merge规则填：读哪些中间表（表名带 schema，如 dws.tmp_x）。两种写法：
+                                         #   字符串 ["dws.tmp1"]                      → 别名默认=表短名
+                                         #   对象 [{table: dws.tmp1, alias: t1}]     → 别名显式声明（规则内唯一，N31 校验冲突）
                                          #   搬运字段默认"直取 {tmp别名}.{字段}"（按 field_targets 血缘归到具体 tmp）；
                                          #   merge 时另 join 真源表补取的字段：joins 声明 + source_aliases 带上该源表别名。
     filter: ""                         # 规则级行过滤（WHERE，如 "ht.del_flag = 'N'"）——"本来就不要"的行排除；

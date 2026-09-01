@@ -21,7 +21,7 @@ slice_ts 住在**同级 dws-coding skill** 的 `scripts/` 下（用注入的 loc
 
 ## 2. 逐条生成
 
-每条 dq_rule 一个文件 `dq_{check_type}.sql`（UT 按此确定名找文件，缺失即发现项）：
+每条 dq_rule 一个文件，**文件名直接用切片条目的 `_file`**（`dq_{NN}_{检查类型}.sql`，序号消重名、清洗消非法字符；UT 按同一函数派生确定名找文件，缺失即发现项）——不自拼不改名：
 
 - **WHERE**：`violation_condition`（违规条件的 SQL 表达式）**存在则直搬禁改口径**（不加不减条件，与 design_logic 同规矩）；缺失才按 rule_desc 写——**方向照 rule_desc 的"违规="描述**（查空值就 `WHERE col IS NULL`，有空值=告警行，别写反），疑义上报不自行演绎。阈值/比例逻辑全收进 WHERE/HAVING
 - **输出列 = 业务键（切片 business_key）+ 违规字段本身**（SELECT 该字段，列名=字段名——输出的是违规字段的**值**，不是字段名清单）——不 SELECT *，不带审计字段（DQ 是探测不是装载）

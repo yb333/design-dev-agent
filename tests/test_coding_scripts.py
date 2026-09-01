@@ -1050,6 +1050,19 @@ class TestSliceDq:
         assert len(s["dq_rules"]) == 1
         assert "违规行探测器" in s["contract"]
 
+    def test_slice_dq_attaches_file_names(self):
+        """切片各条附 _file（run_ut.dq_filename 同源派生）——coder 落盘不自拼名。"""
+        from slice_ts import slice_dq
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
+              "design": {"business_key": ["order_no"]},
+              "dq_rules": [
+                  {"check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "r1"},
+                  {"check_type": "空值检查", "rule_name": "编号非空", "rule_desc": "r2"},
+                  {"check_type": "值域检查 ", "rule_name": "范围", "rule_desc": "r3"}]}
+        s = slice_dq(ts)
+        assert [d["_file"] for d in s["dq_rules"]] ==             ["dq_01_空值检查.sql", "dq_02_空值检查.sql", "dq_03_值域检查.sql"]
+        assert "_file" not in ts["dq_rules"][0]  # 切片增强不改 ts 原件
+
     def test_slice_dq_empty_rules_raises(self):
         from slice_ts import slice_dq
         with pytest.raises(ValueError, match="为空"):

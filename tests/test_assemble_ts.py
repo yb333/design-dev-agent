@@ -526,6 +526,14 @@ class TestRefSkeleton:
         assert n36 and n36[0]["level"] == "hard" and n36[0]["layer"] == "LG"
         assert "delete_flag" in n36[0]["msg"] and "格式" in n36[0]["msg"]
 
+    def test_three_part_reference_hard_blocked(self):
+        """N36 三段式硬拦：schema.table.field 两两配对提取恰好取到(表名)漏掉字段本身，
+        存在性校验看不见它（2026-08-31 实证真空——coder 直搬后 UT 才炸），前置纯语法拦。"""
+        vr = _run(self._dec("dws.dwb_test_f.flag = 'N'（取状态位）"), self._rs())
+        hits = [i for i in vr.items if i["code"] == "N36" and "三段式" in i["msg"]]
+        assert hits and hits[0]["level"] == "hard" and hits[0]["layer"] == "LG"
+        assert "dws.dwb_test_f.flag" in hits[0]["msg"]
+
     def test_n38_existence_checks_qualified_refs(self, tmp_path):
         """N38 存在：限定引用查 schema_cache，源表没有即拦（惯例假设字段）。"""
         import json as _json
@@ -726,6 +734,27 @@ class TestLayer2Path:
         dd["rules"][0]["produces_for"] = []
         vr = _run(dd)
         assert "N9" in _codes(vr, "L2")
+
+    def test_n12b_short_table_name_warns(self):
+        """N12b：target_table/reads 缺 schema 前缀 warn（表名统一带 schema 消形态分叉；
+        兼容短名照常装配，不 hard）。"""
+        dd = make_design_decisions()
+        dd["rules"][0]["target_table"] = "dws.tmp1"
+        dd["rules"][0]["target_role"] = "intermediate"
+        dd["rules"][0]["produces_for"] = ["R0002"]
+        dd["rules"].append({
+            "rule_code": "R0002", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 2, "target_table": "tmp2",
+            "step_type": "full", "target_role": "target",
+            "produces_for": [], "reads": ["tmp1"],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "s", "output": "t", "change": "无"},
+        })
+        vr = _run(dd)
+        n12b = [i for i in vr.items if i["code"] == "N12b"]
+        assert len(n12b) == 2 and all(i["level"] == "warn" for i in n12b)  # tmp2 + tmp1 各一条
+        assert "'tmp2'" in n12b[0]["msg"] and "'tmp1'" in n12b[1]["msg"]  # 违规名带引号
+        # 带前缀的（dws.tmp1 target）不报（提示文案里的"如 dws.tmp1"示例不算）
 
     def test_n10b_dangling_intermediate_reports(self):
         """中间表产出但无下游 reads 引用 → N10b。"""
@@ -2355,6 +2384,24 @@ class TestJoinKeyTypesAndDqContract:
                                  schema_cache_path=self._cache(tmp_path))
         assert "N_JOIN2" not in _codes(vr)
 
+    # ---------- 三段式引用（N30 前置·纯语法，不受 cache 门控） ----------
+
+    def test_join_condition_three_part_hard(self, tmp_path):
+        vr = self._run(tmp_path, [{"alias": "b", "table": "ods_b",
+                                   "condition": "a.prod_code = ods.ods_b.prod_id"}])
+        hits = [i for i in vr.items if i["code"] == "N30" and "三段式" in i["msg"]]
+        assert hits and hits[0]["level"] == "hard" and "ods.ods_b.prod_id" in hits[0]["msg"]
+
+    def test_join_condition_three_part_hard_without_cache(self):
+        """无 cache：存在性检查降 warn，三段式纯语法照拦。"""
+        rs = self._rs()
+        dec = self._dec(joins=[{"alias": "b", "table": "ods_b",
+                                "condition": "a.x = ods.ods_b.prod_id"}])
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        vr = run_all_validations(dec, rs, field_map)
+        assert any(i["code"] == "N30" and "三段式" in i["msg"] and i["level"] == "hard"
+                   for i in vr.items)
+
     # ---------- N_DQ4 / N_DQ5 ----------
 
     def test_dq4_missing_violation_condition_warns(self):
@@ -2398,6 +2445,20 @@ class TestJoinKeyTypesAndDqContract:
         vr2 = run_all_validations(dec, rs, field_map)
         assert not any(i["code"] == "N_DQ4" for i in vr2.items)
         assert any(i["code"] == "N_DQ5" and i["level"] == "warn" for i in vr2.items)
+
+    def test_dq5_three_part_hard_without_cache(self):
+        """violation_condition 三段式纯语法硬拦（不依赖 cache/字段集）——两两配对提取
+        对 dws.t.order_amount 只取到 (dws, t)，字段本身全程不被校验，必须前置拦。"""
+        rs = self._rs()
+        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
+                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
+        dec = self._dec(dq_rules=[{
+            "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+            "violation_condition": "dws.dwb_test_f.order_amount IS NULL",
+            "rule_desc": "违规=order_amount 为空"}])
+        vr = _run(dec, rs)
+        hits = [i for i in vr.items if i["code"] == "N_DQ5" and "三段式" in i["msg"]]
+        assert hits and hits[0]["level"] == "hard" and "dws.dwb_test_f.order_amount" in hits[0]["msg"]
 
     def test_dq5_cross_table_count_compare_passes_with_cache(self, tmp_path):
         """跨表级 DQ（比对来源表与目标表数据量）：schema.table 子查询 + 源表字段

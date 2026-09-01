@@ -566,7 +566,7 @@ class TestRunDqChecks:
     """DQ 检查执行（run_dq_checks）：契约 = 违规行探测器——0 行通过，非 0 行告警。
 
     行数用 COUNT 包裹判（不拉全量结果集），告警才追加 LIMIT 采样；
-    文件按 dq_rules.check_type 确定名拼接，缺失即 MISSING。
+    文件名 = dq_filename（dq_{NN}_{清洗check_type}.sql，序号唯一键），缺失即 MISSING。
     """
 
     class _Exec:
@@ -601,7 +601,7 @@ class TestRunDqChecks:
 
     def test_zero_rows_passes_without_sample_query(self, tmp_path):
         from run_ut import run_dq_checks
-        (tmp_path / "dq_空值检查.sql").write_text(
+        (tmp_path / "dq_01_空值检查.sql").write_text(
             "/* 检查空值 */\nSELECT order_no, amt FROM dws.t WHERE amt IS NULL;", encoding="utf-8")
         ex = self._Exec()
         results = run_dq_checks(ex, tmp_path, self._rules(), {})
@@ -612,7 +612,7 @@ class TestRunDqChecks:
 
     def test_nonzero_rows_alert_with_samples(self, tmp_path):
         from run_ut import run_dq_checks
-        (tmp_path / "dq_空值检查.sql").write_text(
+        (tmp_path / "dq_01_空值检查.sql").write_text(
             "SELECT order_no, amt FROM dws.t WHERE amt IS NULL", encoding="utf-8")
         ex = self._Exec(count_map={"amt IS NULL": 3})
         results = run_dq_checks(ex, tmp_path, self._rules(), {})
@@ -623,19 +623,41 @@ class TestRunDqChecks:
 
     def test_exec_error_fails(self, tmp_path):
         from run_ut import run_dq_checks
-        (tmp_path / "dq_空值检查.sql").write_text(
+        (tmp_path / "dq_01_空值检查.sql").write_text(
             "SELECT bad_col FROM dws.t WHERE bad_col IS NULL", encoding="utf-8")
         results = run_dq_checks(self._Exec(error_sub="bad_col"), tmp_path, self._rules(), {})
         assert results[0]["status"] == "FAIL" and "bad_col" in results[0]["detail"]
 
+    def test_dq_filename_index_is_unique_key(self):
+        """DQ 文件确定名：序号是唯一键（check_type 是检查类型不是规则身份，会重名）；
+        check_type 清洗（去首尾空格/非法字符换 _）消自由文本不一致。"""
+        from run_ut import dq_filename
+        assert dq_filename(1, "空值检查") == "dq_01_空值检查.sql"
+        assert dq_filename(2, "空值检查") == "dq_02_空值检查.sql"     # 重名 check_type 靠序号消解
+        assert dq_filename(3, "值域检查 ") == "dq_03_值域检查.sql"     # 尾随空格先 strip
+        assert dq_filename(4, "a/b:c") == "dq_04_a_b_c.sql"            # 非法文件名字符清洗
+        assert dq_filename(12, "唯一性检查") == "dq_12_唯一性检查.sql"  # 两位补零
+
+    def test_duplicate_check_type_rules_both_executed(self, tmp_path):
+        """两条同 check_type 的 DQ 各自找到自己的文件（旧命名会同名互相覆盖静默丢检查）。"""
+        from run_ut import run_dq_checks
+        (tmp_path / "dq_01_空值检查.sql").write_text(
+            "SELECT order_no FROM dws.t WHERE amt IS NULL", encoding="utf-8")
+        (tmp_path / "dq_02_空值检查.sql").write_text(
+            "SELECT order_no FROM dws.t WHERE amt IS NULL", encoding="utf-8")
+        rules = [{"check_type": "空值检查", "rule_name": "金额非空"},
+                 {"check_type": "空值检查", "rule_name": "编号非空"}]
+        results = run_dq_checks(self._Exec(), tmp_path, rules, {})
+        assert len(results) == 2 and all(r["status"] == "PASS" for r in results)
+
     def test_missing_file_reported(self, tmp_path):
         from run_ut import run_dq_checks
         results = run_dq_checks(self._Exec(), tmp_path, self._rules(), {})
-        assert results[0]["status"] == "MISSING" and "dq_空值检查.sql" in results[0]["detail"]
+        assert results[0]["status"] == "MISSING" and "dq_01_空值检查.sql" in results[0]["detail"]
 
     def test_param_substituted_and_missing_param_fails(self, tmp_path):
         from run_ut import run_dq_checks
-        (tmp_path / "dq_空值检查.sql").write_text(
+        (tmp_path / "dq_01_空值检查.sql").write_text(
             "SELECT order_no FROM dws.t WHERE dt < ${P_CYCLE_ID}", encoding="utf-8")
         ex = self._Exec()
         run_dq_checks(ex, tmp_path, self._rules(), {"P_CYCLE_ID": "20260826"})
@@ -677,6 +699,16 @@ class TestLogicRefs:
             "CASE WHEN x=1 THEN 'Y' ELSE 'N' END，cast(amt as int8)，dt<${P}") == ["amt", "dt"]
         assert find_unqualified_refs("返回 n 否则 y") == []  # 单字母豁免
         assert find_unqualified_refs("按 coalesce(x, 0) 与 to_char(a.dt,'yyyymmdd') 处理") == []
+
+    def test_find_three_part_refs_pure_syntax(self):
+        """三段式硬拦原语：x.y.z 无合法场景——两两配对提取恰好取到(表名)漏掉字段本身。
+        剥 ${}/引号串/全角说明段与 find_unqualified_refs 同口径。"""
+        from sql_parse import find_three_part_refs
+        assert find_three_part_refs("dws.dwb_test_f.order_amount IS NULL") == ["dws.dwb_test_f.order_amount"]
+        assert find_three_part_refs("a.del_flag = 'N'") == []            # 两段合法
+        assert find_three_part_refs("(select count(1) from ods.ods_b s) <> t.cnt") == []  # FROM 位 schema.table 两段合法
+        assert find_three_part_refs("${P.a} 与 'x.y.z' 及（说明 dws.t.c）不算") == []  # 参数/引号串/全角说明段剥离
+        assert find_three_part_refs("cast(a.x as int)") == []            # 函数/类型词不参与
 
     def test_diff_detects_dropped_reference(self):
         from sql_parse import diff_logic_refs

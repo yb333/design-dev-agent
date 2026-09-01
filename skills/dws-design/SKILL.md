@@ -184,7 +184,7 @@ description: >-
   - **宁可输出带假设标注的表达式，绝不退回纯人话**——纯人话把不确定性隐式传给 coder 自由发挥（漂移源头）；带标注的表达式把不确定性显式传给闸口①人裁决
   - 空值口径禁用裸"空"字（歧义源）：写 NULL 或空串，二选一明确
   - 纯照抄原文不附说明句会被 N29 warn 提示（缺审查证据）
-- **★ 口径里的源字段引用一律 `别名.字段`**（a.del_flag），不能只写列名——**未限定字段归属哪个表是你的设计判断，脚本不猜**（view 的 refs 只列未限定词与"多表有此列名"的事实，归属自查：rs_input 源表清单/check_field，多义 question）。产出过**引用门禁**三查：未限定标识符（N36 硬拦）/ 限定引用查表存在（N38 硬拦，未连库降提示）/ 与原文对差疑似丢引用（N37 提示）。**口径引用集就是规则 fields 桶的真来源**（mapping 源字段单元格对加工字段只是提示，脚本按你的引用自动补全）——引用写全 = coder 的字段清单对。ts 两视图：tables=表元数据（DDL），rules.fields 三桶=加工（coder 唯一源；你的 field_logics 装配展开成桶，不落 ts）
+- **★ 口径里的源字段引用一律 `别名.字段` 两段**（a.del_flag），不能只写列名，也不能写 `schema.table.field` 三段式（表引用 schema.table 只出现在 coder 的 FROM/JOIN 位置，N36/N30/N_DQ5 硬拦）——**未限定字段归属哪个表是你的设计判断，脚本不猜**（view 的 refs 只列未限定词与"多表有此列名"的事实，归属自查：rs_input 源表清单/check_field，多义 question）。产出过**引用门禁**三查：未限定标识符（N36 硬拦）/ 限定引用查表存在（N38 硬拦，未连库降提示）/ 与原文对差疑似丢引用（N37 提示）。**口径引用集就是规则 fields 桶的真来源**（mapping 源字段单元格对加工字段只是提示，脚本按你的引用自动补全）——引用写全 = coder 的字段清单对。ts 两视图：tables=表元数据（DDL），rules.fields 三桶=加工（coder 唯一源；你的 field_logics 装配展开成桶，不落 ts）
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"
 - **★ 类型转换字段是加工字段**：precheck 类型风险决策通过后，会回写 rs_input 把转换字段改"数据加工"（transform_detail 标注如"类型转换：varchar→date"）。读到这类字段照常写 field_logic（转换口径），coder 翻译成 CAST/TO_DATE。**改 ETL 不改 DDL（目标类型不变）**。守卫式转换防的是个别脏值炸批（非法格式置 NULL，DQ 可抓）——**不是值域兜底**：目标精度/长度装不下正常源数据是模型问题（precheck 值域探测会拦），不要写"超长置空"类口径，除非闸口①人显式拍板过该策略
 - **聚合类字段必拆解**（拼接/汇总，"对同一 X 的多个值拼接/合计"类描述），表达式+括号说明至少答四件事：
@@ -222,7 +222,7 @@ DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规�
 
 - **RS 有 DQ 需求**（`rs_input_view.json` 的 `dq.requirements` 非空）→ designer **翻译**成 coder 可执行的 DQ 规格写进 `dq_rules`
   - `scope`/`check_type`/`rule_name` 跟 RS 保持一致（分类不变）
-  - `violation_condition` 写**违规条件的 SQL 表达式**（检查对象=目标 F 表，别名自定如 `t.order_amount IS NULL`）——DQ 版 design_logic：coder WHERE 直搬不再翻译自然语言；字段引用查目标表（N_DQ5 硬拦拼写错）
+  - `violation_condition` 写**违规条件的 SQL 表达式**（检查对象=目标 F 表，别名自定如 `t.order_amount IS NULL`）——DQ 版 design_logic：coder WHERE 直搬不再翻译自然语言；字段引用查目标表（N_DQ5 硬拦拼写错）；引用一律两段（别名.字段，跨表子查询 FROM 位用 schema.table 两段，三段式硬拦）
   - `rule_desc` 是**口径说明**（阈值来历/告警级/方向备注），不是 RS 原文复制
   - **必须写明违规方向**（什么情况算违规）——coder 照 violation_condition 定 WHERE，UT 按行数判（0 行通过，非 0 行告警）
   - 例：RS `rule_desc="订单金额不能为空"` → 翻译 `violation_condition="t.order_amount IS NULL"` + `rule_desc="违规=order_amount 为空（有空值即告警）"`——别写"检查 IS NOT NULL"这种正向描述，方向容易译反

@@ -103,7 +103,7 @@ python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 
 只含 SELECT（加工逻辑），不含 INSERT/DDL。
 
-DQ 任务的产出：`10_project_deliver/{资产名}/ddlc_design_dev/dq/dq_{检查类型}.sql`（每条 dq_rule 一个文件，契约与流程见 dws-dq skill）。
+DQ 任务的产出：`10_project_deliver/{资产名}/ddlc_design_dev/dq/` 下每条 dq_rule 一个文件（文件名用切片 `_file`，契约与流程见 dws-dq skill）。
 
 # 硬约束
 

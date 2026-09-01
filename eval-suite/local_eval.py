@@ -295,9 +295,8 @@ def step_coder_dq(report, deliver, skip_ai):
     abs_dq = str(dq_dir.resolve())
 
     prompt = (
-        f"读取 {abs_ts} 的 dq_rules，按每条规则的 rule_desc 技术口径"
-        f"生成检查 SQL，产出到 {abs_dq}/ 目录。"
-        f"每个文件命名 dq_{{检查类型}}.sql。"
+        f"ts.json 路径: {abs_ts}，按 dws-dq 流程（slice_ts --dq 拿切片）"
+        f"逐条生成 DQ 检查 SQL，产出到 {abs_dq}/ 目录，文件名用切片各条的 _file。"
     )
 
     run_cmd(

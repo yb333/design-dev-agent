@@ -767,6 +767,23 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             if r_short not in intermediate_table_names:
                 vr.add_hard("L2", "N12", f"规则 {code} 的 reads 指向 '{r}'，但没有中间表规则产出该表")
 
+    # N12b（warn）：表名引用形态统一——target_table/reads 一律带 schema 前缀
+    # （tmp 与目标表同 schema 是管线已知事实，统一带 schema 消形态分叉；
+    #   代码兼容短名照常装配，warn 只提示形态不改语义）
+    for rule in rules:
+        code = rule.get("rule_code", "?")
+        _tt = str(rule.get("target_table") or "").strip()
+        if _tt and "." not in _tt:
+            vr.add_warn("L2", "N12b",
+                        f"规则 {code} 的 target_table '{_tt}' 缺 schema 前缀——"
+                        f"表名统一带 schema（如 dws.{_tt}），消形态分叉")
+        for _r in rule.get("reads") or []:
+            _tbl = str((_r.get("table") if isinstance(_r, dict) else _r) or "").strip()
+            if _tbl and "." not in _tbl:
+                vr.add_warn("L2", "N12b",
+                            f"规则 {code} 的 reads '{_tbl}' 缺 schema 前缀——"
+                            f"表名统一带 schema（如 dws.{_tbl}），消形态分叉")
+
     # N10c 依赖顺序：produces_for A->B 则 seq(A) < seq(B)
     for a, b in edges:
         if b not in all_rule_codes:
@@ -1193,9 +1210,20 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                         "有 violation_condition 但未连库无 schema_cache——源表字段的引用"
                         "存在性未校验（跨表 DQ 的源表侧引用无法核对，闸口①人工确认）")
         _rs_argd = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
+        from sql_parse import find_three_part_refs
         for i, d in enumerate(dec_dq, 1):
             vc = (d.get("violation_condition") or "").strip()
-            if not vc or not _f_fields:
+            if not vc:
+                continue
+            # 三段式（纯语法硬拦，不依赖字段集/cache）：跨表级子查询里 schema.table
+            # 是 FROM 位置的两段形态（合法）；x.y.z 三段式 coder 直搬后 DWS 不认
+            _three = find_three_part_refs(vc)
+            if _three:
+                vr.add_hard("LD", "N_DQ5",
+                            f"dq_rules[{i}]（{d.get('rule_name', '?')}）的 violation_condition "
+                            f"有三段式引用 {_three}——字段引用一律'别名.字段'（两段）；"
+                            f"子查询引用表用 schema.table 两段（FROM 位置），不写三段式")
+            if not _f_fields:
                 continue
             from sql_parse import extract_logic_refs
             _q, _b = extract_logic_refs(vc, _field_all)
@@ -1371,7 +1399,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
         except Exception:
             cache_tables = {}
 
-    from sql_parse import extract_logic_refs, diff_logic_refs, find_unqualified_refs
+    from sql_parse import extract_logic_refs, diff_logic_refs, find_unqualified_refs, find_three_part_refs
     has_logic_refs = any(extract_logic_refs(str(t), set())[0]
                          for rule in rules for t in (rule.get("field_logics") or {}).values())
     if has_logic_refs and schema_cache_path is not None and not cache_tables:
@@ -1392,6 +1420,13 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     f"{bare_ids}——口径里的字段引用必须'别名.字段'（未限定字段归属哪个表是"
                     f"设计判断，脚本不猜；查 rs_input 源表清单或 check_field，多表同名"
                     f" question 弹确认）")
+            # 【格式】三段式引用（纯语法——两两配对提取恰好漏掉真正的字段，必须前置拦）
+            three = find_three_part_refs(text)
+            if three:
+                vr.add_hard("LG", "N36",
+                    f"【引用门禁·格式】规则 {code} 字段 {col} 的 design_logic 有三段式引用 "
+                    f"{three}——字段引用一律'别名.字段'（两段）；表引用 schema.table 只出现在"
+                    f"coder 的 FROM/JOIN 位置，三段式存在性校验看不见字段本身")
             # 【存在】限定引用查表（源表 cache / tmp field_targets）
             if cache_tables:
                 for al, c in extract_logic_refs(text, set())[0]:
@@ -1433,6 +1468,27 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
         vr.add_warn("L4", "N30",
             "声明了 joins 但未连库无 schema_cache——关联条件引用字段的存在性未校验"
             "（第4层⓪人工确认：条件里每个字段要在源表真实存在）")
+    # N30 前置·三段式（hard，纯语法不依赖 cache）：条件里 x.y.z 没有合法场景——
+    # 字段引用'别名.字段'两段；schema.table 只在 coder 的 FROM/JOIN 位置。
+    # 两两配对提取对三段式恰好取到 (schema, 表名)，存在性校验看不见字段本身。
+    from sql_parse import find_three_part_refs
+    for rule in rules:
+        _code = rule.get("rule_code", "?")
+        _cond_texts = [(j.get("condition") or "").strip() for j in rule.get("joins") or []]
+        _rf = (rule.get("filter") or "").strip()
+        if _rf:
+            _cond_texts.append(_rf)
+        _cond_texts += [str(js.get("join_filter") or "").strip()
+                        for js in rule.get("join_safety") or [] if isinstance(js, dict)]
+        for _cond in _cond_texts:
+            if not _cond:
+                continue
+            _three = find_three_part_refs(_cond)
+            if _three:
+                vr.add_hard("L4", "N30",
+                    f"规则 {_code} 的条件（{_cond}）有三段式引用 {_three}——"
+                    f"字段引用一律'别名.字段'（两段）；表引用 schema.table 只在 coder 的"
+                    f"FROM/JOIN 位置，条件表达式里不出现三段式")
     if cache_tables:
         from sql_parse import extract_condition_field_refs
         _rs_arg = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"

@@ -27,6 +27,8 @@ from pathlib import Path
 # shared 库（ts_compat 等）自洽引用：相对路径推算 design-dev-shared（与 check_sql 同款）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 
+from run_ut import dq_filename
+
 try:
     import yaml
 except ImportError:
@@ -211,6 +213,10 @@ def slice_dq(ts: dict) -> dict:
     dq_rules = ts.get("dq_rules") or []
     if not dq_rules:
         raise ValueError("ts.dq_rules 为空——DQ 切片无内容（执行计划 dq=true 才发起 DQ 任务，空=上游错位）")
+    # 每条附 _file（UT 侧 dq_filename 同源派生的确定文件名）——coder 直接用它落盘，
+    # 不自拼文件名（check_type 是检查类型不是规则身份会重名，自由文本清洗两侧难一致）
+    dq_rules = [{**d, "_file": dq_filename(i, (d.get("check_type") or "").strip())}
+                for i, d in enumerate(dq_rules, 1)]
     f_table = ts.get("meta", {}).get("target", {}).get("f_table", {}) or {}
     target = f"{f_table.get('schema', '')}.{f_table.get('table', '')}".strip(".")
     # 资产级源表并集（全规则 source_tables 按 schema+table+alias 去重）——

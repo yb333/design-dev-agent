@@ -141,14 +141,14 @@
       "rule_name": "",
       "scenario": "",                    // ★ 场景(单场景名 / 多场景合并标记)
       "exec_sequence": 1,                // 执行顺序
-      "target_table": "",                // 产出表(中间表/目标F表)
+      "target_table": "",                // 产出表(中间表/目标F表)，带 schema 如 dws.tmp_x1
       "design_intent": "",               // 该规则的设计意图(自然语言)
       "load_mode": "truncate_table",     // 写入方式: truncate_table | no_delete | delete | truncate_partition | merge_into
       "write_condition": "",             // 写入条件(平台delete_condition)。designer填,脚本只搬运+校验
       "step_type": "full",               // ★ full | aggregate | incremental_extract | merge
       "target_role": "target",           // ★ intermediate(中间表) | target(目标F表)
       "produces_for": [],                // ★ 中间表规则填：产出供哪些规则消费
-      "reads": [],                       // ★ 装配/merge规则填：读哪些中间表
+      "reads": [],                       // ★ 装配/merge规则填：读哪些中间表(带 schema，如 dws.tmp_x)
       "filter": "",                      // 规则级行过滤(WHERE)；join级限定在 joins[].filter
       "source_tables": [                 // 该规则关联的源表（reads 的 tmp 以伪源表 _from_reads 带出别名）
         { "schema": "", "table": "", "alias": "" }
