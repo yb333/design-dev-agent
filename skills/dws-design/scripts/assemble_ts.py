@@ -977,7 +977,12 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                             f"或到 precheck 关联类型决策里选'接受'（业务豁免，需人确认）")
 
     # N20/N21 distribution_key（per-table，校验字段在所属表存在）
-    dec_tables = decisions.get("tables") or {}
+    # 键归一短名：表名统一带 schema 定调后 designer 会写 dws.xxx_f 形态的键，
+    # 字段集按短名聚合——原样键查空会把合法分布键误拦成"本表字段: "空报错
+    dec_tables = {_table_short(str(k)): v for k, v in (decisions.get("tables") or {}).items()}
+    # I 视图短名（物理属性只对 F/中间表生效——I 是 F 的镜像视图，无分布概念）
+    _iview_short = _table_short(str(((rs_input.get("meta", {}).get("target", {}) or {})
+                                      .get("i_view", {}) or {}).get("table") or ""))
     # 构建每张表的字段集合（从 rules 的 field_targets 按表聚合）
     table_fields: dict[str, set] = {}
     for rule in rules:
@@ -987,6 +992,11 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     valid_distribute_types = {"HASH", "ROUNDROBIN", "REPLICATION", ""}
     for tbl_short, tbl_cfg in dec_tables.items():
         if not isinstance(tbl_cfg, dict):
+            continue
+        if tbl_short and tbl_short == _iview_short:
+            vr.add_warn("L4", "N20",
+                        f"tables 里的 '{tbl_short}' 是 I 视图——物理属性（分布键/分布方式）"
+                        f"只对 F/中间表生效，已跳过校验（I 视图由 assemble_ddl 按 F 镜像生成）")
             continue
         dt = (tbl_cfg.get("distribute_type") or "").strip().upper()
         if dt not in valid_distribute_types:
@@ -1937,7 +1947,9 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
     - 审计字段补充到最终目标表的 fields
     - I 视图不放 tables（无物理属性，字段=F表镜像）
     """
-    dec_tables = decisions.get("tables", {})
+    # 键归一短名（与 run_all_validations 的 N20/N21 同口径——designer 键带 schema 时
+    # .get(短名) 查空会让 distribution_key 等物理属性静默回退兜底）
+    dec_tables = {_table_short(str(k)): v for k, v in (decisions.get("tables") or {}).items()}
     supplemented = []  # 审计字段补充（由 build_design 算出，这里通过参数传入更解耦，但简化处理从 design 读不到）
     # 审计字段：从 rs_input 识别来源提供的 + 标准模板
     all_fm = rs_input.get("field_mappings", [])

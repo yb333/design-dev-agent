@@ -700,6 +700,17 @@ class TestLogicRefs:
         assert find_unqualified_refs("返回 n 否则 y") == []  # 单字母豁免
         assert find_unqualified_refs("按 coalesce(x, 0) 与 to_char(a.dt,'yyyymmdd') 处理") == []
 
+    def test_nested_fullwidth_notes_stripped(self):
+        """嵌套全角说明段（（…））型）剥离——单次 sub 跨内层（剥成残串，说明段英文词
+        被误拦（2026-09 案例实证）；循环剥最内层直到稳定。"""
+        from sql_parse import strip_fullwidth_notes, find_unqualified_refs, find_three_part_refs
+        s = "a.del_flag = 'N'（口径（参照 del_flag 拉链规范）取 N）"
+        assert strip_fullwidth_notes(s) == "a.del_flag = 'N' "
+        assert find_unqualified_refs(s) == []                       # 嵌套说明段英文词不进 N36
+        assert find_three_part_refs("x = 1（说明（含 dws.t.c 示例））") == []
+        # 多层嵌套
+        assert strip_fullwidth_notes("a（b（c（d）e）f）g") == "a g"
+
     def test_find_three_part_refs_pure_syntax(self):
         """三段式硬拦原语：x.y.z 无合法场景——两两配对提取恰好取到(表名)漏掉字段本身。
         剥 ${}/引号串/全角说明段与 find_unqualified_refs 同口径。"""

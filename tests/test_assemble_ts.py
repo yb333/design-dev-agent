@@ -645,6 +645,43 @@ def _level_of(vr, code):
     return None
 
 
+class TestTableKeyForms:
+    """tables 键形态（2026-09 案例实证：键带 schema 曾三处查空——N21 误拦空字段清单 +
+    build_tables 查不到声明致分布键静默回退兜底）+ I 视图条目跳物理校验。"""
+
+    def test_n21_schema_prefixed_key_passes(self):
+        dd = make_design_decisions(tables={"dws.dwb_test_f":
+                                           {"distribution_key": ["id"], "distribute_type": "HASH"}})
+        vr = _run(dd)
+        assert not any(i["code"] in ("N20", "N21") for i in vr.items)
+
+    def test_n21_unknown_field_still_reports_with_fields_listed(self):
+        """真错的字段仍拦，且"本表字段"清单非空（曾是空串——键错位查空的表现）。"""
+        dd = make_design_decisions(tables={"dws.dwb_test_f":
+                                           {"distribution_key": ["no_such_col"], "distribute_type": "HASH"}})
+        vr = _run(dd)
+        n21 = [i for i in vr.items if i["code"] == "N21"]
+        assert n21 and n21[0]["level"] == "hard" and "id" in n21[0]["msg"]
+
+    def test_distribution_key_effective_with_schema_key(self):
+        """键带 schema 时声明必须生效（曾静默回退 ROUNDROBIN 兜底）。"""
+        rs = make_rs_input()
+        dd = make_design_decisions(tables={"dws.dwb_test_f":
+                                           {"distribution_key": ["id"], "distribute_type": "HASH"}})
+        ts, _, _ = do_assemble(rs, dd)
+        assert ts["tables"]["dwb_test_f"]["distribution_key"] == ["id"]
+        assert ts["tables"]["dwb_test_f"]["distribute_type"] == "HASH"
+
+    def test_i_view_entry_skipped_with_warn(self):
+        """I 视图条目：物理属性只对 F/中间表生效——跳过校验 + warn 披露，不硬拦。"""
+        dd = make_design_decisions(tables={"dws.dwb_test_i":
+                                           {"distribution_key": ["id"], "distribute_type": "HASH"}})
+        vr = _run(dd)
+        assert any(i["code"] == "N20" and "I 视图" in i["msg"] and i["level"] == "warn"
+                   for i in vr.items)
+        assert not any(i["code"] == "N21" for i in vr.items)
+
+
 class TestLayer0Anchor:
     """第0层 锚点（N1-N4）。"""
 

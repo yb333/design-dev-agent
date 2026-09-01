@@ -191,16 +191,17 @@ complexity_analysis:
 # 其余属性不填走默认（列存 / 按 schema 推断逻辑集群）。
 # 字段定义由 assemble_ts.py 从 rs_input 自动搬入 tables.{表名}.fields，designer 不碰（除中间表自建字段类型）。
 tables:
+  # 键=表名带 schema（统一形态；代码兼容短名）。I 视图不进 tables（物理属性只对 F/中间表生效）。
   # 目标F表:
-  # dwb_xxx_f:
+  # dws.dwb_xxx_f:
   #   distribution_key: [id]
   #   distribute_type: HASH
   # 维表（复制分布）:
-  # dwb_xxx_d:
+  # dws.dwb_xxx_d:
   #   distribution_key: []
   #   distribute_type: REPLICATION
   # 中间表（转换型，默认）:
-  # dwb_xxx_tmp1:
+  # dws.dwb_xxx_tmp1:
   #   distribution_key: [id]
   #   build_mode: transform        # 单一规则产出
   # 中间表（累积共建型）:

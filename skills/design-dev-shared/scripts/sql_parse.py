@@ -485,6 +485,21 @@ _SQL_TYPE_WORDS = {
 }
 
 
+def strip_fullwidth_notes(text: str) -> str:
+    """剥全角括号说明段（嵌套安全——designer 实证写 （（…）） 型嵌套）。
+
+    循环剥最内层 `（[^（）]*）` 直到稳定：单次 re.sub 从首个（贪到首个）会跨过
+    内层（，把 （外层（内层）外层） 剥成残串"外层）"，说明段里的英文词漏进
+    表达式域被 N36 误拦。不配对的孤立（/）不处理（残串拦下反而是暴露）。
+    """
+    s = text or ""
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r"（[^（）]*）", " ", s)
+    return s
+
+
 _THREE_PART_CHAIN = re.compile(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
 
 
@@ -497,7 +512,7 @@ def find_three_part_refs(text: str) -> list:
     存在性校验全程看不见它，coder 直搬后 DWS 不认三段式，UT 阶段才炸。
     剥 ${}/引号串/全角说明段与 find_unqualified_refs 同口径。
     """
-    s = re.sub(r'（[^）]*）', ' ', text or "")
+    s = strip_fullwidth_notes(text)
     s = re.sub(r'\$\{[^}]*\}', ' ', s)
     s = re.sub(r"'[^']*'", " ", s)
     s = re.sub(r'"[^"]*"', " ", s)
@@ -517,7 +532,7 @@ def find_unqualified_refs(text: str) -> list:
     单字母豁免（'N'/'Y' 值在中文行文里常不带引号，真字段名几乎不会单字母）。
     语义边界：中文提字段（不写英文名）机器不可见——归闸口人审，不假装能拦。
     """
-    s = re.sub(r'（[^）]*）', ' ', text or "")
+    s = strip_fullwidth_notes(text)
     s = re.sub(r'\$\{[^}]*\}', ' ', s)
     s = re.sub(r"'[^']*'", " ", s)
     s = re.sub(r'"[^"]*"', " ", s)
