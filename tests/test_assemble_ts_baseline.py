@@ -29,11 +29,12 @@ def merge_case():
 class TestTopology:
     def test_demo_two_step_chain(self, demo):
         topo = derive_topology(demo["rules"])
-        assert topo["_table_roles"]["tmp_trade_order"] == "intermediate"
-        assert topo["_table_roles"]["dwb_trade_order_d"] == "target"
-        # 方向：R0001 的表被 R0002 读 → R0001.produces_for 含 R0002；R0002.reads 含 tmp
+        assert topo["_table_roles"]["dws.tmp_trade_order"] == "intermediate"
+        assert topo["_table_roles"]["dws.dwb_trade_order_d"] == "target"
+        # 方向：R0001 的表被 R0002 读 → R0001.produces_for 含 R0002；R0002.reads 含 tmp（全名）
         assert topo["R0001"]["produces_for"] == ["R0002"]
-        assert topo["R0002"]["reads_tables"] == ["tmp_trade_order"]
+        assert topo["R0002"]["reads_tables"] == ["dws.tmp_trade_order"]
+        assert topo["R0002"]["target_full"] == "dws.dwb_trade_order_d"
 
 
 class TestDemoFullCase:
@@ -48,7 +49,9 @@ class TestDemoFullCase:
         assert ts["rules"]["R0001"]["target_role"] == "intermediate"
         assert ts["rules"]["R0002"]["target_role"] == "target"
         # 结构事实填充
-        assert ts["rules"]["R0002"]["reads"] == ["tmp_trade_order"]
+        assert ts["rules"]["R0002"]["reads"] == ["dws.tmp_trade_order"]  # N12b 带 schema
+        assert ts["rules"]["R0002"]["target_table"] == "dws.dwb_trade_order_d"
+        assert "dwb_trade_order_d" in ts["tables"]  # tables 键仍短名
         assert ts["rules"]["R0001"]["source_tables"][0]["table"] == "ods_trade_order_di"
         assert ts["rules"]["R0001"]["joins"][0]["alias"] == "a"
         # 语义位留空（不伪造）
@@ -69,7 +72,7 @@ class TestDemoFullCase:
         # data_flow：依赖方向 + 调度分组
         assert ts["data_flow"]["dependencies"] == [
             {"from": "R0001", "to": "R0002", "type": "data_flow",
-             "intermediate_table": "tmp_trade_order"}]
+             "intermediate_table": "dws.tmp_trade_order"}]
         assert ts["data_flow"]["schedule_groups"] == [
             {"sequence": 1, "rules": ["R0001"]}, {"sequence": 2, "rules": ["R0002"]}]
 

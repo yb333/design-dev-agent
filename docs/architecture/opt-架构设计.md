@@ -50,7 +50,7 @@ edition: 实现版（v2，2026-08-19 建成后重写；设计过程版见 git �
 ```bash
 python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --outdir {deliver}/_internal
 ```
-产出四件：`ts_baseline.json` / `etl_baseline/{规则}.sql`（逐字原文）/ `baseline_view.md`（designer 读）/ `exemptions.json`（语义空位清单）。exit 2 = 契约违约（版本/必填/dm=6 缺 merge_on），停线报逆向侧。`kind→load_mode` 词表外的写入类型报"待定"不硬映射。
+产出四件：`ts_baseline.json` / `etl_baseline/{规则}.sql`（逐字原文）/ `baseline_view.md`（designer 读）/ `exemptions.json`（语义空位清单）。ts_baseline 表名对齐新版约定（N12b：`rules.target_table`/`reads` 带 schema，`tables` 键短名）——与 new-pipe 新版 ts 同构，消费端无需各自容忍。exit 2 = 契约违约（版本/必填/dm=6 缺 merge_on），停线报逆向侧。`kind→load_mode` 词表外的写入类型报"待定"不硬映射。
 
 ### 步骤 1 · 优化输入预处理（真实格式；需求包目录禁止 Read——分拣解析全在脚本）
 ```bash

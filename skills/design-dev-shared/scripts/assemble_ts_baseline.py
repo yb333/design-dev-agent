@@ -67,24 +67,31 @@ def _layer_of(schema: str) -> str:
 # 拓扑推导（结构事实，非语义）
 # ---------------------------------------------------------------------------
 
+def _table_full(r: dict) -> str:
+    """规则目标表全名（schema.table，N12b：target_table/reads 统一带 schema）。"""
+    return f"{r['target_schema']}.{r['target_table']}"
+
+
 def derive_topology(rules: List[dict]) -> Dict[str, dict]:
     """推导：每规则目标表 / 交叉读写关系 / 表角色（intermediate|target）。
 
-    返回 {rule_code: {"target_short":…, "reads_tables": [...], "produces_for": [...]}}，
-    外加 "_written_tables": {表短名: 产出规则}、"_table_roles": {表短名: role}。
+    返回 {rule_code: {"target_short"/"target_full":…, "reads_tables"(全名), "produces_for": [...]}}，
+    外加 "_written_tables": {表全名: 产出规则}、"_table_roles": {表全名: role}、
+    "_written_short": {短名: 全名}（tables 段键为短名，按新版约定）。
     produces_for 语义与 ts 模板一致：本规则产出的表供哪些规则消费（方向：被读）。
     """
-    written: Dict[str, str] = {}      # 表短名 → 产出 rule_code
+    written: Dict[str, str] = {}      # 表全名 → 产出 rule_code
     for r in rules:
-        written[_table_short(r["target_table"])] = r["rule_code"]
+        written[_table_full(r)] = r["rule_code"]
 
     info: Dict[str, dict] = {}
     for r in rules:
-        code, tgt = r["rule_code"], _table_short(r["target_table"])
-        reads_tables = [_table_short(t) for t in r.get("source_tables", [])
-                        if _table_short(t) in written and written[_table_short(t)] != code]
-        info[code] = {"rule_code": code, "target_short": tgt,
-                      "reads_tables": reads_tables, "produces_for": []}
+        code = r["rule_code"]
+        full = _table_full(r)
+        reads_tables = [t for t in r.get("source_tables", [])
+                        if t in written and written[t] != code]
+        info[code] = {"rule_code": code, "target_short": _table_short(full),
+                      "target_full": full, "reads_tables": reads_tables, "produces_for": []}
     # 方向修正：C 读 P 的表 → P.produces_for 收 C
     for code, d in info.items():
         for t in d["reads_tables"]:
@@ -97,6 +104,7 @@ def derive_topology(rules: List[dict]) -> Dict[str, dict]:
     table_roles = {t: ("intermediate" if t in read_tables else "target") for t in written}
     info["_written_tables"] = written
     info["_table_roles"] = table_roles
+    info["_written_short"] = {_table_short(t): t for t in written}
     return info
 
 
@@ -106,8 +114,9 @@ def derive_topology(rules: List[dict]) -> Dict[str, dict]:
 
 def build_tables(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], List[dict]]:
     """契约 tables[] + lineage → ts.tables dict（仅规则产出的表；源表进 meta.source_tables）。"""
-    written: Dict[str, str] = topo["_written_tables"]
-    table_roles: Dict[str, str] = topo["_table_roles"]
+    written: Dict[str, str] = topo["_written_tables"]            # 全名 → rule
+    written_short: Dict[str, str] = topo["_written_short"]        # 短名 → 全名
+    table_roles: Dict[str, str] = topo["_table_roles"]            # 全名 → role
     contract_tables = {_table_short(t["schema"] + "." + t["name"]): t for t in data.get("tables", [])}
 
     # lineage 按 (rule, target_field) 索引，供字段 enrich
@@ -117,7 +126,8 @@ def build_tables(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], Li
 
     gaps: List[dict] = []
     ts_tables: Dict[str, dict] = {}
-    for short, rule_code in sorted(written.items(), key=lambda kv: kv[1]):
+    for short, rule_code in sorted(((s_, written[f_]) for s_, f_ in written_short.items()),
+                                   key=lambda kv: kv[1]):
         ct = contract_tables.get(short, {})
         fields_def = ct.get("fields") or []
         lns = lineage_by_rule.get(rule_code, {})
@@ -148,7 +158,7 @@ def build_tables(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], Li
                 "design_logic": "",
             })
         ts_tables[short] = {
-            "type": table_roles[short],
+            "type": table_roles[written_short[short]],
             "distribution_key": [],        # 语义位：物理决策留空
             "distribute_type": "ROUNDROBIN",
             "partition": "",
@@ -189,12 +199,11 @@ def build_rules(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], Lis
         # 源表拆分：外部表 → source_tables；本资产中间表 → reads
         src, reads = [], []
         for full in r.get("source_tables", []):
-            short = _table_short(full)
-            if short in written and written[short] != code:
-                reads.append(short)
+            if full in written and written[full] != code:   # 本资产中间表（全名键）
+                reads.append(full)
             else:
                 src.append({"schema": full.split(".")[0] if "." in full else "",
-                            "table": short, "alias": alias_by_table.get(full, "")})
+                            "table": _table_short(full), "alias": alias_by_table.get(full, "")})
         joins = [{"alias": j.get("alias", ""), "type": j.get("join_type", ""),
                   "condition": j.get("join_condition", ""), "filter": ""}
                  for j in r.get("joins", [])]
@@ -202,15 +211,15 @@ def build_rules(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], Lis
             "rule_name": r.get("rule_name", ""),
             "scenario": r.get("scenario_id", ""),
             "exec_sequence": r["exec_sequence"],
-            "target_table": info["target_short"],
+            "target_table": info["target_full"],   # 带 schema（N12b；tables 键仍短名）
             "is_view_step": bool(r.get("is_view_step", False)),
             "design_intent": "",                      # 语义位
             "load_mode": load_mode,
             "write_condition": (wp or {}).get("condition_expr") or "",
             "step_type": "",                          # 语义位：加工路径是设计判断
-            "target_role": topo["_table_roles"][info["target_short"]],
+            "target_role": topo["_table_roles"][info["target_full"]],
             "produces_for": info["produces_for"],
-            "reads": info["reads_tables"],
+            "reads": info["reads_tables"],   # 带 schema（N12b）
             "source_tables": src,
             "grain": {"input": "", "output": "", "change": ""},   # 语义位
             "joins": joins,
@@ -237,7 +246,7 @@ def build_data_flow(data: dict, topo: Dict[str, dict]) -> dict:
     deps = []
     for r in data["rules"]:
         code = r["rule_code"]
-        for t in topo[code]["reads_tables"]:
+        for t in topo[code]["reads_tables"]:   # 全名（N12b）
             deps.append({"from": written[t], "to": code, "type": "data_flow",
                          "intermediate_table": t})
     groups: Dict[int, List[str]] = {}
