@@ -363,9 +363,18 @@ INSERT 成功但 UT 检查 FAIL（主键重复/空值/行数异常，报告带�
 
 > ★ **不回退 designer 诊断给方案**。designer 基于自己的设计立场会给偏向性结论（如"改 join_safety 加 GROUP BY / 改 business_key"），这俩方案往往站不住脚——前者掩盖 JOIN 发散丢数据，后者是凑假主键。根因判断（设计问题 / 环境数据脏 / 业务一对多）需要业务认知，是人的领域。
 
-① **主控读 UT 报告**（含重复键+样例+开发环境数据免责提示），用 question 问人根因：
+⓪ **主键重复类失败先跑发散定位**（事实进问题，人判断质量高）：
+
+```bash
+python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --rule {rule_code}
+```
+
+逐表**按声明条件**查键唯一性（复合键聚合 + joins[].filter / join_safety.join_filter / 规则 filter / condition 字面量项全部严格遵守）：发散表+重复键样例+伙伴表命中实锤、**filter 承重墙**（裸查重复/声明条件唯一 ⇒ SQL 疑似漏写过滤——高频根因）、驱动表 business_key 自检（排除"不是 join 的锅"）。链式关联无需逐层测试——每表在自己键上全局唯一即不可能放大，与顺序无关。报告落 `_internal/diagnose/fanout_{rule}.md`；exit 2=无库归 6c。
+
+① **主控读 UT 报告**（含重复键+样例+开发环境数据免责提示+⓪ 定位结论），用 question 问人根因：
 ```
 question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，摘 UT 报告}\n"
+         "发散定位：{⓪ 工具结论一行——嫌疑表/承重墙/驱动表粒度}\n"
          "请确认根因是哪种：\n"
          "  - 关联设计问题（JOIN 发散，需调整关联/限定条件）\n"
          "  - 源表数据问题（开发环境数据脏，不改设计）\n"

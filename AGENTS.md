@@ -28,6 +28,7 @@ skills/
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
 │   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py fill_type_risk_decision.py fill_join_risk_decision.py(决策填值器,剧本步骤1b)
                          #   dispatch_plan.py assemble_export.py ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
+                         #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
                          #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py archive_writer.py baseline_contract.py(契约校验库)
@@ -145,7 +146,7 @@ UT 失败**不要一律回 coder**。按失败项类型分流：
 **数据质量问题为什么不能给 coder**：coder 拿到"主键重复"会用 ROW_NUMBER 去重，掩盖根因（关联发散/关联键选错），反而丢数据。根因在设计层。
 
 **退回 designer 时带"精简依据包"**（够判断即可，别堆数据）：
-1. 失败项 + 样例数据（UT 报告现摘；run_ut_check 已加 LIMIT 捕获重复键5个/空值行3行）
+1. 失败项 + 样例数据（UT 报告现摘；run_ut_check 已加 LIMIT 捕获重复键5个/空值行3行）；主键重复类先跑 `diagnose_fanout`（new-pipe/scripts，逐表按声明条件查键唯一性+实锤+filter 承重墙+驱动表自检——链式无需增量测试，全局键唯一=不可能放大），结论进 6b 问人材料
 2. coder 实际跑的 SELECT 文件路径
 3. designer 当初声明的 join_safety + business_key（从 ts.json 摘该规则段）
 

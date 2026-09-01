@@ -42,6 +42,7 @@
 ### UT（需数据库；check_db 住 shared 共用，ut_precheck/ut_execute/ut_diagnose 住 new-pipe，run_ut 是 shared 公共库）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
+| `diagnose_fanout.py` | UT 回路**关联发散定位器**（6b 问人前跑）：逐表**按声明条件**（复合键聚合 + joins[].filter/join_safety.join_filter/规则 filter 归属项/condition 字面量项）查键唯一性 + 重复键样例 + 伙伴表命中实锤 + **filter 承重墙**（裸查重复/声明条件唯一⇒SQL 疑似漏过滤）+ 驱动表 business_key 自检；链式无需增量测试（每表全局键唯一=不可能放大，顺序无关）；NULL 键不算发散行 | 步骤 6b ⓪（主键重复类必跑） | ts.json + rule_code → stdout + `_internal/diagnose/fanout_{rule}.md` | **ts.rules（+init.rules）** joins/source_tables + design.business_key |
 | `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
 | `ut_precheck.py` | 快速 UT 预检（DDL 统一部署：回退容忍→建表→I 视图；SELECT 跑通秒级不写数据） | 步骤 6a | ts.json + etl/ + ddl/ → PASS/FAIL | **ts.rules + ts.init.rules**（init-阶段先→增量-阶段后，有序两阶段） |
 | `ut_execute.py` | UT 执行（load_mode 预处理 → INSERT → UT 检查 → **DQ 检查（数据完整时，0 行=通过/非 0 行=告警阻断）** → 报告，分钟级） | 步骤 6b | ts.json + etl/ + ddl/ + dq/ → ut_report.md / `_internal/ut_sql/{rule}.sql` | **ts.rules + ts.init.rules + ts.dq_rules**（init 先建基线→增量在基线上 merge；prev_failed 跨阶段级联；DQ 只在规则全 PASS 时跑） |
