@@ -225,11 +225,14 @@ def run():
         dst = commands_dir / c
         shutil.copy2(src, dst)
         print(f"  ✓ command: {c}")
-    # requirements.txt 进安装布局（check_env 步骤0 依赖对账的清单——不拷则探针无处可读）
+    # requirements.txt 进 config 目录（与其他 config 同目录——check_env 步骤0
+    # 依赖对账的清单；内网生产仓不携带此文件，环境依赖由部署侧统一管）
     req_src = SCRIPT_DIR / "requirements.txt"
+    req_dst = config_dir / "_references" / "rules" / RULES_DIR_NAME / "requirements.txt"
     if req_src.exists():
-        shutil.copy2(str(req_src), str(config_dir / "requirements.txt"))
-        print("  ✓ requirements.txt（依赖对账清单）")
+        req_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(req_src), str(req_dst))
+        print(f"  ✓ requirements.txt（依赖对账清单 → {req_dst}）")
     print()
 
     # ── 6. 数据库配置初始化 ──（config 跟 skill 同根：global→~/.config/opencode，local→<cwd>/.opencode）

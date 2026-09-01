@@ -82,6 +82,15 @@ def schema_apps_path() -> Path:
     return config_dir() / "schema_apps.json"
 
 
+def requirements_path() -> Path:
+    """requirements.txt（check_env 依赖对账清单，与其他 config 同目录）。
+
+    install 布局由 install.py 从仓根拷入；内网生产仓不携带（环境依赖由部署侧
+    统一管）——check_env 找不到时降提示不阻断。
+    """
+    return config_dir() / "requirements.txt"
+
+
 def resolve_appid(schema: str, config_path: str = "") -> str:
     """按 schema 反查所属 appid（schema_apps.json 标准源）。
 

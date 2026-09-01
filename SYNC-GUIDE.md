@@ -13,14 +13,12 @@
 | `agents/*.md` | `.opencode/agents/` | 同名覆盖，**不删**别人的 |
 | `commands/*.md` | `.opencode/commands/` | 同名覆盖，**不删**别人的 |
 | 4 个 config 的 example | `.opencode/_references/rules/dws-design-dev/` | **缺失才初始化，已有永不覆盖** |
-| `install.py` | 内部仓根 `install.py` | 同名覆盖（自测安装器） |
-| `requirements.txt` | 内部仓根 `requirements.txt` | 同名覆盖（check_env 依赖对账清单——生产仓布局读仓根，不带则依赖防线降级提示） |
 
 不同步：docs / tests / eval-suite 等开发侧内容；本仓未 commit 的改动。
 
 **核心口径：源头（本仓 main）是唯一权威。** 内网仓的一切本地状态都不保留（工作区改动、本地提交、上次失败遗留、rebase 冲突现场一律 reset 对齐远端再同步），远端上别人对我们条目的改动也直接被源头内容覆盖（我们本来就要持续优化，覆盖是常态）。工具不需要人处理任何本地状态。
 
-**别人的内容不受影响**：只同步/提交我们自己的条目（5 个 skill + agents/commands 的 md + config 目录 + 根文件 install.py/requirements.txt 两件），别人的 skill / agent / 其余根目录文件全程不碰；镜像删除只删 git 已跟踪的文件（别人放的未跟踪文件不碰）；push 重试冲突以源头内容为准（sync 提交只动我们的条目，不影响别人文件）。
+**别人的内容不受影响**：只同步/提交我们自己的条目（5 个 skill + agents/commands 的 md + config 目录），别人的 skill / agent / 根目录文件全程不碰（我们的内容一律在 .opencode/ 下，不在内部仓根暴露；install.py=维护者自测安装器不上内网，requirements.txt 内网不携带——环境依赖由部署侧统一管）；镜像删除只删 git 已跟踪的文件（别人放的未跟踪文件不碰）；push 重试冲突以源头内容为准（sync 提交只动我们的条目，不影响别人文件）。
 
 **config（`.opencode/_references/rules/dws-design-dev/`）以远端为准**：同步只补缺（缺失时从 example 初始化），永不主动覆盖。要更新 config：把改好的文件**拷贝到内网仓该目录下覆盖**，然后跑一次同步工具——config 改动会自动随本次 sync 提交推送上去（这是唯一被保护的本地改动）。
 

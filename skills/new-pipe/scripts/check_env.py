@@ -139,12 +139,28 @@ def check(skill_root_arg: str = "") -> list[str]:
     else:
         problems.append("缺 _install_meta.json（非 install.py 安装或安装损坏——重跑 install.py）")
 
-    # 6. 运行时依赖对账（当前解释器逐包查——install 曾对自建 venv 检测，运行时真身无人看）
-    req_path = (repo / "requirements.txt") if repo else (_find_config_dir(skill_base) / "requirements.txt")
-    if req_path.exists():
-        problems.extend(check_requirements(req_path.read_text(encoding="utf-8")))
+    # 6. 运行时依赖对账（当前解释器逐包查——install 曾对自建 venv 检测，运行时真身无人看）。
+    # 清单位置：install 布局 = config 目录（与其他 config 同目录，install.py 拷入，
+    # config_paths.requirements_path 唯一定位）；仓布局 = 仓根（本机开发自用）。
+    # 内网生产仓不携带清单（环境依赖由部署侧统一管）——找不到降提示不阻断。
+    req_candidates = []
+    _bs = str(skills_root / "design-dev-shared" / "scripts")
+    sys.path.insert(0, _bs)
+    try:
+        from config_paths import requirements_path
+        req_candidates.append(requirements_path())
+    except Exception:
+        pass
+    finally:
+        sys.path.remove(_bs)
+    if repo:
+        req_candidates.append(repo / "requirements.txt")
+    req_path = next((p for p in req_candidates if p and Path(p).exists()), None)
+    if req_path:
+        problems.extend(check_requirements(Path(req_path).read_text(encoding="utf-8")))
     else:
-        print("[提示] 未找到 requirements.txt（老安装布局）——重跑 install.py 补齐；依赖对账跳过")
+        print("[提示] 未找到 requirements.txt（内网生产仓不携带属正常——环境依赖由部署侧"
+              "统一管；自测环境重跑 install.py 补齐）；依赖对账跳过")
 
     return problems
 
