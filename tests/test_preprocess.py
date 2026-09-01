@@ -638,6 +638,56 @@ def _processed(target_column="total_amt", target_type="decimal(18,2)",
             "scene_group": "default", "remark": ""}
 
 
+class TestViewInfoCompleteness:
+    """view 信息完整性（2026-09-01 定调：给模型用——紧凑靠去噪去重，不丢消费者要的信息）。
+    实证曾缺四处：源类型/schedule 段/场景分组/加工字段备注——模型被迫回读 rs_input 全文。"""
+
+    def test_source_type_in_direct_and_processed(self):
+        import sys
+        sys.path.insert(0, "tests")
+        from conftest import make_rs_input
+        from preprocess import build_compact
+        rs = make_rs_input()
+        rs["field_mappings"][0]["source_type"] = "varchar(20)"
+        rs["field_mappings"].append({"target_column": "amt", "transform_rule": "数据加工",
+            "transform_detail": "sum(amount)", "scene_group": "结算",
+            "source_schema": "ods", "source_table": "ods_test_f", "source_alias": "t",
+            "source_column": "amount", "source_type": "numeric(18,2)",
+            "target_type": "numeric(18,2)", "target_column_cn": "金额", "remark": "含税"})
+        v = build_compact(rs)
+        d = next(r for blk in v["direct"] for r in blk["fields"] if r["tgt"] == "id")
+        assert d["stype"] == "varchar(20)"
+        pr = next(e for e in v["processed"] if e["tgt"] == "amt")
+        assert pr["sources"][4] == "numeric(18,2)" and pr["note"] == "含税"
+
+    def test_schedule_section_present(self):
+        """schedule 段必须进 view（designer 填 decisions.schedule 的唯一输入——曾从没进过）。"""
+        import sys
+        sys.path.insert(0, "tests")
+        from conftest import make_rs_input
+        from preprocess import build_compact
+        v = build_compact(make_rs_input())
+        assert v["schedule"]["frequency"] == "T+1" and "upstream" in v["schedule"]
+
+    def test_scenes_section_for_multi_scene(self):
+        import sys
+        sys.path.insert(0, "tests")
+        from conftest import make_rs_input
+        from preprocess import build_compact
+        rs = make_rs_input()
+        rs["field_mappings"][0]["scene_group"] = "订单"
+        v = build_compact(rs)
+        assert v["scenes"]["groups"] == {"订单": 1}  # 场景名可见（pick_targets --scenario 参数来源）
+
+    def test_no_scene_no_scenes_section(self):
+        import sys
+        sys.path.insert(0, "tests")
+        from conftest import make_rs_input
+        from preprocess import build_compact
+        v = build_compact(make_rs_input())
+        assert "scenes" not in v  # 单场景不产噪音段
+
+
 class TestBuildCompact:
     """build_compact：分块紧凑视图生成。"""
 
@@ -688,7 +738,7 @@ class TestBuildCompact:
         assert p["logic"] == "SUM(amount)"
         # 单来源 sources 是单元素数组
         assert isinstance(p["sources"], list)
-        assert len(p["sources"]) == 4  # [schema, table, alias, column]
+        assert len(p["sources"]) == 5  # [schema, table, alias, column, 源类型]（写转换口径必须知道源类型）
 
     def test_multi_source_field_merged(self):
         """多表来源字段（同 target_column 多行不同表）合并成一段。"""

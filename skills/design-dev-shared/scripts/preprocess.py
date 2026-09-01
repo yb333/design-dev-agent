@@ -1197,6 +1197,8 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             row = {"src": f.get("source_column", ""),
                    "tgt": f.get("target_column", ""),
                    "type": f.get("target_type", "")}
+            if f.get("source_type"):
+                row["stype"] = f.get("source_type")
             remark = f.get("remark", "")
             if remark:
                 row["note"] = remark
@@ -1223,10 +1225,15 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         cn = f0.get("target_column_cn", "")
         if cn and cn != target:
             entry["cn"] = cn
+        # 5 元组 [schema, table, alias, col, 源类型]——写转换口径必须知道源类型
         sources = [[f.get("source_schema", ""), f.get("source_table", ""),
-                    f.get("source_alias", ""), f.get("source_column", "")]
+                    f.get("source_alias", ""), f.get("source_column", ""),
+                    f.get("source_type", "")]
                    for f in fields]
         entry["sources"] = sources if len(sources) > 1 else sources[0]
+        remark = f0.get("remark", "")
+        if remark:
+            entry["note"] = remark
         detail = f0.get("transform_detail", "") or f0.get("mapping_expression", "")
         if detail and detail not in ("-", "无", ""):
             entry["logic"] = detail
@@ -1325,6 +1332,32 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         compact["dq"] = {
             "requirements": [],
             "说明": "RS 无 DQ 需求（dq_requirements 为空）→ dq_rules 留空，不产 DQ（coder 不调，无 DQ 调度任务）。",
+        }
+
+    # 调度（RS L07——designer 填 decisions.schedule 的输入；view 唯一入口不缺信息）
+    sched = rs_input.get("schedule", {}) or {}
+    compact["schedule"] = {
+        "strategy": sched.get("strategy", ""),
+        "frequency": sched.get("frequency", ""),
+        "sla": sched.get("sla", ""),
+        "incremental_key": sched.get("incremental_key", ""),
+        "upstream": sched.get("upstream", []) or [],
+        "说明": ("RS 调度方案（L07）。据此填 decisions.schedule（schedule_type/cron 按频率/SLA 定）；"
+                 "upstream=湖表调度上游任务（含 project/group 归属），designer 新增依赖另加。"),
+    }
+
+    # 场景分组（多场景资产按场景拆规则；scene_group 逐字段带是噪音不进 view——
+    # 某场景的字段清单用 pick_targets --scenario {场景名} 取）
+    scene_groups: dict = {}
+    for fm in fms:
+        sg = (fm.get("scene_group") or "").strip()
+        if sg:
+            scene_groups[sg] = scene_groups.get(sg, 0) + 1
+    if scene_groups:
+        compact["scenes"] = {
+            "groups": scene_groups,
+            "说明": ("多场景资产：按场景拆规则（规则 scenario 属性 + 场景并行 schedule_groups）。"
+                     "某场景的字段清单调 pick_targets --scenario {场景名} 取（view 不逐字段带场景）。"),
         }
     return compact
 

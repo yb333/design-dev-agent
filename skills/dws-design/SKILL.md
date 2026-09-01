@@ -2,7 +2,7 @@
 name: dws-design
 description: >-
   DWS ETL 设计方法论。被 dws-designer agent 加载。
-  指导 designer 如何从 rs_input.json 产出设计决策(design_decisions.yaml),
+  指导 designer 如何从 rs_input_view.json（紧凑视图，唯一人读输入）产出设计决策(design_decisions.yaml),
   再由 assemble_ts.py 组装成 TS 制品包(ts.json + ts.md)。
 ---
 
@@ -58,12 +58,14 @@ description: >-
 > 设计是从目标表**倒推**的过程。每一层有明确的"想清楚什么 + 产出什么 + 闭合条件"。
 > 前一层没闭合就不该进下一层——闭合条件由 assemble_ts 校验兜底，没过会被 fail-loud 拦回。
 
-先读 `rs_input_view.json` 的 compact 视图建立认知（不是 rs_input.json 全文）：
-- `tables`：源表清单（哪些表、规模、关联）→ 理解全貌、判断数据源缺口
-- `direct`：直取/赋值字段按源表分块 → 批量搬运字段扫一眼过
-- `processed`：加工字段逐个平铺（含完整多步骤口径/多表来源合并）→ 逐个拆解加工链
+先读 `rs_input_view.json`（**唯一人读输入，不读 rs_input.json**——那是脚本域文件，只在工具参数里用它的路径）：
+- `tables`：源表清单（哪些表、规模、关联、输入存疑标记）→ 理解全貌、判断数据源缺口
+- `direct`：直取/赋值字段按源表分块（src/tgt/type 目标类型/stype 源类型/note/val）→ 批量搬运字段扫一眼过
+- `processed`：加工字段逐个平铺（含完整多步骤口径/多表来源合并；sources 五元组 [schema,table,alias,col,源类型]）→ 逐个拆解加工链
+- `schedule`：RS 调度方案（策略/频率/SLA/湖表上游）→ 填 decisions.schedule 的输入
+- `scenes`（如有）：场景分组清单（多场景按场景拆规则；某场景字段清单调 pick_targets --scenario 取）
 - `incremental_tables`（如有）：增量驱动表清单
-- 需要某字段精确细节（如完整 source_type）时再查 rs_input.json 的 field_mappings
+- view 缺了你需要的信息 → question 报缺口（view 改进反馈），不回读原文
 
 ### 输入体检（五层之前，逐条 join_condition 过）
 

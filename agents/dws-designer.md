@@ -1,7 +1,7 @@
 ---
 description: >-
   DWS ETL 设计子 agent。在【设计阶段】被调用（通过 command 编排或直接 Task）。
-  消费 rs_input.json，产出 TS 制品包（ts.json + ts.md）。
+  消费 rs_input_view.json（紧凑视图，唯一人读输入），产出 TS 制品包（ts.json + ts.md）。
   不要用于编码、测试、探索或任何非设计工作。
 mode: subagent
 hidden: true
@@ -96,8 +96,8 @@ $c = @'
 # 输入
 
 调用方给两个路径：
-- **`rs_input_view.json`**——compact 视图，**你主要读这个**（~23KB，不是全文）。tables / direct / processed / dq / incremental_tables 分块。
-- **`rs_input.json`**——完整 field_mappings，**脚本读**（assemble_ts / precheck）；你只在要某字段精确细节（完整 source_type 等）时回查。
+- **`rs_input_view.json`**——紧凑视图，**你唯一读的输入**（源/目标类型、口径、场景、增量、DQ、调度、探索全在：tables / direct / processed / dq / schedule / scenes 分块）。**不缺信息，不需要原文**。
+- **`rs_input.json`**——脚本域文件（assemble_ts / precheck / check_field / pick_targets 的**参数路径**用它），**你不用 Read 读它**。view 缺了你需要的信息 → question 报缺口（当 view 改进反馈），不回读原文。
 
 不直接读 mapping.xlsx / RS.md（预处理已完成）。
 
