@@ -19,10 +19,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 # 将各 skill 的 scripts 目录加入 Python 路径
 DESIGN_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-design" / "scripts"
 CODING_REFS = Path(__file__).resolve().parent.parent / "skills" / "dws-coding" / "scripts"
-# design-dev-shared：设计开发 agent 的公共代码库（dws_db.py 等）
+# design-dev-shared：公共代码库（dws_db/run_ut/sql_parse 等，被三方 import）
 DD_SHARED_REFS = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "scripts"
+# 两个 pipe 剧本各自的管线脚本（2026-09 按消费者归位：单一消费者进自己 pipe）
+NEWPIPE_REFS = Path(__file__).resolve().parent.parent / "skills" / "new-pipe" / "scripts"
+OPTPIPE_REFS = Path(__file__).resolve().parent.parent / "skills" / "opt-pipe" / "scripts"
 
-for _p in (DESIGN_REFS, CODING_REFS, DD_SHARED_REFS):
+for _p in (DESIGN_REFS, CODING_REFS, DD_SHARED_REFS, NEWPIPE_REFS, OPTPIPE_REFS):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

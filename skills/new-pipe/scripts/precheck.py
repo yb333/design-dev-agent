@@ -15,7 +15,10 @@ import argparse
 from typing import Any
 from pathlib import Path
 
-# 依赖全在 shared 同目录（type_compat/dws_standards/preprocess/dws_db），无需跨目录引导。
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+
+# type_compat/dws_standards/preprocess/dws_db 中 preprocess/dws_db 留 shared、type_compat/dws_standards 亦然（上方 bootstrap 已接通）。
 
 
 class PrecheckResult:

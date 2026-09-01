@@ -16,19 +16,20 @@ description: >-
 - **两级声明**：change_request（业务说了什么，脚本产）+ ts.change（落位，designer 产）→ 围栏许可 = 两者合体。
 - **三段审计**：意图→落位（fence 内含）→ 结构（fence_check）→ 代码（sql_fence，**闸门单点在你**）。
 - 产出目录 `{deliver}` = `10_project_deliver/{appid}/{schema}/{资产}/ddlc_opt/`（资产名/schema/appid 全从输入推导：preprocess --probe，同 new-pipe——调用方不传）。
-- 脚本路径定位：同 new-pipe 剧本的「脚本路径定位」段——从本 skill 的 Base directory 推算（`{SKILL_BASE}/../design-dev-shared/scripts` 等，bash 用绝对路径）。
+- 脚本路径定位：同 new-pipe 剧本的「脚本路径定位」段判据（单一消费者进自己 pipe，共用进 shared）——`PIPE_SCRIPTS` = `{SKILL_BASE}/scripts`（本剧本专属：preprocess_opt/fence_check/sql_fence_check/ut_opt/assemble_ddl_opt/assemble_ts_baseline/artifact_patcher/archive_writer），`SHARED_SCRIPTS` = `{SKILL_BASE}/../design-dev-shared/scripts`（共用入口 preprocess/check_db + 公共库），bash 用绝对路径。
 
 ---
 
-## 步骤 0：入口与基线
+## 步骤 0：环境自检 + 入口与基线
 
+0. 环境探针（动任何输入之前，一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——探针住 new-pipe/scripts（部署级工具两剧本共用，跨剧本引用同 dws-dq 借 slice_ts 先例）。exit 1 = 环境/依赖不符（报错带修复指引）→ 停，不改环境继续。工具面自检同 new-pipe 步骤0（python 可执行/write 可写 deliver/task 可起子 agent）。
 1. 按资产定位 `{deliver}`：`python SHARED_SCRIPTS/preprocess.py --mapping {需求包内mapping} --rs {RS} --probe` → asset/appid/schema 定位（同 new-pipe）。
 2. **查基线（三段式）** `archives/{schema}/{资产表}/`：
    - **有档案** → 最新目录即基线：`ts_baseline.json` = 档案 ts，`etl_baseline/` = 档案 etl/。跳到步骤 1。
    - **无档案，但 `10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/` 有 new-pipe 产出** → **懒归档**（建档案的成本只在真正优化时付，new-pipe 不做归档步骤）：
 
 ```bash
-python SHARED_SCRIPTS/archive_writer.py \
+python PIPE_SCRIPTS/archive_writer.py \
   --ts {new-pipe交付目录}/ts.json --etl-dir {new-pipe交付目录}/etl \
   --ddl-dir {new-pipe交付目录}/ddl \
   --decisions {new-pipe交付目录}/_internal/design_decisions.yaml \
@@ -38,7 +39,7 @@ python SHARED_SCRIPTS/archive_writer.py \
    - **都没有** → 要求 baseline_v1.json（用户给路径；没有则停：指引"先由逆向侧产出"）。然后入料建档：
 
 ```bash
-python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --outdir {deliver}/_internal
+python PIPE_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --outdir {deliver}/_internal
 ```
    产出 ts_baseline.json + etl_baseline/ + baseline_view.md + exemptions.json。exit 2 = 契约违约 → 停，报告（契约问题归逆向侧）。
 
@@ -47,7 +48,7 @@ python SHARED_SCRIPTS/assemble_ts_baseline.py --baseline {baseline_v1.json} --ou
 ⚠️ **需求包目录下的任何文件禁止 Read**——分拣/解析/校验全由脚本消化（对齐 new-pipe"输入原文一律不 Read"），你只消费 manifest 与 change_request。
 
 ```bash
-python SHARED_SCRIPTS/preprocess_opt.py \
+python PIPE_SCRIPTS/preprocess_opt.py \
   --input-dir {需求包目录} \
   --ts-baseline {deliver}/_internal/ts_baseline.json \
   --outdir {deliver}/_internal [--version 202608]
@@ -73,7 +74,7 @@ Task(subagent_type="dws-designer", description="优化模式设计 {资产}",
 ## 步骤 3：ts 级围栏 → 闸口①
 
 ```bash
-python SHARED_SCRIPTS/fence_check.py \
+python PIPE_SCRIPTS/fence_check.py \
   --ts-baseline {deliver}/_internal/ts_baseline.json --ts-v2 {deliver}/ts_v2.json \
   --change-request {deliver}/_internal/change_request.json
 ```
@@ -95,7 +96,7 @@ Task(subagent_type="dws-coder", description="优化编码 {rule_code}",
 每规则记 task_id。全部落盘后**你独立跑 SQL 围栏**（对每条 placed_rule，闸门单点在你）：
 
 ```bash
-python SHARED_SCRIPTS/sql_fence_check.py \
+python PIPE_SCRIPTS/sql_fence_check.py \
   --ts-v2 {deliver}/ts_v2.json --etl-dir {deliver}/etl \
   --baseline-dir {deliver}/_internal/etl_baseline
 ```
@@ -109,7 +110,7 @@ python SHARED_SCRIPTS/check_db.py --ts {deliver}/ts_v2.json
 NO_DB_SOURCE → 跳过 UT（闸口②告知），直接步骤 6。DB_OK：
 
 ```bash
-python SHARED_SCRIPTS/ut_opt.py \
+python PIPE_SCRIPTS/ut_opt.py \
   --ts {deliver}/ts_v2.json --etl-dir {deliver}/etl \
   --baseline-dir {deliver}/_internal/etl_baseline --ddl-dir {deliver}/ddl \
   --report {deliver}/ut_report_opt.md
@@ -122,10 +123,10 @@ python SHARED_SCRIPTS/ut_opt.py \
 ## 步骤 6：制品
 
 ```bash
-python SHARED_SCRIPTS/assemble_ddl_opt.py \
+python PIPE_SCRIPTS/assemble_ddl_opt.py \
   --ts-v2 {deliver}/ts_v2.json --ts-baseline {deliver}/_internal/ts_baseline.json \
   --outdir {deliver}
-python SHARED_SCRIPTS/artifact_patcher.py \
+python PIPE_SCRIPTS/artifact_patcher.py \
   --ts-v2 {deliver}/ts_v2.json --etl-dir {deliver}/etl \
   --source {原始制品：xlsx 文件或代码仓规则组目录（provenance 定位）} \
   --outdir {deliver}/export
@@ -140,7 +141,7 @@ python SHARED_SCRIPTS/artifact_patcher.py \
 + 资产健康提示 = baseline warnings 摘要一屏）。确认后：
 
 ```bash
-python SHARED_SCRIPTS/archive_writer.py \
+python PIPE_SCRIPTS/archive_writer.py \
   --ts {deliver}/ts_v2.json --etl-dir {deliver}/etl --ddl-dir {deliver}/ddl_full \
   --decisions {deliver}/_internal/design_decisions_opt.yaml --archives-root archives
 ```

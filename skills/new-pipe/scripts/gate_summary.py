@@ -14,6 +14,9 @@ import json
 import argparse
 from pathlib import Path
 
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+
 
 def generate_gate1_summary(ts: dict, rs_input: dict = None) -> str:
     """从 ts.json 生成闸口①摘要文本。rs_input 可选——给了加翻译引用对账差异表。"""

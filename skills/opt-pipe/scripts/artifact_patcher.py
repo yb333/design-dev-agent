@@ -16,6 +16,9 @@ import shutil
 import sys
 from copy import copy
 from pathlib import Path
+
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from typing import Dict, List, Optional, Tuple
 
 from run_ut import read_select

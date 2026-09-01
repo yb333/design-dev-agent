@@ -41,11 +41,14 @@ from _paths import find_mapping_file, find_rs_file
 # 项目根
 ROOT = Path(__file__).resolve().parents[2]
 # skill 脚本目录：repo 内源优先（最新且必然存在），回退全局安装（install.py 装）。
-# pipe 管线脚本归 design-dev-shared/scripts（2026-08 按调用方归位：preprocess/precheck/
-# assemble_ddl/assemble_export/ut_*/check_db 等；dws-design/dws-coding 下只剩 agent 用的）。
+# 2026-09 按消费者归位：new-pipe 专属管线脚本住 new-pipe/scripts，
+# 共用入口（preprocess/check_db/assemble_ddl/resolve_appid）+ 公共库住 design-dev-shared/scripts
 _REPO_SHARED = ROOT / "skills" / "design-dev-shared" / "scripts"
 _GLOBAL_SHARED = Path.home() / ".config" / "opencode" / "skills" / "design-dev-shared" / "scripts"
 SHARED_REFS = _REPO_SHARED if _REPO_SHARED.exists() else _GLOBAL_SHARED
+_REPO_NEWPIPE = ROOT / "skills" / "new-pipe" / "scripts"
+_GLOBAL_NEWPIPE = Path.home() / ".config" / "opencode" / "skills" / "new-pipe" / "scripts"
+NEWPIPE_REFS = _REPO_NEWPIPE if _REPO_NEWPIPE.exists() else _GLOBAL_NEWPIPE
 
 # 默认超时（秒）：AI 阶段（designer/coder 走 opencode）与管线脚本阶段，可由 CLI 覆盖
 DEFAULT_TIMEOUT_AI = 1800
@@ -351,7 +354,7 @@ def _preprocess(deliver: Path, mapping: Path, rs: Path, timeout: float) -> tuple
 
 def _precheck(deliver: Path, timeout: float) -> tuple[bool, str]:
     rs_input = deliver / "_internal" / "rs_input.json"
-    code, out = _run_python(str(SHARED_REFS / "precheck.py"), ["--input", str(rs_input)], timeout)
+    code, out = _run_python(str(NEWPIPE_REFS / "precheck.py"), ["--input", str(rs_input)], timeout)
     if code == 0:
         return True, "全部通过"
     if code == 1:
@@ -427,7 +430,7 @@ def _assemble_ddl(deliver: Path, timeout: float) -> tuple[bool, str]:
 
 def _assemble_export(deliver: Path, timeout: float) -> tuple[bool, str]:
     code, out = _run_python(
-        str(SHARED_REFS / "assemble_export.py"),
+        str(NEWPIPE_REFS / "assemble_export.py"),
         [
             "--ts", str(deliver / "ts.json"),
             "--etl-dir", str(deliver / "etl"),

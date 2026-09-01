@@ -34,7 +34,10 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-# config_paths/resolve_appid 同目录（design-dev-shared/scripts）
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+
+# config_paths/resolve_appid 在 shared 公共库（上方 bootstrap 已接通）
 from config_paths import platform_config_path, resolve_appid
 
 try:

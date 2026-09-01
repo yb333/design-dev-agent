@@ -26,7 +26,10 @@ import json
 import argparse
 from pathlib import Path
 
-# 依赖全在 shared 同目录（type_compat），无需跨目录引导
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+
+# type_compat 在 shared 公共库（上方 bootstrap 已接通）
 from type_compat import parse_type_info
 
 

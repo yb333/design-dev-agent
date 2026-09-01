@@ -36,9 +36,10 @@ def _skill_scripts(name: str) -> Path:
 
 
 CODING_REFS = _skill_scripts("dws-coding")
-# pipe 管线脚本归 design-dev-shared（2026-08 按调用方归位：preprocess/precheck/gate_summary/
-# assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan 等）
+# 2026-09 按消费者归位：new-pipe 专属管线脚本住 new-pipe/scripts，
+# 共用入口（preprocess/check_db/assemble_ddl）住 design-dev-shared/scripts
 SHARED_REFS = _skill_scripts("design-dev-shared")
+NEWPIPE_REFS = _skill_scripts("new-pipe")
 
 
 
@@ -152,7 +153,7 @@ def step_preprocess(report, deliver, mapping, rs, skip_rs):
 def step_precheck(report, deliver):
     """步骤2: 预检查"""
     rs_input = deliver / "_internal" / "rs_input.json"
-    code, out = run_python(str(SHARED_REFS / "precheck.py"), ["--input", str(rs_input)])
+    code, out = run_python(str(NEWPIPE_REFS / "precheck.py"), ["--input", str(rs_input)])
     if code == 0:
         report.pass_step("预检查(precheck)", "全部通过")
     elif code == 1:
@@ -350,7 +351,7 @@ def step_ut(report, deliver):
 
     # 6a: UT 预检（秒级，不写数据）
     code, out = run_python(
-        str(SHARED_REFS / "ut_precheck.py"),
+        str(NEWPIPE_REFS / "ut_precheck.py"),
         ["--ts", str(deliver / "ts.json"),
          "--etl-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),
@@ -364,7 +365,7 @@ def step_ut(report, deliver):
 
     # 6b: UT 执行（分钟级，写数据）
     code, out = run_python(
-        str(SHARED_REFS / "ut_execute.py"),
+        str(NEWPIPE_REFS / "ut_execute.py"),
         ["--ts", str(deliver / "ts.json"),
          "--etl-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),
@@ -386,7 +387,7 @@ def step_assemble_export(report, deliver):
     """
     export_dir = deliver / "export"
     code, out = run_python(
-        str(SHARED_REFS / "assemble_export.py"),
+        str(NEWPIPE_REFS / "assemble_export.py"),
         ["--ts", str(deliver / "ts.json"),
          "--etl-dir", str(deliver / "etl"),
          "--ddl-dir", str(deliver / "ddl"),

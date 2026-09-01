@@ -19,7 +19,7 @@ from jsonschema import Draft202012Validator
 #   权威契约见 dws-analyzer-skill/docs/baseline_v1-契约.md §二）
 SUPPORTED_VERSIONS = {"1.0", "1.1"}
 
-# vendor schema 路径：design-dev-shared/schemas/baseline_v1.schema.json
+# vendor schema 路径：opt-pipe/schemas/baseline_v1.schema.json（随脚本归 opt 消费者）
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schemas" / "baseline_v1.schema.json"
 
 _SCHEMA_CACHE: Dict[str, dict] = {}

@@ -11,15 +11,15 @@
 
 ---
 
-## ① engineer 编排调用（dws-engineer 按 new-pipe/opt-pipe 剧本调，主线管线脚本，住 design-dev-shared）
+## ① engineer 编排调用（dws-engineer 按 new-pipe/opt-pipe 剧本调；2026-09 按消费者归位：单一消费者住自己 pipe/scripts，共用入口住 shared）
 
 | 工具 | 干啥 | 何时调 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------|------------|-------------------|
 | `check_env.py`（住 skills/new-pipe/scripts） | dws-engineer 步骤 0 环境探针：安装指纹对账（_install_meta.json）/ 关键文件存在性 / python≥3.10——环境故障第一秒暴露 | 剧本步骤 0（必跑） | --skill-root 可选（默认按安装布局推算） → exit 0/1 | 不读 ts |
 
-> 这些脚本归 design-dev-shared/scripts（按调用方归类），**调用方是编排 command**，不是 agent。
+> 调用方是**剧本（new-pipe/opt-pipe SKILL）**，不是 agent。住址：new-pipe 专属管线脚本住 `skills/new-pipe/scripts`（下述各节标注）；共用入口（preprocess/check_db/assemble_ddl/resolve_appid）+ 公共库住 `design-dev-shared/scripts`。
 
-### 预处理 / 输入校验（住 design-dev-shared）
+### 预处理 / 输入校验（preprocess 住 shared 共用；precheck/gate_summary 住 new-pipe）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `preprocess.py` | mapping.xlsx + RS.md → rs_input.json（完整，给脚本；含加工字段引用提取存顶层 `_logic_refs`（尽力而为，引用门禁 N37 原料））+ rs_input_view.json（compact，给 designer；processed 段含 refs 引用提示） | 步骤 1 | mapping+RS → `rs_input.json` / `rs_input_view.json` | 不读 ts（还没产） |
@@ -28,18 +28,18 @@
 | `fill_join_risk_decision.py` | 把人的关联键类型决策填进 precheck 的骨架（--pair-decisions '条件=>处置'，免手写 YAML；与类型风险同轮全爆一次问完） | 步骤 1 | 决策参数 → 改 join_type_decision.yaml | 不读 ts |
 | `gate_summary.py` | 闸口①设计摘要（表/规则数/场景/字段统计 + 翻译引用对账差异表 `--rs`，确定性） | 闸口① | ts.json（+ 可选 rs_input.json）→ 摘要 | ts.rules（field_logics）/ rs_input `_raw_refs` |
 
-### 执行计划（编码前，住 design-dev-shared）
+### 执行计划（编码前，dispatch_plan 住 new-pipe）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `dispatch_plan.py` | 读 ts.json 输出编码段执行计划（ddl/dq/etl_rules/init_rules/groups），pipe 一次拿全并行发起，不手工解析判断 | 步骤 4-0 | ts.json → 执行计划 JSON（stdout） | **ts.rules + ts.init.rules** + ts.dq_rules + ts.data_flow |
 
-### 制品生成（住 design-dev-shared）
+### 制品生成（assemble_ddl 住 shared 共用；assemble_export 住 new-pipe）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `assemble_ddl.py` | ts → DDL（CREATE TABLE + I 视图（F 表配套镜像）+ COMMENT（视图用 COMMENT ON VIEW）+ 分布键 + TO GROUP） | 步骤 4 | ts.json → `ddl/*.sql` | ts.rules + ts.tables |
 | `assemble_export.py` | ts + ETL → shujia_{表}.xlsx（10 sheet）+ lts_{表}.xlsx（3 sheet），无 manifest（取码脚本只读 Excel） | 步骤 7.5 | ts.json + etl/ → `export/*.xlsx`（视图走 ddl/ 通道部署，不发术加规则行） | **ts.rules + ts.init.rules**（init 执行行：inline→P_FLAG 运行条件 / separate→独立 init 任务；编码占位符出厂 GR_*/规则码/PV000N 三处闭合校验；租户ID=appid、组织简称/数据源/项目中文名/责任人全走 shujia_tenants[appid]（platform_config 收敛为单块，schema_mappings/default 退役），项目编码/英文名及子项目全套由内网取码脚本补；lts 调度路径以 ts.tasks 为准（schedule_config 设计期盖章）；RULE 行带执行序列，TargetFields 来源字段 s.字段 形态，参数变量行每规则组一条） |
 
-### UT（需数据库，住 design-dev-shared）
+### UT（需数据库；check_db 住 shared 共用，ut_precheck/ut_execute/ut_diagnose 住 new-pipe，run_ut 是 shared 公共库）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
 | `check_db.py` | DB 探活（db-sources.json + 连通性，决定要不要跑 UT） | 步骤 6（门） | ts.json → DB_OK / NO_DB_SOURCE | ts.meta（不涉 rules） |
@@ -82,21 +82,21 @@
 |------|------|------------|------|
 | `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
 | `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行）+ **join_key_pair_risky**（JOIN 键对保守谓词：跨大类风险，integer↔numeric/同族放行） | precheck / ut_diagnose / assemble_ts(N_JOIN2) | design-dev-shared/scripts |
-| `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样 / INSERT 列重复终检） | ut_precheck / ut_execute | design-dev-shared/scripts |
+| `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样 / INSERT 列重复终检 / dq_filename） | ut_precheck / ut_execute / ut_opt / artifact_patcher / sql_fence_check / slice_ts | design-dev-shared/scripts |
 | `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / parse_cte_bodies（均字符串字面量感知）/ extract_select_aliases / extract_from_tables / extract_table_refs_raw / cte_projection_names / extract_qualified_refs / extract_condition_field_refs / find_field_provenance / is_trivial_assign_detail / extract_case_when_exprs+norm_expr（表达式口径对账的提取原语，词边界防误匹配）/ parse_join_pairs / extract_logic_refs / find_unqualified_refs（N36 守门原语，剥全角括号说明段）/ find_three_part_refs（三段式引用硬拦原语——N36/N30/N_DQ5 共用；两两配对提取对 x.y.z 恰好漏掉字段本身，须前置拦）/ **normalize_logic_line**（design_logic 落盘单行归一，引号串保护） | run_ut / check_sql / precheck / assemble_ts(N30/N36/N_JOIN2) | design-dev-shared/scripts |
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
 | `ts_compat.py` | ts 结构兼容层：classify_field 分桶原语 + normalize_ts 旧结构内存升级（幂等，认远古 rule.fields-only）——两视图重构后读旧 ts 的下游全走此路 | slice_ts / check_sql / assemble_export / fence_check / assemble_ts / assemble_ts_opt | design-dev-shared/scripts |
-| `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline / tests/test_baseline_v1_contract | design-dev-shared/scripts |
+| `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline / tests/test_baseline_v1_contract | skills/opt-pipe/scripts（schema 在 opt-pipe/schemas） |
 
 ---
 
-## ⑤ 优化场景 opt-pipe 调用（建设中专用节，住 design-dev-shared）
+## ⑤ 优化场景 opt-pipe 调用（专用节，2026-09 归位：全部住 skills/opt-pipe/scripts + schemas，对存量零接触）
 
 > 设计定稿见 `docs/specs/opt/00-08` + `docs/architecture/opt-架构设计.md`。分阶段实施（08 §七）：阶段一零存量接触，阶段二动四个接触点（评测闸门后）。本节随实施进度登记。
 
 | 工具 | 干啥 | opt-pipe 阶段 | 输入 → 输出 | 状态 |
 |------|------|--------------|------------|------|
-| `schemas/baseline_v1.schema.json` | 契约 vendor 拷贝（权威在 analyzer 仓） | 步骤 0 入料 | baseline_v1.json 的校验基准 | ✅ 阶段一 |
+| `opt-pipe/schemas/baseline_v1.schema.json` | 契约 vendor 拷贝（权威在 analyzer 仓） | 步骤 0 入料 | baseline_v1.json 的校验基准 | ✅ 阶段一 |
 | `baseline_contract.py` | 契约校验（schema+版本+语义条件） | 步骤 0 入料 | baseline_v1.json → 违规清单 | ✅ 阶段一 |
 | `assemble_ts_baseline.py` | json → ts_baseline + etl_baseline + baseline_view + 语义空位清单（exemptions）；kind→load_mode 映射、词表外待定不硬映射 | 步骤 0 入料建档 | baseline_v1.json → baseline 包 | ✅ 阶段一 |
 | `preprocess_opt.py` | 标注解析 → change_request + 一致性校验（冲突/漏标/配对/资产一致/标识枚举 + RS 对账 warn） | 步骤 1 | marked mapping + ts_baseline [+RS] → change_request.json | ✅ 阶段一 |

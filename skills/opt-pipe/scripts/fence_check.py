@@ -30,6 +30,9 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from typing import Dict, List, Optional, Tuple
 
 # ts.change 段支持的动作类型（第一刀仅 add_field；矩阵扩展即此枚举扩展，原则6）

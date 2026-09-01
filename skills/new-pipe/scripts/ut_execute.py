@@ -14,6 +14,9 @@ import os
 import json
 import argparse
 from pathlib import Path
+
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from datetime import datetime
 
 try:
@@ -21,7 +24,7 @@ try:
 except AttributeError:
     pass
 
-# 依赖全在 shared 同目录（dws_db/config_paths/run_ut/ut_diagnose），无需跨目录引导
+# dws_db/config_paths/run_ut 在 shared 公共库（上方 bootstrap 已接通）；ut_diagnose 同目录
 from dws_db import create_executor
 from config_paths import db_sources_path
 from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks, run_dq_checks

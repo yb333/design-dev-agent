@@ -70,12 +70,9 @@ permission:
 - **环境类修复**（数据库/权限/表结构，输入未变）→ 从失败点继续，deliver 里已有产物照用
 - 判断依据：修复说明 + 失败时的上报内容对照；判不了就按输入类处理（宁重跑不基于旧状态）
 
-# 步骤 0：环境自检（动任何输入之前）
+# 开工第一动作
 
-1. 跑探针脚本：`python {本 skill base}/scripts/check_env.py`（base 见 skill 加载输出）——环境不符即停（报错带修复指引：**项目仓部署（生产）=更新仓 git pull；全局安装（自测）=重跑 install.py**）
-2. 工具面自检：python 可执行、write 可写 `{deliver}` 目录、task 可起子 agent——任一缺失即停，报"调用链权限被钳制（缺 X）：按调用契约部署前提，上游不得排除 bash/write/edit/task"
-
-自检通过 → 按模式用 Skill tool 加载 `new-pipe` 或 `opt-pipe`，逐字执行剧本。
+按模式用 Skill tool 加载 `new-pipe` 或 `opt-pipe`，逐字执行剧本——**剧本步骤0 自带环境自检**（check_env 探针 + 工具面三项：python 可执行/write 可写 `{deliver}`/task 可起子 agent；任一不符即停，报"调用链权限被钳制（缺 X）：按调用契约部署前提，上游不得排除 bash/write/edit/task"）。此处不复述（工作流唯一源在剧本）。
 
 # 判断权收口（主会话与被 Task 调用同样适用）
 

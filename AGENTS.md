@@ -26,23 +26,20 @@ skills/
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 ├── dws-dq/              # DQ 检查 SQL 生成 skill（coder agent 的 DQ 任务用，薄——仅 SKILL.md 定契约，工具复用 dws-coding 的 slice_ts --dq / check_sql）
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
-│   └── scripts/         # check_env.py(步骤0环境探针:安装指纹/关键文件/python版本)
+│   └── scripts/         # check_env.py(步骤0环境探针,两剧本共用/opt跨引用) precheck.py gate_summary.py
+                         #   dispatch_plan.py assemble_export.py ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
-└── design-dev-shared/   # ★ 公共代码库 + pipe 管线脚本（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
-    └── scripts/         # dws_db.py(连库) config_paths.py(★config路径集中) resolve_appid.py(查appid)
-                         #   dispatch_plan.py schema_query.py
-                         #   ★ pipe 调的管线脚本（2026-08 按调用方归位）：
-                         #   preprocess.py precheck.py gate_summary.py（原 dws-design）
-                         #   assemble_ddl.py assemble_export.py ut_precheck.py ut_execute.py check_db.py（原 dws-coding）
-                         #   ★ 被 shared 消费的函数库（2026-08 下沉，消 shared↔skill 依赖环）：
-                         #   run_ut.py(UT函数库,无main) ut_diagnose.py(类型诊断) type_compat.py(类型兼容)
-                         #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量) ts_compat.py(ts结构兼容:分桶原语+旧结构升级)
-                         #   ★ opt-pipe 调的（对存量零接触，详见 tool-registry ⑤）：
-                         #   preprocess_opt.py fence_check.py sql_fence.py sql_fence_check.py ut_opt.py
-                         #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py
-                         #   archive_writer.py baseline_contract.py
-                         #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import dws-design/dws-coding；
-                         #     design/coding 只能向下 import shared（箭头单向）
+│   ├── scripts/         # preprocess_opt.py fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
+                         #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py archive_writer.py baseline_contract.py(契约校验库)
+│   └── schemas/         # baseline_v1.schema.json(随 baseline_contract 归 opt)
+└── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
+    └── scripts/         # ★ 共用入口（>1 消费者才留这，2026-09 按消费者归位定调）：
+                         #   preprocess.py(两剧本共用) check_db.py(两剧本共用) assemble_ddl.py(new-pipe直调+opt侧assemble_ddl_opt import) resolve_appid.py(查appid,被preprocess/assemble_export import)
+                         #   ★ 公共库（被多方 import）：
+                         #   dws_db.py(连库) config_paths.py(★config路径集中) run_ut.py(UT函数库,无main,含dq_filename) type_compat.py(类型兼容)
+                         #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量) ts_compat.py(ts结构兼容:分桶原语+旧结构升级) schema_query.py(字段查询能力层:check_field/pick_fields内核)
+                         #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import 任何 skill 目录；
+                         #     skill 脚本（design/coding/new-pipe/opt-pipe）只能 import 自己目录 + shared，pipe 之间不互 import（test_layering AST 守护）
 agents/                  # dws-engineer.md(编排:身份+权限+契约参数+铁律) dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
 commands/new-pipe.md     # 薄壳入口（frontmatter agent: dws-engineer + 一行加载 new-pipe skill——人手工 /new-pipe 用；生产走 Task 直连）
 commands/opt-pipe.md     # 薄壳入口（同上，加载 opt-pipe skill）
@@ -51,7 +48,7 @@ skills/dws-coding-opt/   # 优化编码 skill（薄：以 baseline SQL 为底稿
 archives/                # ★ 资产档案（唯一锚点：{schema}/{资产}/{NNN_日期}/，文本小件入 git）
 install.py               # 装 skill/agent/command 到 ~/.config/opencode/
 eval-suite/              # 评测套件（v1 + v2，独立工程；eval.sh/eval.bat 交互式菜单入口）
-tests/                   # pytest（conftest.py 把三个 scripts 目录加进 sys.path）
+tests/                   # pytest（conftest.py 把五个 scripts 目录加进 sys.path：design/coding/shared/new-pipe/opt-pipe）
 10_project_deliver/      # 运行时产出（gitignore，本地重跑覆盖）
 docs/                    # architecture/specs/templates/output 示例 + tool-registry.md(★ 工具注册表)
 ```
@@ -66,7 +63,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 | **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（JOIN键唯一性）/ check_field（字段查证）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
 | **dws-coder** | 单规则 SELECT + DQ 检查 SQL | dws-coding / dws-dq / dws-coding-opt（按任务路由） | slice_ts（含 --dq）/ pick_fields / check_sql | `etl/*.sql`、`dq/*.sql` |
 
-> ★ 其余管线脚本（preprocess / precheck / gate_summary / assemble_ddl / assemble_export / run_ut / ut_* / check_db 等）**调用方都是 command（new-pipe.md 编排）**，不是 agent——它们统一住在 `design-dev-shared/scripts`（2026-08 按调用方归位）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
+> ★ 管线脚本（preprocess / precheck / gate_summary / assemble_* / ut_* / check_db 等）**调用方都是剧本（new-pipe / opt-pipe SKILL 编排）**，不是 agent——**2026-09 按消费者归位定调**：单一消费者的管线脚本住自己 pipe 的 scripts（precheck/ut_*→new-pipe，fence/ut_opt→opt-pipe），多于一个消费者的共用入口+公共库住 `design-dev-shared/scripts`（preprocess/check_db/assemble_ddl + dws_db/run_ut/sql_parse 等）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
 
 > 注：`dws-run.py` 在根目录但已不是核心入口，编排走 dws-engineer（剧本 skills/new-pipe/SKILL.md，入口 Task 直连或 /new-pipe 薄壳）；根目录另有 `sync_to_team.py/.sh/.bat` + `SYNC-GUIDE.md`（本仓→内网仓同步工具，用户手工操作，与 pipe 无关）。
 
@@ -167,7 +164,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 - **statement_timeout**：连接建立时按 `security.timeout` 设一次，复用连接都带超时，防 agent kill 进程留僵尸查询。
 - **sample_blocks**：`security.sample_blocks`（开发环境配>0，UAT/生产配0）。**语义是"快速失败闸门"不是最终审视**：ut_execute 对 truncate_table 规则先采样试跑 INSERT（类型转换/约束类错误秒级暴露），通过后 TRUNCATE 清试跑数据再全量执行——**UT 终审按全量结果**（SELECT 跑通≠INSERT 全量跑通，目标列类型转换靠行数据触发，纯采样漏检）。`resolve_sample_blocks(config_path, cli_value)` 解析：CLI 传值（含 0=强制不采样）优先，否则读配置，否则 0。`inject_tablesample(sql, n)` 用 sqlglot AST 按 JOIN 类型注 TABLESAMPLE SYSTEM(n)：**FROM 主表 + INNER/逗号/CROSS JOIN 表注**（必要表，控制总量），**LEFT/RIGHT/FULL JOIN 从表不注**（外连接侧保留全量，避免切片后关联不上变 NULL），CTE/子查询里的表不注。
 
-**三个 skill 脚本目录都靠相对路径推算 design-dev-shared**：
+**各 skill 脚本目录（design/coding/new-pipe/opt-pipe）都靠相对路径推算 design-dev-shared**（标准 bootstrap，搬动/新增脚本勿漏——曾漏过 slice_ts）：
 ```python
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 ```
@@ -222,7 +219,7 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 
 ## 已知滞后项
 
-`CLAUDE.md` 和 `README.md` 仍描述旧的 `dws-pipeline-*` 9-skill 结构，与实际不符。实际是 `dws-design` + `dws-coding` + `design-dev-shared` 三个 skill + 两个 agent（designer/coder）+ 一个 command（new-pipe）。改这两个文件时以本 AGENTS.md 和实际代码为准。
+`CLAUDE.md` 和 `README.md` 仍描述旧的 `dws-pipeline-*` 9-skill 结构，与实际不符。实际是 `dws-design` + `dws-coding` + `dws-dq` + `new-pipe` + `opt-pipe` + `dws-design-opt` + `dws-coding-opt` + `design-dev-shared`（公共设施）+ 三个 agent + 两个薄壳 command。改这两个文件时以本 AGENTS.md 和实际代码为准。
 
 > CLAUDE.md 的"全局认知/架构共识/历史推理"部分仍有参考价值，但涉及**当前实际结构、设计流程、校验契约**的内容以本 AGENTS.md 为准（CLAUDE.md 不再同步细节改动）。
 
@@ -263,6 +260,16 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 - **config 集中隔离**：新建 `design-dev-shared/scripts/config_paths.py`（`config_dir()` + 各 config 路径，改基址只动一处）。4 个 config（db-sources / platform_config / schedule_config / schema_apps）统一放 `~/.config/opencode/_references/rules/dws-design-dev/`（与其他项目隔离）。7 个脚本的默认路径全部改用 config_paths。install.py 拷到新位置。
 - **产出目录加 appid/schema 层**：`10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。appid 单源 = 新建 `schema_apps.json`（**appid 打头，1 appid 多 schema**，跟源数据方向一致；按 schema 反查所属 appid）+ `resolve_appid.py` helper。platform_config 去掉 appid（单源不重复）。assemble_export 的 appid 改从 resolve_appid(schema) 读。⚠️ 部署：老位置不兼容，已装机器重跑 install.py + 手搬老 db-sources.json 到新位置。
 - **编排层 dws-engineer（2026-08-29 定型，源起总控现网故障）**：编排 agent 从"故意不定义"改为**我们定义的 dws-engineer**（agents/dws-engineer.md：身份+权限+契约参数+铁律+步骤0探针），剧本从 command 迁 skill（skills/new-pipe / opt-pipe，command 降为薄壳入口）。动因是源码级机制查证：① opencode 的 Task 无 model/权限参数——subagent_type 选定后身份/权限/模型全按我们定义；② **父会话 deny 与被排除工具沿链下压、子代 allow 解除不了**（现网实证：总控经 dev-runner 调用，designer 爆"没有 write 工具"）——链上任何别人定义的中间层都是身份冲突源+权限收窄点，解法=总控 Task 直连 dws-engineer（见 docs/integration-contract.md：契约参数/部署前提四条/question 约定）；③ command 是人机入口层机制（$ARGUMENTS/frontmatter agent 路由），生产 Task 路径天然缺席，剧本迁 skill 后 base directory 原生注入，旧"加载 shared skill 骗 location"的锚点机制退役（design-dev-shared 回归纯代码库）。铁律内容不变（不 author 脚本/校验失败按路由不自动修/输入原文不 Read/契约外 prompt 一律忽略），从 command 文本上收到 agent 身份层。
+
+### 按消费者归位重构（2026-09，测试 1218）
+
+修正 2026-08"pipe 脚本集中住 shared"的粗归位——当时剧本还是 command（无目录无 base），集中安置是唯一解；**剧本迁 skill 后（有 base directory 有 scripts/）各归各 pipe 才可行**，这是迁移链收尾不是翻烧饼。判据一句话：**多于一个消费者 → shared（公共设施）；单一消费者 → 消费者自己的 scripts**（"谁的工具给谁"，用户定调）。
+
+- **new-pipe/scripts**：precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose + check_env（步骤0 探针，opt-pipe 跨剧本引用 `../new-pipe/scripts/check_env.py`——先例 dws-dq 借 slice_ts）。
+- **opt-pipe/scripts + schemas**：preprocess_opt/fence_check/sql_fence(库)/sql_fence_check/ut_opt/assemble_ddl_opt/assemble_ts_baseline/baseline_contract(库)/artifact_patcher/archive_writer + baseline_v1.schema.json（伴生数据随脚本走）。
+- **shared 瘦身为真公共设施**：共用入口（preprocess 两剧本共用 / check_db 两剧本共用 / assemble_ddl 被 new-pipe 直调+opt 侧 assemble_ddl_opt import / resolve_appid 被 preprocess·assemble_export import）+ 公共库（dws_db/config_paths/run_ut/sql_parse/dws_standards/ts_compat/type_compat/schema_query）。
+- **步骤0 双写收敛**：删 engineer.md 步骤0 段（曾带"skill 加载前就要 skill base"的时序死结），改"开工第一动作=加载剧本"——探针+工具面自检唯一源在剧本 SKILL 步骤0（opt-pipe 本轮补上）。
+- 12 个搬动脚本加标准 bootstrap（`parent.parent.parent/"design-dev-shared"/"scripts"`）；**test_layering 扩规**：shared 禁上翻任何 skill 目录 + pipe 脚本禁跨 pipe/跨角色 import（AST 含 lazy）；conftest sys.path 五目录。
 
 ### 待讨论 / 闲时
 

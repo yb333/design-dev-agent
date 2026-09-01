@@ -246,14 +246,14 @@ def run():
         dst = skills_dir / s
         copy_dir(src, dst)
         print(f"  ✓ {s}")
-    # design-dev-shared 是纯代码库（无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe
-    # skill 的 Base directory 承接），scan_skills 扫不到，必须单独拷。
-    # 它是 pipe 管线脚本（preprocess/assemble_* 等）+ 公共库，全局安装的 skill 脚本
-    # 靠 ../../design-dev-shared 相对路径推算它，不拷会 import 失败/脚本缺失。
+    # design-dev-shared 是纯公共设施库（无 SKILL.md，scan_skills 扫不到，必须单独拷）：
+    # 共用入口（preprocess/check_db/assemble_ddl/resolve_appid）+ 公共库（dws_db/run_ut/sql_parse 等）。
+    # 各 pipe 的专属管线脚本随自己 skill 目录整拷（scan_skills 覆盖，scripts/ 在 skill 目录内），
+    # 靠 ../../design-dev-shared 相对路径 bootstrap 推算公共库，不拷 shared 会 import 失败。
     shared_src = SCRIPT_DIR / "skills" / "design-dev-shared"
     if shared_src.exists():
         copy_dir(shared_src, skills_dir / "design-dev-shared")
-        print("  ✓ design-dev-shared（管线脚本，无 SKILL.md 单独拷）")
+        print("  ✓ design-dev-shared（公共设施：共用入口+公共库，无 SKILL.md 单独拷）")
     print()
 
     # ── 5. 安装 agents + commands ──

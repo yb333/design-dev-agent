@@ -57,20 +57,17 @@ python {SKILL_BASE}/scripts/check_env.py
 
 ### 脚本路径定位
 
-脚本按**调用方**分布在三个 skill 目录：
-- `design-dev-shared/scripts`（SHARED_SCRIPTS）：pipe 编排调的管线脚本（preprocess/precheck/gate_summary/assemble_ddl/assemble_export/ut_precheck/ut_execute/check_db/dispatch_plan/resolve_appid）+ 公共库（dws_db/config_paths/run_ut/ut_diagnose/type_compat/sql_parse/dws_standards/schema_query——后者是字段查询**能力层**，designer 入口 check_field / coder 入口 pick_fields 的内核）。
-- `dws-design/scripts`（DESIGN_SCRIPTS）：designer 调的（assemble_ts/explore/fill_type_risk_decision）。
-- `dws-coding/scripts`（CODING_SCRIPTS）：coder 调的（slice_ts/check_sql/pick_fields）。
+脚本按**消费者**分布（归位判据：多于一个消费者 → shared 公共设施；单一消费者 → 自己的 scripts）：
+- **本剧本 `scripts/`（PIPE_SCRIPTS = `{SKILL_BASE}/scripts`）**：new-pipe 专属管线脚本（precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose + check_env 步骤0 探针）。
+- `design-dev-shared/scripts`（SHARED_SCRIPTS = `{SKILL_BASE}/../design-dev-shared/scripts`）：**共用入口**（preprocess——两剧本共用 / check_db——两剧本共用 / assemble_ddl——new-pipe 直调+opt 侧 assemble_ddl_opt import / resolve_appid）+ **公共库**（dws_db/config_paths/run_ut/sql_parse/dws_standards/ts_compat/type_compat/schema_query——schema_query 是字段查询能力层，designer 入口 check_field / coder 入口 pick_fields 的内核）。
+- `dws-design/scripts`（DESIGN_SCRIPTS = `{SKILL_BASE}/../dws-design/scripts`）：designer 调的（assemble_ts/explore/check_field/pick_targets/fill_*_decision）。
+- `dws-coding/scripts`（CODING_SCRIPTS = `{SKILL_BASE}/../dws-coding/scripts`）：coder 调的（slice_ts/check_sql/pick_fields）。
 
-**先定位路径再开工**——本 skill 加载注入的 Base directory 即锚点（`{SKILL_BASE}` = .../skills/new-pipe）。推算脚本目录：
-
-- `SHARED_SCRIPTS` = `{SKILL_BASE}/../design-dev-shared/scripts`（管线脚本 + 公共库）
-- `DESIGN_SCRIPTS` = `{SKILL_BASE}/../dws-design/scripts`
-- `CODING_SCRIPTS` = `{SKILL_BASE}/../dws-coding/scripts`
+**先定位路径再开工**——本 skill 加载注入的 Base directory 即锚点（`{SKILL_BASE}` = .../skills/new-pipe）。
 
 bash 调用时用推算出的**绝对路径**（会话 cwd 不在 skill 目录，裸相对路径会指错）。
 
-下文用 `DESIGN_SCRIPTS` 代指设计段脚本目录，`CODING_SCRIPTS` 代指编码段脚本目录，`SHARED_SCRIPTS` 代指公共脚本目录（pipe 管线脚本 + 公共库所在）。
+下文用 `PIPE_SCRIPTS` 代指本剧本脚本目录，`DESIGN_SCRIPTS`/`CODING_SCRIPTS` 代指设计/编码段脚本目录，`SHARED_SCRIPTS` 代指 shared 公共目录（共用入口 + 公共库）。
 调用时把变量替换为实际路径，例如：`python <SHARED_SCRIPTS>/preprocess.py ...`
 
 ### 确定 {deliver}（probe 先行，资产定位全从输入推导）
@@ -106,7 +103,7 @@ python SHARED_SCRIPTS/preprocess.py \
 **步骤 1b：校验**（检查 rs_input.json 完整性）
 
 ```bash
-python SHARED_SCRIPTS/precheck.py \
+python PIPE_SCRIPTS/precheck.py \
   --input {deliver}/_internal/rs_input.json \
   --decision {deliver}/_internal/type_risk_decision.yaml
 ```
@@ -200,7 +197,7 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
 调脚本从 ts.json 直接生成摘要（不需要 AI 提取）：
 
 ```bash
-python SHARED_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_internal/rs_input.json
+python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_internal/rs_input.json
 
 > ★ **表名标准映射（不许以此打回）**：输入资产锚点名是 I 视图（`_i`，对外消费名），
 > ts 的物理产出是 F 表（`_f`），I 是 F 的直封镜像视图——`输入 *_i ↔ ts 目标 *_f`
@@ -225,7 +222,7 @@ python SHARED_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_int
 ### 4-0：生成执行计划（先跑，统一判断——不要自己解析 ts.json 猜）
 
 ```bash
-python SHARED_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
+python PIPE_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
 ```
 
 输出执行计划 JSON：`ddl` / `dq`（含条数）/ `etl_rules` / `init_rules` / `groups` / `summary`。
@@ -303,7 +300,7 @@ python SHARED_SCRIPTS/check_db.py --ts {deliver}/ts.json
 回退 + DDL + SELECT 预检。不写数据，只验证建表和查询能跑通。
 
 ```bash
-python SHARED_SCRIPTS/ut_precheck.py \
+python PIPE_SCRIPTS/ut_precheck.py \
   --ts {deliver}/ts.json \
   --etl-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
@@ -317,7 +314,7 @@ python SHARED_SCRIPTS/ut_precheck.py \
 按 load_mode 预处理 + INSERT 灌数据 + UT 检查 + 出报告。
 
 ```bash
-python SHARED_SCRIPTS/ut_execute.py \
+python PIPE_SCRIPTS/ut_execute.py \
   --ts {deliver}/ts.json \
   --etl-dir {deliver}/etl \
   --ddl-dir {deliver}/ddl \
@@ -396,7 +393,7 @@ question("{rule_code}（{target}）UT 主键检查失败：{失败项+样例，�
 调 assemble_export.py 生成平台消费的 Excel：
 
 ```bash
-python SHARED_SCRIPTS/assemble_export.py \
+python PIPE_SCRIPTS/assemble_export.py \
   --ts {deliver}/ts.json \
   --etl-dir {deliver}/etl/ \
   --outdir {deliver}
