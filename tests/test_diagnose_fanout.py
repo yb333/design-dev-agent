@@ -310,6 +310,32 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
         assert "重复组解剖" in joined and "is_current" in joined and "eff_date" in joined
 
 
+class TestRuleFilterLiteralForm:
+    """R30 实证残留口回归：规则 filter 原文裸回放（逐表 WHERE 归属项 + 整体试算
+    WHERE 两处）——char 列裸数值同样要开局修正，不只 join 条件。"""
+
+    def test_rule_filter_literal_fixed_everywhere(self, monkeypatch, tmp_path):
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "schema_cache.json").write_text(json.dumps(
+            {"tables": {"dim.dim_cust": {"status": "varchar(2)"}}}), encoding="utf-8")
+        (tmp_path / "_internal" / "rs_input.json").write_text("{}", encoding="utf-8")
+        ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}],
+                 extra_rule={"filter": "a.del_flag = 'N' and c.status = 1"})
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+
+        def h(sql):
+            if " AS jc " in sql:
+                return [{"jc": 50}]
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        lines, _, ex = _run(monkeypatch, tmp_path, ts, h)
+        joined_sql = "\n".join(ex.captured)
+        assert "c.status = '1'" in joined_sql          # 修正进 SQL（逐表 WHERE + 整体试算）
+        assert "status = 1" not in joined_sql.replace("status = '1'", "")
+        assert any("字面量形态" in ln and "c.status" in ln for ln in lines)   # 披露
+
+
 class TestFaultIsolation:
     """单表故障隔离（内网实证：一张表报错曾炸停整批致报告缺失）+
     隐式转换报错识别（声明条件字面量与列类型不匹配——条件独立执行都跑不通，

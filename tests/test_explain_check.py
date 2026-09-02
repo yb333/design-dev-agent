@@ -2,7 +2,7 @@
 
 门槛定调（2026-09-02 用户拍板，只做这两个）：
 - STREAM 算子出现个数 ≤ 50（Gather/Redistribute/Broadcast——过多→大量线程消耗性能降）；
-- 不下推（计划含 Row Adapter 等 CN 侧标志——内网实测后可调模式常量）。
+- 不下推（官方判据：Data Node Scan + _REMOTE_TABLE_QUERY_；Row Adapter 非判据已纠正）。
 过程可视：计划原文全量落盘 _internal/diagnose/plan_{rule}.txt（好坏都留，人可回溯）。
 提示级不阻断。纯 EXPLAIN（零执行成本，形状信号无需 ANALYZE）。
 """
@@ -61,19 +61,27 @@ class TestStreamThreshold:
         issues2, _ = _explain_check(ex2, "SELECT 1", "R0001", tmp_path / "ts.json")
         assert any("STREAM 算子 51 个 > 50" in i for i in issues2)
 
-    def test_pattern_matches_both_formats(self):
+    def test_pattern_matches_both_formats_and_any_type(self):
         text = ("Streaming (type: GATHER)\n"
                 "Stream[name:S2, type: REDISTRIBUTE]\n"
-                "->  Streaming(type: BROADCAST)")
-        assert len(_STREAM_PATTERN.findall(text)) == 3
+                "->  Streaming(type: BROADCAST)\n"
+                "Streaming (type: PART REDISTRIBUTE)\n"
+                "Streaming (type: PART LOCAL)")     # PART 变体也算（任意 type）
+        assert len(_STREAM_PATTERN.findall(text)) == 5
 
 
 class TestNoPushdown:
-    def test_row_adapter_flags(self, tmp_path):
-        ex = _Ex(["Row Adapter", "Streaming (type: GATHER)"])
+    def test_data_node_scan_flags_no_pushdown(self, tmp_path):
+        """官方判据：Data Node Scan（伴随 _REMOTE_TABLE_QUERY_）=不可下推；Row Adapter
+        只是行列转换算子不算（首版误用已纠正）。"""
+        ex = _Ex(["Data Node Scan on t1 \"_REMOTE_TABLE_QUERY_\"", "Streaming (type: GATHER)"])
         (tmp_path / "ts.json").write_text("{}", encoding="utf-8")
         issues, _ = _explain_check(ex, "SELECT 1", "R0001", tmp_path / "ts.json")
-        assert any("不下推" in i and "Row Adapter" in i for i in issues)
+        assert any("不下推" in i and "Data Node Scan" in i and "_REMOTE_TABLE_QUERY_" in i for i in issues)
+        # Row Adapter 单独出现不报
+        ex2 = _Ex(["Row Adapter", "Streaming (type: GATHER)"])
+        issues2, _ = _explain_check(ex2, "SELECT 1", "R0001", tmp_path / "ts.json")
+        assert not any("不下推" in i for i in issues2)
 
     def test_explain_failure_disclosed_not_blocking(self, tmp_path):
         ex = _Ex(error="permission denied")

@@ -143,6 +143,27 @@ def _dup_anatomy(db: "_Db", schema: str, table: str, cols: list[str],
     return "、".join(diffs[:8])
 
 
+def _fix_literal_form_any(text: str, binding: dict, coltypes: dict) -> tuple[str, list[str]]:
+    """任意 别名.列 = 裸数值 的形态修正（规则 filter 整段用——filter 可引用多别名）。
+    语义同 _fix_literal_form：char 列裸数值=声明错误，开局按 '值' 执行并披露。"""
+    notes = []
+    pat = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)(\s*=\s*)([-+]?\d+(?:\.\d+)?)")
+
+    def _sub(m):
+        alias, col = m.group(1).lower(), m.group(2).lower()
+        ent = binding.get(alias)
+        if not ent:
+            return m.group(0)
+        ct = coltypes.get(f"{ent[0]}.{ent[1]}".lower(), {}).get(col)
+        if ct and _CHAR_FAMILY_PAT.search(ct):
+            notes.append(f"{m.group(1)}.{col} = {m.group(4)}（列类型 {ct}）→ 已按 '{m.group(4)}' 执行；"
+                         f"声明本身需修正（真实 ETL 照写触发隐式转换会炸）")
+            return f"{m.group(1)}.{m.group(2)}{m.group(3)}'{m.group(4)}'"
+        return m.group(0)
+
+    return pat.sub(_sub, text or ""), notes
+
+
 class _Db:
     """单连接走**目标 schema 的数据源**（部署事实：目标 schema 数据源有全部来源表
     权限，逐源 schema 连库会报"schema 不在 db 配置"——explore.py 同款语义）。
@@ -344,10 +365,13 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
     joins = rule.get("join_safety") or []
     safety_by_table = {(j.get("table") or "").rsplit(".", 1)[-1].lower(): j
                        for j in joins if isinstance(j, dict)}
-    rule_filter_terms = _split_terms(rule.get("filter") or "")
     business_key = (ts.get("design") or {}).get("business_key") or []
     coltypes = _load_coltypes(ts_path)
     mapping_joins = _load_mapping_joins(ts_path)
+    # 规则 filter 的字面量形态修正（R30 实证残留口：filter 原文裸回放两处——
+    # 逐表 WHERE 归属项 + 整体试算的 WHERE；join 条件已有修正，filter 此前漏了）
+    rule_filter_fixed, rf_notes = _fix_literal_form_any(rule.get("filter") or "", binding, coltypes)
+    rule_filter_terms = _split_terms(rule_filter_fixed)
 
     connect_schema = str(((ts.get("meta", {}).get("target", {}) or {})
                            .get("f_table", {}) or {}).get("schema") or "").strip()
@@ -356,7 +380,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
     owns_db = db is None
     if owns_db:
         db = _Db(connect_schema)
-    lines: list[str] = []
+    lines: list[str] = [f"[字面量形态] {n}" for n in rf_notes]
     verdicts: list[str] = []
     try:
         # ── 驱动表自检（count vs business_key——排除"根本不是 join 的锅"）──
@@ -510,7 +534,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
 
         # ── 整体试算（严重性：当前数据下膨胀/丢行/空关联——与逐表唯一性定性互补）──
         jc_state = _join_counts(db, rule, binding, driving, tmp_aliases, coltypes,
-                                rule.get("filter") or "", top, lines, verdicts)
+                                rule_filter_fixed, top, lines, verdicts)
         if jc_state == "fanout" and not any("不唯一" in v for v in verdicts):
             # 矛盾信号：各键条件下都唯一但拼起来膨胀——贴条件原文给人判（数据脏？条件含函数/非等值？）
             lines.append("[⚠ 需人确认] 各关联键在条件下都唯一，但拼起来却膨胀——矛盾信号："

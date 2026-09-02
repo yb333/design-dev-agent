@@ -324,7 +324,7 @@ python PIPE_SCRIPTS/ut_precheck.py \
 
 **读预检结果**：全通过 → 继续 5b；有失败 → 走步骤6 分流（SQL 问题回 coder / 环境问题报告人）。
 
-预检同时跑**执行计划两门槛**（2026-09-02 定调，只做这两个其他暂不做）：①不下推（计划含 CN 侧标志）②STREAM 算子数 ≤50（gather/redistribute/broadcast 过多→大量线程消耗性能降）。纯 EXPLAIN 毫秒级零执行成本；**计划原文全量落盘** `_internal/diagnose/plan_{rule}.txt`（好坏都留——过程可视，人可回溯）；提示级不阻断，性能归闸口②人判。
+预检同时跑**执行计划两门槛**（2026-09-02 定调+官方判据查证，只做这两个其他暂不做）：①不下推（**官方判据：计划含 `Data Node Scan`[伴随 `_REMOTE_TABLE_QUERY_`]——中间结果拉回 CN 执行成瓶颈**）②STREAM 算子数 ≤50（gather/redistribute/broadcast 及 PART 变体过多→大量线程消耗性能降）。纯 EXPLAIN 毫秒级零执行成本；**计划原文全量落盘** `_internal/diagnose/plan_{rule}.txt`（好坏都留——过程可视，人可回溯）；提示级不阻断，性能归闸口②人判。
 
 ### 步骤 5b：UT 执行（慢，分钟级）
 

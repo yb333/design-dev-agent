@@ -82,17 +82,21 @@ def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
 
 # ── 执行计划两门槛（2026-09-02 第二批，用户定调：只做这两个，其他性能分析暂不做）──
 # 纯 EXPLAIN（毫秒级零执行成本——两门槛都是计划形状信号，无需 ANALYZE 实际行数）。
+# 不下推判据=Data Node Scan（官方）；首版误用 Row Adapter 已纠正（行列转换算子非判据）。
 # 过程可视：计划原文全量落盘 _internal/diagnose/plan_{rule}.txt（好坏都留，人可回溯），
 # stdout 只出结论。提示级不阻断（性能归人判——与质检体系"披露不代答"一致）。
 import re as _re
 
-# STREAM 算子计数：Gather/Redistribute/Broadcast 等（Streaming (type: GATHER) /
-# Stream[name:S1, type: REDISTRIBUTE] 两种格式都认）
+# STREAM 算子计数：所有 Streaming/Stream 算子节点（Gather/Redistribute/Broadcast 及
+# PART 变体——type: 任意值都算），Streaming (type: GATHER) / Stream[name:S1, type: ...] 格式都认
 _STREAM_PATTERN = _re.compile(
-    r"(?:Streaming|Stream)\s*[\(\[]?[^)\]]*?type:\s*(GATHER|REDISTRIBUTE|BROADCAST)",
-    _re.IGNORECASE)
-# 不下推标志：CN 侧行列适配（DWS 常见不下推表征——内网实测后可在此调整模式）
-_NO_PUSHDOWN_MARKERS = ("Row Adapter",)
+    r"(?:Streaming|Stream)\s*[\(\[][^)\]]*?type\s*:", _re.IGNORECASE)
+# 不下推标志（华为云《语句下推调优》官方判据，2026-09-02 查证）：
+#   计划中出现 Data Node Scan 节点（伴随 _REMOTE_TABLE_QUERY_）= 不可下推——
+#   可下推部分下推、剩余中间结果拉到 CN 执行，CN 成性能瓶颈；
+#   出现 Streaming 节点 = 可下推（分布式计划）。Row Adapter 只是行列转换算子
+#   （混合存储合法出现），不是判据（首版误用已纠正）。
+_NO_PUSHDOWN_MARKERS = ("Data Node Scan",)
 STREAM_LIMIT = 50   # 算子出现个数上限（过多→大量线程消耗、性能下降）
 
 
@@ -113,7 +117,9 @@ def _explain_check(executor, sql: str, rule_code: str, ts_path) -> tuple[list[st
                       f"（gather/redistribute/broadcast 过多→大量线程消耗性能下降，人判改写/分布键）")
     hits = [m for m in _NO_PUSHDOWN_MARKERS if m in plan_text]
     if hits:
-        issues.append(f"疑似不下推（计划含 {'/'.join(hits)}）——算子在 CN 执行性能劣化，人判")
+        remote = "（伴随 _REMOTE_TABLE_QUERY_）" if "_REMOTE_TABLE_QUERY_" in plan_text else ""
+        issues.append(f"疑似不下推（计划含 {'/'.join(hits)}{remote}——官方判据：中间结果拉回 CN 执行，"
+                      f"CN 成瓶颈；常见诱因：不支持下推的函数/语法/分布列不齐，人判改写）")
     return issues, str(plan_path)
 
 
