@@ -139,8 +139,9 @@ def _partner_hits(db: _Db, p_schema: str, p_table: str, p_cols: list[str],
     return int(db.one(sql).get("hits") or 0)
 
 
-def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], str]:
-    """跑诊断，返回 (报告行列表, 结论一句话)。异常上抛由 main 分流。"""
+def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = None) -> tuple[list[str], str]:
+    """跑诊断，返回 (报告行列表, 结论一句话)。异常上抛由 main 分流。
+    db 传入则复用连接（批量模式单连接跑全部规则），不传入则自建自关。"""
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
     rule = (ts.get("rules") or {}).get(rule_code) \
         or ((ts.get("init") or {}).get("rules") or {}).get(rule_code)
@@ -163,7 +164,9 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], st
                            .get("f_table", {}) or {}).get("schema") or "").strip()
     if not connect_schema and binding:
         connect_schema = next(iter(binding.values()))[0]
-    db = _Db(connect_schema)
+    owns_db = db is None
+    if owns_db:
+        db = _Db(connect_schema)
     lines: list[str] = []
     verdicts: list[str] = []
     try:
@@ -253,7 +256,8 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], st
                 lines.append(f"{head}：{st['total']} 行 / 唯一 {st['uniq']}（NULL {st['nulls']}）"
                              f"→ ✓ 唯一{extra}")
     finally:
-        db.close()
+        if owns_db:
+            db.close()
 
     conclusion = "；".join(verdicts) if verdicts else "所有 join 表按声明条件键唯一、驱动表粒度一致——发散不来自关联（核 coder SQL 与设计差异，如漏 GROUP BY/漏 filter）"
     lines.append(f"[结论] {conclusion}")
@@ -261,19 +265,50 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], st
     return lines, conclusion
 
 
+def diagnose_all(ts_path: Path, top: int = 5) -> list[tuple[str, str]]:
+    """全规则批量（闸口①前用）：rules + init.rules 逐规则，共享单连接；单规则异常跳过不炸整批。"""
+    ts = json.loads(ts_path.read_text(encoding="utf-8"))
+    codes = list((ts.get("rules") or {}).keys()) \
+        + list(((ts.get("init") or {}).get("rules") or {}).keys())
+    connect_schema = str(((ts.get("meta", {}).get("target", {}) or {})
+                          .get("f_table", {}) or {}).get("schema") or "").strip()
+    db = _Db(connect_schema)
+    out: list[tuple[str, str]] = []
+    try:
+        for code in codes:
+            try:
+                _, concl = diagnose(ts_path, code, top, db=db)
+            except Exception as e:  # 单规则问题（别名绑不上/条件解析不了）不炸整批
+                concl = f"跳过（{str(e)[:120]}）"
+            out.append((code, concl))
+    finally:
+        db.close()
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="UT 回路关联发散定位器（逐表按声明条件查键唯一性+实锤+驱动表自检）")
     ap.add_argument("--ts", required=True, help="ts.json 路径")
-    ap.add_argument("--rule", required=True, help="规则编码（R0001 / INIT_R0001）")
+    ap.add_argument("--rule", default="", help="规则编码（R0001 / INIT_R0001；与 --all 二选一）")
+    ap.add_argument("--all", action="store_true",
+                    help="全规则批量（闸口①前用：rules+init.rules 逐规则共享单连接，单规则异常跳过）")
     ap.add_argument("--top", type=int, default=5, help="重复键样例数（默认 5）")
     args = ap.parse_args()
+
+    if args.all == bool(args.rule.strip()):
+        ap.error("--rule 与 --all 必须二选一")
 
     ts_path = Path(args.ts)
     if not ts_path.exists():
         print(f"[错误] ts.json 不存在: {ts_path}", file=sys.stderr)
         sys.exit(1)
     try:
-        lines, _ = diagnose(ts_path, args.rule, args.top)
+        if args.all:
+            results = diagnose_all(ts_path, args.top)
+            lines = ["[发散定位·全规则批量（闸口①材料）]"] + \
+                    [f"{code}: {concl}" for code, concl in results]
+        else:
+            lines, _ = diagnose(ts_path, args.rule, args.top)
     except ConnectionError as e:
         print(f"[环境] 无库/连不上: {e}——环境问题归人（剧本 6c）", file=sys.stderr)
         sys.exit(2)
@@ -282,7 +317,8 @@ def main():
         sys.exit(1)
 
     print("\n".join(lines))
-    out = ts_path.parent / "_internal" / "diagnose" / f"fanout_{args.rule}.md"
+    tag = "all" if args.all else args.rule
+    out = ts_path.parent / "_internal" / "diagnose" / f"fanout_{tag}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("# 关联发散定位 " + args.rule + "\n\n```\n" + "\n".join(lines) + "\n```\n",
                    encoding="utf-8")

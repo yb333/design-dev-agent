@@ -213,6 +213,26 @@ class TestDrivingTable:
         assert "发散不来自关联" in concl
 
 
+def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
+    """--all 批量（闸口①前）：rules+init.rules 逐规则共享单连接；单规则异常跳过不炸整批。"""
+    from diagnose_fanout import diagnose_all
+
+    def h(sql):
+        return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+    ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+    ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+    ts["rules"]["R0002"] = {  # 无 source_tables 绑定 → 驱动缺、仍应不炸（或可诊断）
+        "source_tables": [], "joins": [], "filter": ""}
+    (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+    ex = _patch(monkeypatch, h)
+    results = diagnose_all(tmp_path / "ts.json")
+    codes = [c for c, _ in results]
+    assert codes == ["R0001", "R0002"]
+    assert "发散不来自关联" in dict(results)["R0001"]
+    assert ex.created_schemas == ["dws"]  # 全批一次连接
+
+
 def test_rule_not_found_raises(tmp_path):
     (tmp_path / "ts.json").write_text(json.dumps({"rules": {}}), encoding="utf-8")
     from diagnose_fanout import diagnose

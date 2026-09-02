@@ -147,7 +147,7 @@ python PIPE_SCRIPTS/fill_join_risk_decision.py \
 precheck 检测到"直接复制"字段有源→目标类型转换风险时阻断，输出 `TYPE_RISK_PENDING {JSON}` 摘要行（含 batch 常规风险字段 + individual 跨大类/字符语义差异风险字段 + decision_file 路径）。
 
 **用 question 收集决策**（不让用户手填 YAML），两类分别问：
-- **batch（常规风险：长度超长/精度收窄）**：一问定策略。选项 `加安全处理`（守卫式转换：非法值置 NULL 被 DQ 抓；**字符收窄（含字节→字符）=SUBSTR 按字符截取**，尾部丢失闸口①披露——**不覆盖数值整数位溢出**，另见值域 error）/ `不加`（接受风险，数据问题以报错暴露）。
+- **batch（常规风险：长度超长/精度收窄）**：一问定策略。选项 `加安全处理`（守卫式转换：非法值置 NULL 被 DQ 抓；**字符收窄=按目标类型长度语义截取**（varchar 系=字符 SUBSTR / nvarchar 系=字节 SUBSTRB——单位跟目标走），尾部丢失闸口①披露——**不覆盖数值整数位溢出**，另见值域 error）/ `不加`（接受风险，数据问题以报错暴露）。
 - **individual（跨大类不兼容/字符语义差异）**：**按类型对归并提问**——同 源类型→目标类型 的字段合并为一问（同类字段处置几乎总相同），问题文案给字段数+类型对。选项 `全部转换`（ETL SELECT 加 TO_DATE/TO_CHAR/CAST）/ `全部不加`（接受风险）/ `全部返源端`（源端改类型更合适，追问原因）/ `拆开逐个定`（选它再逐字段问）。单次 question ≤4 问，组多分多轮。示例：
   ```
   question("检出 12 个 varchar→numeric 跨大类字段（amount_str、qty_txt 等）怎么处理？",
@@ -213,7 +213,13 @@ python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_inter
 > 是 preprocess 的标准推导（成对产出），不是漂移。闸口①比对表名时按此映射判断。
 ```
 
-拿到摘要后，**立即调 question 停下等用户确认**（不允许跑完摘要直接进编码段）：
+拿到摘要后，**先跑发散定位批量预检**（结论进闸口材料，**披露不阻断**——发散嫌疑可能是开发库数据脏，人判；exit 2=无库跳过不拦闸口）：
+
+```bash
+python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --all
+```
+
+然后**立即调 question 停下等用户确认**（question 里带上摘要 + 发散定位结论；不允许跑完直接进编码段）：
 
 - 用户选"确认设计，进入编码" → 进入步骤 4
 - 用户选"需要修改"（说明哪里改）→ 回步骤 2 重新调 designer
