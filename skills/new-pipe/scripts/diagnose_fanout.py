@@ -64,39 +64,42 @@ def _fmt_val(v) -> str:
 
 
 class _Db:
-    """按 schema 缓存 executor（一次诊断多源表各连一次）。"""
+    """单连接走**目标 schema 的数据源**（部署事实：目标 schema 数据源有全部来源表
+    权限，逐源 schema 连库会报"schema 不在 db 配置"——explore.py 同款语义）。
+    表名在各 SQL 里带自己的 schema 限定，跨 schema 同连接查。"""
 
-    def __init__(self):
-        self._cache: dict = {}
+    def __init__(self, connect_schema: str):
+        from dws_db import create_executor_for_schema
+        self._ex = create_executor_for_schema(connect_schema, role="etl")
+        if not self._ex.test_connection():
+            raise ConnectionError(f"连不上目标 schema={connect_schema} 的数据源")
 
-    def get(self, schema: str):
-        schema = (schema or "").strip()
-        if schema not in self._cache:
-            from dws_db import create_executor_for_schema
-            ex = create_executor_for_schema(schema, role="etl")
-            if not ex.test_connection():
-                raise ConnectionError(f"连不上 schema={schema}")
-            self._cache[schema] = ex
-        return self._cache[schema]
-
-    def one(self, schema: str, sql: str) -> dict:
-        r = self.get(schema).execute(sql)
+    def one(self, sql: str) -> dict:
+        r = self._ex.execute(sql)
         if not r.success:
             raise RuntimeError(f"查询失败: {(r.error or '')[:200]} | SQL: {sql[:150]}")
         return (r.rows or [{}])[0]
 
-    def rows(self, schema: str, sql: str) -> list[dict]:
-        r = self.get(schema).execute(sql)
+    def rows(self, sql: str) -> list[dict]:
+        r = self._ex.execute(sql)
         if not r.success:
             raise RuntimeError(f"查询失败: {(r.error or '')[:200]} | SQL: {sql[:150]}")
         return r.rows or []
 
     def close(self):
-        for ex in self._cache.values():
-            try:
-                ex.close()
-            except Exception:
-                pass
+        try:
+            self._ex.close()
+        except Exception:
+            pass
+
+
+def _strip_alias(term: str, alias: str) -> str | None:
+    """单表查询的 WHERE 项剥掉别名前缀（s.is_current=1 → is_current=1——FROM 没写
+    别名，带前缀直接 SQL 报错）。剥完仍含其他 别名. 引用的项归属不了，跳过（宁放过）。"""
+    stripped = re.sub(rf"\b{re.escape(alias.lower())}\.", "", term, flags=re.IGNORECASE)
+    if re.search(r"\b[A-Za-z_]\w*\.", stripped):
+        return None
+    return stripped
 
 
 def _key_stat(db: _Db, schema: str, table: str, cols: list[str], where: str) -> dict:
@@ -109,7 +112,7 @@ def _key_stat(db: _Db, schema: str, table: str, cols: list[str], where: str) -> 
            f"FROM {schema}.{table}")
     if where:
         sql += f" WHERE {where}"
-    row = db.one(schema, sql)
+    row = db.one(sql)
     return {"total": int(row.get("total") or 0), "uniq": int(row.get("uniq") or 0),
             "nulls": int(row.get("nulls") or 0)}
 
@@ -120,7 +123,7 @@ def _dup_samples(db: _Db, schema: str, table: str, cols: list[str], where: str, 
     if where:
         sql += f" WHERE {where}"
     sql += (f" GROUP BY {key} HAVING COUNT(*) > 1 ORDER BY c DESC, {key} LIMIT {top}")
-    return db.rows(schema, sql)
+    return db.rows(sql)
 
 
 def _partner_hits(db: _Db, p_schema: str, p_table: str, p_cols: list[str],
@@ -133,7 +136,7 @@ def _partner_hits(db: _Db, p_schema: str, p_table: str, p_cols: list[str],
     pkey = ", ".join(p_cols)
     sql = (f"SELECT COUNT(*) AS hits FROM {p_schema}.{p_table} "
            f"WHERE ({pkey}) IN ({', '.join(tuples)})")
-    return int(db.one(p_schema, sql).get("hits") or 0)
+    return int(db.one(sql).get("hits") or 0)
 
 
 def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], str]:
@@ -156,7 +159,11 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], st
     rule_filter_terms = _split_terms(rule.get("filter") or "")
     business_key = (ts.get("design") or {}).get("business_key") or []
 
-    db = _Db()
+    connect_schema = str(((ts.get("meta", {}).get("target", {}) or {})
+                           .get("f_table", {}) or {}).get("schema") or "").strip()
+    if not connect_schema and binding:
+        connect_schema = next(iter(binding.values()))[0]
+    db = _Db(connect_schema)
     lines: list[str] = []
     verdicts: list[str] = []
     try:
@@ -166,7 +173,8 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], st
             or (next(iter(binding)) if binding else "")
         if driving and business_key:
             sch, tbl = binding[driving]
-            where = " AND ".join(_terms_for_alias(rule_filter_terms, driving))
+            where = " AND ".join(filter(None, (_strip_alias(x, driving)
+                                                for x in _terms_for_alias(rule_filter_terms, driving))))
             st = _key_stat(db, sch, tbl, [c.lower() for c in business_key], where)
             dup = st["total"] - st["nulls"] - st["uniq"]
             if dup > 0:
@@ -210,7 +218,9 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5) -> tuple[list[str], st
             terms += _split_terms(safety.get("join_filter") or "")
             terms += _terms_for_alias(rule_filter_terms, alias)
             terms += _literal_terms(cond, alias)
-            where = " AND ".join(dict.fromkeys(terms))
+            # 单表查询 FROM 无别名——逐项剥别名前缀；剥完仍含其他别名引用的跳过（宁放过）
+            where = " AND ".join(dict.fromkeys(
+                x for x in (_strip_alias(tm, alias) for tm in terms) if x))
             st = _key_stat(db, sch, tbl, own, where)
             dup = st["total"] - st["nulls"] - st["uniq"]
             head = (f"[JOIN {i}] {sch}.{tbl}（{alias}）键({', '.join(own)})"

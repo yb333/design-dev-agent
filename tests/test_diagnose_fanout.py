@@ -48,8 +48,10 @@ class _FakeEx:
 def _patch(monkeypatch, handler):
     import dws_db
     ex = _FakeEx(handler)
+    ex.created_schemas = []
 
     def _create(schema, role="etl"):
+        ex.created_schemas.append(schema)
         return ex
 
     monkeypatch.setattr(dws_db, "create_executor_for_schema", _create)
@@ -139,7 +141,7 @@ class TestDeclaredConditionsHonored:
              "condition": "a.x = c.x and a.tenant = c.tenant and c.is_current = 1"}]), h)
         joined = "\n".join(ex.captured)
         assert "COUNT(DISTINCT (x, tenant))" in joined          # 复合键（单列查会误报）
-        assert "c.is_current = 1" in joined                     # condition 字面量项并入
+        assert "is_current = 1" in joined                       # condition 字面量项并入（单表 WHERE 剥别名前缀）
         assert "→ ✓ 唯一" in "\n".join(lines)
 
     def test_rule_filter_and_join_safety_filter_applied(self, monkeypatch, tmp_path):
@@ -153,7 +155,8 @@ class TestDeclaredConditionsHonored:
                                               "join_key_unique": True}]})
         lines, _, ex = _run(monkeypatch, tmp_path, ts, h)
         joined = "\n".join(ex.captured)
-        assert "c.del_flag = 'N'" in joined and "c.is_current = 1" in joined
+        assert "del_flag = 'N'" in joined and "is_current = 1" in joined
+        assert "c." not in joined.split("WHERE")[-1]           # FROM 无别名，WHERE 不得残留别名前缀
 
     def test_filter_load_bearing_wall(self, monkeypatch, tmp_path):
         """裸查重复但声明条件唯一 → filter 承重墙（SQL 漏写即发散）。"""
@@ -168,6 +171,19 @@ class TestDeclaredConditionsHonored:
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code",
              "filter": "c.is_current = 1"}]), h)
         assert "filter 承重墙" in "\n".join(lines) and "承重" in concl
+
+
+    def test_single_connection_via_target_schema(self, monkeypatch, tmp_path):
+        """部署事实：目标 schema 数据源有全部来源表权限——单连接走目标 schema，
+        不逐源 schema 连库（曾报'来源 schema 不在 db 配置'）。"""
+        def h(sql):
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        lines, _, ex = _run(monkeypatch, tmp_path, ts, h)
+        assert ex.created_schemas == ["dws"]                    # 只连目标 schema 一次
+        assert "FROM dim.dim_cust" in "\n".join(ex.captured)  # 表名带各自 schema 限定
 
 
 class TestDrivingTable:
