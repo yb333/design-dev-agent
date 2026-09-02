@@ -146,12 +146,17 @@ description: >-
   → 详见 `references/design-guide.md` §1.1
 - **关联安全（每个声明的 JOIN：⓪条件可信 + 三维判断，都要有结论）**：
   - ⓪ **条件语义（先于三维）**：join_condition 里"取一/最新/去重"类过滤（如 rn=1）= 从表按业务键不唯一的强信号——①方向必须有对齐结论（GROUP BY 收敛 / 取最新有效行），开窗口径业务语义源端给，designer 不编。存在性/出处已由 precheck+输入体检把关，此处兜底语义
-  - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一。不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行）。
-    不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique；连不上库静默跳过）：
+  - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一——不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique）：
     ```
     python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_input.json \
         --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
     ```
+    **不唯一时按"信息在谁手里"走决策树**（五出口全覆盖，勿自由发挥）：
+    - 输入已声明条件/口径（mapping/RS 里有）→ 照输入设计（漏抄=设计错误补上）＋ join_safety 记依据；
+    - 输入没有但字段语义可推断 → **提一次假设**（补条件/对齐策略）＋ explore 复验（加条件后实测唯一）＋ join_safety 记【假设与依据】。★**止损：推断是一发子弹**——复验不过=推不出来，立即转 question 弹人，**禁止连环试条件**（猜 A 不唯一再猜 B；碰巧让当前数据唯一的歪条件更是语义陷阱——数据巧合≠业务口径）；
+    - 推不出来（业务一对多？该取哪行？聚合口径？）→ question 弹人（附 explore 证据；不自主定口径——红线）；
+    - 事实坏了（唯一性应成立但脏数据破坏）→ question 上报（源端问题人判退 BA/治理）；
+    - 查不了（连不上库）→ join_key_unique 标"未验证"，闸口①兜底实证。
   - ② **类型可比**：两边键类型大类必须可比（字符=数值这种等式本身就是错的）。视图里有类型直接判；
     没有 → 用 check_field 查双侧（返回类型，两边各查一次对比）：
     `python skills/dws-design/scripts/check_field.py --rs {deliver}/_internal/rs_input.json --field t1.order_id`

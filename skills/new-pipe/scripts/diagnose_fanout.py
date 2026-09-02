@@ -517,6 +517,21 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                             lines.append(f"  ｜→ 设计与输入声明一致——问题在**输入侧**（BA 声明的关联在数据上不成立，退 BA）")
                     else:
                         lines.append(f"  ｜输入未声明此关联（designer 自设）——问题属设计判断")
+                    # join_safety 断言对照（maker 断言 vs 实测——闸口①与 designer 检查的闭环）：
+                    # 声明 unique=true 实测不唯一=断言证伪（最高优先）；声明 false+reason=已知接受不重复弹
+                    safety = safety_by_table.get(tbl.rsplit(".", 1)[-1].lower()) or {}
+                    if safety:
+                        if safety.get("join_key_unique") is True:
+                            lines.append(f"  ｜★ designer 断言 join_key_unique=true——**实测证伪**"
+                                         f"（designer 判断错或数据变了，闸口①重点核对）")
+                            verdicts.append(f"JOIN {i} {tbl}：join_key_unique 断言被实测证伪")
+                        elif safety.get("join_key_unique") is False:
+                            lines.append(f"  ｜designer 已声明不唯一（strategy={safety.get('strategy') or '—'}"
+                                         f"/reason={safety.get('reason') or '—'}）——已知接受，闸口①确认口径即可")
+                        else:
+                            lines.append(f"  ｜join_safety 未填 join_key_unique——第4层要求补声明")
+                    else:
+                        lines.append(f"  ｜join_safety 未声明此关联——第4层要求补")
                     try:
                         samples = _dup_samples(db, sch, tbl, own, where, top)
                     except RuntimeError as e:

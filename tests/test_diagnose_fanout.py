@@ -309,6 +309,56 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
         assert "重复组解剖" in joined and "is_current" in joined and "eff_date" in joined
 
 
+class TestJoinSafetyAssertionCompare:
+    """join_safety 断言对照（maker 断言 vs 实测——闸口①与 designer 检查的闭环）：
+    声明 unique=true 实测不唯一=证伪（最高优先）；声明 false+reason=已知接受不重复弹；
+    未声明=补声明提示。"""
+
+    def _ts_safety(self, tmp_path, safety):
+        ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}],
+                 extra_rule={"join_safety": [safety]})
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        return ts
+
+    def test_assertion_falsified(self, monkeypatch, tmp_path):
+        def h(sql):
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 88, "nulls": 0}]   # 实测不唯一
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        self._ts_safety(tmp_path, {"table": "dim_cust", "join_key_unique": True,
+                                   "strategy": "", "reason": "拉链取有效行"})
+        lines, concl, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        joined = "\n".join(lines)
+        assert "实测证伪" in joined and "断言被实测证伪" in concl
+
+    def test_declared_not_unique_known_acceptance(self, monkeypatch, tmp_path):
+        def h(sql):
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 88, "nulls": 0}]
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        self._ts_safety(tmp_path, {"table": "dim_cust", "join_key_unique": False,
+                                   "strategy": "GROUP BY 收敛", "reason": "业务一对多"})
+        lines, concl, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        joined = "\n".join(lines)
+        assert "已知接受" in joined and "GROUP BY 收敛" in joined
+        assert "证伪" not in concl                            # 不重复弹狼来了
+
+    def test_no_assertion_prompts_declaration(self, monkeypatch, tmp_path):
+        def h(sql):
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 88, "nulls": 0}]
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        self._ts_safety(tmp_path, {"table": "dim_cust", "strategy": "", "reason": ""})
+        lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        assert "未填 join_key_unique" in "\n".join(lines)
+
+
 class TestFreeTextNormalization:
     """宁缺勿错（2026-09-02 用户原则确认）：BA 声明是自由文本，写法差异不得误判成
     '设计漏条件'（会把人往改设计方向带）。归一强化：等号边空白/两侧写反/中文连词
