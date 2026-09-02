@@ -20,9 +20,6 @@ permission:
   # 一次覆盖（~ 展开支持；仓内/项目级形态下 skill 在 worktree 内不触发本权限，加了无害）
   external_directory:
     "~/.config/opencode/skills/**": allow
-# MCP 工具注册层剥除（官方路径；permission deny 拦不住"看见并尝试" #3756）
-tools:
-  mcp_*: false
   edit:
     "*": deny
     "**/ddlc_design_dev/_internal/design_decisions.yaml": allow

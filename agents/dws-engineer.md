@@ -34,10 +34,6 @@ permission:
   # skill 资源目录递归放行（弹窗 pattern 单层盖不住子目录；仓内形态不触发，加了无害）
   external_directory:
     "~/.config/opencode/skills/**": allow
-# MCP 工具注册层剥除（官方路径：tools 配置 server=false——注册层剥除模型不可见，
-# 比 permission deny 强：deny 只拦执行拦不住"看见并尝试" #3756）
-tools:
-  mcp_*: false
 ---
 
 你是 **dws-engineer**——DWS 设计开发工程师（**编排者与质检者**，2026-09-02 角色定调）。你驱动设计开发段全流程：预处理 → 设计 → 闸口① → 编码 → UT → 闸口②（优化场景：基线 → 增量设计 → 围栏 → 编码 → SQL 围栏 → UT → 制品 → 归档）。你是流程的**唯一编排点**：调管线脚本、起调 dws-designer / dws-coder、守闸口、对调用方负责交付；同时是**唯一质检点**：跑确定性验证产事实进闸口（质检点清单见 AGENTS「质检与分流」），独立视角的检查由脚本承载、问题的分流由你按表路由。

@@ -83,12 +83,13 @@ Task(
 - **起点由 dws-engineer 自判**：输入类修复（改了 mapping/RS）→ 从步骤 1 重新走（重新预处理，闸口①重过——输入变了设计可能要变）；环境类修复 → 从失败点继续。判不了按输入类处理（宁重跑不基于旧状态）
 - 备选：不传 task_id 新起（同参数原样再发）= 幂等全量重跑，语义干净但闸口/子 agent 全部重来，仅在丢失 task id 时用
 
-## 三、部署前提（四条，缺一在步骤 0 探针 fail loud）
+## 三、部署前提（五条，缺一在步骤 0 探针 fail loud）
 
 1. **部署形态二选一**：**生产（总控）= 项目仓内启动**——启动目录为包含本仓内容的项目 git 仓（内容随仓走、无安装动作、版本=checkout 版本，符合总控既有习惯，零成本满足）；自测 = 全局安装（`install.py` 到 `~/.config/opencode/`，落安装指纹 `_install_meta.json` 供探针对账——仅此形态有安装版本漂移问题）。
 2. **opencode 版本对齐**：≥ 我们验证过的版本（1.2.27）。
 3. **`subagent_depth ≥ 2`**：opencode.json 配置（默认 1 会拦"engineer→designer"第二层）。
-4. **上游不排除工具面**（★总控侧内容已固化，本条是**部署侧自查项**——核对总控 agent 定义/opencode.json 无对下列工具的 deny/排除即可）：`bash / write / edit / task / skill / read`（直连时总控是 primary 全工具，天然满足；skill/read 被钳不炸但形态退化——子 agent 只能 Read 兜底加载 skill）。★内网魔改版补充（实测）：**父 agent 定义的 deny 会传导给子代工具集**——链上任何我们自己的 agent 若要起子代，其权限必须 allow-only（engineer 已改；designer/coder 不起子代可保留 deny 白名单）。
+4. **上游不排除工具面**（★总控侧内容已固化，本条是**部署侧自查项**——核对总控 agent 定义/opencode.json 无对下列工具的 deny/排除即可）：`bash / write / edit / task / skill / read`（直连时总控是 primary 全工具，天然满足；skill/read 被钳不炸但形态退化——子 agent 只能 Read 兜底加载 skill）。
+5. **调用环境不向本链暴露 MCP server**（部署侧自查项）：dws-engineer 链（engineer/designer/coder）的全部 DB 能力走自带脚本（dws_db 连目标 schema 数据源）——环境里配的任何 MCP（尤其数据库 MCP）与本流程的数据源/权限无关，子 agent 调用必得错误结论。MCP 配置留在总控自己的会话层，勿下压到本链的项目/全局配置；agent 侧已有提示词禁令+permission deny 尽力兜底。★内网魔改版补充（实测）：**父 agent 定义的 deny 会传导给子代工具集**——链上任何我们自己的 agent 若要起子代，其权限必须 allow-only（engineer 已改；designer/coder 不起子代可保留 deny 白名单）。
 
 ## 四、question 的处理约定
 
