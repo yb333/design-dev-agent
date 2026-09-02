@@ -219,13 +219,23 @@ python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_inter
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --all
 ```
 
-然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**question 模板**（四个选项一个不少——退 BA 是一等选项，发散检出时人大概率选它）：
+然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**question 模板分场景**：
+
+**检查全部通过**（三常规选项）：
 
 ```
-question("闸口①设计确认（{资产}）：{gate_summary 摘要——表/规则数/字段数}
-"
-         "关联质量：{diagnose_fanout 结论——不唯一表+条件原文+人判方向 / 矛盾信号 / 全部通过}
-"
+question("闸口①设计确认（{资产}）：{gate_summary 摘要——表/规则数/字段数}\\n"
+         "关联质量：全部通过。请选择：",
+         options=["确认设计，进入编码",
+                  "需要修改设计（说明哪里改→回 designer）",
+                  "放弃"])
+```
+
+**检出问题**（不唯一/矛盾信号/丢行——追加退 BA 选项，发散类现实大概率选它）：
+
+```
+question("闸口①设计确认（{资产}）：{gate_summary 摘要}\\n"
+         "关联质量：{diagnose_fanout 结论——✗ 不唯一表+关联条件原文+输入声明对照 / 矛盾信号+条件原文}\\n"
          "请选择：",
          options=["确认设计，进入编码",
                   "需要修改设计（说明哪里改→回 designer）",

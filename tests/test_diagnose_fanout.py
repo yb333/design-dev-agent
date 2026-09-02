@@ -310,6 +310,39 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
         assert "重复组解剖" in joined and "is_current" in joined and "eff_date" in joined
 
 
+class TestDeclaredPrefixClean:
+    """内网实证回归：mapping 声明写 'left join ： t.xx=s.xx'（带 join 类型前缀+中文
+    冒号），designer 条件 't.xx=s.xx'——不清洗前缀文本比对必不等，整条声明被误报成
+    '设计漏了条件'。清洗后两声明一致 → 对照=一致（问题在输入侧）。"""
+
+    def test_join_prefix_cleaned_no_false_miss(self, monkeypatch, tmp_path):
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text(json.dumps({"source_tables": [
+            {"source_schema": "dim", "source_table": "dim_cust", "source_alias": "c",
+             "join_condition": "left join ： a.cust_code = c.cust_code"}]}), encoding="utf-8")
+        ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+
+        def h(sql):
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 88, "nulls": 0}]   # 不唯一 → 失败块展示对照
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        lines, _, _ = _run(monkeypatch, tmp_path, ts, h)
+        joined = "\n".join(lines)
+        assert "设计与输入声明一致" in joined          # 清洗后一致——不再是"漏了条件"
+        assert "设计漏了" not in joined
+        assert "人判方向" not in joined                # 菜单已进 question 选项，报告不再重复
+
+    def test_clean_declared_variants(self):
+        from diagnose_fanout import _clean_declared
+        assert _clean_declared("left join ： t.x=s.x") == "t.x=s.x"
+        assert _clean_declared("LEFT JOIN: t.x=s.x") == "t.x=s.x"
+        assert _clean_declared("left outer join on a.x=b.x") == "a.x=b.x"
+        assert _clean_declared("t.x=s.x") == "t.x=s.x"          # 无前缀原样
+
+
 class TestRuleFilterLiteralForm:
     """R30 实证残留口回归：规则 filter 原文裸回放（逐表 WHERE 归属项 + 整体试算
     WHERE 两处）——char 列裸数值同样要开局修正，不只 join 条件。"""

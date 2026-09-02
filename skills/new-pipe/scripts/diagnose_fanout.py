@@ -105,15 +105,25 @@ def _fix_literal_form(text: str, alias: str, binding: dict, coltypes: dict) -> t
     return pat.sub(_sub, text or ""), notes
 
 
+def _clean_declared(text: str) -> str:
+    """剥 BA 声明里的 join 类型前缀与冒号（内网实证：mapping 里写 'left join ： t.xx=s.xx'，
+    designer 条件 't.xx=s.xx'——不剥前缀文本比对必不等，把整条声明误报成'漏掉的条件'）。"""
+    s = str(text or "").strip()
+    s = re.sub(r"^\s*(?:(?:left|right|full|inner|cross|outer)\s+)*join\b\s*[:：]?\s*",
+               "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^\s*on\b\s*", "", s, flags=re.IGNORECASE)
+    return s.strip()
+
+
 def _load_mapping_joins(ts_path: Path) -> dict:
-    """BA 的关联声明（rs_input 实体级 join_condition，按表短名）——设计 vs 输入
+    """BA 的关联声明（rs_input 实体级 join_condition，按表短名，**清洗后**——设计 vs 输入
     归属判别的依据。约定路径 ts 同级 _internal/rs_input.json 自动探测；探测不到
     返回空 dict（对照降级为'声明不可得'，事实照报不猜）。"""
     p = ts_path.parent / "_internal" / "rs_input.json"
     try:
         sts = json.loads(p.read_text(encoding="utf-8")).get("source_tables") or []
         return {str(st.get("source_table") or "").rsplit(".", 1)[-1].lower():
-                str(st.get("join_condition") or "").strip()
+                _clean_declared(st.get("join_condition"))
                 for st in sts if st.get("source_table")}
     except Exception:
         return {}
@@ -524,8 +534,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                         lines.append(f"  ｜当前数据命中驱动表 {hits} 行——会实际膨胀")
                     elif hits == 0:
                         lines.append(f"  ｜当前数据未命中驱动表——暂不膨胀（生产数据可能命中，别默默放过）")
-                    lines.append(f"  ｜人判方向：**退 BA 修源端输入**（数据一对多/脏/关联声明——现实中大概率此项，改后重跑 1a 全流程）；"
-                                 f"SE 拍板设计侧收敛（补条件/换键）——工具不猜")
+
                     verdicts.append(f"JOIN {i} {sch}.{tbl}：关联键在条件下不唯一（重复 {dup} 行"
                                     + ("，当前命中会膨胀" if hits > 0 else "，当前未命中") + "）")
                 else:
