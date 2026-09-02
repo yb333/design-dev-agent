@@ -423,8 +423,11 @@ def validate_decisions(decisions, field_map):
         )
 
     # write_condition 校验：非全量 load_mode 必填且不含中文
+    # N_WC1：merge/update 的 ON 条件必须覆盖全部 business_key（ON 不含主键=merge
+    # 语义错误，一行对多行——确定性结构校验，2026-09-02 质检缺口盘点补齐）
     import re
     needs_condition = {"truncate_partition", "delete", "merge_into", "update"}
+    business_key = [str(b).lower() for b in (decisions.get("business_key") or [])]
     for rule in rules:
         code = rule.get("rule_code", "??")
         load_mode = rule.get("load_mode", "truncate_table")
@@ -440,6 +443,14 @@ def validate_decisions(decisions, field_map):
                 errors.append(
                     f"规则 {code} 的 write_condition 含中文（应为SQL片段）: {cond}"
                 )
+            if load_mode in ("merge_into", "update") and cond and business_key:
+                missing = [b for b in business_key if b not in cond.lower()]
+                if missing:
+                    errors.append(
+                        f"规则 {code} 的 write_condition（ON 条件）缺业务主键列 {missing}"
+                        f"——ON 不含全 business_key 则 merge 一行对多行，语义错误"
+                        f"（应如 'T.order_id=T1.order_id AND T.line_no=T1.line_no'）"
+                    )
 
     return errors
 

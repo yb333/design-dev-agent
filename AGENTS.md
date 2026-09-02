@@ -60,7 +60,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 
 | agent | 职责 | skill | 能调的工具（详见 tool-registry.md） | 能写 |
 |-------|------|-------|----------------------------------|------|
-| **dws-engineer** | 设计开发段编排：契约参数→加载剧本→调管线脚本→起 designer/coder→守闸口 | new-pipe / opt-pipe（按模式路由） | check_env（步骤0探针）；管线脚本经 bash python 调（不属 agent 工具） | `ddlc_design_dev/**`、`ddlc_opt/**` |
+| **dws-engineer** | 设计开发段**编排+质检**：契约参数→加载剧本→调管线脚本→起 designer/coder→跑确定性验证产事实→按分流表路由问题→守闸口（判断=分流不定罪，定罪归闸口人） | new-pipe / opt-pipe（按模式路由） | check_env（步骤0探针）；管线脚本经 bash python 调（不属 agent 工具） | `ddlc_design_dev/**`、`ddlc_opt/**` |
 | **dws-designer** | 设计判断，产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（JOIN键唯一性）/ check_field（字段查证）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
 | **dws-coder** | 单规则 SELECT + DQ 检查 SQL | dws-coding / dws-dq / dws-coding-opt（按任务路由） | slice_ts（含 --dq）/ pick_fields / check_sql | `etl/*.sql`、`dq/*.sql` |
 
@@ -153,6 +153,37 @@ UT 失败**不要一律回 coder**。按失败项类型分流：
 designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 business_key；源表本身多对一→标"需业务确认"。**改完必须回闸口①人确认**，确认后才恢复 coder 旧会话按新设计改 SELECT。每规则限 3 轮。
 
 ---
+
+## 质检与分流（engineer 质检者角色，2026-09-02 定调）
+
+> 架构定调：**独立性来自 maker=LLM / checker=确定性脚本**（比双 LLM 检查者强），不加独立检查者 agent；engineer=编排者+质检事实生产者+规则分流者（四层判断模型：L0 脚本检查→L1 脚本定位→L2 engineer 按表分流→L3 闸口人定罪）。设计变更必回闸口①，不私下循环。
+
+**质检点总表**（产物 × 检查 × 时机——加检查先查这张表找位置）：
+
+| 交接点 | 检查 | 工具 | 时机 | 判读 |
+|---|---|---|---|---|
+| 输入→流程 | 完整性/类型/值域/关联键类型 | precheck | 1b | 人决策（exit 2 决策类阻断） |
+| designer→ts | 设计结构闭合 ~40 条 | assemble_ts | 组装时 | 脚本定罪，硬阻断 |
+| designer→闸口① | 任务目标对照 | gate_summary | 闸口①前 | 人判材料 |
+| designer→闸口① | **关联质量**：声明语义精确膨胀/丢行/空关联率（+膨胀时逐表归因） | diagnose_fanout --all | 闸口①前 | 披露不阻断（脏数据嫌疑人判） |
+| coder→SQL | 静态（字段覆盖/引用/口径对账） | check_sql | 每规则写完 | error 硬阻断 / 提示级 |
+| coder→UT | 执行可跑性 | ut_precheck 6a | INSERT 前 | 硬阻断 |
+| UT 装载后 | 数据质量实锤+DQ+发散深查 | ut_execute 6b + diagnose_fanout --rule + ut_diagnose | 6b | 实败按分流表路由 |
+| 环境 | 指纹/关键文件/python/依赖（开关式） | check_env | 步骤0 | 硬阻断 |
+
+**分流总表**（engineer 的 L2 判断唯一依据——表外默认上报人）：
+
+| 问题类型 | 确定性路由（不问人） | 根因/语义时的归宿 |
+|---|---|---|
+| SQL 语法类（COLUMN/TYPE/SYNTAX/DOES NOT EXIST；DQ FAIL/MISSING） | 恢复 coder 旧会话修复 | — |
+| 类型风险（跨大类转换） | — | 1b 问人（转换/不加/返源端） |
+| 关联键类型跨大类 | — | 1b 问人（转换/改关联键/接受） |
+| 值域溢出（numeric overflow/value too long） | — | 按 1b 值域菜单：源输入→**BA** 改模型；过程决策→**SE** 拍板 |
+| UT 数据质量（主键重复/空值/行数） | 先 diagnose_fanout 定位，事实进问题 | 6b 四选一问人 |
+| DQ ALERT（非 0 行） | — | 闸口②人判（方向反→coder/阈值→designer/数据脏→人） |
+| 环境（连库/权限/缺表/超时） | 停 + 报告修复指引 | 人 |
+| 声明条件独立执行失败（隐式转换类） | 事实披露（字面量与列类型不符） | 设计修正→闸口① |
+| **表外一切** | — | **默认上报人** |
 
 ## 连库（dws_db.py）
 

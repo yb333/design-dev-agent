@@ -213,7 +213,7 @@ python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_inter
 > 是 preprocess 的标准推导（成对产出），不是漂移。闸口①比对表名时按此映射判断。
 ```
 
-拿到摘要后，**先跑发散定位批量预检**（结论进闸口材料，**披露不阻断**——发散嫌疑可能是开发库数据脏，人判；exit 2=无库跳过不拦闸口）：
+拿到摘要后，**先跑关联质量批量预检**（结论进闸口材料，**披露不阻断**——嫌疑可能是开发库数据脏，人判；exit 2=无库跳过不拦闸口）：
 
 ```bash
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --all
@@ -375,7 +375,7 @@ INSERT 成功但 UT 检查 FAIL（主键重复/空值/行数异常，报告带�
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --rule {rule_code}
 ```
 
-逐表**按声明条件**查键唯一性（复合键聚合 + joins[].filter / join_safety.join_filter / 规则 filter / condition 字面量项全部严格遵守）：发散表+重复键样例+伙伴表命中实锤、**filter 承重墙**（裸查重复/声明条件唯一 ⇒ SQL 疑似漏写过滤——高频根因）、驱动表 business_key 自检（排除"不是 join 的锅"）。链式关联无需逐层测试——每表在自己键上全局唯一即不可能放大，与顺序无关。报告落 `_internal/diagnose/fanout_{rule}.md`；exit 2=无库归 6c。**单表故障隔离**：某表查询失败不炸整批——声明条件执行报错（如字面量与列类型不匹配触发隐式转换 invalid input）本身是诊断发现（条件独立执行都跑不通，真实 ETL 照写同样炸，闸口①提前抓到），自动降级裸查给结论，裸查也挂才跳过该表。
+关联三类边界场景一次拿全：**声明语义精确计数**（驱动行数 vs 声明关联后行数——膨胀/INNER 丢行无取样噪声；字面量值形态按列类型开局修正，char 列裸数值=声明错误会被披露）+ **空关联率与未命中键样例**（LEFT join 关联不上率——值域/内容不一致维度）+ 确认膨胀才逐表键唯一性归因（闸口①批量省略逐表与承重墙，6b 深查全量）。中间表规则闸口①不可查（表未建，UT 兜底）。报告分规则**全量**落 `_internal/diagnose/fanout_all.md`（中间结论不吞）；exit 2=无库归 6c。**单表故障隔离**：某表查询失败不炸整批——降级裸查/跳过续跑，报错原文与隐式转换提示照常披露。
 
 ① **主控读 UT 报告**（含重复键+样例+开发环境数据免责提示+⓪ 定位结论），用 question 问人根因：
 ```

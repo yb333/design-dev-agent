@@ -231,10 +231,12 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
     (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
     ex = _patch(monkeypatch, h)
     results = diagnose_all(tmp_path / "ts.json")
-    codes = [c for c, _ in results]
+    codes = [c for c, _, _ in results]
     assert codes == ["R0001", "R0002"]
-    assert "发散不来自关联" in dict(results)["R0001"]
+    assert "发散不来自关联" in {c: k for c, k, _ in results}["R0001"]
     assert ex.created_schemas == ["dws"]  # 全批一次连接
+    # 中间结论不吞（内网实证 --all 曾只留一行总结论）——分规则完整报告行必须保留
+    assert all(len(rlines) >= 2 for _, _, rlines in results if rlines)
 
 
 class TestFaultIsolation:
@@ -283,6 +285,87 @@ class TestFaultIsolation:
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}]), h)
         joined = "\n".join(ex.captured)
         assert "COUNT(1)" in joined and "COUNT(*)" not in joined
+
+
+class TestJoinCountAndValueForm:
+    """声明语义精确计数（闸口①满配核心）+ 字面量值形态开局修正（2026-09-02 第一批）。"""
+
+    def _write_ts(self, tmp_path, joins, rule_filter=""):
+        ts = _ts(joins, extra_rule={"filter": rule_filter} if rule_filter else None)
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        return ts
+
+    def test_gate_mode_clean_skips_per_table(self, monkeypatch, tmp_path):
+        """闸口①批量（deep=False）：计数无膨胀 → 逐表归因省略（省 N 条 count distinct）。"""
+        def h(sql):
+            if " AS jc " in sql:
+                return [{"jc": 100}]                       # before=after 无膨胀无丢行
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        self._write_ts(tmp_path, [
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+        ex = _patch(monkeypatch, h)
+        from diagnose_fanout import diagnose
+        lines, concl = diagnose(tmp_path / "ts.json", "R0001", deep=False)
+        joined = "\n".join(lines)
+        assert "✓ 无膨胀无丢行" in joined and "逐表归因] 未触发" in joined
+        assert "COUNT(DISTINCT" not in "\n".join(ex.captured[1:])  # 只有驱动自检 + 计数
+
+    def test_gate_mode_fanout_runs_attribution(self, monkeypatch, tmp_path):
+        """确认膨胀 → 逐表归因照跑（闸口①模式下定位嫌疑表）。"""
+        def h(sql):
+            if " AS jc " in sql:
+                return [{"jc": 130}] if sql.count("JOIN") else [{"jc": 100}]
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        self._write_ts(tmp_path, [
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+        ex = _patch(monkeypatch, h)
+        from diagnose_fanout import diagnose
+        lines, concl = diagnose(tmp_path / "ts.json", "R0001", deep=False)
+        joined = "\n".join(lines)
+        assert "膨胀 30 行" in joined and "精确膨胀" in concl
+        assert "[JOIN 1]" in joined                          # 归因跑了
+
+    def test_literal_form_fixed_upfront(self, monkeypatch, tmp_path):
+        """值形态开局修正：char 列裸数值（c.status=1）→ SQL 里已是 = '1'，并披露声明错误。"""
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "schema_cache.json").write_text(json.dumps(
+            {"tables": {"dim.dim_cust": {"status": "varchar(2)"}}}), encoding="utf-8")
+        self._write_ts(tmp_path, [
+            {"alias": "c", "type": "LEFT JOIN",
+             "condition": "a.cust_code = c.cust_code and c.status = 1"}])
+
+        def h(sql):
+            if " AS jc " in sql:
+                return [{"jc": 50}]
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        lines, _, ex = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        joined = "\n".join(lines)
+        assert "字面量形态" in joined and "声明本身需修正" in joined
+        assert "c.status = '1'" in "\n".join(ex.captured)   # 开局修正进 SQL，无重试
+        assert "c.status = 1" not in "\n".join(ex.captured).replace("c.status = '1'", "")
+
+    def test_hits_carries_partner_filter(self, monkeypatch, tmp_path):
+        """实锤查询带伙伴侧过滤（规则 filter 归属项剥别名后拼入——不带会误计已排除行）。"""
+        def h(sql):
+            if "GROUP BY" in sql:
+                return [{"cust_code": "C001", "c": 3}]
+            if " IN (" in sql:
+                return [{"hits": 2}]
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 88, "nulls": 0}]
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        ts = self._write_ts(tmp_path, [
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}],
+            rule_filter="a.del_flag = 'N' and c.tenant = 9")
+        lines, _, ex = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        hits_sql = next(s for s in ex.captured if " IN (" in s)
+        # 伙伴=c 的对端是驱动表 a——伙伴侧过滤=a 的归属项进实锤查询（不带会误计已排除行）
+        assert "del_flag = 'N'" in hits_sql
 
 
 def test_rule_not_found_raises(tmp_path):
