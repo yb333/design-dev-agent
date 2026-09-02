@@ -219,11 +219,23 @@ python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_inter
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --all
 ```
 
-然后**立即调 question 停下等用户确认**（question 里带上摘要 + 发散定位结论；不允许跑完直接进编码段）：
+然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**question 模板**（四个选项一个不少——退 BA 是一等选项，发散检出时人大概率选它）：
+
+```
+question("闸口①设计确认（{资产}）：{gate_summary 摘要——表/规则数/字段数}
+"
+         "关联质量：{diagnose_fanout 结论——不唯一表+条件原文+人判方向 / 矛盾信号 / 全部通过}
+"
+         "请选择：",
+         options=["确认设计，进入编码",
+                  "需要修改设计（说明哪里改→回 designer）",
+                  "源端输入问题→退 BA（修 mapping/源数据后重跑 1a 全流程）",
+                  "放弃"])
+```
 
 - 用户选"确认设计，进入编码" → 进入步骤 4
-- 用户选"需要修改"（说明哪里改）→ 回步骤 2 重新调 designer
-- 发散/关联类发现人判为**源端输入问题** → 退 BA（人协调）修 mapping/源数据后**重跑 1a 全流程**（输入变更全流程重来——恢复执行规则同款）
+- 用户选"需要修改设计"（说明哪里改）→ 回步骤 2 重新调 designer
+- 用户选"源端输入问题→退 BA" → 人协调 BA 修源端（数据一对多/脏/关联声明），修完**重跑 1a 全流程**（输入变更全流程重来——恢复执行规则同款）
 - 用户选"放弃" → 结束
 
 > **非交互例外只有一个**：用户/调用方**显式声明**非交互（如 `opencode run` 批量评测、契约参数 `交互: non-interactive`）。不得自行判定环境非交互而跳过 question。
