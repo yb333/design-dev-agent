@@ -487,7 +487,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                         lines.append(f"  ｜输入声明（mapping）：{mapping_decl}")
                         if miss:
                             lines.append(f"  ｜→ 设计漏了输入声明的条件：{'；'.join(miss)}"
-                                         f"（补上大概率收敛——问题在**设计侧**）")
+                                         f"（补上大概率收敛——问题在**设计侧**；若业务本就一对多则归 BA 确认粒度）")
                         elif extra:
                             lines.append(f"  ｜→ 设计自创了输入没有的条件：{'；'.join(extra)}（收敛口径是设计判断）")
                         else:
@@ -524,7 +524,8 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                         lines.append(f"  ｜当前数据命中驱动表 {hits} 行——会实际膨胀")
                     elif hits == 0:
                         lines.append(f"  ｜当前数据未命中驱动表——暂不膨胀（生产数据可能命中，别默默放过）")
-                    lines.append(f"  ｜人判方向：补条件收敛 / 换键（设计侧）；源表数据脏（环境）——工具不猜")
+                    lines.append(f"  ｜人判方向：**退 BA 修源端输入**（数据一对多/脏/关联声明——现实中大概率此项，改后重跑 1a 全流程）；"
+                                 f"SE 拍板设计侧收敛（补条件/换键）——工具不猜")
                     verdicts.append(f"JOIN {i} {sch}.{tbl}：关联键在条件下不唯一（重复 {dup} 行"
                                     + ("，当前命中会膨胀" if hits > 0 else "，当前未命中") + "）")
                 else:
@@ -538,7 +539,8 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
         if jc_state == "fanout" and not any("不唯一" in v for v in verdicts):
             # 矛盾信号：各键条件下都唯一但拼起来膨胀——贴条件原文给人判（数据脏？条件含函数/非等值？）
             lines.append("[⚠ 需人确认] 各关联键在条件下都唯一，但拼起来却膨胀——矛盾信号："
-                         "源表数据脏，或关联条件含函数/非等值部分（键唯一性检查覆盖不到）。关联条件原文：")
+                         "源端数据问题（退 BA：脏数据/统计漂移——现实中大概率此项），"
+                         "或关联条件含函数/非等值部分（键唯一性查不到，人核原文）。关联条件原文：")
             for i, j in enumerate(joins_decl, 1):
                 al = (j.get("alias") or "").strip().lower()
                 ent = binding.get(al) or ("", "")
