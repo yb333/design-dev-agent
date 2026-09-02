@@ -23,12 +23,13 @@ from diagnose_fanout import diagnose  # noqa: E402
 
 
 class _R:
-    def __init__(self, rows):
-        self.success, self.rows = True, rows
+    def __init__(self, rows=None, success=True, error=""):
+        self.success, self.rows, self.error = success, rows or [], error
 
 
 class _FakeEx:
-    """按 SQL 特征回放结果；capture 收集全部 SQL 供断言（复合键/过滤是否真进了查询）。"""
+    """按 SQL 特征回放结果；capture 收集全部 SQL 供断言。
+    handler 返回 ("ERR", "msg") 模拟查询失败（executor 报错路径）。"""
 
     def __init__(self, handler):
         self.h = handler
@@ -39,7 +40,10 @@ class _FakeEx:
 
     def execute(self, sql):
         self.captured.append(sql)
-        return _R(self.h(sql))
+        out = self.h(sql)
+        if isinstance(out, tuple) and out and out[0] == "ERR":
+            return _R(success=False, error=out[1])
+        return _R(out)
 
     def close(self):
         pass
@@ -231,6 +235,54 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
     assert codes == ["R0001", "R0002"]
     assert "发散不来自关联" in dict(results)["R0001"]
     assert ex.created_schemas == ["dws"]  # 全批一次连接
+
+
+class TestFaultIsolation:
+    """单表故障隔离（内网实证：一张表报错曾炸停整批致报告缺失）+
+    隐式转换报错识别（声明条件字面量与列类型不匹配——条件独立执行都跑不通，
+    真实 ETL 照写同样炸，闸口①提前抓到）。"""
+
+    def test_declared_filter_error_degrades_to_bare(self, monkeypatch, tmp_path):
+        """声明条件查询炸（invalid input 隐式转换）→ 降级裸查给结论+提示，其余表继续。"""
+        def h(sql):
+            if "dim_cust" in sql and "WHERE" in sql:
+                return ("ERR", "invalid input for type numeric: 'R42'")
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 87, "nulls": 0}]   # 裸查发散
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code",
+             "filter": "c.status = 1"},
+            {"alias": "p", "type": "LEFT JOIN", "condition": "a.pay_id = p.pay_id"}]), h)
+        joined = "\n".join(lines)
+        assert "降级裸查" in joined and "隐式转换" in joined and "invalid input" in joined
+        assert "重复 3 行" in joined                       # 裸查结论仍给出
+        assert "JOIN 2" in joined                          # 后续表继续诊断
+
+    def test_table_failure_skips_but_rest_continue(self, monkeypatch, tmp_path):
+        """裸查也失败 → 跳过该表，其余表照常出结论，不炸整批。"""
+        def h(sql):
+            if "dim_cust" in sql:
+                return ("ERR", "relation does not exist")
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"},
+            {"alias": "p", "type": "LEFT JOIN", "condition": "a.pay_id = p.pay_id"}]), h)
+        joined = "\n".join(lines)
+        assert "查询失败跳过（其余表继续）" in joined
+        assert "[JOIN 2] ods.pay" in joined and "✓ 唯一" in joined
+
+    def test_count_1_not_count_star(self, monkeypatch, tmp_path):
+        """COUNT(1) 而非 COUNT(*)（平台口径）。"""
+        def h(sql):
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        _, _, ex = _run(monkeypatch, tmp_path, _ts([
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}]), h)
+        joined = "\n".join(ex.captured)
+        assert "COUNT(1)" in joined and "COUNT(*)" not in joined
 
 
 def test_rule_not_found_raises(tmp_path):

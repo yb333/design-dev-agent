@@ -102,12 +102,28 @@ def _strip_alias(term: str, alias: str) -> str | None:
     return stripped
 
 
+def _err_brief(e, limit: int = 120) -> str:
+    """报错原文展示：剥掉自带 的 SQL 回显尾巴（截断难读），限长。"""
+    return str(e).split("| SQL:")[0].strip()[:limit]
+
+
+def _cast_err_hint(err_text) -> str:
+    """识别隐式转换类报错（回放声明条件时字面量与列类型不匹配——如 varchar 列
+    = 数值字面量，内核把列值隐式 cast 成 numeric，脏值即炸。这本身是诊断发现：
+    条件独立执行都跑不通，真实 ETL 照写同样炸，闸口①提前抓到）。"""
+    low = str(err_text).lower()
+    if "invalid input" in low or "无效" in low:
+        return "（疑似声明条件的字面量与列类型不匹配触发隐式转换——该条件独立执行已跑不通，真实 ETL 照写同样炸，闸口①提前抓到）"
+    return ""
+
+
 def _key_stat(db: _Db, schema: str, table: str, cols: list[str], where: str) -> dict:
     """count(*) vs count(distinct 组合键)（NULL 键行单独数——NULL 不参与 join 不会发散）。"""
     key = ", ".join(cols)
     # NULL 键行数用 CASE（GaussDB=PG9.2 内核，无 FILTER 子句）——NULL 不参与 join 不会发散
+    # COUNT(1) 而非 COUNT(*)（平台口径，性能更合理）
     null_cond = " OR ".join(f"{c} IS NULL" for c in cols)
-    sql = (f"SELECT COUNT(*) AS total, COUNT(DISTINCT ({key})) AS uniq, "
+    sql = (f"SELECT COUNT(1) AS total, COUNT(DISTINCT ({key})) AS uniq, "
            f"SUM(CASE WHEN {null_cond} THEN 1 ELSE 0 END) AS nulls "
            f"FROM {schema}.{table}")
     if where:
@@ -119,10 +135,10 @@ def _key_stat(db: _Db, schema: str, table: str, cols: list[str], where: str) -> 
 
 def _dup_samples(db: _Db, schema: str, table: str, cols: list[str], where: str, top: int) -> list[dict]:
     key = ", ".join(cols)
-    sql = (f"SELECT {key}, COUNT(*) AS c FROM {schema}.{table}")
+    sql = (f"SELECT {key}, COUNT(1) AS c FROM {schema}.{table}")
     if where:
         sql += f" WHERE {where}"
-    sql += (f" GROUP BY {key} HAVING COUNT(*) > 1 ORDER BY c DESC, {key} LIMIT {top}")
+    sql += (f" GROUP BY {key} HAVING COUNT(1) > 1 ORDER BY c DESC, {key} LIMIT {top}")
     return db.rows(sql)
 
 
@@ -134,7 +150,7 @@ def _partner_hits(db: _Db, p_schema: str, p_table: str, p_cols: list[str],
         vals = ", ".join(_fmt_val(s.get(c)) for c in cols)
         tuples.append(f"({vals})")
     pkey = ", ".join(p_cols)
-    sql = (f"SELECT COUNT(*) AS hits FROM {p_schema}.{p_table} "
+    sql = (f"SELECT COUNT(1) AS hits FROM {p_schema}.{p_table} "
            f"WHERE ({pkey}) IN ({', '.join(tuples)})")
     return int(db.one(sql).get("hits") or 0)
 
@@ -178,16 +194,22 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
             sch, tbl = binding[driving]
             where = " AND ".join(filter(None, (_strip_alias(x, driving)
                                                 for x in _terms_for_alias(rule_filter_terms, driving))))
-            st = _key_stat(db, sch, tbl, [c.lower() for c in business_key], where)
-            dup = st["total"] - st["nulls"] - st["uniq"]
-            if dup > 0:
-                verdicts.append(f"驱动表 {sch}.{tbl} 自身 business_key 重复 {dup} 行（非关联问题——粒度/主键）")
-                lines.append(f"[驱动表自检] {sch}.{tbl}（{driving}）：{st['total']} 行 / "
-                             f"business_key 唯一 {st['uniq']}（NULL 键 {st['nulls']}）→ "
-                             f"✗ 自身重复 {dup} 行——发散不来自 JOIN，查粒度/business_key")
-            else:
-                lines.append(f"[驱动表自检] {sch}.{tbl}（{driving}）：{st['total']} 行 / "
-                             f"business_key 唯一 {st['uniq']}（NULL 键 {st['nulls']}）→ ✓ 自身粒度与主键一致")
+            try:
+                st = _key_stat(db, sch, tbl, [c.lower() for c in business_key], where)
+            except RuntimeError as e:
+                lines.append(f"[驱动表自检] {sch}.{tbl} 查询失败跳过（其余继续）："
+                             f"{_err_brief(e)}{_cast_err_hint(e)}")
+                st = None
+            if st:
+                dup = st["total"] - st["nulls"] - st["uniq"]
+                if dup > 0:
+                    verdicts.append(f"驱动表 {sch}.{tbl} 自身 business_key 重复 {dup} 行（非关联问题——粒度/主键）")
+                    lines.append(f"[驱动表自检] {sch}.{tbl}（{driving}）：{st['total']} 行 / "
+                                 f"business_key 唯一 {st['uniq']}（NULL 键 {st['nulls']}）→ "
+                                 f"✗ 自身重复 {dup} 行——发散不来自 JOIN，查粒度/business_key")
+                else:
+                    lines.append(f"[驱动表自检] {sch}.{tbl}（{driving}）：{st['total']} 行 / "
+                                 f"business_key 唯一 {st['uniq']}（NULL 键 {st['nulls']}）→ ✓ 自身粒度与主键一致")
 
         # ── 逐 join 表按声明条件查 ──
         joins_decl = rule.get("joins") or []
@@ -224,19 +246,45 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
             # 单表查询 FROM 无别名——逐项剥别名前缀；剥完仍含其他别名引用的跳过（宁放过）
             where = " AND ".join(dict.fromkeys(
                 x for x in (_strip_alias(tm, alias) for tm in terms) if x))
-            st = _key_stat(db, sch, tbl, own, where)
-            dup = st["total"] - st["nulls"] - st["uniq"]
             head = (f"[JOIN {i}] {sch}.{tbl}（{alias}）键({', '.join(own)})"
                     + (f" [声明过滤: {where}]" if where else ""))
+            # ★ 单表故障隔离（内网实证：一张表报错曾炸停整批致报告缺失）——
+            # 声明条件独立执行失败本身是诊断发现；降级裸查继续，裸查也挂才跳过该表
+            try:
+                st = _key_stat(db, sch, tbl, own, where)
+            except RuntimeError as e:
+                hint = _cast_err_hint(e)
+                try:
+                    bare = _key_stat(db, sch, tbl, own, "")
+                except RuntimeError as e2:
+                    verdicts.append(f"JOIN {i} {tbl}：查询失败跳过（其余表继续）")
+                    lines.append(f"{head}：查询失败跳过（其余表继续）。报错原文: {_err_brief(e2, 160)}")
+                    continue
+                dup_b = bare["total"] - bare["nulls"] - bare["uniq"]
+                tag = f"✗ 重复 {dup_b} 行（filter 承重且条件本身有问题）" if dup_b > 0 else "✓ 唯一"
+                verdicts.append(f"JOIN {i} {tbl}：声明条件查询失败{hint}；降级裸查{tag}")
+                lines.append(f"{head}：按声明条件查询失败{hint}，已降级裸查——"
+                             f"{bare['total']} 行/唯一 {bare['uniq']}（NULL {bare['nulls']}）→ {tag}；"
+                             f"报错原文: {_err_brief(e)}")
+                continue
+            dup = st["total"] - st["nulls"] - st["uniq"]
             if dup > 0:
-                samples = _dup_samples(db, sch, tbl, own, where, top)
+                try:
+                    samples = _dup_samples(db, sch, tbl, own, where, top)
+                except RuntimeError as e:
+                    lines.append(f"{head}：✗ 发散 {dup} 行（样例查询失败：{_err_brief(e, 100)}）")
+                    verdicts.append(f"JOIN {i} {tbl}：键重复 {dup} 行（样例未取到）")
+                    continue
                 hits, p_desc = 0, ""
                 if partner:
                     pa = next(iter(partner))
                     if pa in binding:
                         p_sch, p_tbl = binding[pa]
-                        hits = _partner_hits(db, p_sch, p_tbl, partner[pa], samples, own)
-                        p_desc = f"伙伴表 {p_sch}.{p_tbl}.{','.join(partner[pa])} 命中 {hits} 行"
+                        try:
+                            hits = _partner_hits(db, p_sch, p_tbl, partner[pa], samples, own)
+                            p_desc = f"伙伴表 {p_sch}.{p_tbl}.{','.join(partner[pa])} 命中 {hits} 行"
+                        except RuntimeError as e:
+                            p_desc = f"实锤查询失败（{_err_brief(e, 80)}）"
                 verdict = (f"{tbl} 键重复 {dup} 行" + ("且命中伙伴表——发散嫌疑成立" if hits else
                           "但未命中伙伴表（实际可能不膨胀）"))
                 verdicts.append(f"JOIN {i} {sch}.{tbl}：{verdict}")
@@ -248,8 +296,12 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
             else:
                 extra = ""
                 if where:  # filter 承重墙：裸查重复但声明条件下唯一 ⇒ SQL 漏 filter 即发散
-                    bare = _key_stat(db, sch, tbl, own, "")
-                    if bare["total"] - bare["nulls"] - bare["uniq"] > 0:
+                    try:
+                        bare = _key_stat(db, sch, tbl, own, "")
+                    except RuntimeError as e:
+                        bare = None
+                        lines.append(f"{head}：✓ 唯一（承重墙裸查失败：{_err_brief(e, 80)}）")
+                    if bare and bare["total"] - bare["nulls"] - bare["uniq"] > 0:
                         extra = (f"（⚠ filter 承重墙：裸查 {bare['total']}/唯一 {bare['uniq']} 重复——"
                                  f"coder 的 SQL 漏写该过滤即发散，先核 SQL）")
                         verdicts.append(f"JOIN {i} {tbl}：声明条件下唯一但裸查重复（filter 承重——核 SQL 是否漏写）")
@@ -279,7 +331,7 @@ def diagnose_all(ts_path: Path, top: int = 5) -> list[tuple[str, str]]:
             try:
                 _, concl = diagnose(ts_path, code, top, db=db)
             except Exception as e:  # 单规则问题（别名绑不上/条件解析不了）不炸整批
-                concl = f"跳过（{str(e)[:120]}）"
+                concl = f"跳过（{_err_brief(e)}）"
             out.append((code, concl))
     finally:
         db.close()

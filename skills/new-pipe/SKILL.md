@@ -375,7 +375,7 @@ INSERT 成功但 UT 检查 FAIL（主键重复/空值/行数异常，报告带�
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --rule {rule_code}
 ```
 
-逐表**按声明条件**查键唯一性（复合键聚合 + joins[].filter / join_safety.join_filter / 规则 filter / condition 字面量项全部严格遵守）：发散表+重复键样例+伙伴表命中实锤、**filter 承重墙**（裸查重复/声明条件唯一 ⇒ SQL 疑似漏写过滤——高频根因）、驱动表 business_key 自检（排除"不是 join 的锅"）。链式关联无需逐层测试——每表在自己键上全局唯一即不可能放大，与顺序无关。报告落 `_internal/diagnose/fanout_{rule}.md`；exit 2=无库归 6c。
+逐表**按声明条件**查键唯一性（复合键聚合 + joins[].filter / join_safety.join_filter / 规则 filter / condition 字面量项全部严格遵守）：发散表+重复键样例+伙伴表命中实锤、**filter 承重墙**（裸查重复/声明条件唯一 ⇒ SQL 疑似漏写过滤——高频根因）、驱动表 business_key 自检（排除"不是 join 的锅"）。链式关联无需逐层测试——每表在自己键上全局唯一即不可能放大，与顺序无关。报告落 `_internal/diagnose/fanout_{rule}.md`；exit 2=无库归 6c。**单表故障隔离**：某表查询失败不炸整批——声明条件执行报错（如字面量与列类型不匹配触发隐式转换 invalid input）本身是诊断发现（条件独立执行都跑不通，真实 ETL 照写同样炸，闸口①提前抓到），自动降级裸查给结论，裸查也挂才跳过该表。
 
 ① **主控读 UT 报告**（含重复键+样例+开发环境数据免责提示+⓪ 定位结论），用 question 问人根因：
 ```
