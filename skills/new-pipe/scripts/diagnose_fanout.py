@@ -105,6 +105,44 @@ def _fix_literal_form(text: str, alias: str, binding: dict, coltypes: dict) -> t
     return pat.sub(_sub, text or ""), notes
 
 
+def _load_mapping_joins(ts_path: Path) -> dict:
+    """BA 的关联声明（rs_input 实体级 join_condition，按表短名）——设计 vs 输入
+    归属判别的依据。约定路径 ts 同级 _internal/rs_input.json 自动探测；探测不到
+    返回空 dict（对照降级为'声明不可得'，事实照报不猜）。"""
+    p = ts_path.parent / "_internal" / "rs_input.json"
+    try:
+        sts = json.loads(p.read_text(encoding="utf-8")).get("source_tables") or []
+        return {str(st.get("source_table") or "").rsplit(".", 1)[-1].lower():
+                str(st.get("join_condition") or "").strip()
+                for st in sts if st.get("source_table")}
+    except Exception:
+        return {}
+
+
+def _norm_term(term: str) -> str:
+    """条件项归一（空白折叠+小写）——声明对照用（文本级，等价性人看明细判）。"""
+    return re.sub(r"\s+", " ", str(term).strip()).lower()
+
+
+def _dup_anatomy(db: "_Db", schema: str, table: str, cols: list[str],
+                 key_vals: dict, limit: int = 3) -> str:
+    """重复组解剖：top 重复键取组内整行，报**组内值有差异的列**——人一眼看出
+    该补什么收敛/是不是撞键（事实披露，不猜收敛方式）。"""
+    cond = " AND ".join(f"{c} = {_fmt_val(key_vals.get(c))}" for c in cols)
+    try:
+        rows = db.rows(f"SELECT * FROM {schema}.{table} WHERE {cond} LIMIT {limit}")
+    except RuntimeError:
+        return ""
+    if len(rows) < 2:
+        return ""
+    diffs = []
+    for col in rows[0]:
+        vals = [str(r.get(col)) for r in rows]
+        if len(set(vals)) > 1:
+            diffs.append(f"{col}({'|'.join(vals)})")
+    return "、".join(diffs[:8])
+
+
 class _Db:
     """单连接走**目标 schema 的数据源**（部署事实：目标 schema 数据源有全部来源表
     权限，逐源 schema 连库会报"schema 不在 db 配置"——explore.py 同款语义）。
@@ -221,8 +259,9 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
         alias = (j.get("alias") or "").strip().lower()
         sch, tbl = binding[alias]
         cond, fix_notes = _fix_literal_form(j.get("condition") or "", alias, binding, coltypes)
-        for n in fix_notes:
-            lines.append(f"[字面量形态] {n}")
+        for n in fix_notes:  # 逐表段已披露过的不再重复
+            if f"[字面量形态] {n}" not in "\n".join(lines):
+                lines.append(f"[字面量形态] {n}")
         jt = (j.get("type") or "").strip().upper() or "INNER JOIN"
         jt_by_alias[alias] = jt
         join_parts.append(f"{jt} {sch}.{tbl} {alias} ON ({cond})")
@@ -281,12 +320,12 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
     return "clean"
 
 
-def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = None,
-             deep: bool = True) -> tuple[list[str], str]:
+def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = None) -> tuple[list[str], str]:
     """跑诊断，返回 (报告行列表, 结论一句话)。异常上抛由 main 分流。
     db 传入则复用连接（批量模式单连接跑全部规则），不传入则自建自关。
-    deep=True（6b 深查）：计数 + 逐表唯一性/承重墙/实锤全量；
-    deep=False（闸口①批量）：精确计数为主，确认膨胀才逐表归因，无承重墙。"""
+    结构（2026-09-02 定稿，闸口①与 6b 同构）：驱动自检 → 逐表【声明对照（设计
+    vs 输入归属的事实）+ 键唯一性(主判据) + 重复组解剖 + 承重墙 + 命中】→
+    声明计数（当前数据严重性：膨胀/丢行/空关联）。只反馈事实，不猜收敛方式。"""
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
     rule = (ts.get("rules") or {}).get(rule_code) \
         or ((ts.get("init") or {}).get("rules") or {}).get(rule_code)
@@ -308,6 +347,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
     rule_filter_terms = _split_terms(rule.get("filter") or "")
     business_key = (ts.get("design") or {}).get("business_key") or []
     coltypes = _load_coltypes(ts_path)
+    mapping_joins = _load_mapping_joins(ts_path)
 
     connect_schema = str(((ts.get("meta", {}).get("target", {}) or {})
                            .get("f_table", {}) or {}).get("schema") or "").strip()
@@ -344,18 +384,11 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                     lines.append(f"[驱动表自检] {sch}.{tbl}（{driving}）：{st['total']} 行 / "
                                  f"business_key 唯一 {st['uniq']}（NULL 键 {st['nulls']}）→ ✓ 自身粒度与主键一致")
 
-        # ── 声明语义精确计数（膨胀/丢行/空关联——闸口①满配核心，6b 也带实锤）──
-        jc_state = _join_counts(db, rule, binding, driving, tmp_aliases, coltypes,
-                                rule.get("filter") or "", top, lines, verdicts)
-
-        # ── 逐 join 表按声明条件查（deep=6b 深查全量；闸口①仅在确认膨胀时归因）──
+        # ── 逐 join 表（主判据：声明条件下键唯一性 + 声明对照归属 + 证据解剖）──
         joins_decl = rule.get("joins") or []
         if not joins_decl:
             lines.append("[关联] 本规则无 joins——无关联可查，发散不来自 JOIN（查驱动表粒度/主键）")
-        if not deep and jc_state != "fanout":
-            if joins_decl:
-                lines.append("[逐表归因] 未触发（闸口①批量模式：精确计数无膨胀，逐表统计与承重墙省略——6b 深查或膨胀时才跑）")
-        else:
+        if True:
             for i, j in enumerate(joins_decl, 1):
                 alias = (j.get("alias") or "").strip().lower()
                 sch_tbl = binding.get(alias)
@@ -393,6 +426,25 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                     x for x in (_strip_alias(tm, alias) for tm in terms) if x))
                 head = (f"[JOIN {i}] {sch}.{tbl}（{alias}）键({', '.join(own)})"
                         + (f" [声明过滤: {where}]" if where else ""))
+                # ★ 声明对照（设计 vs 输入归属的事实判据——确定性文本比对，不猜语义）：
+                # 输入声明了但设计没写=漏条件；设计有输入没有=自创/改写；一致/未声明照实陈述
+                mapping_decl = mapping_joins.get(tbl.rsplit(".", 1)[-1].lower(), "")
+                if mapping_decl:
+                    d_set = {_norm_term(x) for x in _split_terms(cond)}
+                    m_set = {_norm_term(x) for x in _split_terms(mapping_decl)}
+                    miss = [x for x in _split_terms(mapping_decl) if _norm_term(x) not in d_set]
+                    extra = [x for x in _split_terms(cond) if _norm_term(x) not in m_set]
+                    if miss:
+                        lines.append(f"  [声明对照] ✗ 设计漏了输入声明的条件：{'；'.join(miss)}"
+                                     f"——键不唯一时优先怀疑漏条件（设计侧修正）")
+                    elif extra:
+                        lines.append(f"  [声明对照] △ 设计自创/改写了输入没有的条件：{'；'.join(extra)}"
+                                     f"（收敛口径是设计判断）")
+                    else:
+                        lines.append(f"  [声明对照] ✓ 与输入声明一致——键不唯一属输入侧问题"
+                                     f"（BA 声明的关联在数据上不成立，退 BA）")
+                else:
+                    lines.append(f"  [声明对照] ○ 输入未声明此关联（designer 自设）——键唯一性属设计判断")
                 # ★ 单表故障隔离（内网实证：一张表报错曾炸停整批致报告缺失）——
                 # 声明条件独立执行失败本身是诊断发现；降级裸查继续，裸查也挂才跳过该表
                 try:
@@ -443,6 +495,9 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                                  f"→ ✗ 发散 {dup} 行")
                     lines.append(f"  重复键 top{len(samples)}：" + "、".join(
                         f"{'|'.join(str(s.get(c)) for c in own)}×{s.get('c')}" for s in samples))
+                    anatomy = _dup_anatomy(db, sch, tbl, own, samples[0])
+                    if anatomy:
+                        lines.append(f"  重复组解剖（top1 键组内差异列，判收敛/撞键用）：{anatomy}")
                     lines.append(f"  实锤：{p_desc or '无伙伴表可核'} → {verdict}")
                 else:
                     extra = ""
@@ -458,6 +513,10 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                             verdicts.append(f"JOIN {i} {tbl}：声明条件下唯一但裸查重复（filter 承重——核 SQL 是否漏写）")
                     lines.append(f"{head}：{st['total']} 行 / 唯一 {st['uniq']}（NULL {st['nulls']}）"
                                  f"→ ✓ 唯一{extra}")
+
+        # ── 声明计数（严重性：当前数据下膨胀/丢行/空关联——与唯一性定性互补）──
+        _join_counts(db, rule, binding, driving, tmp_aliases, coltypes,
+                     rule.get("filter") or "", top, lines, verdicts)
     finally:
         if owns_db:
             db.close()
@@ -469,8 +528,8 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
 
 
 def diagnose_all(ts_path: Path, top: int = 5) -> list[tuple[str, str, list[str]]]:
-    """全规则批量（闸口①前用）：rules + init.rules 逐规则，共享单连接，闸口①深度
-    （deep=False：精确计数为主，膨胀才逐表归因）；单规则异常跳过不炸整批。
+    """全规则批量（闸口①前用）：rules + init.rules 逐规则，共享单连接（与单规则
+    同构：逐表唯一性主判据 + 声明对照 + 声明计数严重性）；单规则异常跳过不炸整批。
     返回 [(code, 结论, 完整报告行)]——**中间结论不吞**（内网实证 --all 曾只留一行总结论）。"""
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
     codes = list((ts.get("rules") or {}).keys()) \
@@ -482,7 +541,7 @@ def diagnose_all(ts_path: Path, top: int = 5) -> list[tuple[str, str, list[str]]
     try:
         for code in codes:
             try:
-                rlines, concl = diagnose(ts_path, code, top, db=db, deep=False)
+                rlines, concl = diagnose(ts_path, code, top, db=db)
             except Exception as e:  # 单规则问题（别名绑不上/条件解析不了）不炸整批
                 concl, rlines = f"跳过（{_err_brief(e)}）", []
             out.append((code, concl, rlines))

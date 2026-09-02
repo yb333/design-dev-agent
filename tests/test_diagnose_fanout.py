@@ -160,7 +160,9 @@ class TestDeclaredConditionsHonored:
         lines, _, ex = _run(monkeypatch, tmp_path, ts, h)
         joined = "\n".join(ex.captured)
         assert "del_flag = 'N'" in joined and "is_current = 1" in joined
-        assert "c." not in joined.split("WHERE")[-1]           # FROM 无别名，WHERE 不得残留别名前缀
+        # 单表统计查询（COUNT(DISTINCT)）的 FROM 无别名——WHERE 不得残留别名前缀
+        stat_sql = next(s for s in ex.captured if "COUNT(DISTINCT" in s and "dim_cust" in s and "WHERE" in s)
+        assert "c." not in stat_sql.split("WHERE", 1)[1].split("GROUP BY")[0]
 
     def test_filter_load_bearing_wall(self, monkeypatch, tmp_path):
         """裸查重复但声明条件唯一 → filter 承重墙（SQL 漏写即发散）。"""
@@ -239,6 +241,69 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
     assert all(len(rlines) >= 2 for _, _, rlines in results if rlines)
 
 
+    def test_declare_compare_three_facts(self, monkeypatch, tmp_path):
+        """声明对照三态（漏条件/自创/一致/未声明）——设计 vs 输入归属的确定性事实。"""
+        from diagnose_fanout import diagnose
+        # rs_input 实体级 join_condition：BA 声明了 is_current=1
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text(json.dumps({"source_tables": [
+            {"source_schema": "dim", "source_table": "dim_cust", "source_alias": "c",
+             "join_condition": "t.cust_code = c.cust_code and c.is_current = 1"}]}), encoding="utf-8")
+        # designer 漏了 is_current → 漏条件（设计侧）
+        self._write_ts(tmp_path, [
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+
+        def h(sql):
+            if " AS jc " in sql:
+                return [{"jc": 50}]
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        joined = "\n".join(lines)
+        assert "设计漏了输入声明的条件" in joined and "is_current = 1" in joined
+        assert "设计侧修正" in joined
+
+    def test_declare_compare_consistent_points_to_input(self, monkeypatch, tmp_path):
+        from diagnose_fanout import diagnose
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text(json.dumps({"source_tables": [
+            {"source_schema": "dim", "source_table": "dim_cust", "source_alias": "c",
+             "join_condition": "a.cust_code = c.cust_code"}]}), encoding="utf-8")
+        self._write_ts(tmp_path, [
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+
+        def h(sql):
+            if " AS jc " in sql:
+                return [{"jc": 50}]
+            return [{"total": 50, "uniq": 50, "nulls": 0}]
+
+        lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        assert "与输入声明一致" in "\n".join(lines) and "退 BA" in "\n".join(lines)
+
+    def test_dup_anatomy_diff_columns(self, monkeypatch, tmp_path):
+        """重复组解剖：top1 键组内差异列（判收敛/撞键的事实，不猜收敛方式）。"""
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text("{}", encoding="utf-8")
+        self._write_ts(tmp_path, [
+            {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+
+        def h(sql):
+            if "SELECT *" in sql:
+                return [{"cust_code": "C001", "is_current": "1", "eff_date": "2024"},
+                        {"cust_code": "C001", "is_current": "0", "eff_date": "2025"}]
+            if "GROUP BY" in sql:
+                return [{"cust_code": "C001", "c": 2}]
+            if " IN (" in sql:
+                return [{"hits": 1}]
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 89, "nulls": 0}]
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        lines, concl, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
+        joined = "\n".join(lines)
+        assert "重复组解剖" in joined and "is_current" in joined and "eff_date" in joined
+
+
 class TestFaultIsolation:
     """单表故障隔离（内网实证：一张表报错曾炸停整批致报告缺失）+
     隐式转换报错识别（声明条件字面量与列类型不匹配——条件独立执行都跑不通，
@@ -296,8 +361,8 @@ class TestJoinCountAndValueForm:
         (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
         return ts
 
-    def test_gate_mode_clean_skips_per_table(self, monkeypatch, tmp_path):
-        """闸口①批量（deep=False）：计数无膨胀 → 逐表归因省略（省 N 条 count distinct）。"""
+    def test_per_table_always_runs_even_clean(self, monkeypatch, tmp_path):
+        """2026-09-02 定稿：逐表唯一性=主判据每表必跑（设计审查清单），无膨胀也不省。"""
         def h(sql):
             if " AS jc " in sql:
                 return [{"jc": 100}]                       # before=after 无膨胀无丢行
@@ -307,13 +372,13 @@ class TestJoinCountAndValueForm:
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
         ex = _patch(monkeypatch, h)
         from diagnose_fanout import diagnose
-        lines, concl = diagnose(tmp_path / "ts.json", "R0001", deep=False)
+        lines, concl = diagnose(tmp_path / "ts.json", "R0001")
         joined = "\n".join(lines)
-        assert "✓ 无膨胀无丢行" in joined and "逐表归因] 未触发" in joined
-        assert "COUNT(DISTINCT" not in "\n".join(ex.captured[1:])  # 只有驱动自检 + 计数
+        assert "✓ 无膨胀无丢行" in joined
+        assert "COUNT(DISTINCT" in "\n".join(ex.captured)   # 逐表统计跑了
 
-    def test_gate_mode_fanout_runs_attribution(self, monkeypatch, tmp_path):
-        """确认膨胀 → 逐表归因照跑（闸口①模式下定位嫌疑表）。"""
+    def test_fanout_and_attribution_coexist(self, monkeypatch, tmp_path):
+        """膨胀（严重性）与逐表归因（定性）同报告——主次互补。"""
         def h(sql):
             if " AS jc " in sql:
                 return [{"jc": 130}] if sql.count("JOIN") else [{"jc": 100}]
@@ -323,10 +388,10 @@ class TestJoinCountAndValueForm:
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
         ex = _patch(monkeypatch, h)
         from diagnose_fanout import diagnose
-        lines, concl = diagnose(tmp_path / "ts.json", "R0001", deep=False)
+        lines, concl = diagnose(tmp_path / "ts.json", "R0001")
         joined = "\n".join(lines)
         assert "膨胀 30 行" in joined and "精确膨胀" in concl
-        assert "[JOIN 1]" in joined                          # 归因跑了
+        assert "[JOIN 1]" in joined                          # 逐表照跑
 
     def test_literal_form_fixed_upfront(self, monkeypatch, tmp_path):
         """值形态开局修正：char 列裸数值（c.status=1）→ SQL 里已是 = '1'，并披露声明错误。"""
