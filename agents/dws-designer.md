@@ -20,6 +20,9 @@ permission:
   # 一次覆盖（~ 展开支持；仓内/项目级形态下 skill 在 worktree 内不触发本权限，加了无害）
   external_directory:
     "~/.config/opencode/skills/**": allow
+# MCP 工具注册层剥除（官方路径；permission deny 拦不住"看见并尝试" #3756）
+tools:
+  mcp_*: false
   edit:
     "*": deny
     "**/ddlc_design_dev/_internal/design_decisions.yaml": allow
@@ -56,7 +59,7 @@ permission:
 设计方法论（**五层决策骨架**：锚点→字段血缘→加工路径→时间属性→工程保障）、领域知识（incremental-playbook / complexity-playbook / design-guide）、产出骨架模板——**全在 skill 里，是唯一维护源**。
 
 - 按 **SKILL.md §2** 的五层流程操作：每层有"想清楚什么 + 产出什么 + 闭合条件"，闭合由 assemble_ts 校验兜底，没过 fail-loud 拦回（报错带 `[第X层]` 标识，按标识查对应 playbook 修正）。
-- DB 访问一律走工具（explore 试算 / check_field 查字段——读 precheck 产的 schema_cache），无原始 DB 通道，**不尝试 MCP**。**禁 `python -c` 内联**（不落盘不可回溯——临时计算走 bash 原生工具，必须 python 的写 `_internal/diagnose/` 临时 .py 再执行）。
+- **你的全部 DB 能力 = explore / check_field 两个工具**（工具背后的连库与配置已就绪，你不需要关心）。环境里可能配置了其他 MCP 工具（如数据库 MCP）——**它们不属于本流程**（数据源/权限与本流程无关，调用必得错误结论），一律不调用、不用它做任何连通性或验证尝试。**禁 `python -c` 内联**（不落盘不可回溯——临时计算走 bash 原生工具，必须 python 的写 `_internal/diagnose/` 临时 .py 再执行）。
 - 写 decisions 的字段清单用本 skill 的 `pick_targets.py` 取料（yaml 最终格式贴入零调整，禁 python 拼 yaml）。
 - 路由：标了增量读 incremental-playbook / 评估复杂度或拆步骤读 complexity-playbook / 分布键分区依赖类型读 design-guide（SKILL.md §2 路由段有完整表）。
 

@@ -21,6 +21,9 @@ permission:
   # 一次覆盖（~ 展开支持；仓内/项目级形态下 skill 在 worktree 内不触发本权限，加了无害）
   external_directory:
     "~/.config/opencode/skills/**": allow
+# MCP 工具注册层剥除（官方路径；permission deny 拦不住"看见并尝试" #3756）
+tools:
+  mcp_*: false
   edit:
     "*": deny
     "**/ddlc_design_dev/etl/*.sql": allow
@@ -60,7 +63,7 @@ permission:
 - **DQ 检查 SQL 生成**（prompt 明确是 DQ 任务、产出 dq/）→ `skill({ name: "dws-dq" })`
 - **优化模式**（prompt 显式声明）→ `skill({ name: "dws-coding-opt" })`——职责不变，工作流换成以 baseline SQL 为底稿加列（老列投影不许动）
 
-各自的工作流/契约/规范全在对应 skill 里，是唯一维护源。**禁 `python -c` 内联**（不落盘不可回溯——临时计算走 bash 原生工具，必须 python 的写 `_internal/diagnose/` 临时 .py 再执行）。
+各自的工作流/契约/规范全在对应 skill 里，是唯一维护源。**环境里的 MCP 工具（如数据库 MCP）不属于本流程**（数据源/权限无关，调用必得错误结论）——一律不调用；表结构/字段一律以切片和 check_sql 为准。**禁 `python -c` 内联**（不落盘不可回溯——临时计算走 bash 原生工具，必须 python 的写 `_internal/diagnose/` 临时 .py 再执行）。
 
 **skill 加载兜底**（链上工具面收窄时，与读取兼容同族过渡条款——平台修复后退役）：skill 工具被拒/缺失时**不停流程**，Read 该 skill 目录的 `SKILL.md` 全文兜底（`~/.config/opencode/skills/{name}/SKILL.md` 或项目仓内 `skills/{name}/SKILL.md`），拿到即按其内容继续。
 
