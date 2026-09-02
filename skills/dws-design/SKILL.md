@@ -149,7 +149,7 @@ description: >-
   - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一。不唯一 → 对齐策略（GROUP BY 收敛 / 取最新有效行）。
     不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique；连不上库静默跳过）：
     ```
-    python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
+    python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_input.json \
         --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
     ```
   - ② **类型可比**：两边键类型大类必须可比（字符=数值这种等式本身就是错的）。视图里有类型直接判；
@@ -162,7 +162,7 @@ description: >-
   - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'、编码 vs 名称——不报错只静默空关联）。
     存疑时调 explore.py 重叠率试算取证：
     ```
-    python {location所在目录}/scripts/explore.py --ts {deliver}/ts.json \
+    python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_input.json \
         --check-overlap --schema-a {sch1} --table-a {t1} --key-a {k1} \
         --schema-b {sch2} --table-b {t2} --key-b {k2}
     ```

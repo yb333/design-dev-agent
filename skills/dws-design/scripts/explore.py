@@ -264,6 +264,19 @@ def run_join_key_check(target_schema: str, schema: str, table: str, key: str,
 # ts.json 读取（取 target schema 选源）
 # ============================================================
 
+def read_target_schema_from_rs(rs_path: str) -> str:
+    """设计期锚点：rs_input.json 的 meta.target.f_table.schema。
+
+    ★ 循环依赖破解（2026-09-03 实证）：explore 的数据源锚点曾是 --ts ts.json，
+    但设计期调 explore（第4层关联安全）时 ts.json 还没组装出来——传 --ts 文件
+    不存在、不传则退化为按源表 schema 选源（dim 等不在 db 配置必连不上），
+    designer 被逼去找替代通道（如 DB MCP——数据源/权限无关必得错误结论）。
+    rs_input 与 ts 同源同事实（meta.target），设计期它一直在。"""
+    data = json.loads(Path(rs_path).read_text(encoding="utf-8"))
+    target = ((data.get("meta") or {}).get("target") or {})
+    return str((target.get("f_table") or {}).get("schema") or "").strip()
+
+
 def read_target_schema(ts_path: str) -> str:
     """从 ts.json 读 target f_table 的 schema（用来按 schema 选数据源）。"""
     p = Path(ts_path)
@@ -285,7 +298,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="设计探索：JOIN 键唯一性试算 + 键值重叠率试算"
     )
-    parser.add_argument("--ts", help="ts.json 路径（取 target schema 选数据源）")
+    parser.add_argument("--ts", help="ts.json 路径（取 target schema 选数据源——组装后才存在）")
+    parser.add_argument("--rs", default="",
+                        help="rs_input.json 路径（设计期锚点：meta.target.f_table.schema——"
+                             "第4层调 explore 时 ts.json 还没产，用这个）")
     parser.add_argument("--schema", help="要试算的表 schema", default="")
     parser.add_argument("--table", help="要试算的表名", default="")
     parser.add_argument("--key", help="JOIN 键列名", default="")
@@ -308,15 +324,19 @@ def main():
     if args.check_overlap:
         # target schema：从 ts.json 取（选数据源用）；--schema-a 兜底
         target_schema = ""
-        if args.ts:
-            try:
-                target_schema = read_target_schema(args.ts)
-            except Exception as e:
-                print(format_skip(f"读取 ts.json 失败: {e}"))
-                return
+        for anchor, reader in ((args.ts, read_target_schema), (args.rs, read_target_schema_from_rs)):
+            if anchor:
+                try:
+                    target_schema = reader(anchor)
+                except Exception as e:
+                    print(format_skip(f"读取锚点失败（{anchor}）: {e}"))
+                    return
+                if target_schema:
+                    break
         target_schema = target_schema or args.schema_a
         if not target_schema:
-            print(format_skip("无法确定 target schema（请传 --ts 或 --schema-a）"))
+            print(format_skip("无法确定 target schema（设计期传 --rs rs_input.json；"
+                              "组装后可传 --ts；--schema-a 兜底）"))
             return
         missing = [n for n, v in (
             ("--schema-a", args.schema_a), ("--table-a", args.table_a), ("--key-a", args.key_a),
@@ -338,18 +358,22 @@ def main():
 
     # target schema：从 ts.json 取（选数据源用）；--schema 是要查的表的 schema
     target_schema = ""
-    if args.ts:
-        try:
-            target_schema = read_target_schema(args.ts)
-        except Exception as e:
-            print(format_skip(f"读取 ts.json 失败: {e}"))
-            return
+    for anchor, reader in ((args.ts, read_target_schema), (args.rs, read_target_schema_from_rs)):
+        if anchor:
+            try:
+                target_schema = reader(anchor)
+            except Exception as e:
+                print(format_skip(f"读取锚点失败（{anchor}）: {e}"))
+                return
+            if target_schema:
+                break
     else:
-        # 没传 ts.json，用 --schema 兜底选源
+        # 没传锚点，用 --schema 兜底选源（源表 schema 可能不在 db 配置——优先 --rs）
         target_schema = args.schema
 
     if not target_schema:
-        print(format_skip("无法确定 target schema（请传 --ts 或 --schema）"))
+        print(format_skip("无法确定 target schema（设计期传 --rs rs_input.json；"
+                          "组装后可传 --ts；--schema 兜底）"))
         return
 
     print(run_join_key_check(
