@@ -22,6 +22,28 @@ from conftest import make_type_risk_rs_input
 # ============================================================
 # assess_type_risk 单测
 # ============================================================
+class TestCharTruncExpr:
+    """字符收窄截取表达式唯一源（DWS 官方口径：varchar/varchar2=字节 SUBSTRB；
+    nvarchar 系=字符 SUBSTR——曾两轮镜像互反，2026-09-02 官方文档定案写死）。"""
+
+    def test_byte_semantics_families(self):
+        from type_compat import char_trunc_expr
+        assert char_trunc_expr("varchar2(50)", "s.remark") == "SUBSTRB(s.remark, 1, 50)"
+        assert char_trunc_expr("varchar(10)", "x") == "SUBSTRB(x, 1, 10)"   # varchar=varchar2 同类型（官方）
+        assert char_trunc_expr("VARCHAR2(30)", "x") == "SUBSTRB(x, 1, 30)"  # 大小写容错
+
+    def test_char_semantics_families(self):
+        from type_compat import char_trunc_expr
+        assert char_trunc_expr("nvarchar2(30)", "s.name") == "SUBSTR(s.name, 1, 30)"
+        assert char_trunc_expr("nvarchar(8)", "x") == "SUBSTR(x, 1, 8)"
+        assert char_trunc_expr("nchar(5)", "x") == "SUBSTR(x, 1, 5)"
+
+    def test_no_length_returns_empty(self):
+        from type_compat import char_trunc_expr
+        assert char_trunc_expr("text", "x") == ""          # 无长度上限不截
+        assert char_trunc_expr("", "x") == ""
+
+
 class TestAssessTypeRisk:
     def test_same_type_no_risk(self):
         assert assess_type_risk("varchar(50)", "varchar(50)") is None

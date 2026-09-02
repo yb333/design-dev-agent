@@ -31,10 +31,10 @@
 - 带小数的字符串直接转整数会爆错——中转 numeric：`CAST(CAST(x AS numeric) AS int8)`；注意 numeric→整数是**四舍五入**不是截断
 - 字符→日期必须带显式格式 `to_date(x, 'YYYYMMDD')`——不写格式走会话参数（nls_date_format），环境漂移即错位；格式与源字符串严格对齐
 - 数值/日期→字符用 `to_char(x, fmt)` 定格式（裸 CAST float→字符可能出科学计数法）
-- 目标长度收窄：加安全处理=截取（不置 NULL——尾部丢失由 precheck [截断披露] warn 在闸口①披露，业务不可接受才退 BA 改长度）。**截取单位跟目标类型的长度语义走**（2026-09-02 定调，平台实测口径）：
-  - 目标 **varchar/varchar2(n)=字符语义** → `SUBSTR(x, 1, n)` 按字符截
-  - 目标 **nvarchar/nvarchar2(n)=字节语义** → `SUBSTRB(x, 1, n)` 按字节截（ORA 兼容语义不切半个字符；环境实测有差异上报）
-  - 反例：nvarchar2(50) 目标用 SUBSTR(x,1,50) 按字符截——中文 3 字节/字符可到 150 字节，照样 value too long
+- 目标长度收窄：加安全处理=截取（不置 NULL——尾部丢失由 precheck [截断披露] warn 在闸口①披露，业务不可接受才退 BA 改长度）。**截取表达式写死唯一源 = type_compat.char_trunc_expr（不自己判断单位）**，语义依据 DWS 官方（2026-09-02 查证）：
+  - 目标 **varchar/varchar2(n)=字节长度**（两者为同一数据类型的不同表达）→ `SUBSTRB(x, 1, n)`
+  - 目标 **nvarchar/nvarchar2/nchar(n)=字符长度**（Unicode）→ `SUBSTR(x, 1, n)`
+  - 反例（官方口径镜像陷阱，已踩过）：varchar2(50) 目标用 SUBSTR(x,1,50) 按字符截——中文 3 字节/字符可到 150 字节，照样 value too long
 - JOIN/比较键两侧类型在源头对齐，不靠隐式转换（性能劣化+语义漂移）——键类型不齐回报调用方，不自作主张 CAST 凑合
 
 ---

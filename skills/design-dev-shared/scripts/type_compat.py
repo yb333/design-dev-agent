@@ -39,6 +39,28 @@ _TYPE_FAMILY_MAP = {
 # 国家字符集类型（长度按字符/国家字符集计）；与 varchar/varchar2/char（兼容模式决定字节/字符）口径可能不同
 _N_CHAR_BASES = {"nvarchar", "nvarchar2", "nchar"}
 
+# 字符长度语义（DWS 官方口径，2026-09-02 查证华为云 SQL 语法参考·字符类型：
+# https://support.huaweicloud.com/sqlreference-dws/dws_06_0012.html）：
+#   varchar(n)/varchar2(n) = **字节**长度（两者为同一数据类型的不同表达）；
+#   nvarchar(n)/nvarchar2(n)/nchar(n) = **字符**长度（Unicode）。
+# 截取单位必须跟目标类型走；未收录族默认按字节（保守：字节截同时满足字符上限）。
+# ★ 唯一源写死在此（char_trunc_expr）——designer/coder 直接取表达式，零疑惑零判断。
+
+
+def char_trunc_expr(target_type: str, ref: str) -> str:
+    """按目标类型长度语义给出截取表达式（字符收窄守卫的唯一写法源）。
+
+    字节语义 → SUBSTRB(ref, 1, n)；n 系字符语义 → SUBSTR(ref, 1, n)。
+    解析不出长度 (n)（如 text）返回空串——不截，调用方按需上报。
+    """
+    info = parse_type_info(target_type or "")
+    base = (info.get("base") or "").lower()
+    n = info.get("length")
+    if not base or not n:
+        return ""
+    fn = "SUBSTR" if base in _N_CHAR_BASES else "SUBSTRB"
+    return f"{fn}({ref}, 1, {n})"
+
 
 def _length_semantics_differ(base1: str, base2: str) -> bool:
     """字符类型 base 不同时，长度口径（字节 vs 字符）是否可能不同。
