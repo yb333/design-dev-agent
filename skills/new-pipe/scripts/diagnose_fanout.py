@@ -36,10 +36,10 @@ from sql_parse import parse_join_pairs
 
 
 def _split_terms(text: str) -> list[str]:
-    """把 condition/filter 按顶层 AND 拆成项（简单合取假设——我们的声明都是简单合取）。"""
+    """把 condition/filter 按顶层 AND 拆成项（含中文连词 且/并且——BA 自由文本）。"""
     if not text:
         return []
-    parts = re.split(r"\s+and\s+", str(text), flags=re.IGNORECASE)
+    parts = re.split(r"\s+and\s+|并且|且", str(text), flags=re.IGNORECASE)
     return [p.strip().strip("()").strip() for p in parts if p.strip()]
 
 
@@ -130,8 +130,17 @@ def _load_mapping_joins(ts_path: Path) -> dict:
 
 
 def _norm_term(term: str) -> str:
-    """条件项归一（空白折叠+小写）——声明对照用（文本级，等价性人看明细判）。"""
-    return re.sub(r"\s+", " ", str(term).strip()).lower()
+    """条件项归一——声明对照用（宁缺勿错：把常见写法差异归到同形，等价才可断言）。
+    ① 小写；② 引号串外的空白全去（'t.x = s.x'≡'t.x=s.x'，串内空白保留）；
+    ③ 纯两操作数等值项两侧排序（'s.x=t.x'≡'t.x=s.x'——SQL 等价）。"""
+    s = str(term).strip().lower()
+    segs = re.split(r"('[^']*'|\"[^\"]*\")", s)
+    s = "".join(seg if i % 2 else re.sub(r"\s+", "", seg) for i, seg in enumerate(segs))
+    eq = re.fullmatch(r"([a-z_][\w.]*)=([a-z_][\w.]*)", s)
+    if eq:
+        a, b = sorted((eq.group(1), eq.group(2)))
+        return f"{a}={b}"
+    return s
 
 
 def _dup_anatomy(db: "_Db", schema: str, table: str, cols: list[str],
@@ -495,11 +504,15 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                         miss = [x for x in _split_terms(mapping_decl) if _norm_term(x) not in d_set]
                         extra = [x for x in _split_terms(cond) if _norm_term(x) not in m_set]
                         lines.append(f"  ｜输入声明（mapping）：{mapping_decl}")
-                        if miss:
-                            lines.append(f"  ｜→ 设计漏了输入声明的条件：{'；'.join(miss)}"
-                                         f"（补上大概率收敛——问题在**设计侧**；若业务本就一对多则归 BA 确认粒度）")
-                        elif extra:
-                            lines.append(f"  ｜→ 设计自创了输入没有的条件：{'；'.join(extra)}（收敛口径是设计判断）")
+                        if miss or extra:
+                            # 宁缺勿错：归一后仍不等可能是真漏条件，也可能只是写法差异
+                            # （自由文本无穷变体）——不定罪设计侧，人核差异
+                            if miss:
+                                lines.append(f"  ｜△ 声明差异（人核：可能设计漏了条件，也可能只是写法差异）"
+                                             f"——输入声明独有：{'；'.join(miss)}")
+                            if extra:
+                                lines.append(f"  ｜△ 声明差异（人核：写法差异或设计自创收敛条件）"
+                                             f"——设计条件独有：{'；'.join(extra)}")
                         else:
                             lines.append(f"  ｜→ 设计与输入声明一致——问题在**输入侧**（BA 声明的关联在数据上不成立，退 BA）")
                     else:

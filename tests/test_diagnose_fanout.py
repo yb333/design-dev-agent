@@ -266,8 +266,7 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
 
         lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
         joined = "\n".join(lines)
-        assert "设计漏了输入声明的条件" in joined and "is_current = 1" in joined
-        assert "设计侧修正" in joined
+        assert "声明差异" in joined and "is_current = 1" in joined and "人核" in joined
 
     def test_declare_compare_consistent_points_to_input(self, monkeypatch, tmp_path):
         from diagnose_fanout import diagnose
@@ -308,6 +307,64 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
         lines, concl, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), h)
         joined = "\n".join(lines)
         assert "重复组解剖" in joined and "is_current" in joined and "eff_date" in joined
+
+
+class TestFreeTextNormalization:
+    """宁缺勿错（2026-09-02 用户原则确认）：BA 声明是自由文本，写法差异不得误判成
+    '设计漏条件'（会把人往改设计方向带）。归一强化：等号边空白/两侧写反/中文连词
+    都归到同形；归一后仍不等的只给中性'人核'措辞，不定罪设计侧。"""
+
+    def test_space_and_side_swap_normalized_equal(self):
+        from diagnose_fanout import _norm_term
+        assert _norm_term("t.x = s.x") == _norm_term("t.x=s.x")      # 等号边空白
+        assert _norm_term("s.x = t.x") == _norm_term("t.x=s.x")      # 两侧写反（SQL 等价）
+        assert _norm_term("C.Status = 'A B'") == _norm_term("c.status='A B'")  # 串内空白保留
+
+    def test_chinese_conjunction_split(self):
+        from diagnose_fanout import _split_terms
+        assert _split_terms("a.x=b.x 且 c.d=1") == ["a.x=b.x", "c.d=1"]
+        assert _split_terms("a.x=b.x 并且 c.d=1") == ["a.x=b.x", "c.d=1"]
+        assert _split_terms("a.x=b.x and c.d=1") == ["a.x=b.x", "c.d=1"]
+
+    def test_variant_writing_no_false_miss(self, monkeypatch, tmp_path):
+        """BA 写 't.cust_code = c.cust_code'（等号边空格+两侧反序）——归一后与
+        designer 条件一致，不得误报漏条件。"""
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text(json.dumps({"source_tables": [
+            {"source_schema": "dim", "source_table": "dim_cust", "source_alias": "c",
+             "join_condition": "c.cust_code = a.cust_code"}]}), encoding="utf-8")   # 两侧反序
+        ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+
+        def h(sql):
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 88, "nulls": 0}]
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        lines, _, _ = _run(monkeypatch, tmp_path, ts, h)
+        joined = "\n".join(lines)
+        assert "设计与输入声明一致" in joined and "声明差异" not in joined
+
+    def test_genuine_difference_stays_neutral(self, monkeypatch, tmp_path):
+        """真不等（输入声明确有设计没有的条件）→ 中性'人核'措辞，不定罪设计侧。"""
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text(json.dumps({"source_tables": [
+            {"source_schema": "dim", "source_table": "dim_cust", "source_alias": "c",
+             "join_condition": "a.cust_code = c.cust_code and c.is_current = 1"}]}), encoding="utf-8")
+        ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+
+        def h(sql):
+            if "dim_cust" in sql:
+                return [{"total": 90, "uniq": 88, "nulls": 0}]
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        lines, _, _ = _run(monkeypatch, tmp_path, ts, h)
+        joined = "\n".join(lines)
+        assert "声明差异" in joined and "人核" in joined
+        assert "问题在**设计侧**" not in joined          # 不定罪
 
 
 class TestDeclaredPrefixClean:
