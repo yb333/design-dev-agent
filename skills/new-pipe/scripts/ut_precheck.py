@@ -80,6 +80,43 @@ def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
     return errors
 
 
+# ── 执行计划两门槛（2026-09-02 第二批，用户定调：只做这两个，其他性能分析暂不做）──
+# 纯 EXPLAIN（毫秒级零执行成本——两门槛都是计划形状信号，无需 ANALYZE 实际行数）。
+# 过程可视：计划原文全量落盘 _internal/diagnose/plan_{rule}.txt（好坏都留，人可回溯），
+# stdout 只出结论。提示级不阻断（性能归人判——与质检体系"披露不代答"一致）。
+import re as _re
+
+# STREAM 算子计数：Gather/Redistribute/Broadcast 等（Streaming (type: GATHER) /
+# Stream[name:S1, type: REDISTRIBUTE] 两种格式都认）
+_STREAM_PATTERN = _re.compile(
+    r"(?:Streaming|Stream)\s*[\(\[]?[^)\]]*?type:\s*(GATHER|REDISTRIBUTE|BROADCAST)",
+    _re.IGNORECASE)
+# 不下推标志：CN 侧行列适配（DWS 常见不下推表征——内网实测后可在此调整模式）
+_NO_PUSHDOWN_MARKERS = ("Row Adapter",)
+STREAM_LIMIT = 50   # 算子出现个数上限（过多→大量线程消耗、性能下降）
+
+
+def _explain_check(executor, sql: str, rule_code: str, ts_path) -> tuple[list[str], str]:
+    """纯 EXPLAIN 拿计划文本，跑两门槛：①不下推 ②STREAM 算子数≤50。
+    返回 (问题列表[空=通过], 计划落盘路径)。EXPLAIN 失败=跳过门槛（披露不阻断）。"""
+    r = executor.execute(f"EXPLAIN {sql}")
+    if not r.success:
+        return [f"EXPLAIN 失败（计划门槛跳过）: {(r.error or '')[:100]}"], ""
+    plan_text = "\n".join(str(v) for row in (r.rows or []) for v in row.values())
+    plan_path = ts_path.parent / "_internal" / "diagnose" / f"plan_{rule_code}.txt"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(f"-- EXPLAIN {rule_code}\n{sql}\n\n{plan_text}\n", encoding="utf-8")
+    issues = []
+    streams = _STREAM_PATTERN.findall(plan_text)
+    if len(streams) > STREAM_LIMIT:
+        issues.append(f"STREAM 算子 {len(streams)} 个 > {STREAM_LIMIT}"
+                      f"（gather/redistribute/broadcast 过多→大量线程消耗性能下降，人判改写/分布键）")
+    hits = [m for m in _NO_PUSHDOWN_MARKERS if m in plan_text]
+    if hits:
+        issues.append(f"疑似不下推（计划含 {'/'.join(hits)}）——算子在 CN 执行性能劣化，人判")
+    return issues, str(plan_path)
+
+
 def main():
     parser = argparse.ArgumentParser(description="UT 预检（回退+DDL+SELECT，不写数据）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
@@ -205,6 +242,7 @@ def main():
                 continue
 
             select_sql = substitute_params(select_sql, param_values)
+            full_sql = select_sql  # 未采样版（计划分析用——TABLESAMPLE 会歪曲行数估算与计划形状）
             # 采样：CLI参数优先，不传则从 db-sources.json 的 security.sample_blocks 读默认
             sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
             select_sql = inject_tablesample(select_sql, sample_n)
@@ -234,6 +272,14 @@ def main():
                 print(f"  ✅ SELECT预检: {pre_rows}行, {pre_cols}列")
             r_result["pre_cols"] = pre_cols
             r_result["pre_rows"] = pre_rows
+            # 执行计划两门槛（未采样 SQL；计划原文落盘可回溯；提示级不阻断——性能人判）
+            plan_issues, plan_file = _explain_check(etl_executor, full_sql, rule_code, ts_path)
+            if plan_issues:
+                r_result["plan_issues"] = plan_issues
+                for pi in plan_issues:
+                    print(f"  ⚠️ 计划门槛: {pi}")
+            if plan_file:
+                r_result["plan_file"] = plan_file
             results.append(r_result)
 
     # 输出结果

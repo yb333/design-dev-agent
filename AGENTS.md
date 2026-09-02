@@ -158,6 +158,8 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 
 > 架构定调：**独立性来自 maker=LLM / checker=确定性脚本**（比双 LLM 检查者强），不加独立检查者 agent；engineer=编排者+质检事实生产者+规则分流者（四层判断模型：L0 脚本检查→L1 脚本定位→L2 engineer 按表分流→L3 闸口人定罪）。设计变更必回闸口①，不私下循环。
 
+> **过程可视原则**（2026-09-02 用户定调）：所有检查/定位产物**落盘可回溯**——报告与原文（含执行计划全文）一律留 `_internal/diagnose/` 等过程目录，stdout 只出结论；好坏都留，方便人回溯找问题。
+
 **质检点总表**（产物 × 检查 × 时机——加检查先查这张表找位置）：
 
 | 交接点 | 检查 | 工具 | 时机 | 判读 |
@@ -167,7 +169,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | designer→闸口① | 任务目标对照 | gate_summary | 闸口①前 | 人判材料 |
 | designer→闸口① | **关联质量**：声明语义精确膨胀/丢行/空关联率（+膨胀时逐表归因） | diagnose_fanout --all | 闸口①前 | 披露不阻断（脏数据嫌疑人判） |
 | coder→SQL | 静态（字段覆盖/引用/口径对账） | check_sql | 每规则写完 | error 硬阻断 / 提示级 |
-| coder→UT | 执行可跑性 | ut_precheck 6a | INSERT 前 | 硬阻断 |
+| coder→UT | 执行可跑性 + **执行计划两门槛**（不下推 / STREAM 算子数≤50——纯 EXPLAIN 零成本，计划原文落盘可回溯） | ut_precheck 6a | INSERT 前 | 跑通=硬阻断；计划门槛=披露不阻断（性能人判） |
 | UT 装载后 | 数据质量实锤+DQ+发散深查 | ut_execute 6b + diagnose_fanout --rule + ut_diagnose | 6b | 实败按分流表路由 |
 | 环境 | 指纹/关键文件/python/依赖（开关式） | check_env | 步骤0 | 硬阻断 |
 
