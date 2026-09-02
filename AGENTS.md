@@ -167,7 +167,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | 输入→流程 | 完整性/类型/值域/关联键类型 | precheck | 1b | 人决策（exit 2 决策类阻断） |
 | designer→ts | 设计结构闭合 ~40 条 | assemble_ts | 组装时 | 脚本定罪，硬阻断 |
 | designer→闸口① | 任务目标对照 | gate_summary | 闸口①前 | 人判材料 |
-| designer→闸口① | **关联质量**：逐表键唯一性（主判据·设计断言实证）+ 声明对照（设计vs输入归属）+ 重复组解剖 + 承重墙/命中 + 声明计数严重性（膨胀/丢行/空关联率）——只反馈事实不猜收敛 | diagnose_fanout --all | 闸口①前 | 披露不阻断（人判归属与收敛） |
+| designer→闸口① | **关联质量**：逐表键唯一性（主判据——通过一句话，不唯一才展开：条件原文+输入声明对照+重复组差异列+命中）+ 整体试算严重性（膨胀/丢行/空关联率；全通过却膨胀=矛盾信号贴条件原文）——只反馈事实不猜收敛 | diagnose_fanout --all | 闸口①前 | 披露不阻断（人判归属与收敛） |
 | coder→SQL | 静态（字段覆盖/引用/口径对账） | check_sql | 每规则写完 | error 硬阻断 / 提示级 |
 | coder→UT | 执行可跑性 + **执行计划两门槛**（不下推 / STREAM 算子数≤50——纯 EXPLAIN 零成本，计划原文落盘可回溯） | ut_precheck 6a | INSERT 前 | 跑通=硬阻断；计划门槛=披露不阻断（性能人判） |
 | UT 装载后 | 数据质量实锤+DQ+发散深查 | ut_execute 6b + diagnose_fanout --rule + ut_diagnose | 6b | 实败按分流表路由 |

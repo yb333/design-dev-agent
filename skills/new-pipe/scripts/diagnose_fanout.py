@@ -274,16 +274,16 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
         return "skip"
     fanout, loss = after - before, before - after
     if fanout > 0:
-        verdicts.append(f"声明语义精确膨胀 {fanout} 行（before {before} → after {after}，as-declared 实锤）")
-        lines.append(f"[声明计数] 驱动 {before} 行 → 声明关联后 {after} 行 → ✗ **膨胀 {fanout} 行**"
-                     f"（as-declared 实锤，无取样歧义）")
+        verdicts.append(f"整体试算膨胀 {fanout} 行（驱动 {before} → 关联后 {after}）")
+        lines.append(f"[整体试算] 按声明条件把全部关联拼起来数行数：驱动 {before} 行 → 关联后 {after} 行"
+                     f"（膨胀 {fanout} 行——当前数据下会实际膨胀）")
         return "fanout"
     if loss > 0:
-        verdicts.append(f"声明关联丢行 {loss} 行（before {before} → after {after}——INNER 未命中，或规则 filter 引用 join 表列使 LEFT 退化；核对关联条件/键内容）")
-        lines.append(f"[声明计数] 驱动 {before} 行 → 声明关联后 {after} 行 → ⚠ **丢行 {loss} 行**"
-                     f"（INNER 未命中，或规则 filter 引用 join 表列使 LEFT 退化）")
+        verdicts.append(f"整体试算丢行 {loss} 行（驱动 {before} → 关联后 {after}——INNER 未命中或 filter 引用 join 表列使 LEFT 退化）")
+        lines.append(f"[整体试算] 按声明条件把全部关联拼起来数行数：驱动 {before} 行 → 关联后 {after} 行"
+                     f"（⚠ 丢行 {loss} 行——INNER 未命中，或规则 filter 引用了 join 表列使 LEFT 退化）")
     else:
-        lines.append(f"[声明计数] 驱动 {before} 行 → 声明关联后 {after} 行 → ✓ 无膨胀无丢行")
+        lines.append(f"[整体试算] 按声明条件把全部关联拼起来数行数：驱动 {before} 行 → 关联后 {after} 行（无膨胀无丢行）")
     # 空关联率（LEFT join 逐个——值域/内容不一致维度的系统性检查）
     for i, j in enumerate(joins_decl, 1):
         alias = (j.get("alias") or "").strip().lower()
@@ -424,29 +424,9 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                 # 单表查询 FROM 无别名——逐项剥别名前缀；剥完仍含其他别名引用的跳过（宁放过）
                 where = " AND ".join(dict.fromkeys(
                     x for x in (_strip_alias(tm, alias) for tm in terms) if x))
-                head = (f"[JOIN {i}] {sch}.{tbl}（{alias}）键({', '.join(own)})"
-                        + (f" [声明过滤: {where}]" if where else ""))
-                # ★ 声明对照（设计 vs 输入归属的事实判据——确定性文本比对，不猜语义）：
-                # 输入声明了但设计没写=漏条件；设计有输入没有=自创/改写；一致/未声明照实陈述
                 mapping_decl = mapping_joins.get(tbl.rsplit(".", 1)[-1].lower(), "")
-                if mapping_decl:
-                    d_set = {_norm_term(x) for x in _split_terms(cond)}
-                    m_set = {_norm_term(x) for x in _split_terms(mapping_decl)}
-                    miss = [x for x in _split_terms(mapping_decl) if _norm_term(x) not in d_set]
-                    extra = [x for x in _split_terms(cond) if _norm_term(x) not in m_set]
-                    if miss:
-                        lines.append(f"  [声明对照] ✗ 设计漏了输入声明的条件：{'；'.join(miss)}"
-                                     f"——键不唯一时优先怀疑漏条件（设计侧修正）")
-                    elif extra:
-                        lines.append(f"  [声明对照] △ 设计自创/改写了输入没有的条件：{'；'.join(extra)}"
-                                     f"（收敛口径是设计判断）")
-                    else:
-                        lines.append(f"  [声明对照] ✓ 与输入声明一致——键不唯一属输入侧问题"
-                                     f"（BA 声明的关联在数据上不成立，退 BA）")
-                else:
-                    lines.append(f"  [声明对照] ○ 输入未声明此关联（designer 自设）——键唯一性属设计判断")
                 # ★ 单表故障隔离（内网实证：一张表报错曾炸停整批致报告缺失）——
-                # 声明条件独立执行失败本身是诊断发现；降级裸查继续，裸查也挂才跳过该表
+                # 声明条件独立执行失败本身是诊断发现；降级不带条件查继续，也挂才跳过该表
                 try:
                     st = _key_stat(db, sch, tbl, own, where)
                 except RuntimeError as e:
@@ -455,24 +435,48 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                         bare = _key_stat(db, sch, tbl, own, "")
                     except RuntimeError as e2:
                         verdicts.append(f"JOIN {i} {tbl}：查询失败跳过（其余表继续）")
-                        lines.append(f"{head}：查询失败跳过（其余表继续）。报错原文: {_err_brief(e2, 160)}")
+                        lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）？ 查询失败跳过（其余表继续）。"
+                                     f"报错原文: {_err_brief(e2, 160)}")
                         continue
                     dup_b = bare["total"] - bare["nulls"] - bare["uniq"]
-                    tag = f"✗ 重复 {dup_b} 行（filter 承重且条件本身有问题）" if dup_b > 0 else "✓ 唯一"
-                    verdicts.append(f"JOIN {i} {tbl}：声明条件查询失败{hint}；降级裸查{tag}")
-                    lines.append(f"{head}：按声明条件查询失败{hint}，已降级裸查——"
-                                 f"{bare['total']} 行/唯一 {bare['uniq']}（NULL {bare['nulls']}）→ {tag}；"
-                                 f"报错原文: {_err_brief(e)}")
+                    if dup_b > 0:
+                        tag = f"✗ 不带条件的键重复 {dup_b} 行（带条件的查询失败——条件本身可能有问题，人核原文）"
+                    else:
+                        tag = "（不带条件时唯一——条件本身可能有问题，人核原文）"
+                    verdicts.append(f"JOIN {i} {tbl}：按条件查询失败{hint}；降级不带条件查：{tag}")
+                    lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）？ 按关联条件查询失败{hint}，"
+                                 f"已降级为不带条件查询——{bare['total']} 行/唯一 {bare['uniq']}：{tag}")
+                    lines.append(f"  ｜关联条件（designer 写的）：{cond}")
+                    lines.append(f"  ｜报错原文: {_err_brief(e)}")
                     continue
                 dup = st["total"] - st["nulls"] - st["uniq"]
                 if dup > 0:
+                    lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）✗ 关联键({', '.join(own)}) "
+                                 f"在关联条件下不唯一（{st['total']} 行 / 唯一 {st['uniq']}，重复 {dup} 行）")
+                    lines.append(f"  ｜关联条件（designer 写的）：{cond}")
+                    # 声明对照（只在出问题时给——问题在设计侧还是输入侧的依据）
+                    if mapping_decl:
+                        d_set = {_norm_term(x) for x in _split_terms(cond)}
+                        m_set = {_norm_term(x) for x in _split_terms(mapping_decl)}
+                        miss = [x for x in _split_terms(mapping_decl) if _norm_term(x) not in d_set]
+                        extra = [x for x in _split_terms(cond) if _norm_term(x) not in m_set]
+                        lines.append(f"  ｜输入声明（mapping）：{mapping_decl}")
+                        if miss:
+                            lines.append(f"  ｜→ 设计漏了输入声明的条件：{'；'.join(miss)}"
+                                         f"（补上大概率收敛——问题在**设计侧**）")
+                        elif extra:
+                            lines.append(f"  ｜→ 设计自创了输入没有的条件：{'；'.join(extra)}（收敛口径是设计判断）")
+                        else:
+                            lines.append(f"  ｜→ 设计与输入声明一致——问题在**输入侧**（BA 声明的关联在数据上不成立，退 BA）")
+                    else:
+                        lines.append(f"  ｜输入未声明此关联（designer 自设）——问题属设计判断")
                     try:
                         samples = _dup_samples(db, sch, tbl, own, where, top)
                     except RuntimeError as e:
-                        lines.append(f"{head}：✗ 发散 {dup} 行（样例查询失败：{_err_brief(e, 100)}）")
-                        verdicts.append(f"JOIN {i} {tbl}：键重复 {dup} 行（样例未取到）")
+                        lines.append(f"  ｜样例查询失败：{_err_brief(e, 100)}")
+                        verdicts.append(f"JOIN {i} {tbl}：键在关联条件下不唯一（重复 {dup} 行）")
                         continue
-                    hits, p_desc = 0, ""
+                    hits = 0
                     if partner:
                         pa = next(iter(partner))
                         if pa in binding:
@@ -485,38 +489,36 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                                 _strip_alias(x, pa) for x in p_terms)))
                             try:
                                 hits = _partner_hits(db, p_sch, p_tbl, partner[pa], samples, own, p_where)
-                                p_desc = f"伙伴表 {p_sch}.{p_tbl}.{','.join(partner[pa])} 命中 {hits} 行"
-                            except RuntimeError as e:
-                                p_desc = f"实锤查询失败（{_err_brief(e, 80)}）"
-                    verdict = (f"{tbl} 键重复 {dup} 行" + ("且命中伙伴表——发散嫌疑成立" if hits else
-                              "但未命中伙伴表（不膨胀，或键内容形态不一致——空关联维度）"))
-                    verdicts.append(f"JOIN {i} {sch}.{tbl}：{verdict}")
-                    lines.append(f"{head}：{st['total']} 行 / 唯一 {st['uniq']}（NULL {st['nulls']}）"
-                                 f"→ ✗ 发散 {dup} 行")
-                    lines.append(f"  重复键 top{len(samples)}：" + "、".join(
+                            except RuntimeError:
+                                hits = -1
+                    lines.append(f"  ｜重复键 top{len(samples)}：" + "、".join(
                         f"{'|'.join(str(s.get(c)) for c in own)}×{s.get('c')}" for s in samples))
                     anatomy = _dup_anatomy(db, sch, tbl, own, samples[0])
                     if anatomy:
-                        lines.append(f"  重复组解剖（top1 键组内差异列，判收敛/撞键用）：{anatomy}")
-                    lines.append(f"  实锤：{p_desc or '无伙伴表可核'} → {verdict}")
+                        lines.append(f"  ｜重复组差异列（判该收敛还是撞键）：{anatomy}")
+                    if hits > 0:
+                        lines.append(f"  ｜当前数据命中驱动表 {hits} 行——会实际膨胀")
+                    elif hits == 0:
+                        lines.append(f"  ｜当前数据未命中驱动表——暂不膨胀（生产数据可能命中，别默默放过）")
+                    lines.append(f"  ｜人判方向：补条件收敛 / 换键（设计侧）；源表数据脏（环境）——工具不猜")
+                    verdicts.append(f"JOIN {i} {sch}.{tbl}：关联键在条件下不唯一（重复 {dup} 行"
+                                    + ("，当前命中会膨胀" if hits > 0 else "，当前未命中") + "）")
                 else:
-                    extra = ""
-                    if where:  # filter 承重墙：裸查重复但声明条件下唯一 ⇒ SQL 漏 filter 即发散
-                        try:
-                            bare = _key_stat(db, sch, tbl, own, "")
-                        except RuntimeError as e:
-                            bare = None
-                            lines.append(f"{head}：✓ 唯一（承重墙裸查失败：{_err_brief(e, 80)}）")
-                        if bare and bare["total"] - bare["nulls"] - bare["uniq"] > 0:
-                            extra = (f"（⚠ filter 承重墙：裸查 {bare['total']}/唯一 {bare['uniq']} 重复——"
-                                     f"coder 的 SQL 漏写该过滤即发散，先核 SQL）")
-                            verdicts.append(f"JOIN {i} {tbl}：声明条件下唯一但裸查重复（filter 承重——核 SQL 是否漏写）")
-                    lines.append(f"{head}：{st['total']} 行 / 唯一 {st['uniq']}（NULL {st['nulls']}）"
-                                 f"→ ✓ 唯一{extra}")
+                    # 通过=一句话完事（键裸查重复是常态——条件下唯一就是设计本身，不裸查不对照）
+                    lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）✓ 关联键({', '.join(own)}) "
+                                 f"在关联条件下唯一（{st['total']} 行）｜条件：{cond}")
 
-        # ── 声明计数（严重性：当前数据下膨胀/丢行/空关联——与唯一性定性互补）──
-        _join_counts(db, rule, binding, driving, tmp_aliases, coltypes,
-                     rule.get("filter") or "", top, lines, verdicts)
+        # ── 整体试算（严重性：当前数据下膨胀/丢行/空关联——与逐表唯一性定性互补）──
+        jc_state = _join_counts(db, rule, binding, driving, tmp_aliases, coltypes,
+                                rule.get("filter") or "", top, lines, verdicts)
+        if jc_state == "fanout" and not any("不唯一" in v for v in verdicts):
+            # 矛盾信号：各键条件下都唯一但拼起来膨胀——贴条件原文给人判（数据脏？条件含函数/非等值？）
+            lines.append("[⚠ 需人确认] 各关联键在条件下都唯一，但拼起来却膨胀——矛盾信号："
+                         "源表数据脏，或关联条件含函数/非等值部分（键唯一性检查覆盖不到）。关联条件原文：")
+            for i, j in enumerate(joins_decl, 1):
+                al = (j.get("alias") or "").strip().lower()
+                ent = binding.get(al) or ("", "")
+                lines.append(f"  JOIN {i} {ent[0]}.{ent[1]}（{al}）：{j.get('condition') or ''}")
     finally:
         if owns_db:
             db.close()

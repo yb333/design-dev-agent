@@ -99,9 +99,9 @@ class TestFanoutLocalization:
 
         lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}]), h)
-        assert "发散 2 行" in "\n".join(lines)
+        assert "重复 2 行" in "\n".join(lines)
         assert "C001×3" in "\n".join(lines)
-        assert "发散嫌疑成立" in concl
+        assert "当前命中会膨胀" in concl
 
     def test_dup_keys_not_hit_partner_reported_soft(self, monkeypatch, tmp_path):
         """重复键不命中伙伴表 → 软结论（实际可能不膨胀），不误报实锤。"""
@@ -116,7 +116,7 @@ class TestFanoutLocalization:
 
         lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}]), h)
-        assert "未命中伙伴表" in concl and "嫌疑成立" not in concl
+        assert "当前未命中" in concl and "会膨胀" not in concl
 
     def test_all_unique_conclusion_points_away_from_join(self, monkeypatch, tmp_path):
         def h(sql):
@@ -124,7 +124,7 @@ class TestFanoutLocalization:
 
         lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}]), h)
-        assert "发散不来自关联" in concl
+        assert "键唯一" in concl
 
     def test_no_joins_message(self, monkeypatch, tmp_path):
         def h(sql):
@@ -146,7 +146,7 @@ class TestDeclaredConditionsHonored:
         joined = "\n".join(ex.captured)
         assert "COUNT(DISTINCT (x, tenant))" in joined          # 复合键（单列查会误报）
         assert "is_current = 1" in joined                       # condition 字面量项并入（单表 WHERE 剥别名前缀）
-        assert "→ ✓ 唯一" in "\n".join(lines)
+        assert "在关联条件下唯一" in "\n".join(lines)
 
     def test_rule_filter_and_join_safety_filter_applied(self, monkeypatch, tmp_path):
         """规则 filter / join_safety.join_filter 归属该表的项并入 WHERE（as-designed）。"""
@@ -164,19 +164,25 @@ class TestDeclaredConditionsHonored:
         stat_sql = next(s for s in ex.captured if "COUNT(DISTINCT" in s and "dim_cust" in s and "WHERE" in s)
         assert "c." not in stat_sql.split("WHERE", 1)[1].split("GROUP BY")[0]
 
-    def test_filter_load_bearing_wall(self, monkeypatch, tmp_path):
-        """裸查重复但声明条件唯一 → filter 承重墙（SQL 漏写即发散）。"""
+    def test_passing_join_one_line_no_bare_query(self, monkeypatch, tmp_path):
+        """2026-09-02 用户定调：键裸查重复是常态，条件下唯一=设计本身——通过时一句话
+        完事，不做裸查比对（承重墙已移除——'coder 漏写 filter'归 check_sql/UT）。"""
         def h(sql):
             if "dim_cust" in sql and "WHERE" in sql:
                 return [{"total": 105, "uniq": 105, "nulls": 0}]   # 按声明条件唯一
             if "dim_cust" in sql:
-                return [{"total": 120, "uniq": 100, "nulls": 0}]   # 裸查重复
+                return [{"total": 120, "uniq": 100, "nulls": 0}]   # 裸查重复（常态，不报）
             return [{"total": 100, "uniq": 100, "nulls": 0}]
 
-        lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
+        lines, concl, ex = _run(monkeypatch, tmp_path, _ts([
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code",
              "filter": "c.is_current = 1"}]), h)
-        assert "filter 承重墙" in "\n".join(lines) and "承重" in concl
+        joined = "\n".join(lines)
+        assert "在关联条件下唯一" in joined and "✗" not in joined
+        assert "承重" not in joined                              # 不再报承重墙
+        # 唯一的 dim_cust 统计查询带 WHERE——没有第二条裸查
+        dim_stats = [s for s in ex.captured if "COUNT(DISTINCT" in s and "dim_cust" in s]
+        assert len(dim_stats) == 1 and "WHERE" in dim_stats[0]
 
 
     def test_single_connection_via_target_schema(self, monkeypatch, tmp_path):
@@ -215,8 +221,8 @@ class TestDrivingTable:
         lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}]), h)
         joined = "\n".join(lines)
-        assert "✓ 唯一" in joined and "✗" not in joined   # NULL 键不算发散行
-        assert "发散不来自关联" in concl
+        assert "✓ 关联键" in joined and "✗" not in joined   # NULL 键不算发散行
+        assert "键唯一" in concl
 
 
 def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
@@ -323,7 +329,7 @@ class TestFaultIsolation:
              "filter": "c.status = 1"},
             {"alias": "p", "type": "LEFT JOIN", "condition": "a.pay_id = p.pay_id"}]), h)
         joined = "\n".join(lines)
-        assert "降级裸查" in joined and "隐式转换" in joined and "invalid input" in joined
+        assert "降级为不带条件" in joined and "隐式转换" in joined and "invalid input" in joined
         assert "重复 3 行" in joined                       # 裸查结论仍给出
         assert "JOIN 2" in joined                          # 后续表继续诊断
 
@@ -339,7 +345,7 @@ class TestFaultIsolation:
             {"alias": "p", "type": "LEFT JOIN", "condition": "a.pay_id = p.pay_id"}]), h)
         joined = "\n".join(lines)
         assert "查询失败跳过（其余表继续）" in joined
-        assert "[JOIN 2] ods.pay" in joined and "✓ 唯一" in joined
+        assert "[JOIN 2] ods.pay" in joined and "在关联条件下唯一" in joined
 
     def test_count_1_not_count_star(self, monkeypatch, tmp_path):
         """COUNT(1) 而非 COUNT(*)（平台口径）。"""
@@ -374,7 +380,7 @@ class TestJoinCountAndValueForm:
         from diagnose_fanout import diagnose
         lines, concl = diagnose(tmp_path / "ts.json", "R0001")
         joined = "\n".join(lines)
-        assert "✓ 无膨胀无丢行" in joined
+        assert "无膨胀无丢行" in joined
         assert "COUNT(DISTINCT" in "\n".join(ex.captured)   # 逐表统计跑了
 
     def test_fanout_and_attribution_coexist(self, monkeypatch, tmp_path):
@@ -390,7 +396,7 @@ class TestJoinCountAndValueForm:
         from diagnose_fanout import diagnose
         lines, concl = diagnose(tmp_path / "ts.json", "R0001")
         joined = "\n".join(lines)
-        assert "膨胀 30 行" in joined and "精确膨胀" in concl
+        assert "膨胀 30 行" in joined and "膨胀 30 行" in concl
         assert "[JOIN 1]" in joined                          # 逐表照跑
 
     def test_literal_form_fixed_upfront(self, monkeypatch, tmp_path):
