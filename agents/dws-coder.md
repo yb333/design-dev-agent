@@ -60,7 +60,7 @@ permission:
 - **DQ 检查 SQL 生成**（prompt 明确是 DQ 任务、产出 dq/）→ `skill({ name: "dws-dq" })`
 - **优化模式**（prompt 显式声明）→ `skill({ name: "dws-coding-opt" })`——职责不变，工作流换成以 baseline SQL 为底稿加列（老列投影不许动）
 
-各自的工作流/契约/规范全在对应 skill 里，是唯一维护源。
+各自的工作流/契约/规范全在对应 skill 里，是唯一维护源。**禁 `python -c` 内联**（不落盘不可回溯——临时计算走 bash 原生工具，必须 python 的写 `_internal/diagnose/` 临时 .py 再执行）。
 
 **skill 加载兜底**（链上工具面收窄时，与读取兼容同族过渡条款——平台修复后退役）：skill 工具被拒/缺失时**不停流程**，Read 该 skill 目录的 `SKILL.md` 全文兜底（`~/.config/opencode/skills/{name}/SKILL.md` 或项目仓内 `skills/{name}/SKILL.md`），拿到即按其内容继续。
 

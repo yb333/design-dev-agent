@@ -175,11 +175,17 @@ _WHITELIST_SCRIPTS = {
     "seed", "promote", "history", "menu", "engine", "report_v2",
 }
 
-# 脚本调用行（python/bash/sh + 落盘脚本路径；-c 内联与 -m 模块豁免）
+# 脚本调用行（python/bash/sh + 落盘脚本路径；-m 模块豁免）
 _INVOKE_RE = re.compile(
     r"\b(?:python3?|bash|sh)\s+(?!-c)([^\s`\"'|;]+?\.(?:py|sh))",
     re.IGNORECASE,
 )
+
+# python -c 内联禁令（2026-09-02 定调）：内联代码不落盘不可回溯（撞过程可视原则）、
+# 是"不 author 脚本/禁自编"的漏洞形态、跨平台引号/换行/中文转义雷区最重。
+# 临时计算走 bash 原生工具，必须 python 的写 _internal/diagnose/ 临时脚本再执行。
+# bash -c 不在禁令内（shell 单行管道是常态）；py -c / python3 -c 都算。
+_INLINE_PY_RE = re.compile(r"\b(?:python3?|py)\s+-c\b", re.IGNORECASE)
 
 # 上下文窗口行数（违规前文——agent 写脚本前的报错/诱因通常在这段里）
 _DISCIPLINE_CONTEXT_LINES = 15
@@ -207,6 +213,10 @@ class _DisciplineTracker:
         for m in _INVOKE_RE.finditer(stripped):
             script = m.group(1).replace("\\", "/")
             self._record(script, f"调用 {m.group(0)[:120]}", from_stream=True)
+        if _INLINE_PY_RE.search(stripped):
+            self._record("__inline_python__",
+                         "python -c 内联执行（禁——不落盘不可回溯；临时计算走 bash 原生或"
+                         "_internal/diagnose/ 临时脚本）", from_stream=True)
 
     def on_file(self, rel_path: str) -> None:
         """watcher 检出产出目录里的自建脚本文件（diagnose 豁免由 watcher 保证）。

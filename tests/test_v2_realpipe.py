@@ -435,11 +435,21 @@ class TestDisciplineTracker:
         d.feed("python /abs/ut_execute.py --ts ts.json\n")
         assert d.violations == []
 
-    def test_inline_c_exempt(self):
+    def test_inline_python_c_flagged_but_m_exempt(self):
+        """python -c 内联=违规（2026-09-02 从豁免翻为抓：不落盘不可回溯）；
+        -m 模块调用仍豁免（pip 等常态）。"""
         d = real_pipe._DisciplineTracker()
         d.feed('python -c "print(1)"\n')
-        d.feed("python3 -m pip install x\n")
-        assert d.violations == []
+        assert len(d.violations) == 1
+        assert d.violations[0]["script"] == "__inline_python__"
+        assert "内联" in d.violations[0]["action"]
+        d2 = real_pipe._DisciplineTracker()
+        d2.feed("python3 -m pip install x\n")
+        d2.feed("python -c 'import json'\n")
+        assert len(d2.violations) == 1                       # -m 不算，-c 算
+        d3 = real_pipe._DisciplineTracker()
+        d3.feed("py -c \"print(1)\"\n")                    # py -c 同禁
+        assert len(d3.violations) == 1
 
     def test_violation_with_context(self):
         d = real_pipe._DisciplineTracker()
