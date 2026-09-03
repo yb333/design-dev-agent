@@ -347,7 +347,7 @@ python PIPE_SCRIPTS/ut_precheck.py \
 
 **读预检结果**：全通过 → 继续 5b；有失败 → 走步骤6 分流（SQL 问题回 coder / 环境问题报告人）。
 
-预检同时跑**执行计划两门槛**（2026-09-02 定调+官方判据查证，只做这两个其他暂不做）：①不下推（**官方判据：计划含 `Data Node Scan`[伴随 `_REMOTE_TABLE_QUERY_`]——中间结果拉回 CN 执行成瓶颈**）②STREAM 算子数 ≤50（gather/redistribute/broadcast 及 PART 变体过多→大量线程消耗性能降）。纯 EXPLAIN 毫秒级零执行成本；**计划原文全量落盘** `_internal/diagnose/plan_{rule}.txt`（好坏都留——过程可视，人可回溯）；提示级不阻断，性能归闸口②人判。
+预检用 **EXPLAIN ANALYZE 全量真实执行一次（不带采样，2026-09-03 定调替代采样 SELECT）**——一次执行三份收获：真跑通验证（采样过≠全量过）+ **执行计划两门槛**（①不下推=官方判据 `Data Node Scan`/`_REMOTE_TABLE_QUERY_`；②STREAM 算子数 ≤50 含 PART 变体）+ 顶层实际行数（0 行=空关联极端信号，全量口径）。行数解析多格式兼容（PG 文本式/表头驱动表格式），解析不出宁缺勿错跳过不猜；**计划原文（含 actual 值）全量落盘** `_internal/diagnose/plan_{rule}.txt`（过程可视）；两门槛提示级不阻断，性能归闸口②人判。**字段级 NULL（LEFT JOIN 关联不上的常态形态：行数正常+关联字段全 NULL）本检查拿不到列值——6b INSERT 后空值检查兜底**。
 
 ### 步骤 5b：UT 执行（慢，分钟级）
 

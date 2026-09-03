@@ -112,16 +112,52 @@ _NO_PUSHDOWN_MARKERS = ("Data Node Scan",)
 STREAM_LIMIT = 50   # 算子出现个数上限（过多→大量线程消耗、性能下降）
 
 
-def _explain_check(executor, sql: str, rule_code: str, ts_path) -> tuple[list[str], str]:
-    """纯 EXPLAIN 拿计划文本，跑两门槛：①不下推 ②STREAM 算子数≤50。
-    返回 (问题列表[空=通过], 计划落盘路径)。EXPLAIN 失败=跳过门槛（披露不阻断）。"""
-    r = executor.execute(f"EXPLAIN {sql}")
-    if not r.success:
-        return [f"EXPLAIN 失败（计划门槛跳过）: {(r.error or '')[:100]}"], ""
-    plan_text = "\n".join(str(v) for row in (r.rows or []) for v in row.values())
+# 实际行数解析（EXPLAIN ANALYZE 顶层 actual rows；解析不出返回 None=宁缺勿错
+# 跳过 0 行告警，不猜——猜错列会把 E-rows/内存值当行数，比没有更糟）
+_ACTUAL_ROWS_TEXT_PATTERNS = [
+    _re.compile(r"actual\s+time\s*=\S+\s+rows\s*=\s*(\d+)"),   # PG 文本式 (actual time=.. rows=N loops=..)
+    _re.compile(r"\brows\s*=\s*(\d+)\s+loops"),                   # 同上变体
+]
+
+
+def _parse_actual_rows(plan_text: str):
+    """从 EXPLAIN ANALYZE 计划文本解析顶层实际行数。
+
+    两格式：PG 文本式（actual time=.. rows=N）直接正则；DWS 表格式**表头驱动**
+    （找含 A-rows/A-rows 列名的表头定位列号，再取 id=1 行该列——不猜列位）。
+    都不中返回 None（宁缺勿错）。"""
+    for pat in _ACTUAL_ROWS_TEXT_PATTERNS:
+        m = pat.search(plan_text)
+        if m:
+            return int(m.group(1))
+    # 表格式：表头驱动定位 A-rows 列
+    lines = plan_text.splitlines()
+    header_idx = next((i for i, ln in enumerate(lines)
+                       if "|" in ln and _re.search(r"a-?rows", ln, _re.IGNORECASE)), None)
+    if header_idx is None:
+        return None
+    header_cols = [c.strip().lower() for c in lines[header_idx].split("|")]
+    try:
+        col = next(i for i, c in enumerate(header_cols) if _re.search(r"a-?rows", c))
+    except StopIteration:
+        return None
+    for ln in lines[header_idx + 1:]:
+        if _re.match(r"^\s*1\s*\|", ln):                    # id=1 行（顶层）
+            cols = [c.strip() for c in ln.split("|")]
+            if col < len(cols):
+                m = _re.search(r"\d+", cols[col].replace(",", ""))
+                if m:
+                    return int(m.group())
+            break
+    return None
+
+
+def _analyze_plan(plan_text: str, rule_code: str, ts_path) -> tuple[list[str], str]:
+    """分析计划文本跑两门槛：①不下推（Data Node Scan 官方判据）②STREAM 算子数≤50。
+    计划原文（含 actual 值）落盘可回溯。返回 (问题列表[空=通过], 计划文件路径)。"""
     plan_path = ts_path.parent / "_internal" / "diagnose" / f"plan_{rule_code}.txt"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
-    plan_path.write_text(f"-- EXPLAIN {rule_code}\n{sql}\n\n{plan_text}\n", encoding="utf-8")
+    plan_path.write_text(f"-- EXPLAIN ANALYZE {rule_code}\n\n{plan_text}\n", encoding="utf-8")
     issues = []
     streams = _STREAM_PATTERN.findall(plan_text)
     if len(streams) > STREAM_LIMIT:
@@ -260,41 +296,39 @@ def main():
                 continue
 
             select_sql = substitute_params(select_sql, param_values)
-            full_sql = select_sql  # 未采样版（计划分析用——TABLESAMPLE 会歪曲行数估算与计划形状）
-            # 采样：CLI参数优先，不传则从 db-sources.json 的 security.sample_blocks 读默认
-            sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
-            select_sql = inject_tablesample(select_sql, sample_n)
-            sample_note = f"TABLESAMPLE {sample_n}" if sample_n else "全量"
-            print(f"  ⏱️ SELECT预检（{sample_note}）...")
-            r_pre = etl_executor.execute(select_sql)
+            # ★ 2026-09-03 定调（用户）：EXPLAIN ANALYZE 真实执行一次（不带采样）替代
+            # 采样 SELECT——一次执行三份收获：真跑通验证（采样过≠全量过）+ 计划两门槛
+            # + 顶层实际行数（0 行=空关联极端信号，全量口径比采样行数准）。
+            # 字段级 NULL（LEFT JOIN 关联不上的常态形态）本检查拿不到列值——6b 空值检查兜底。
+            print(f"  ⏱️ EXPLAIN ANALYZE 预检（全量真实执行）...")
+            r_pre = etl_executor.execute(f"EXPLAIN ANALYZE {select_sql}")
             if not r_pre.success:
                 error_msg = r_pre.error[:200] if r_pre.error else "未知错误"
                 error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
                 r_result["status"] = "FAIL"
                 r_result["error_type"] = error_type
-                r_result["detail"] = f"SELECT预检失败({error_type}): {error_msg}"
-                print(f"  ❌ SELECT预检失败({error_type}): {error_msg}")
+                r_result["detail"] = f"预检执行失败({error_type}): {error_msg}"
+                print(f"  ❌ 预检执行失败({error_type}): {error_msg}")
                 results.append(r_result)
                 prev_failed = True
                 continue
 
-            pre_cols = len(r_pre.columns) if r_pre.columns else 0
-            pre_rows = len(r_pre.rows) if r_pre.rows else 0
+            plan_text = "\n".join(str(v) for row in (r_pre.rows or []) for v in row.values())
+            pre_rows = _parse_actual_rows(plan_text)
             r_result["status"] = "PASS"
-            r_result["detail"] = f"SELECT预检通过: {pre_rows}行, {pre_cols}列"
-            # 真 0 行 = 静默空关联的最强信号（关联类型/内容对不上不报错，只 0 匹配）。
-            # 不阻断（过滤条件当天无数据也可能是合理 0 行；采样过小同此），给排查方向。
-            if pre_rows == 0:
-                zero_note = "⚠ 0行——源表有数据却查不出：疑似关联/过滤条件全灭或采样过小，核对关联条件"
-                r_result["detail"] += f"（{zero_note}）"
-                print(f"  ⚠️ SELECT预检 0 行: 疑似关联/过滤全灭，核对关联条件")
-            else:
-                print(f"  ✅ SELECT预检: {pre_rows}行, {pre_cols}列")
-            r_result["pre_cols"] = pre_cols
+            row_note = f"{pre_rows}行" if pre_rows is not None else "行数未解析（计划格式未识别——宁缺勿错跳过 0 行告警）"
+            r_result["detail"] = f"预检通过（EXPLAIN ANALYZE 全量）: {row_note}"
             r_result["pre_rows"] = pre_rows
-            # 执行计划两门槛（未采样 SQL；计划原文落盘可回溯；提示级不阻断——性能人判）
-            # 成功也打印结论行——静默通过看起来像"检查没了"（2026-09-03 内网反馈）
-            plan_issues, plan_file = _explain_check(etl_executor, full_sql, rule_code, ts_path)
+            # 真 0 行 = 静默空关联的极端信号（全灭）；字段全 NULL 形态归 6b 空值检查。
+            # 不阻断（过滤条件当天无数据也可能是合理 0 行），给排查方向。
+            if pre_rows == 0:
+                zero_note = "⚠ 0行——源表有数据却查不出：疑似关联/过滤条件全灭，核对关联条件"
+                r_result["detail"] += f"（{zero_note}）"
+                print(f"  ⚠️ 预检 0 行: 疑似关联/过滤全灭，核对关联条件")
+            else:
+                print(f"  ✅ 预检真实执行通过: {row_note}")
+            # 计划两门槛（同一计划文本——落盘含 actual 值可回溯；提示级不阻断性能人判）
+            plan_issues, plan_file = _analyze_plan(plan_text, rule_code, ts_path)
             r_result["plan_issues"] = plan_issues
             if plan_file:
                 r_result["plan_file"] = plan_file
@@ -302,11 +336,7 @@ def main():
                 for pi in plan_issues:
                     print(f"  ⚠️ 计划门槛: {pi}")
             else:
-                streams = 0
-                try:
-                    streams = len(_STREAM_PATTERN.findall(Path(plan_file).read_text(encoding="utf-8")))
-                except Exception:
-                    pass
+                streams = len(_STREAM_PATTERN.findall(plan_text))
                 print(f"  📋 计划检查: 通过（STREAM {streams}/{STREAM_LIMIT}，无 Data Node Scan）→ {plan_file}")
             results.append(r_result)
 

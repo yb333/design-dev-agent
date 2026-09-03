@@ -1,10 +1,9 @@
-"""ut_precheck._explain_check 测试：执行计划两门槛（fake executor，不连库）。
+"""ut_precheck 计划分析测试（fake，不连库）。
 
-门槛定调（2026-09-02 用户拍板，只做这两个）：
-- STREAM 算子出现个数 ≤ 50（Gather/Redistribute/Broadcast——过多→大量线程消耗性能降）；
-- 不下推（官方判据：Data Node Scan + _REMOTE_TABLE_QUERY_；Row Adapter 非判据已纠正）。
-过程可视：计划原文全量落盘 _internal/diagnose/plan_{rule}.txt（好坏都留，人可回溯）。
-提示级不阻断。纯 EXPLAIN（零执行成本，形状信号无需 ANALYZE）。
+2026-09-03 定调（用户）：EXPLAIN ANALYZE 真实执行一次（不带采样）**替代**采样 SELECT——
+一次执行三份收获：真跑通验证 + 计划两门槛 + 顶层实际行数（多格式解析，失败=宁缺勿错
+跳过 0 行告警不猜）。门槛：①不下推=Data Node Scan（官方判据；Row Adapter 非判据已纠正）
+②STREAM 算子出现个数 ≤50。计划原文（含 actual 值）全量落盘可回溯（过程可视）。
 """
 
 import sys
@@ -14,51 +13,46 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "skills" / "new-pipe" / "scripts"))
 sys.path.insert(0, str(REPO / "skills" / "design-dev-shared" / "scripts"))
 
-from ut_precheck import _explain_check, _STREAM_PATTERN  # noqa: E402
+from ut_precheck import _analyze_plan, _parse_actual_rows, _STREAM_PATTERN  # noqa: E402
 
 
-class _R:
-    def __init__(self, rows=None, success=True, error=""):
-        self.success, self.rows, self.error = success, rows or [], error
+def _plan_with_streams(n: int, extra: str = "") -> str:
+    return ("\n".join(["Streaming (type: GATHER)"] * n
+                      + ["Streaming (type: REDISTRIBUTE)"]
+                      + ["Stream[name:S1, type: BROADCAST]"]
+                      + ([extra] if extra else [])))
 
 
-class _Ex:
-    def __init__(self, plan_lines=None, error=""):
-        self.plan_lines = plan_lines or []
-        self.error = error
-        self.captured: list[str] = []
+class TestActualRowsParse:
+    def test_pg_text_style(self):
+        plan = "Streaming (type: GATHER) (cost=.. rows=100)\n   (actual time=1.2..3.4 rows=87 loops=1)"
+        assert _parse_actual_rows(plan) == 87
 
-    def execute(self, sql):
-        self.captured.append(sql)
-        if self.error:
-            return _R(success=False, error=self.error)
-        return _R([{"QUERY PLAN": ln} for ln in self.plan_lines])
+    def test_rows_loops_variant(self):
+        assert _parse_actual_rows("(... rows=42 loops=1)") == 42
 
+    def test_dws_table_style_first_row(self):
+        plan = " id | operation | A-time | A-rows\n 1 | -> Streaming (type: GATHER) | 3.2 | 55"
+        assert _parse_actual_rows(plan) == 55
 
-def _plan_with_streams(n: int, extra: str = "") -> list[str]:
-    return (["Streaming (type: GATHER)"] * n
-            + ["Streaming (type: REDISTRIBUTE)"]
-            + ["Stream[name:S1, type: BROADCAST]"]      # openGauss 风格格式也认
-            + ([extra] if extra else []))
+    def test_unrecognized_returns_none(self):
+        assert _parse_actual_rows("啥都没有") is None       # 宁缺勿错：不猜
 
 
 class TestStreamThreshold:
     def test_under_limit_passes_and_plan_saved(self, tmp_path):
-        ex = _Ex(_plan_with_streams(3))
+        plan = _plan_with_streams(3)
         (tmp_path / "ts.json").write_text("{}", encoding="utf-8")
-        issues, plan_file = _explain_check(ex, "SELECT 1", "R0001", tmp_path / "ts.json")
+        issues, plan_file = _analyze_plan(plan, "R0001", tmp_path / "ts.json")
         assert issues == []
         assert plan_file and Path(plan_file).exists()
-        assert "SELECT 1" in Path(plan_file).read_text(encoding="utf-8")   # SQL 原文同落盘（可回溯）
-        assert ex.captured[0].startswith("EXPLAIN SELECT 1")
+        assert "EXPLAIN ANALYZE" in Path(plan_file).read_text(encoding="utf-8")  # 落盘含标记
 
     def test_over_limit_flags(self, tmp_path):
-        ex = _Ex(_plan_with_streams(48))                  # 48+1+1 = 50 个 → 不超
         (tmp_path / "ts.json").write_text("{}", encoding="utf-8")
-        issues, _ = _explain_check(ex, "SELECT 1", "R0001", tmp_path / "ts.json")
+        issues, _ = _analyze_plan(_plan_with_streams(48), "R0001", tmp_path / "ts.json")   # 50 个 → 不超
         assert issues == []
-        ex2 = _Ex(_plan_with_streams(49))                 # 51 个 → 超
-        issues2, _ = _explain_check(ex2, "SELECT 1", "R0001", tmp_path / "ts.json")
+        issues2, _ = _analyze_plan(_plan_with_streams(49), "R0001", tmp_path / "ts.json")  # 51 → 超
         assert any("STREAM 算子 51 个 > 50" in i for i in issues2)
 
     def test_pattern_matches_both_formats_and_any_type(self):
@@ -66,26 +60,19 @@ class TestStreamThreshold:
                 "Stream[name:S2, type: REDISTRIBUTE]\n"
                 "->  Streaming(type: BROADCAST)\n"
                 "Streaming (type: PART REDISTRIBUTE)\n"
-                "Streaming (type: PART LOCAL)")     # PART 变体也算（任意 type）
+                "Streaming (type: PART LOCAL)")
         assert len(_STREAM_PATTERN.findall(text)) == 5
 
 
 class TestNoPushdown:
-    def test_data_node_scan_flags_no_pushdown(self, tmp_path):
-        """官方判据：Data Node Scan（伴随 _REMOTE_TABLE_QUERY_）=不可下推；Row Adapter
-        只是行列转换算子不算（首版误用已纠正）。"""
-        ex = _Ex(["Data Node Scan on t1 \"_REMOTE_TABLE_QUERY_\"", "Streaming (type: GATHER)"])
+    def test_data_node_scan_flags(self, tmp_path):
+        plan = 'Data Node Scan on t1 "_REMOTE_TABLE_QUERY_"\nStreaming (type: GATHER)'
         (tmp_path / "ts.json").write_text("{}", encoding="utf-8")
-        issues, _ = _explain_check(ex, "SELECT 1", "R0001", tmp_path / "ts.json")
+        issues, _ = _analyze_plan(plan, "R0001", tmp_path / "ts.json")
         assert any("不下推" in i and "Data Node Scan" in i and "_REMOTE_TABLE_QUERY_" in i for i in issues)
-        # Row Adapter 单独出现不报
-        ex2 = _Ex(["Row Adapter", "Streaming (type: GATHER)"])
-        issues2, _ = _explain_check(ex2, "SELECT 1", "R0001", tmp_path / "ts.json")
-        assert not any("不下推" in i for i in issues2)
 
-    def test_explain_failure_disclosed_not_blocking(self, tmp_path):
-        ex = _Ex(error="permission denied")
+    def test_row_adapter_alone_not_flagged(self, tmp_path):
+        """Row Adapter 只是行列转换算子不算（首版误用已纠正）。"""
         (tmp_path / "ts.json").write_text("{}", encoding="utf-8")
-        issues, plan_file = _explain_check(ex, "SELECT 1", "R0001", tmp_path / "ts.json")
-        assert any("EXPLAIN 失败（计划门槛跳过）" in i for i in issues)
-        assert plan_file == ""                             # 失败不落盘
+        issues, _ = _analyze_plan("Row Adapter\nStreaming (type: GATHER)", "R0001", tmp_path / "ts.json")
+        assert not any("不下推" in i for i in issues)

@@ -169,7 +169,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | designer→闸口① | 任务目标对照 | gate_summary | 闸口①前 | 人判材料 |
 | designer→闸口① | **关联质量**：逐表键唯一性（主判据——通过一句话，不唯一才展开：条件原文+输入声明对照[宁缺勿错]+**join_safety 断言对照**[证伪最高优先/已知接受不重复弹]+重复组差异列+命中）+ 整体试算严重性（膨胀/丢行/空关联率；全通过却膨胀=矛盾信号贴条件原文）——只反馈事实不猜收敛。与 designer 第4层自查构成断言-实证闭环（maker 断言 join_key_unique，闸口①实测） | diagnose_fanout --all | 闸口①前 | 披露不阻断（人判归属与收敛） |
 | coder→SQL | 静态（字段覆盖/引用/口径对账） | check_sql | 每规则写完 | error 硬阻断 / 提示级 |
-| coder→UT | 执行可跑性 + **执行计划两门槛**（不下推=官方判据 Data Node Scan/_REMOTE_TABLE_QUERY_ / STREAM 算子数≤50——纯 EXPLAIN 零成本，计划原文落盘可回溯） | ut_precheck 6a | INSERT 前 | 跑通=硬阻断；计划门槛=披露不阻断（性能人判） |
+| coder→UT | 执行可跑性（EXPLAIN ANALYZE 全量真实执行一次[替代采样 SELECT]+顶层实际行数 0 行告警）+ **执行计划两门槛**（不下推=官方判据 Data Node Scan/_REMOTE_TABLE_QUERY_ / STREAM 算子数≤50——同一计划文本，含 actual 值落盘可回溯；字段级 NULL 归 6b 空值检查） | ut_precheck 6a | INSERT 前 | 跑通=硬阻断；计划门槛=披露不阻断（性能人判） |
 | UT 装载后 | 数据质量实锤+DQ+发散深查 | ut_execute 6b + diagnose_fanout --rule + ut_diagnose | 6b | 实败按分流表路由 |
 | 环境 | 指纹/关键文件/python/依赖（开关式） | check_env | 步骤0 | 硬阻断 |
 
