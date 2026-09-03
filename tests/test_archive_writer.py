@@ -1,7 +1,8 @@
-"""archive_writer 测试：档案写回与序号顺延（docs/specs/opt/02 §〇）。"""
+"""archive_writer 测试：档案两动作 adopt（首优收档）/ advance（交付收口推进）——
+目录定调 2026-08-31：档案=ddlc_design_dev/archive/ 单目录当前态，演进史=git 提交历史。"""
 import json
 
-from archive_writer import write_archive, next_seq, main
+from archive_writer import adopt, advance, main
 
 
 def _mk(p, files: dict):
@@ -12,35 +13,100 @@ def _mk(p, files: dict):
         f.write_text(content, encoding="utf-8")
 
 
-TS = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_d", "cn": ""}}}}
-
-
-class TestArchive:
-    def test_first_write_creates_001(self, tmp_path):
-        ts_dir = tmp_path / "src"; _mk(ts_dir, {"ts_v2.json": json.dumps(TS, ensure_ascii=False),
-                                                "etl/R0001.sql": "SELECT 1",
-                                                "ddl_full/create_table_dwb_x_d.sql": "CREATE..."})
-        dest = write_archive(tmp_path / "archives", "dws", "dwb_x_d",
-                             ts_dir / "ts_v2.json", ts_dir / "etl", ts_dir / "ddl_full",
-                             ts_dir / "decisions.yaml")
-        assert dest.name.startswith("001_")
-        assert (dest / "ts_v2.json").exists()
+class TestAdopt:
+    def test_adopt_moves_newpipe_outputs(self, tmp_path):
+        """平铺产出收档：ts/etl/ddl/dq 移入 archive/，decisions 拷入（_internal 原位不动）。"""
+        ddlc = tmp_path / "ddlc_design_dev"
+        _mk(ddlc, {"ts.json": "{}", "ts.md": "# ts", "etl/R0001.sql": "SELECT 1",
+                   "ddl/create_table_t.sql": "CREATE...", "dq/dq_01_null.sql": "SELECT 2",
+                   "export/制品.xlsx": "bin", "ut_report.md": "# ut",
+                   "_internal/design_decisions.yaml": "grain: ...",
+                   "_internal/rs_input.json": "{}"})
+        dest = adopt(ddlc)
+        assert dest == ddlc / "archive"
+        assert (dest / "ts.json").exists() and (dest / "ts.md").exists()
         assert (dest / "etl/R0001.sql").exists()
-        assert (dest / "ddl/create_table_dwb_x_d.sql").exists(), "全量 DDL 统一落 dest/ddl"
+        assert (dest / "ddl/create_table_t.sql").exists()
+        assert (dest / "dq/dq_01_null.sql").exists()
+        assert (dest / "decisions.yaml").exists()
+        # 平铺原件移走（mv）；交付现场与过程产物留原位
+        assert not (ddlc / "ts.json").exists() and not (ddlc / "etl").exists()
+        assert (ddlc / "export/制品.xlsx").exists() and (ddlc / "ut_report.md").exists()
+        assert (ddlc / "_internal/design_decisions.yaml").exists()
 
-    def test_seq_increments(self, tmp_path):
-        asset = tmp_path / "archives" / "dws" / "dwb_x_d" / "001_20260101"
-        asset.mkdir(parents=True)
-        assert next_seq(asset.parent) == 2
-        assert next_seq(tmp_path / "archives" / "dws" / "nope") == 1
+    def test_adopt_without_dq_ok(self, tmp_path):
+        """无 DQ 资产（dq/ 可缺）照常收档。"""
+        ddlc = tmp_path / "ddlc_design_dev"
+        _mk(ddlc, {"ts.json": "{}", "etl/R0001.sql": "SELECT 1",
+                   "ddl/x.sql": "CREATE", "_internal/design_decisions.yaml": "d: 1"})
+        adopt(ddlc)
+        assert not (ddlc / "archive/dq").exists()
 
-    def test_main(self, tmp_path):
-        ts_dir = tmp_path / "src"; _mk(ts_dir, {"ts.json": json.dumps(TS, ensure_ascii=False),
-                                                "etl/R0001.sql": "SELECT 1",
-                                                "ddl/x.sql": "CREATE..."})
-        rc = main(["--ts", str(ts_dir / "ts.json"), "--etl-dir", str(ts_dir / "etl"),
-                   "--ddl-dir", str(ts_dir / "ddl"),
-                   "--archives-root", str(tmp_path / "archives")])
-        assert rc == 0
-        dirs = list((tmp_path / "archives" / "dws" / "dwb_x_d").iterdir())
-        assert len(dirs) == 1 and dirs[0].name.startswith("001_")
+    def test_adopt_twice_rejected(self, tmp_path):
+        """已有档案再收档 → 拒（幂等保护）。"""
+        ddlc = tmp_path / "ddlc_design_dev"
+        _mk(ddlc, {"ts.json": "{}", "_internal/design_decisions.yaml": "d: 1"})
+        adopt(ddlc)
+        try:
+            adopt(ddlc)
+            assert False, "应拒绝重复收档"
+        except ValueError as e:
+            assert "已存在" in str(e)
+
+    def test_adopt_without_newpipe_outputs_rejected(self, tmp_path):
+        ddlc = tmp_path / "ddlc_design_dev"
+        _mk(ddlc, {"export/x.xlsx": "bin"})
+        try:
+            adopt(ddlc)
+            assert False
+        except ValueError as e:
+            assert "ts.json" in str(e)
+
+    def test_adopt_main(self, tmp_path):
+        ddlc = tmp_path / "ddlc"
+        _mk(ddlc, {"ts.json": "{}", "_internal/design_decisions.yaml": "d: 1"})
+        assert main(["adopt", "--ddlc", str(ddlc)]) == 0
+        assert (ddlc / "archive/decisions.yaml").exists()
+
+
+class TestAdvance:
+    def _site(self, tmp_path):
+        """已建档资产 + 一次优化现场。"""
+        ddlc = tmp_path / "ddlc"
+        _mk(ddlc, {"archive/ts.json": '{"v": 1}', "archive/etl/R0001.sql": "OLD",
+                   "archive/etl/R0002.sql": "KEEP",
+                   "archive/ddl/old.sql": "CREATE",
+                   "archive/decisions.yaml": "old: 1"})
+        _mk(ddlc / "opt", {"ts_v2.json": '{"v": 2}', "ts.md": "# v2",
+                           "etl/R0001.sql": "NEW",
+                           "ddl_full/new.sql": "CREATE2",
+                           "_internal/design_decisions_opt.yaml": "opt: 1"})
+        return ddlc
+
+    def test_advance_promotes_current_state(self, tmp_path):
+        ddlc = self._site(tmp_path)
+        advance(ddlc / "opt", ddlc / "archive")
+        arc = ddlc / "archive"
+        assert json.loads((arc / "ts.json").read_text())["v"] == 2
+        assert (arc / "ts.md").read_text() == "# v2"
+        assert (arc / "etl/R0001.sql").read_text() == "NEW", "同名覆盖=该规则当前版"
+        assert (arc / "etl/R0002.sql").read_text() == "KEEP", "未变更规则零接触"
+        assert (arc / "ddl/new.sql").exists() and (arc / "ddl/old.sql").exists()
+        assert (arc / "decisions.yaml").read_text() == "opt: 1"
+        # opt 现场保留（交付物人取用）
+        assert (ddlc / "opt/ts_v2.json").exists()
+
+    def test_advance_without_output_rejected(self, tmp_path):
+        ddlc = tmp_path / "ddlc"
+        _mk(ddlc / "archive", {"ts.json": "{}"})
+        try:
+            advance(ddlc / "opt", ddlc / "archive")
+            assert False
+        except ValueError as e:
+            assert "ts_v2" in str(e)
+
+    def test_advance_main(self, tmp_path):
+        ddlc = self._site(tmp_path)
+        assert main(["advance", "--opt", str(ddlc / "opt"),
+                     "--archive", str(ddlc / "archive")]) == 0
+        assert json.loads((ddlc / "archive/ts.json").read_text())["v"] == 2

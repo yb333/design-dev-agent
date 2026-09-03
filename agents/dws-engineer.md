@@ -19,10 +19,10 @@ permission:
   read: allow
   edit:
     "**/ddlc_design_dev/**": allow
-    "**/ddlc_opt/**": allow
+    "**/ddlc_design_dev/opt/**": allow
   write:
     "**/ddlc_design_dev/**": allow
-    "**/ddlc_opt/**": allow
+    "**/ddlc_design_dev/opt/**": allow
   skill:
     "new-pipe": allow
     "opt-pipe": allow

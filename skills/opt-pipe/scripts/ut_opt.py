@@ -109,12 +109,18 @@ def _frozen_columns(ts_v2: dict, change: dict) -> Dict[str, List[str]]:
 
 
 def apply_alters(executor, ddl_dir: Path, tables: List[str], schema: str) -> List[str]:
-    """应用 ALTER 变更单（确定文件名拼接，禁 glob）。表不存在让 DB 报错 → 环境问题归人。"""
+    """应用 ALTER 变更单（确定文件名拼接，禁 glob）。表不存在让 DB 报错 → 环境问题归人。
+
+    变更单文件缺失 → fail loud（不静默跳过：缺 ALTER 直接跑 INSERT 会报新列不存在，
+    错误会被分流给 coder——先跑 assemble_ddl_opt 生成 ddl/ 再进 UT）。
+    """
     applied = []
+    missing = [t for t in tables if not (ddl_dir / f"alter_table_{t}.sql").exists()]
+    if missing:
+        raise ValueError(
+            f"ALTER 变更单缺失: {missing}（{ddl_dir}）——先跑 assemble_ddl_opt 生成变更单再执行 UT")
     for t in tables:
         p = ddl_dir / f"alter_table_{t}.sql"
-        if not p.exists():
-            continue
         executor.execute(p.read_text(encoding="utf-8"))
         applied.append(t)
     return applied
@@ -180,11 +186,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"UT_OPT_NO_DB: 数据源不可用（{e}）——环境问题归人", file=sys.stderr)
         return 3
 
-    # 1. ALTER
+    # 1. ALTER（变更单缺失=流程顺序错——先 assemble_ddl_opt 再 UT，与环境问题分开报）
     try:
         tables = sorted({f.get("target_table", "") for f in change["fields"]} |
                         {t for f in change["fields"] for t in f.get("intermediate_tables", [])})
         alters = apply_alters(executor, Path(args.ddl_dir), tables, schema)
+    except ValueError as e:
+        print(f"UT_OPT_ERROR: {e}", file=sys.stderr)
+        return 2
     except Exception as e:
         print(f"UT_OPT_ENV: ALTER 失败（表不存在=环境问题归人）: {e}", file=sys.stderr)
         return 3

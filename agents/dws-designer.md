@@ -23,11 +23,11 @@ permission:
   edit:
     "*": deny
     "**/ddlc_design_dev/_internal/design_decisions.yaml": allow
-    "**/ddlc_opt/_internal/design_decisions_opt.yaml": allow
+    "**/ddlc_design_dev/opt/_internal/design_decisions_opt.yaml": allow
   write:
     "*": deny
     "**/ddlc_design_dev/_internal/design_decisions.yaml": allow
-    "**/ddlc_opt/_internal/design_decisions_opt.yaml": allow
+    "**/ddlc_design_dev/opt/_internal/design_decisions_opt.yaml": allow
   skill:
     "*": deny
     "dws-design": allow

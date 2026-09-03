@@ -25,14 +25,14 @@ permission:
     "*": deny
     "**/ddlc_design_dev/etl/*.sql": allow
     "**/ddlc_design_dev/dq/*.sql": allow
-    "**/ddlc_opt/etl/*.sql": allow
-    "**/ddlc_opt/dq/*.sql": allow
+    "**/ddlc_design_dev/opt/etl/*.sql": allow
+    "**/ddlc_design_dev/opt/dq/*.sql": allow
   write:
     "*": deny
     "**/ddlc_design_dev/etl/*.sql": allow
     "**/ddlc_design_dev/dq/*.sql": allow
-    "**/ddlc_opt/etl/*.sql": allow
-    "**/ddlc_opt/dq/*.sql": allow
+    "**/ddlc_design_dev/opt/etl/*.sql": allow
+    "**/ddlc_design_dev/opt/dq/*.sql": allow
   # 禁止 MCP 工具
   "mcp_*": deny
   skill:
@@ -96,7 +96,7 @@ python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 
 # 产出
 
-**唯一产出：`10_project_deliver/{资产名}/ddlc_design_dev/etl/{编号}_{规则名简称}_{写入方式}.sql`**
+**唯一产出：`10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/etl/{编号}_{规则名简称}_{写入方式}.sql`**
 
 文件命名：`R0001_订单汇总_truncate_table.sql`
 - 编号：切片的 rule_code（如 `R0001`）
@@ -105,7 +105,7 @@ python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 
 只含 SELECT（加工逻辑），不含 INSERT/DDL。
 
-DQ 任务的产出：`10_project_deliver/{资产名}/ddlc_design_dev/dq/` 下每条 dq_rule 一个文件（文件名用切片 `_file`，契约与流程见 dws-dq skill）。
+DQ 任务的产出：`10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/dq/` 下每条 dq_rule 一个文件（文件名用切片 `_file`，契约与流程见 dws-dq skill）。
 
 # 硬约束
 

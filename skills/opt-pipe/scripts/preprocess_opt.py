@@ -1,11 +1,9 @@
 """preprocess_opt —— 优化输入预处理 v2（真实输入格式：全量 mapping + RS，2026-08-21 确认）。
 
-输入包（docs/specs/opt/03 + 真实格式）：
-  --input-dir   需求包目录（分拣规则：唯一 xlsx = 全量 mapping、唯一 md = RS；
-                多个时按文件名关键词 full/最新/融合/全量 与 rs/需求 唯一命中；
-                仍分不出 → fail loud；其余文件忽略并记入 manifest）
-  或显式 --full-mapping X --rs Y（评测/疑难覆盖）
-  --ts-baseline ts_baseline.json（组装备件）
+输入（契约参数直传，不猜文件——分拣器已退役 2026-08-31）：
+  --mapping     全量 mapping xlsx 路径（调用方/人指定，内网命名无关键词约定）
+  --rs          RS md 路径（变更记录在 RS，opt 场景必有）
+  --ts-baseline 档案 ts（archive/ts.json，只读）
   --version     可选覆盖（默认 = RS 变更记录最新"优化"行日期归一 YYYYMM）
 
 真实格式约定（mapping-format.md 备注版本标记规范）：
@@ -15,9 +13,10 @@
 
 提取：本次版本 + "新增"标记的行 → 变更清单（属性级 = add_field 候选，实体级 = 新来源）；
 其他动词（修改/下线…）→ 归类 change_type 并报告"待扩展"（识别是一回事，支持是另一回事）。
-校验：冲突/别名配对/资产一致（原有）+ 版本锚定与正文对账。
-产出：input_manifest.json（分拣结果与依据）+ change_request.json（+version+变更记录摘要）。
-exit 0/1/2 对齐 precheck 分级。编排者不读输入原文——分拣解析全在本脚本。
+校验：冲突/别名配对/资产一致（F/I 镜像归一：mapping 写 I 视图、baseline 记 F 表是同一资产）
+      + 版本锚定与正文对账。
+产出：change_request.json（含 source_files/version/变更记录摘要——闸口①'把简述与提取字段并排）。
+exit 0/1/2 对齐 precheck 分级。编排者不读输入原文——解析校验全在本脚本。
 """
 import argparse
 import json
@@ -40,43 +39,14 @@ VERB_TO_CHANGE = {"新增": "add", "修改": "modify", "调整": "modify", "变�
                   "下线": "drop", "删除": "drop", "停用": "drop"}
 SUPPORTED_CHANGE_TYPES = {"add"}   # 第一刀全流程仅 add；其余识别+报告待扩展
 
-FULL_KEYWORDS = ("full", "最新", "融合", "全量", "latest")
-RS_KEYWORDS = ("rs", "需求", "requirement")
 
-
-# ---------------------------------------------------------------------------
-# 1. 输入包分拣（确定性规则 + fail loud + 显式参数覆盖）
-# ---------------------------------------------------------------------------
-
-def scan_input_dir(input_dir: Path) -> dict:
-    """分拣：唯一 xlsx=全量 mapping、唯一 md=RS；多个按文件名关键词；分不出 fail loud。"""
-    xlsx = sorted(p for p in input_dir.rglob("*.xls*") if not p.name.startswith("~$"))
-    mds = sorted(p for p in input_dir.rglob("*.md"))
-
-    def pick(cands: List[Path], kws: Tuple[str, ...], label: str) -> Optional[Path]:
-        if len(cands) == 1:
-            return cands[0]
-        if not cands:
-            return None
-        hits = [p for p in cands if any(k in p.name.lower() for k in kws)]
-        if len(hits) == 1:
-            return hits[0]
-        raise ValueError(f"{label}有 {len(cands)} 个且关键词无法唯一命中："
-                         f"{[p.name for p in cands]}——请改名或用 --full-mapping/--rs 显式指定")
-
-    full = pick(xlsx, FULL_KEYWORDS, "mapping 文件")
-    rs = pick(mds, RS_KEYWORDS, "RS 文档")
-    chosen = {full, rs} - {None}
-    ignored = [str(p.relative_to(input_dir)) for p in input_dir.rglob("*")
-               if p.is_file() and p not in chosen]
-    if full is None or rs is None:
-        missing = []
-        if full is None:
-            missing.append("全量 mapping（*.xlsx）")
-        if rs is None:
-            missing.append("RS（*.md）")
-        raise ValueError(f"输入包缺：{'+'.join(missing)}（目录：{input_dir}）")
-    return {"full_mapping": full, "rs": rs, "ignored": ignored}
+def norm_asset(name: str) -> str:
+    """资产名镜像归一：剥 schema 前缀 + 去 _i/_f 尾（资产铆定 I，mapping 写 I 视图、
+    baseline 记 F 表是同一资产的两面——I 视图是 F 表的固定镜像）。"""
+    n = (name or "").strip()
+    if "." in n:
+        n = n.rsplit(".", 1)[-1]
+    return re.sub(r"_[if]$", "", n.lower())
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +253,12 @@ def extract_and_check(mapping: Dict[str, List[dict]], facts: dict, version: str,
                               "message": f"属性级第{i}行：{tcol!r} 不在 baseline 存量且无本次"
                                          f"版本标记（旧版本漏入档 or 漏标）——请业务确认"})
 
-    # 资产定位一致性
+    # 资产定位一致性（F/I 镜像归一：mapping 目标表写 I 视图、baseline 记 F 表是常态）
     for t in sorted({r.get("target_table", "") for r in entity_rows if r.get("target_table")}):
-        if t != facts["target_short"]:
+        if norm_asset(t) != norm_asset(facts["target_short"]):
             diags.append({"level": "error", "code": "asset_table_mismatch",
-                          "message": f"实体级目标表 {t!r} 与本次资产 {facts['target_short']!r} 不一致"})
+                          "message": f"实体级目标表 {t!r} 与本次资产 {facts['target_short']!r} 不一致"
+                                     f"（已按 I/F 镜像归一比较）"})
 
     # RS 对账：新增字段应出现在版本锚定段
     if rs_section:
@@ -322,29 +293,21 @@ def build_change_request(facts: dict, version: str, add_fields: List[dict],
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="优化输入预处理 v2：全量 mapping + RS（真实格式）")
-    ap.add_argument("--input-dir", default="", help="需求包目录（分拣：唯一 xlsx/md 或关键词）")
-    ap.add_argument("--full-mapping", default="", help="显式指定全量 mapping（覆盖分拣）")
-    ap.add_argument("--rs", default="", help="显式指定 RS（覆盖分拣）")
-    ap.add_argument("--ts-baseline", required=True)
+    ap = argparse.ArgumentParser(description="优化输入预处理 v2：全量 mapping + RS（契约参数直传）")
+    ap.add_argument("--mapping", required=True, help="全量 mapping xlsx 路径（调用方指定）")
+    ap.add_argument("--rs", required=True, help="RS md 路径（变更记录所在，opt 场景必有）")
+    ap.add_argument("--ts-baseline", required=True, help="档案 ts（archive/ts.json，只读）")
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--version", default="", help="覆盖版本号（默认 RS 变更记录最新优化行 YYYYMM）")
     args = ap.parse_args(argv)
 
-    # 分拣
-    try:
-        if args.full_mapping and args.rs:
-            scan = {"full_mapping": Path(args.full_mapping), "rs": Path(args.rs), "ignored": []}
-        elif args.input_dir:
-            scan = scan_input_dir(Path(args.input_dir))
-        else:
-            print("OPT_PRECHECK_ERROR: 需要 --input-dir 或 --full-mapping + --rs", file=sys.stderr)
+    mapping_path, rs_path = Path(args.mapping), Path(args.rs)
+    for p, label in ((mapping_path, "mapping"), (rs_path, "RS")):
+        if not p.exists():
+            print(f"OPT_PRECHECK_ERROR: {label} 文件不存在: {p}", file=sys.stderr)
             return 2
-    except ValueError as e:
-        print(f"OPT_PRECHECK_ERROR: {e}", file=sys.stderr)
-        return 2
 
-    rs_text = scan["rs"].read_text(encoding="utf-8")
+    rs_text = rs_path.read_text(encoding="utf-8")
     try:
         change_log = parse_change_log(rs_text)
         version = args.version or pick_current_version(change_log)[0]
@@ -360,7 +323,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
     facts = baseline_facts(ts_baseline)
-    mapping = read_full_mapping(scan["full_mapping"])
+    mapping = read_full_mapping(mapping_path)
     add_fields, unsupported, diags = extract_and_check(mapping, facts, version, rs_section)
 
     errors = [d for d in diags if d["level"] == "error"]
@@ -371,21 +334,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[INFO] 识别到 {u['change_type']} 变更（{u['level']} {u['name']}，"
               f"备注动词'{u['verb']}'）——本刀流程未支持，待扩展", file=sys.stderr)
 
-    out = Path(args.outdir)
-    out.mkdir(parents=True, exist_ok=True)
-    # manifest 永远落盘（分拣可追溯）
-    (out / "input_manifest.json").write_text(json.dumps({
-        "full_mapping": str(scan["full_mapping"]), "rs": str(scan["rs"]),
-        "ignored": scan["ignored"], "version": version,
-        "classify_rule": "唯一 xlsx=全量 mapping / 唯一 md=RS；多个按文件名关键词"},
-        ensure_ascii=False, indent=2), encoding="utf-8")
-
     if errors:
+        out = Path(args.outdir)
+        out.mkdir(parents=True, exist_ok=True)
         print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断，{len(warns)} 项 warn。", file=sys.stderr)
         return 2
 
+    out = Path(args.outdir)
+    out.mkdir(parents=True, exist_ok=True)
     cr = build_change_request(facts, version, add_fields, unsupported, row, rs_section,
-                              {"mapping": str(scan["full_mapping"]), "rs": str(scan["rs"]),
+                              {"mapping": str(mapping_path), "rs": str(rs_path),
                                "ts_baseline": str(args.ts_baseline)})
     (out / "change_request.json").write_text(
         json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")

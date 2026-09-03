@@ -169,6 +169,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(v2, ensure_ascii=False, indent=2), encoding="utf-8")
+    # ts.md 同步产出（当前态完整性：档案 ts.json/ts.md 成对）——投影件，渲染失败不阻断组装
+    try:
+        from assemble_ts import render_md
+        md_path = out.with_suffix(".md")
+        md_path.write_text(render_md(v2), encoding="utf-8")
+        print(f"ts_md: {md_path}")
+    except Exception as e:
+        print(f"WARN: ts.md 渲染失败（不阻断）: {e}", file=sys.stderr)
     n_joins = sum(len(f.get("new_joins", [])) for f in decisions["fields"])
     print(f"ts_v2: {out}")
     print(f"fields: {len(decisions['fields'])}, new_joins: {n_joins}")

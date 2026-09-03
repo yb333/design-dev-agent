@@ -1,67 +1,87 @@
-"""archive_writer —— 交付写回档案（docs/specs/opt/02 §〇 档案模型；v1.7 循环链闭合）。
+"""archive_writer —— 资产档案两动作（2026-08-31 目录定调：档案=ddlc_design_dev/archive/ 单目录当前态）。
 
-档案 = 唯一锚点（ts + etl SQL + ddl 全量 + decisions/change），文本小件入 git。
-archives/{appid}/{schema}/{资产}/{NNN_日期}/，NNN 顺延既有目录（不 glob——目录枚举）。
-xlsx 大件不进档案（运行时产物可再生）。new-pipe 与 opt-pipe 共用（new-pipe 交付即建档）。
+档案 = 资产当前态唯一真身（ts.json/ts.md + etl/ + ddl/ + dq/ + decisions.yaml），
+入 git（gitignore 白名单），演进史 = git 提交历史（每次交付覆盖 + 一次 commit）。
+
+两动作（子命令）：
+  adopt   首优收档：new-pipe 平铺产出原地收纳进 archive/（一次性；交付即建档，无归档动作）
+  advance 交付收口：优化现场（opt/）推进档案（闸口②'确认后调；确认前档案零改动=天然回归点）
 """
 import argparse
-import json
 import shutil
 import sys
-from datetime import date
 from pathlib import Path
 from typing import Optional
 
 
-def next_seq(asset_dir: Path) -> int:
-    if not asset_dir.exists():
-        return 1
-    seqs = []
-    for d in asset_dir.iterdir():
-        if d.is_dir() and d.name[:3].isdigit():
-            seqs.append(int(d.name[:3]))
-    return (max(seqs) + 1) if seqs else 1
+def adopt(ddlc: Path) -> Path:
+    """首优收档：ddlc_design_dev 平铺的 new-pipe 产出 → archive/。
+
+    mv ts.json/ts.md/etl//ddl//dq/（dq 可缺）→ archive/；cp _internal/design_decisions.yaml
+    → archive/decisions.yaml。export//ut_report.md/_internal/ 留原位（new-pipe 交付现场）。
+    """
+    archive = ddlc / "archive"
+    if archive.exists():
+        raise ValueError(f"档案已存在（无需收档）: {archive}")
+    if not (ddlc / "ts.json").exists():
+        raise ValueError(f"{ddlc} 无 new-pipe 产出（ts.json 缺）——不能收档")
+    archive.mkdir(parents=True)
+    for name in ("ts.json", "ts.md", "etl", "ddl", "dq"):
+        src = ddlc / name
+        if src.exists():
+            shutil.move(str(src), str(archive / name))
+    decisions = ddlc / "_internal" / "design_decisions.yaml"
+    if not decisions.exists():
+        raise ValueError(f"收档缺设计决策: {decisions}")
+    shutil.copy2(decisions, archive / "decisions.yaml")
+    return archive
 
 
-def write_archive(archives_root: Path, schema: str, asset: str,
-                  ts_path: Path, etl_dir: Path, ddl_dir: Path,
-                  decisions_path: Optional[Path] = None) -> Path:
-    asset_dir = archives_root / schema / asset
-    dest = asset_dir / f"{next_seq(asset_dir):03d}_{date.today():%Y%m%d}"
-    dest.mkdir(parents=True, exist_ok=False)
-    shutil.copy2(ts_path, dest / ts_path.name)
-    if etl_dir.is_dir():
-        shutil.copytree(etl_dir, dest / "etl", dirs_exist_ok=True)
-    if ddl_dir.is_dir():
-        shutil.copytree(ddl_dir, dest / "ddl", dirs_exist_ok=True)
-    if decisions_path and Path(decisions_path).exists():
-        shutil.copy2(decisions_path, dest / Path(decisions_path).name)
-    return dest
+def advance(opt: Path, archive: Path) -> Path:
+    """交付收口：优化现场（opt/）推进档案当前态。
+
+    ts_v2.json→ts.json、ts.md→ts.md、etl/*.sql→etl/（{rule_code}.sql 同名覆盖=该规则当前版）、
+    ddl_full/→ddl/、_internal/design_decisions_opt.yaml→decisions.yaml。
+    opt/ 现场保留（最近一次优化的交付物：ALTER 单/patch 副本，人取用），下次优化开工重建。
+    """
+    if not (opt / "ts_v2.json").exists():
+        raise ValueError(f"{opt} 无优化产出（ts_v2.json 缺）——不能推进")
+    if not archive.is_dir():
+        raise ValueError(f"档案不存在: {archive}（先收档或入料建档）")
+    shutil.copy2(opt / "ts_v2.json", archive / "ts.json")
+    if (opt / "ts.md").exists():
+        shutil.copy2(opt / "ts.md", archive / "ts.md")
+    if (opt / "etl").is_dir():
+        (archive / "etl").mkdir(exist_ok=True)
+        for f in (opt / "etl").glob("*.sql"):
+            shutil.copy2(f, archive / "etl" / f.name)
+    if (opt / "ddl_full").is_dir():
+        shutil.copytree(opt / "ddl_full", archive / "ddl", dirs_exist_ok=True)
+    decisions = opt / "_internal" / "design_decisions_opt.yaml"
+    if not decisions.exists():
+        raise ValueError(f"推进缺设计决策: {decisions}")
+    shutil.copy2(decisions, archive / "decisions.yaml")
+    return archive
 
 
 def main(argv: Optional[list] = None) -> int:
-    ap = argparse.ArgumentParser(description="交付写回档案（ts + etl + ddl 全量 + decisions）")
-    ap.add_argument("--ts", required=True, help="ts.json（new-pipe 产物或 ts_v2.json）")
-    ap.add_argument("--etl-dir", required=True)
-    ap.add_argument("--ddl-dir", required=True, help="全量 DDL 目录（opt: ddl_full/；new-pipe: ddl/）")
-    ap.add_argument("--decisions", default="", help="decisions 文件（opt 增量 or new-pipe 全量）")
-    ap.add_argument("--archives-root", default="archives", help="档案根目录")
+    ap = argparse.ArgumentParser(description="资产档案两动作：adopt 首优收档 / advance 交付收口")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p_adopt = sub.add_parser("adopt", help="new-pipe 平铺产出收档进 archive/")
+    p_adopt.add_argument("--ddlc", required=True, help="ddlc_design_dev 目录（平铺产出所在）")
+    p_adv = sub.add_parser("advance", help="优化现场推进档案当前态（闸口②'确认后）")
+    p_adv.add_argument("--opt", required=True, help="opt/ 优化现场目录")
+    p_adv.add_argument("--archive", required=True, help="archive/ 档案目录")
     args = ap.parse_args(argv)
 
-    ts = json.loads(Path(args.ts).read_text(encoding="utf-8"))
-    f_table = ts.get("meta", {}).get("target", {}).get("f_table", {})
-    schema, asset = f_table.get("schema", ""), f_table.get("table", "")
-    if not schema or not asset:
-        print("ARCHIVE_ERROR: ts 缺 meta.target.f_table.schema/table", file=sys.stderr)
-        return 2
     try:
-        dest = write_archive(Path(args.archives_root), schema, asset,
-                             Path(args.ts), Path(args.etl_dir), Path(args.ddl_dir),
-                             Path(args.decisions) if args.decisions else None)
-    except Exception as e:
+        dest = adopt(Path(args.ddlc)) if args.cmd == "adopt" else \
+            advance(Path(args.opt), Path(args.archive))
+    except ValueError as e:
         print(f"ARCHIVE_ERROR: {e}", file=sys.stderr)
         return 2
     print(f"archive: {dest}")
+    print("提示: git add 该档案目录并提交（message 记变更摘要）——演进史 = git 提交历史")
     return 0
 
 

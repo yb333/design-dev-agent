@@ -60,7 +60,7 @@
 |------|------|--------|------------|-------------------|
 | `assemble_ts.py` | rs_input + design_decisions → ts.json + ts.md；跑 ~40 条校验（五层+LI，含 **N_JOIN1 关联键类型闭合**：rs_input._join_type_risks 检出对必须 joins.cast 或豁免） | designer 写完 decisions 后组装 | rs_input.json + design_decisions.yaml → ts.json / ts.md | 读 decisions.rules **+ decisions.init**（Chunk 1 已接通 init 段） |
 | `explore.py` | JOIN 键唯一性探查（COUNT(1) vs COUNT(DISTINCT)，只读单表，不 JOIN；**--key 逗号分隔复合键**→COUNT(DISTINCT (a,b)) 组合唯一性）+ **键值重叠率试算**（--check-overlap：双侧 DISTINCT 采样500 算交集，探测同类型不同内容的静默空关联；复合键行构造器转 text）；数据源锚点 **--rs rs_input.json（设计期，2026-09-03 循环依赖破解：--ts 是 ts.json 组装后才存在，设计期调 explore 曾无锚可用被逼找 MCP 替代）** > --ts > --schema 兜底 | designer 第4层关联安全/内容语义 | ts.json + 表/键 → 结论 | ts.rules / ts.tables |
-| `assemble_ts_opt.py` ★opt | 优化模式组装：ts_baseline + 增量 decisions（opt-decisions-template.yaml）→ ts_v2 + change 段；新 JOIN 必须声明 join_safety；确定性应用不动存量 | 优化模式 designer 写完 decisions 后 | ts_baseline.json + decisions.yaml → ts_v2.json | 读 ts_baseline 全部 + 写 change 段 |
+| `assemble_ts_opt.py` ★opt | 优化模式组装：ts_baseline + 增量 decisions（opt-decisions-template.yaml）→ ts_v2 + ts.md + change 段；新 JOIN 必须声明 join_safety；确定性应用不动存量；_baseline（含 provenance）深拷贝透传 | 优化模式 designer 写完 decisions 后 | ts_baseline.json + decisions.yaml → ts_v2.json + ts.md | 读 ts_baseline 全部 + 写 change 段 |
 | `check_field.py`（★ designer 自有入口） | 字段查证：抄正要写的 `别名.字段` 引用直接查 schema_cache（别名自动解析；查无给相似字段建议；只给别名=列全表）。内核调 shared/schema_query | designer 写 design_logic/关联条件引用 mapping 外字段前；惯例假设字段（SCD2 start_date 类）先查再写 | rs_input.json + 别名.字段 → 存在性/类型/相似建议 | 不读 ts（读 `_internal/schema_cache.json`） |
 | `pick_targets.py` | designer 字段清单取料器（类比 coder 的 pick_fields）：rs_input → yaml 最终格式片段（--targets 清单 / --rule 规则条目骨架判断位留空；--scenario/--alias/--audit 过滤）——誊写归工具判断归人，贴入零调整 | designer 写 decisions 随用随查 | rs_input.json → stdout 片段 | 不读 ts |
 | `schema_query.py`（住 design-dev-shared，**能力层**：query_fields/lookup_table 库 + 通用 CLI） | 字段查询公共能力——check_field（designer 入口）/ pick_fields（coder 入口）的内核 | 被两个角色入口 import；通用 CLI 仅兜底 | 锚点 + schema.table → 存在性/字段清单 | 不读 ts（读 `_internal/schema_cache.json`） |
@@ -99,14 +99,14 @@
 |------|------|--------------|------------|------|
 | `opt-pipe/schemas/baseline_v1.schema.json` | 契约 vendor 拷贝（权威在 analyzer 仓） | 步骤 0 入料 | baseline_v1.json 的校验基准 | ✅ 阶段一 |
 | `baseline_contract.py` | 契约校验（schema+版本+语义条件） | 步骤 0 入料 | baseline_v1.json → 违规清单 | ✅ 阶段一 |
-| `assemble_ts_baseline.py` | json → ts_baseline + etl_baseline + baseline_view + 语义空位清单（exemptions）；kind→load_mode 映射、词表外待定不硬映射 | 步骤 0 入料建档 | baseline_v1.json → baseline 包 | ✅ 阶段一 |
-| `preprocess_opt.py` | 标注解析 → change_request + 一致性校验（冲突/漏标/配对/资产一致/标识枚举 + RS 对账 warn） | 步骤 1 | marked mapping + ts_baseline [+RS] → change_request.json | ✅ 阶段一 |
-| `sql_fence_check.py` | SQL 围栏 CLI（pipe 独立跑；逐 placed_rule 比对，read_select 兼容带后缀命名） | 步骤 4 后 | ts_v2 + etl/ + etl_baseline/ → FENCE_PASS/违规清单 | ✅ |
-| `ut_opt.py` | 优化 UT 独立入口（ALTER 应用 + 双向 MINUS 输出对比 + INSERT 全量；零触碰 ut_precheck/ut_execute） | 步骤 5 | ts_v2 + etl + etl_baseline + ddl → ut_report_opt.md | ✅ |
-| `assemble_ddl_opt.py` | ALTER 变更单 + 全量 DDL 推进（复用 generate_ddl）+ 字段差异审计 | 步骤 6 | ts_v2 + ts_baseline → ddl/ + ddl_full/ | ✅ |
-| `artifact_patcher.py` | 制品 patch 引擎（xlsx TargetFields 行追加+SQL 单元格替换 / yml 组 round-trip；严格 patch 不碰漂移；patch 说明） | 步骤 6 | ts_v2 + etl + 原始制品 → export/patched + patch_notes | ✅ |
-| `archive_writer.py` | 交付写回档案（archives/{schema}/{资产}/{NNN_日期}/；opt-pipe 步骤0 懒归档 + 步骤7 交付写回——new-pipe 无归档步骤，v2.5） | opt-pipe 步骤 0/7 | ts + etl + ddl + decisions → archives/ | ✅ |
-| `fence_check.py` | ts 级围栏（声明驱动比对：diff 分解 + add_field 冻结/许可矩阵 + 恰好等于双向判定；定义 ts.change 段消费形状） | 步骤 3 | ts_baseline + ts_v2 + change_request → FENCE_PASS / 越界+漏改清单 | ✅ 阶段一 |
+| `assemble_ts_baseline.py` | json 入料建档：档案件（ts.json + etl/{rule}.sql）落 archive/、过程件（baseline_view + exemptions）落 opt/_internal/；provenance 落 ts._baseline；kind→load_mode 映射、词表外待定不硬映射 | opt 步骤 0 入料 | baseline_v1.json → archive/ + opt/_internal/ | ✅ |
+| `preprocess_opt.py` | 标注解析 → change_request + 一致性校验（冲突/漏标/配对/资产一致[I/F 镜像归一比基名]/标识枚举 + RS 对账 warn）；**契约参数直传 --mapping/--rs（分拣器已退役——脚本不猜输入）** | opt 步骤 1 | mapping xlsx + RS md + archive/ts.json → change_request.json | ✅ |
+| `sql_fence_check.py` | SQL 围栏 CLI（pipe 独立跑；逐 placed_rule 比对；opt 新 SQL 与档案同名 {rule_code}.sql） | opt 步骤 4 后 | opt/ts_v2 + opt/etl + archive/etl → FENCE_PASS/违规清单 | ✅ |
+| `ut_opt.py` | 优化 UT 独立入口（ALTER 应用[变更单缺失 fail loud exit 2——先 assemble_ddl_opt 再 UT] + 双向 MINUS 输出对比 + INSERT 全量；零触碰 ut_precheck/ut_execute） | opt 步骤 5 | ts_v2 + opt/etl + archive/etl + opt/ddl → ut_report_opt.md | ✅ |
+| `assemble_ddl_opt.py` | ALTER 变更单 + 全量 DDL 推进（复用 generate_ddl）+ 字段差异审计 | opt 步骤 5（先于 UT——ut_opt 依赖变更单应用新列） | ts_v2 + archive/ts.json → opt/ddl/ + opt/ddl_full/ | ✅ |
+| `artifact_patcher.py` | 制品 patch 引擎（xlsx TargetFields 行追加+SQL 单元格替换 / yml 组 round-trip；严格 patch 不碰漂移；patch 说明）；--source 从 ts_v2._baseline.provenance 定位、取不到问人 | opt 步骤 6 | ts_v2 + opt/etl + 原始制品 → opt/export/patched + patch_notes | ✅ |
+| `archive_writer.py` | 档案两动作（子命令）：`adopt` 首优收档（new-pipe 平铺产出原地收纳进 archive/）/ `advance` 交付收口（opt/ 现场推进档案当前态，闸口②'确认后）——NNN 序列退役，演进史=git 提交历史 | opt-pipe 步骤 0/7 | adopt: ddlc 平铺产出 → archive/；advance: opt/ → archive/ | ✅ |
+| `fence_check.py` | ts 级围栏（声明驱动比对：diff 分解 + add_field 冻结/许可矩阵 + 恰好等于双向判定；定义 ts.change 段消费形状） | opt 步骤 3 | archive/ts.json + opt/ts_v2.json + change_request → FENCE_PASS / 越界+漏改清单 | ✅ 阶段一 |
 | `sql_fence.py` | SQL 围栏判定纯函数库（AST 老列逐列结构等价/仅追加声明列/JOIN·WHERE·GROUP BY 冻结/不支持形态转人工；rule_declaration 从 change 段派生单规则许可） | 步骤 4（pipe 独立跑；check_sql 可选自测共用） | baseline SQL + 新 SQL + 规则声明 → 违规清单 | ✅ |
 
 ---

@@ -286,6 +286,8 @@ def build_ts_baseline(data: dict) -> Tuple[dict, List[dict]]:
             "source": "baseline_v1", "contract_version": data["version"],
             "platform_generation": data["asset"].get("platform_generation", ""),
             "asset": target_full,
+            # 原始制品定位（xlsx/代码仓路径清单）——artifact_patcher --source 从这读
+            "provenance": data.get("provenance") or [],
         },
         "meta": {
             "target": {"f_table": {"schema": data["asset"]["schema"],
@@ -396,9 +398,10 @@ def render_baseline_view(data: dict, ts: dict, gaps: List[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="baseline_v1 → ts_baseline 基线包组装")
+    ap = argparse.ArgumentParser(description="baseline_v1 入料建档（档案件落 archive/，过程件落 opt/_internal/）")
     ap.add_argument("--baseline", required=True, help="baseline_v1.json 路径")
-    ap.add_argument("--outdir", required=True, help="输出目录（{deliver}/_internal）")
+    ap.add_argument("--archive-dir", required=True, help="档案目录（ddlc_design_dev/archive/）")
+    ap.add_argument("--internal-dir", required=True, help="过程目录（ddlc_design_dev/opt/_internal/）")
     args = ap.parse_args(argv)
 
     data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
@@ -413,20 +416,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     ts, gaps = build_ts_baseline(data)
     view = render_baseline_view(data, ts, gaps)
 
-    outdir = Path(args.outdir)
-    (outdir / "etl_baseline").mkdir(parents=True, exist_ok=True)
-    (outdir / "ts_baseline.json").write_text(
+    archive, internal = Path(args.archive_dir), Path(args.internal_dir)
+    (archive / "etl").mkdir(parents=True, exist_ok=True)
+    internal.mkdir(parents=True, exist_ok=True)
+    # 档案件（资产当前态；provenance 保留原始制品定位——artifact_patcher --source 的来源）
+    (archive / "ts.json").write_text(
         json.dumps(ts, ensure_ascii=False, indent=2), encoding="utf-8")
-    (outdir / "exemptions.json").write_text(
-        json.dumps({"_reverse_engineered": True, "items": gaps},
-                   ensure_ascii=False, indent=2), encoding="utf-8")
-    (outdir / "baseline_view.md").write_text(view, encoding="utf-8")
     # query_sql 逐字落盘（不做任何变换）
     for r in data["rules"]:
-        (outdir / "etl_baseline" / f"{r['rule_code']}.sql").write_text(
+        (archive / "etl" / f"{r['rule_code']}.sql").write_text(
             r["query_sql"], encoding="utf-8")
+    # 过程件（designer 读 + 豁免清单）
+    (internal / "exemptions.json").write_text(
+        json.dumps({"_reverse_engineered": True, "items": gaps},
+                   ensure_ascii=False, indent=2), encoding="utf-8")
+    (internal / "baseline_view.md").write_text(view, encoding="utf-8")
 
-    print(f"ts_baseline: {outdir / 'ts_baseline.json'}")
+    print(f"archive ts: {archive / 'ts.json'}")
     print(f"rules: {len(ts['rules'])}, semantic_gaps: {len(gaps)}, "
           f"pending_load_mode: {sum(1 for g in gaps if g['code'] == 'load_mode_pending')}")
     return 0

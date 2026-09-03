@@ -29,7 +29,13 @@ skills/design-dev-shared/scripts/local/
 eval-suite/results/
 
 # 运行时产出（跑流水线/评测生成的 SQL/DDL/ts.json/xlsx，本地重新生成，不进仓库）
-10_project_deliver/
+# ★ 例外：资产档案 archive/（文本小件入 git——资产当前态+演进史=git 提交记录）。
+# 写法（gitignore 定式：被忽略目录内的路径无法白名单救回，目录须逐级放行）：
+#   先忽略 deliver 下一切 → 放行全部目录（可遍历，内容仍忽略）→ 放行 archive 子树。
+10_project_deliver/**
+!10_project_deliver/**/
+!10_project_deliver/**/ddlc_design_dev/archive/
+!10_project_deliver/**/ddlc_design_dev/archive/**
 
 # 测试隔离目录（conftest 自动创建，指向 DWS_RULES_DIR 避免测试碰机器全局 config）
 tests/.test_rules_config/

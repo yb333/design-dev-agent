@@ -12,9 +12,13 @@ import pytest
 
 from assemble_ts_baseline import build_ts_baseline
 from preprocess_opt import (
-    scan_input_dir, parse_change_log, normalize_yyyymm, pick_current_version,
+    parse_change_log, normalize_yyyymm, pick_current_version,
     extract_version_section, remark_markers, extract_and_check, main,
+    norm_asset,
 )
+
+PKG_XLSX = "dwb_trade_order_d_全量mapping.xlsx"
+PKG_RS = "RS_需求文档.md"
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
@@ -104,26 +108,36 @@ def mapping_of(entity_rows, attr_rows):
     return {"entity": to_en(entity_rows, ENT_EN), "attr": to_en(attr_rows, ATTR_EN)}
 
 
-class TestScan:
-    def test_unique_xlsx_md(self, tmp_path):
-        pkg = make_pkg(tmp_path, *std_rows())
-        scan = scan_input_dir(pkg)
-        assert "全量mapping" in scan["full_mapping"].name
-        assert scan["rs"].name.endswith(".md")
-        assert scan["ignored"] == ["冗余说明.txt"]
+class TestNormAsset:
+    """资产名 I/F 镜像归一：资产铆定 I，mapping 写 I 视图、baseline 记 F 表是同一资产。"""
 
-    def test_multi_xlsx_keyword_pick(self, tmp_path):
-        pkg = make_pkg(tmp_path, *std_rows())
-        # 再丢一个非 mapping 的 xlsx（含"最新"关键词的才该被选中）
-        (pkg / "其他_台账.xlsx").write_bytes((pkg / "dwb_trade_order_d_全量mapping.xlsx").read_bytes())
-        scan = scan_input_dir(pkg)
-        assert "全量mapping" in scan["full_mapping"].name
+    def test_if_mirror_equal(self):
+        assert norm_asset("dwb_trade_order_i") == norm_asset("dwb_trade_order_f")
 
-    def test_ambiguous_fail_loud(self, tmp_path):
-        pkg = make_pkg(tmp_path, *std_rows(), mapping_name="mapping_A.xlsx")
-        (pkg / "mapping_B.xlsx").write_bytes((pkg / "mapping_A.xlsx").read_bytes())
-        with pytest.raises(ValueError, match="显式指定"):
-            scan_input_dir(pkg)
+    def test_schema_prefix_and_case(self):
+        assert norm_asset("dws.dwb_trade_order_i") == norm_asset("DWB_TRADE_ORDER_F")
+
+    def test_bare_name(self):
+        assert norm_asset("dwb_trade_order") == norm_asset("dwb_trade_order_f")
+
+    def test_real_mismatch(self):
+        assert norm_asset("dwb_trade_order_i") != norm_asset("dwb_other_f")
+
+    def test_entity_i_view_vs_baseline_f_table_passes(self, facts):
+        """mapping 目标表写 I 视图、baseline 是 F 表 → 不误报（内网实测踩过的坑）。"""
+        f_facts = dict(facts, target_short="dwb_trade_order_f")   # baseline F 表名
+        entity, attr_rows = std_rows()
+        for e in entity:                                          # 所有实体行的目标表都写 I 视图
+            e["目标表物理名称"] = "dwb_trade_order_i"
+        mapping = mapping_of(entity, attr_rows)
+        _, _, diags = extract_and_check(mapping, f_facts, "202608", "channel_name")
+        assert not any(d["code"] == "asset_table_mismatch" for d in diags)
+        # 真不一致仍拦（归一后基名不同）
+        for e in entity:
+            e["目标表物理名称"] = "dwb_other_i"
+        _, _, diags2 = extract_and_check(mapping_of(entity, attr_rows), f_facts,
+                                         "202608", "channel_name")
+        assert any(d["code"] == "asset_table_mismatch" for d in diags2)
 
 
 class TestRsParsing:
@@ -186,23 +200,23 @@ class TestRemarkMarkers:
 
 
 class TestMainEndToEnd:
-    def test_input_dir_flow(self, tmp_path, demo_baseline):
+    def test_direct_paths_flow(self, tmp_path, demo_baseline):
         pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
         out = tmp_path / "internal"
-        rc = main(["--input-dir", str(pkg), "--ts-baseline", str(demo_baseline),
-                   "--outdir", str(out)])
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(demo_baseline), "--outdir", str(out)])
         assert rc == 0
         cr = json.loads((out / "change_request.json").read_text(encoding="utf-8"))
         assert cr["version"] == "202608" and cr["change_type"] == "add_field"
         assert cr["change_log_summary"]["ver"] == "v2.0"
         assert [f["field"] for f in cr["fields"]] == ["channel_name"]
         assert "channel_name" in cr["rs_opt_section"]
-        mf = json.loads((out / "input_manifest.json").read_text(encoding="utf-8"))
-        assert mf["version"] == "202608" and mf["ignored"] == ["冗余说明.txt"]
+        assert cr["source_files"]["mapping"].endswith(PKG_XLSX)
 
     def test_explicit_version_override(self, tmp_path, demo_baseline):
         pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
-        rc = main(["--input-dir", str(pkg), "--ts-baseline", str(demo_baseline),
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(demo_baseline),
                    "--outdir", str(tmp_path / "internal"), "--version", "202609"])
         assert rc in (0, 1)   # 无 202609 标记行 → 提取为空 + rs warn；不阻断（版本是显式的）
         cr = json.loads((tmp_path / "internal" / "change_request.json").read_text(encoding="utf-8"))
@@ -211,10 +225,16 @@ class TestMainEndToEnd:
     def test_blocked_exit_2(self, tmp_path, demo_baseline):
         entity, attr_rows = std_rows(extra_attr=[attr(remark="202608版本新增", tcol="order_id")])
         pkg = make_pkg(tmp_path / "rs_mapping", entity, attr_rows)
-        rc = main(["--input-dir", str(pkg), "--ts-baseline", str(demo_baseline),
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(demo_baseline),
                    "--outdir", str(tmp_path / "internal")])
         assert rc == 2
         assert not (tmp_path / "internal" / "change_request.json").exists()
+
+    def test_missing_input_file_exit_2(self, tmp_path, demo_baseline):
+        rc = main(["--mapping", str(tmp_path / "不存在.xlsx"), "--rs", str(tmp_path / "r.md"),
+                   "--ts-baseline", str(demo_baseline), "--outdir", str(tmp_path / "internal")])
+        assert rc == 2
 
 
 @pytest.fixture(scope="module")
@@ -224,6 +244,7 @@ def demo_baseline(tmp_path_factory):
     d = tmp_path_factory.mktemp("baseline")
     src = d / "baseline_v1.json"
     src.write_text(json.dumps(demo, ensure_ascii=False), encoding="utf-8")
-    outdir = d / "internal"
-    assert m.main(["--baseline", str(src), "--outdir", str(outdir)]) == 0
-    return outdir / "ts_baseline.json"
+    archive, internal = d / "archive", d / "internal"
+    assert m.main(["--baseline", str(src), "--archive-dir", str(archive),
+                   "--internal-dir", str(internal)]) == 0
+    return archive / "ts.json"

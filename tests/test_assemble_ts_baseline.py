@@ -152,18 +152,20 @@ class TestV10NoWritePlan:
 
 class TestVerbatimSql:
     def test_query_sql_verbatim_pass_through(self, demo, tmp_path):
-        """main 落盘的 etl_baseline 与契约 query_sql 逐字节一致（含紧凑写法）。"""
+        """main 落档的 etl 与契约 query_sql 逐字节一致（含紧凑写法）；
+        档案件落 archive/、过程件落 internal/（目录定调 2026-08-31）。"""
         import assemble_ts_baseline as m
-        outdir = tmp_path / "internal"
+        archive, internal = tmp_path / "archive", tmp_path / "internal"
         src = tmp_path / "baseline_v1.json"
         src.write_text(json.dumps(demo, ensure_ascii=False), encoding="utf-8")
-        rc = m.main(["--baseline", str(src), "--outdir", str(outdir)])
+        rc = m.main(["--baseline", str(src), "--archive-dir", str(archive),
+                     "--internal-dir", str(internal)])
         assert rc == 0
-        sql1 = (outdir / "etl_baseline" / "R0001.sql").read_text(encoding="utf-8")
+        sql1 = (archive / "etl" / "R0001.sql").read_text(encoding="utf-8")
         assert sql1 == demo["rules"][0]["query_sql"]
-        assert (outdir / "ts_baseline.json").exists()
-        assert (outdir / "exemptions.json").exists()
-        assert (outdir / "baseline_view.md").exists()
+        assert (archive / "ts.json").exists()
+        assert (internal / "exemptions.json").exists()
+        assert (internal / "baseline_view.md").exists()
 
     def test_contract_violation_exit2(self, demo, tmp_path, capsys):
         import assemble_ts_baseline as m
@@ -171,6 +173,7 @@ class TestVerbatimSql:
         bad["version"] = "9.9"
         src = tmp_path / "bad.json"
         src.write_text(json.dumps(bad), encoding="utf-8")
-        rc = m.main(["--baseline", str(src), "--outdir", str(tmp_path / "o")])
+        rc = m.main(["--baseline", str(src), "--archive-dir", str(tmp_path / "a"),
+                     "--internal-dir", str(tmp_path / "o")])
         assert rc == 2
         assert "契约校验不通过" in capsys.readouterr().err
