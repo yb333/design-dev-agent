@@ -3,7 +3,7 @@
 设计探索脚本：JOIN 键唯一性试算 + 键值重叠率试算。
 
 designer 做 join_safety 分析时，不确定 JOIN 键在右表唯一不唯一——这是
-"关联会不会发散"的事实依据。本脚本对单表跑 count(*) / count(DISTINCT key)，
+"关联会不会发散"的事实依据。本脚本对单表跑 COUNT(1) / COUNT(DISTINCT key)，
 给出唯一性结论。
 
 键值重叠率（--check-overlap）：类型全兼容但内容语义不确定时用（'1' vs '01'、
@@ -17,11 +17,11 @@ Python 算，重叠率是启发证据不是证明。
 - 不需要采样（单表 count 不会发散；重叠率模式用 DISTINCT LIMIT 500 受控采样）
 
 用法（designer 在关联安全分析时按需调）：
-  python explore.py --ts {deliver}/ts.json \\
+  python explore.py --rs {deliver}/_internal/rs_input.json \\
       --check-join-key --schema dim --table dim_store --key store_id \\
       --where "is_current = 1"
 
-  python explore.py --ts {deliver}/ts.json \\
+  python explore.py --rs {deliver}/_internal/rs_input.json \\
       --check-overlap --schema-a ods --table-a t1 --key-a cust_code \\
       --schema-b dim --table-b dim_cust --key-b cust_id
 

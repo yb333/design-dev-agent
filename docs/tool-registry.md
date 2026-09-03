@@ -81,7 +81,7 @@
 
 | 模块 | 干啥 | 被谁 import | 所在 |
 |------|------|------------|------|
-| `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection + sample_blocks | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
+| `dws_db.py` | DB 连接抽象（DBExecutor + PsycopgExecutor）+ diagnose_connection | precheck / ut_precheck / ut_execute / check_db | design-dev-shared/scripts |
 | `type_compat.py` | 类型兼容判断（assess_type_risk + RISK_LABEL_CN + parse_type_info；字符类型互跨 nvarchar↔varchar 等报 charset_semantics 人工决策，不自动放行）+ **join_key_pair_risky**（JOIN 键对保守谓词：跨大类风险，integer↔numeric/同族放行） | precheck / ut_diagnose / assemble_ts(N_JOIN2) | design-dev-shared/scripts |
 | `run_ut.py` | UT 函数库（wrap_write / run_ut_check / 参数替换 / 采样 / INSERT 列重复终检 / dq_filename） | ut_precheck / ut_execute / ut_opt / artifact_patcher / sql_fence_check / slice_ts | design-dev-shared/scripts |
 | `sql_parse.py` | SQL 文本解析原语（read_sql / split_cte_main / parse_cte_bodies（均字符串字面量感知）/ extract_select_aliases / extract_from_tables / extract_table_refs_raw / cte_projection_names / extract_qualified_refs / extract_condition_field_refs / find_field_provenance / is_trivial_assign_detail / extract_case_when_exprs+norm_expr（表达式口径对账的提取原语，词边界防误匹配）/ parse_join_pairs / extract_logic_refs / find_unqualified_refs（N36 守门原语，剥全角括号说明段）/ find_three_part_refs（三段式引用硬拦原语——N36/N30/N_DQ5 共用；两两配对提取对 x.y.z 恰好漏掉字段本身，须前置拦）/ **normalize_logic_line**（design_logic 落盘单行归一，引号串保护） | run_ut / check_sql / precheck / assemble_ts(N30/N36/N_JOIN2) | design-dev-shared/scripts |

@@ -72,11 +72,11 @@ permission:
 > ⚠️ 别为了"让主键唯一"建议 ROW_NUMBER 取一行 / 建议 coder 去重——掩盖根因、丢数据。根因在关联修关联，在源表标出来问业务。
 > ⚠️ business_key 是 BA 定的，**你不擅自改**——只有人确认"业务粒度本该如此"后按指示补字段。
 
-**落盘走 write/edit，失败即上报**：design_decisions.yaml 一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。工具报错或写入失败 → 用 question 报原始错误后停，**不自创替代路径**（自写脚本加工产物、shell 花招绕过工具）——工具的 bug 交回维护者修，你在现场修不了也不该修。
+**落盘走 write/edit，失败即上报**：design_decisions.yaml 一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。工具报错或写入失败 → 用 question 报原始错误后停，**不自创替代路径**——工具的 bug 交回维护者修。
 
 # 落盘（design_decisions.yaml）
 
-**分层落盘**：有 write/edit 工具用 write/edit（首选）。**环境没有 write 工具时**（内网魔改 bug：≥2 层子 agent 丢 write/edit——平台修复后本段退役）用**唯一标准写法**（内网团队实证定稿，勿换变体）：
+**环境没有 write 工具时**（内网魔改 bug——平台修复后本段退役）用**唯一标准写法**（勿换变体）：
 
 ```powershell
 [IO.Directory]::CreateDirectory("<父目录绝对路径>") | Out-Null
@@ -92,7 +92,7 @@ $c = @'
 
 > 有 write 工具的环境（本仓验证环境）大概率用不到降级模板；黑盒运行时无 write 时按模板落盘，写完 Read 回读首行自检无 BOM（﻿ 字符）。
 
-**读取兼容**（内网 bug：≥2 层子 agent 丢 read 的目录权限，read 工具可能被拒）：read 工具优先；**被拒即 fallback** bash 标准写法 `Get-Content -Encoding UTF8 '<绝对路径>'`（读无 BOM 问题，引用文件全为仓内 UTF-8）——标准写法失败上报，禁换变体试错；**读不到的引用文件禁止凭理解自编替代**——上报（实证坑：读不到模板就手写 yaml，格式必不符，被 assemble_ts 反复拦截空转）。
+**读取兼容**（内网 bug：read 可能被拒——平台修复后本段退役）：read 优先；被拒即 fallback `Get-Content -Encoding UTF8 '<绝对路径>'`（禁换变体）；**读不到的引用文件禁止凭理解自编替代**——上报（实证坑：读不到模板就手写 yaml，被 assemble_ts 反复拦截空转）。
 
 # 输入
 

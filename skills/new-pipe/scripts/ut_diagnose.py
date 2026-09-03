@@ -145,7 +145,7 @@ def _probe_dirty(executor, schema: str, table: str, column: str,
     cond = f"{column} IS NOT NULL AND {column}::text !~ '{pattern}'"
     result = {"dirty_count": None, "samples": []}
     try:
-        r1 = executor.execute(f"SELECT count(*) AS cnt FROM {full} WHERE {cond}")
+        r1 = executor.execute(f"SELECT COUNT(1) AS cnt FROM {full} WHERE {cond}")
         if r1.success and r1.rows:
             result["dirty_count"] = r1.rows[0].get("cnt")
         r2 = executor.execute(f"SELECT {column} AS val FROM {full} WHERE {cond} LIMIT 3")

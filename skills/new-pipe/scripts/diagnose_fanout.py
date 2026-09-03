@@ -13,8 +13,8 @@
   （char 列裸数值 = 声明错误，按 '值' 执行并披露——真实 ETL 照写会炸）。
   单表故障隔离（降级裸查/跳过续跑）；依赖中间表的规则闸口①不可查（表未建，UT 兜底）。
 
-  两种深度：--all（闸口①批量，deep=否——精确计数为主，发散才逐表归因，无承重墙）；
-  --rule（6b 深查，deep=是——计数 + 逐表唯一性/承重墙/实锤全量）。
+  用法同构（闸口① --all 批量 / 6b --rule 单规则）：驱动自检 → 逐表唯一性+声明对照
+  （全量）+join_safety 断言对照 → 整体试算严重性。
 
 用法:
   python diagnose_fanout.py --ts {ts路径} --rule R0001 [--top 5]   # 6b 深查
@@ -247,7 +247,7 @@ def _cast_err_hint(err_text) -> str:
 
 
 def _key_stat(db: _Db, schema: str, table: str, cols: list[str], where: str) -> dict:
-    """count(*) vs count(distinct 组合键)（NULL 键行单独数——NULL 不参与 join 不会发散）。"""
+    """COUNT(1) vs COUNT(DISTINCT 组合键)（NULL 键行单独数——NULL 不参与 join 不会发散）。"""
     key = ", ".join(cols)
     # NULL 键行数用 CASE（GaussDB=PG9.2 内核，无 FILTER 子句）——NULL 不参与 join 不会发散
     # COUNT(1) 而非 COUNT(*)（平台口径，性能更合理）
@@ -372,9 +372,9 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
 def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = None) -> tuple[list[str], str]:
     """跑诊断，返回 (报告行列表, 结论一句话)。异常上抛由 main 分流。
     db 传入则复用连接（批量模式单连接跑全部规则），不传入则自建自关。
-    结构（2026-09-02 定稿，闸口①与 6b 同构）：驱动自检 → 逐表【声明对照（设计
-    vs 输入归属的事实）+ 键唯一性(主判据) + 重复组解剖 + 承重墙 + 命中】→
-    声明计数（当前数据严重性：膨胀/丢行/空关联）。只反馈事实，不猜收敛方式。"""
+    结构（闸口①与 6b 同构）：驱动自检 → 逐表【声明对照（设计 vs 输入归属的事实，
+    全量做）+ 键唯一性(主判据) + join_safety 断言对照 + 重复组解剖 + 命中】→
+    整体试算（当前数据严重性：膨胀/丢行/空关联）。只反馈事实，不猜收敛方式。"""
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
     rule = (ts.get("rules") or {}).get(rule_code) \
         or ((ts.get("init") or {}).get("rules") or {}).get(rule_code)

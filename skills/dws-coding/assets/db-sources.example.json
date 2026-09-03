@@ -59,7 +59,6 @@
   "security": {
     "allowWriteOperations": true,
     "maxRows": 1000,
-    "timeout": 600,
-    "sample_blocks": 0
+    "timeout": 600
   }
 }
