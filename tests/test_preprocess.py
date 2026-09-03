@@ -1334,11 +1334,13 @@ class TestCompactExploreAndDecision:
         assert "未提供数据探索" in c["explore"]["说明"]
 
     def test_type_decision_marked_in_processed(self):
-        """决策回写字段（类型转换：/类型安全处理：打头）标'决策'——已人定勿再质疑。"""
+        """决策回写字段（类型转换：/类型安全处理：打头）标'决策'——已人定勿再质疑，
+        且披露原始性质（原'直接复制'，加工是人决策不是业务定义——agent 共识）。"""
         from preprocess import build_compact
         c = build_compact(self._rs())
         entry = [e for e in c["processed"] if e["tgt"] == "amt"][0]
         assert "决策" in entry and "勿推翻方向" in entry["决策"]
+        assert "原始输入='直接复制'" in entry["决策"]
 
     def test_normal_processed_not_marked(self):
         from preprocess import build_compact

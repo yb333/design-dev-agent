@@ -554,6 +554,23 @@ def _validate_type_risk_decision(
     return ok
 
 
+def _return_source_cols(decision_path: Path) -> list[str]:
+    """读决策文件，返回选了'返源端'的跨大类字段清单（空=没有）。
+
+    返源端=回去改输入（mapping/源端定义），本轮不放行——对齐 join 的'改关联键'。
+    """
+    import yaml
+    try:
+        dec = yaml.safe_load(decision_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(dec, dict):
+        return []
+    return sorted({item.get("目标字段", "") for item in (dec.get("跨大类风险字段") or [])
+                   if isinstance(item, dict)
+                   and (item.get("处置") or "").strip() == "返源端"})
+
+
 def _apply_type_decision(rs_input: dict, decision_path: Path) -> int:
     """按类型决策把转换字段改"数据加工"（嵌入主链路）。
 
@@ -621,6 +638,15 @@ def _check_type_risk(rs_input: dict, result: PrecheckResult, decision_path: Path
     # 有风险 → 看决策文件是否已填全
     if decision_path.exists():
         if _validate_type_risk_decision(decision_path, batch, individual, result):
+            # 决策含'返源端' → 本轮终止（改输入重跑，对齐 join 的'改关联键'）——
+            # 不回写不重生成骨架（决策已填全，缺的不是决策是修正后的输入）
+            back_cols = _return_source_cols(decision_path)
+            if back_cols:
+                result.add_error(
+                    f"类型决策含'返源端'（字段: {', '.join(back_cols)}）——请修正源端"
+                    f"字段定义（mapping 类型/源表）后重跑 preprocess+precheck"
+                    f"（rs_input 仍检测到该风险）")
+                return
             # 决策已填全，放行 + ★回写 rs_input（转换字段改"数据加工"，决策流进主链路）
             if rs_input_path is not None:
                 changed = _apply_type_decision(rs_input, decision_path)

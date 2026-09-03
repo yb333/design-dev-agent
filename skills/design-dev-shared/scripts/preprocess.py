@@ -1238,9 +1238,10 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         if detail and detail not in ("-", "无", ""):
             entry["logic"] = detail
             # 类型风险决策回写的字段（transform_detail 以'类型安全处理：/'类型转换：'打头）：
-            # 标记已人定——designer 按此译守卫式转换表达式，不重新质疑方向
+            # 标记已人定并披露原始性质（原是'直接复制'，加工是人决策不是业务定义）——
+            # designer 按此译守卫式转换表达式，不重新质疑方向
             if str(detail).startswith(("类型安全处理：", "类型转换：")):
-                entry["决策"] = "类型风险已人定（勿推翻方向）——译成守卫式转换 design_logic（版本无关写法，见 dws-coding-standards §0）"
+                entry["决策"] = "原始输入='直接复制'，类型风险已人定加处理（勿推翻方向）——译成守卫式转换 design_logic（版本无关写法，见 dws-coding-standards §0）"
             # 引用提示（只陈述事实，不猜归属）：限定引用原样 + 未限定词中性列示
             # （多表同名是可判事实→标注；单表归属不猜——那是 designer 的判断）
             _q, _b = extract_logic_refs(detail, _reg_cols)

@@ -272,6 +272,31 @@ class TestCheckTypeRiskFlow:
         _check_type_risk_inner(rs, result, decision_path)
         assert result.errors  # 没填原因阻断
 
+    def test_return_source_blocks_flow(self, tmp_path):
+        """决策填全但含'返源端' → 本轮终止不放行（对齐 join 的'改关联键'）：
+        错误信息引导修正输入重跑；已填好的决策文件不被骨架覆盖。"""
+        rs = make_type_risk_rs_input([
+            {"target_column": "biz_date", "source_type": "varchar(20)", "target_type": "date"},
+        ])
+        decision_path = tmp_path / "type_risk_decision.yaml"
+        _generate_type_risk_skeleton(decision_path, *_detect_type_risks(rs))
+        import yaml
+        dec = yaml.safe_load(decision_path.read_text(encoding="utf-8"))
+        dec["批量处置策略"] = "加安全处理"
+        for item in dec.get("跨大类风险字段", []):
+            item["处置"] = "返源端"
+            item["原因"] = "源端应提供 date 类型"
+        filled_text = yaml.dump(dec, allow_unicode=True)
+        decision_path.write_text(filled_text, encoding="utf-8")
+        result = PrecheckResult()
+        _check_type_risk_inner(rs, result, decision_path)
+        assert result.errors  # 不放行
+        msg = result.errors[0]
+        assert "返源端" in msg and "biz_date" in msg
+        assert "重跑 preprocess+precheck" in msg
+        # 决策已填全，缺的是修正后的输入——骨架不覆盖
+        assert decision_path.read_text(encoding="utf-8") == filled_text
+
     def test_stale_decision_regenerates(self, tmp_path):
         """mapping 改了字段、决策文件过期 → 重新生成骨架阻断。"""
         rs = make_type_risk_rs_input()
