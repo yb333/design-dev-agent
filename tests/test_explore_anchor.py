@@ -68,3 +68,24 @@ class _FakeEx:
 
     def close(self):
         pass
+
+
+class TestCompositeKey:
+    """复合键支持（2026-09-03 内网实测：多字段关联条件此前查不了）。"""
+
+    def test_join_key_sql_composite(self):
+        from explore import build_join_key_sql
+        sql = build_join_key_sql("dim", "t", "tenant_id, order_no", "is_current = 1")
+        assert "COUNT(DISTINCT (tenant_id, order_no))" in sql
+        assert "COUNT(1)" in sql and "count(*)" not in sql
+
+    def test_overlap_sql_composite_row_text(self):
+        from explore import build_overlap_sample_sql
+        # 复合键行构造器整体转 text（单列输出，交集逻辑不变）
+        assert "(x, y)::text" in build_overlap_sample_sql("ods", "t1", "x,y")
+        assert "k::text" in build_overlap_sample_sql("ods", "t1", "k")
+
+    def test_split_key(self):
+        from explore import split_key
+        assert split_key("a, b,,c") == ["a", "b", "c"]
+        assert split_key("k") == ["k"]

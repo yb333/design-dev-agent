@@ -45,10 +45,16 @@ sys.path.insert(
 # 核心逻辑（纯函数，可单测，不连库）
 # ============================================================
 
-def build_join_key_sql(schema: str, table: str, key: str, where_clause: str = "") -> str:
-    """构造 JOIN 键唯一性试算 SQL。
+def split_key(key: str) -> list[str]:
+    """--key 逗号分隔多列 → 列表（复合键支持，2026-09-03 内网实测：多字段关联条件
+    此前查不了——COUNT(DISTINCT 单列) 对复合键必误报不唯一）。"""
+    return [k.strip() for k in (key or "").split(",") if k.strip()]
 
-    SELECT count(*) AS total, count(DISTINCT {key}) AS distinct_cnt
+
+def build_join_key_sql(schema: str, table: str, key: str, where_clause: str = "") -> str:
+    """构造 JOIN 键唯一性试算 SQL（--key 支持逗号分隔复合键——COUNT(DISTINCT (a,b))）。
+
+    SELECT COUNT(1) AS total, COUNT(DISTINCT {键}) AS distinct_cnt
     FROM {schema}.{table}
     [WHERE {where_clause}]
 
@@ -57,10 +63,13 @@ def build_join_key_sql(schema: str, table: str, key: str, where_clause: str = ""
     if not schema or not table or not key:
         raise ValueError("schema/table/key 都不能为空")
     # 列名/表名只允许字母数字下划线和点（防 SQL 注入；这些值来自 designer/RS，不是用户直接输入）
+    keys = split_key(key)
     _validate_identifier(f"{schema}.{table}")
-    _validate_identifier(key)
+    for k in keys:
+        _validate_identifier(k)
+    key_expr = f"({', '.join(keys)})" if len(keys) > 1 else keys[0]
     sql = (
-        f"SELECT count(*) AS total, count(DISTINCT {key}) AS distinct_cnt "
+        f"SELECT COUNT(1) AS total, COUNT(DISTINCT {key_expr}) AS distinct_cnt "
         f"FROM {schema}.{table}"
     )
     if where_clause and where_clause.strip():
@@ -113,10 +122,15 @@ def build_overlap_sample_sql(schema: str, table: str, key: str,
 
     SELECT DISTINCT {key}::text AS v FROM {schema}.{table} [WHERE ...] LIMIT 500
     ::text 归一显示形态（数值/日期侧也能跟字符侧直观比对）。
+    --key 逗号分隔复合键 → DISTINCT (a,b)::text 整串归一（内网实测：多字段关联
+    此前查不了）。
     """
     _validate_identifier(f"{schema}.{table}")
-    _validate_identifier(key)
-    sql = (f"SELECT DISTINCT {key}::text AS v FROM {schema}.{table}")
+    keys = split_key(key)
+    for k in keys:
+        _validate_identifier(k)
+    key_expr = f"({', '.join(keys)})" if len(keys) > 1 else keys[0]
+    sql = (f"SELECT DISTINCT {key_expr}::text AS v FROM {schema}.{table}")
     if where_clause and where_clause.strip():
         sql += f" WHERE {where_clause.strip()}"
     sql += f" LIMIT {OVERLAP_SAMPLE_LIMIT}"
@@ -304,7 +318,7 @@ def main():
                              "第4层调 explore 时 ts.json 还没产，用这个）")
     parser.add_argument("--schema", help="要试算的表 schema", default="")
     parser.add_argument("--table", help="要试算的表名", default="")
-    parser.add_argument("--key", help="JOIN 键列名", default="")
+    parser.add_argument("--key", help="JOIN 键列名（复合键逗号分隔，如 tenant_id,order_no）", default="")
     parser.add_argument("--where", help="WHERE 限定条件（可选，如 is_current = 1）",
                         default="")
     parser.add_argument("--check-join-key", action="store_true",
@@ -313,11 +327,11 @@ def main():
                         help="执行键值重叠率检查（双侧采样算交集，探测内容语义是否吻合）")
     parser.add_argument("--schema-a", default="", help="重叠率：左表 schema")
     parser.add_argument("--table-a", default="", help="重叠率：左表名")
-    parser.add_argument("--key-a", default="", help="重叠率：左表键列")
+    parser.add_argument("--key-a", default="", help="重叠率：左表键列（复合键逗号分隔）")
     parser.add_argument("--where-a", default="", help="重叠率：左表 WHERE 限定（可选）")
     parser.add_argument("--schema-b", default="", help="重叠率：右表 schema")
     parser.add_argument("--table-b", default="", help="重叠率：右表名")
-    parser.add_argument("--key-b", default="", help="重叠率：右表键列")
+    parser.add_argument("--key-b", default="", help="重叠率：右表键列（复合键逗号分隔）")
     parser.add_argument("--where-b", default="", help="重叠率：右表 WHERE 限定（可选）")
     args = parser.parse_args()
 

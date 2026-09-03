@@ -29,14 +29,14 @@ class TestBuildJoinKeySql:
     def test_basic_no_where(self):
         sql = build_join_key_sql("dim", "dim_store", "store_id")
         assert sql == (
-            "SELECT count(*) AS total, count(DISTINCT store_id) AS distinct_cnt "
+            "SELECT COUNT(1) AS total, COUNT(DISTINCT store_id) AS distinct_cnt "
             "FROM dim.dim_store"
         )
 
     def test_with_where(self):
         sql = build_join_key_sql("dim", "dim_store", "store_id", "is_current = 1")
         assert sql.endswith("WHERE is_current = 1")
-        assert "count(DISTINCT store_id)" in sql
+        assert "COUNT(DISTINCT store_id)" in sql
 
     def test_where_whitespace_stripped(self):
         """where 前后空白被 strip，但内部表达式不动。"""
