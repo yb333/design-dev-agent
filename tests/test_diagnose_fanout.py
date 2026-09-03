@@ -309,6 +309,54 @@ def test_diagnose_all_batch_single_connection_and_skip(monkeypatch, tmp_path):
         assert "重复组解剖" in joined and "is_current" in joined and "eff_date" in joined
 
 
+class TestAllJoinsDeclareCompare:
+    """声明对照全量化（2026-09-03 用户定调：所有关联都对比，不只发散的）+ 两个
+    宁缺勿错 guard：自然语言声明不可解析跳过、中间表无输入声明属正常。"""
+
+    def _setup(self, tmp_path, join_condition):
+        (tmp_path / "_internal").mkdir(exist_ok=True)
+        (tmp_path / "_internal" / "rs_input.json").write_text(json.dumps({"source_tables": [
+            {"source_schema": "dim", "source_table": "dim_cust", "source_alias": "c",
+             "join_condition": join_condition}]}), encoding="utf-8")
+        ts = _ts([{"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"}])
+        ts["meta"] = {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}}
+        (tmp_path / "ts.json").write_text(json.dumps(ts), encoding="utf-8")
+        return ts
+
+    @staticmethod
+    def _h(sql):
+        return [{"total": 90, "uniq": 90, "nulls": 0}] if "dim_cust" in sql else [{"total": 100, "uniq": 100, "nulls": 0}]
+
+    def test_passing_join_carries_declare_tag(self, monkeypatch, tmp_path):
+        self._setup(tmp_path, "a.cust_code = c.cust_code")
+        lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), self._h)
+        assert "｜声明:一致" in "\n".join(lines)          # 通过行带对照标签
+
+    def test_passing_join_missing_condition_tagged(self, monkeypatch, tmp_path):
+        self._setup(tmp_path, "a.cust_code = c.cust_code and c.is_current = 1")
+        lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), self._h)
+        joined = "\n".join(lines)
+        assert "△漏条件" in joined                          # 通过但漏条件——标签人核
+
+    def test_natural_language_decl_skipped(self, monkeypatch, tmp_path):
+        self._setup(tmp_path, "订单表关联客户表取最新一条有效记录")
+        lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), self._h)
+        joined = "\n".join(lines)
+        assert "声明:自然语言(跳过)" in joined
+        assert "漏条件" not in joined and "自创" not in joined   # 不误报
+
+    def test_no_decl_tagged_self_set(self, monkeypatch, tmp_path):
+        self._setup(tmp_path, "")
+        lines, _, _ = _run(monkeypatch, tmp_path, json.loads((tmp_path / "ts.json").read_text()), self._h)
+        assert "声明:输入未声明(自设)" in "\n".join(lines)
+
+    def test_decl_parseable(self):
+        from diagnose_fanout import _decl_parseable
+        assert _decl_parseable("left join ： a.x = b.x and b.is_current = 1")
+        assert not _decl_parseable("订单表关联客户表取最新")
+        assert not _decl_parseable("")
+
+
 class TestJoinSafetyAssertionCompare:
     """join_safety 断言对照（maker 断言 vs 实测——闸口①与 designer 检查的闭环）：
     声明 unique=true 实测不唯一=证伪（最高优先）；声明 false+reason=已知接受不重复弹；

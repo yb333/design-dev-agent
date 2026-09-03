@@ -115,6 +115,15 @@ def _clean_declared(text: str) -> str:
     return s.strip()
 
 
+def _decl_parseable(mapping_decl: str) -> bool:
+    """声明可解析性（宁缺勿错）：清洗后仍解析不出任何 '别名.列=别名.列' 等值对
+    （纯自然语言描述——BA 写'订单表关联客户表取最新'这类）→ 对照无意义，跳过
+    不比（2026-09-03 用户预判的误报源之一）。"""
+    if not mapping_decl:
+        return False
+    return bool(parse_join_pairs(_clean_declared(mapping_decl)))
+
+
 def _load_mapping_joins(ts_path: Path) -> dict:
     """BA 的关联声明（rs_input 实体级 join_condition，按表短名，**清洗后**——设计 vs 输入
     归属判别的依据。约定路径 ts 同级 _internal/rs_input.json 自动探测；探测不到
@@ -498,7 +507,11 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                                  f"在关联条件下不唯一（{st['total']} 行 / 唯一 {st['uniq']}，重复 {dup} 行）")
                     lines.append(f"  ｜关联条件（designer 写的）：{cond}")
                     # 声明对照（只在出问题时给——问题在设计侧还是输入侧的依据）
-                    if mapping_decl:
+                    if alias in tmp_aliases:
+                        lines.append(f"  ｜中间表（闸口①表已建时查）——无输入声明属正常，对照跳过")
+                    elif mapping_decl and not _decl_parseable(mapping_decl):
+                        lines.append(f"  ｜输入声明为自然语言（{mapping_decl[:40]}…）——不可解析，对照跳过（宁缺勿错）")
+                    elif mapping_decl:
                         d_set = {_norm_term(x) for x in _split_terms(cond)}
                         m_set = {_norm_term(x) for x in _split_terms(mapping_decl)}
                         miss = [x for x in _split_terms(mapping_decl) if _norm_term(x) not in d_set]
@@ -515,7 +528,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                                              f"——设计条件独有：{'；'.join(extra)}")
                         else:
                             lines.append(f"  ｜→ 设计与输入声明一致——问题在**输入侧**（BA 声明的关联在数据上不成立，退 BA）")
-                    else:
+                    elif alias not in tmp_aliases:
                         lines.append(f"  ｜输入未声明此关联（designer 自设）——问题属设计判断")
                     # join_safety 断言对照（maker 断言 vs 实测——闸口①与 designer 检查的闭环）：
                     # 声明 unique=true 实测不唯一=断言证伪（最高优先）；声明 false+reason=已知接受不重复弹
@@ -566,9 +579,29 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                     verdicts.append(f"JOIN {i} {sch}.{tbl}：关联键在条件下不唯一（重复 {dup} 行"
                                     + ("，当前命中会膨胀" if hits > 0 else "，当前未命中") + "）")
                 else:
-                    # 通过=一句话完事（键裸查重复是常态——条件下唯一就是设计本身，不裸查不对照）
+                    # 通过=一句话完事（键裸查重复是常态——条件下唯一就是设计本身，不裸查）
+                    # 声明对照标签（2026-09-03 全量化：所有关联都对比，不只发散的）
+                    if alias in tmp_aliases:
+                        decl_tag = "｜声明:中间表(正常)"
+                    elif mapping_decl and not _decl_parseable(mapping_decl):
+                        decl_tag = "｜声明:自然语言(跳过)"
+                    elif mapping_decl:
+                        d_set = {_norm_term(x) for x in _split_terms(cond)}
+                        m_set = {_norm_term(x) for x in _split_terms(mapping_decl)}
+                        miss = [x for x in _split_terms(mapping_decl) if _norm_term(x) not in d_set]
+                        extra = [x for x in _split_terms(cond) if _norm_term(x) not in m_set]
+                        if not miss and not extra:
+                            decl_tag = "｜声明:一致"
+                        elif miss:
+                            decl_tag = f"｜声明:△漏条件({len(miss)}项,人核)"
+                        elif extra:
+                            decl_tag = f"｜声明:△自创({len(extra)}项,人核)"
+                        else:
+                            decl_tag = f"｜声明:△差异(漏{len(miss)}自创{len(extra)},人核)"
+                    else:
+                        decl_tag = "｜声明:输入未声明(自设)"
                     lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）✓ 关联键({', '.join(own)}) "
-                                 f"在关联条件下唯一（{st['total']} 行）｜条件：{cond}")
+                                 f"在关联条件下唯一（{st['total']} 行）{decl_tag}｜条件：{cond}")
 
         # ── 整体试算（严重性：当前数据下膨胀/丢行/空关联——与逐表唯一性定性互补）──
         jc_state = _join_counts(db, rule, binding, driving, tmp_aliases, coltypes,

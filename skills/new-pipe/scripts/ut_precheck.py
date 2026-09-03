@@ -44,16 +44,28 @@ def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
     def _run(path: Path):
         return ddl_executor.execute(substitute_params(path.read_text(encoding="utf-8"), param_values))
 
+    # 回退结果明确标识（2026-09-03 用户反馈：容忍只该对首次——后续轮回退执行
+    # 成功与否必须说清楚，不然分不清"没跑"和"跑失败被容忍"）
+    rb_ok = rb_fail = 0
+    def _rollback(path: Path):
+        nonlocal rb_ok, rb_fail
+        r = _run(path)
+        if r.success:
+            rb_ok += 1
+            print(f"  ✅ 回退成功: {path.name}{f'（{r.summary()}）' if r.summary() else ''}")
+        else:
+            rb_fail += 1
+            print(f"  ⚠️ 回退失败(容忍——首次对象不存在属正常,非首次需查): {path.name} | {r.error[:80]}")
     if i_view_short:
         rb = rb_dir / f"rollback_create_view_{i_view_short}.sql"
         if rb.exists():
-            r = _run(rb)
-            print(f"  {'🔄' if r.success else '⚠️'} 回退(容忍): {rb.name}")
+            _rollback(rb)
     for tb in sorted(table_shorts):
         rb = rb_dir / f"rollback_create_table_{tb}.sql"
         if rb.exists():
-            r = _run(rb)
-            print(f"  {'🔄' if r.success else '⚠️'} 回退(容忍): {rb.name}")
+            _rollback(rb)
+    if rb_ok or rb_fail:
+        print(f"  回退汇总: ✅{rb_ok} 成功  ⚠️{rb_fail} 失败(容忍)")
 
     errors = []
     for tb in sorted(table_shorts):
@@ -252,6 +264,8 @@ def main():
             # 采样：CLI参数优先，不传则从 db-sources.json 的 security.sample_blocks 读默认
             sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
             select_sql = inject_tablesample(select_sql, sample_n)
+            sample_note = f"TABLESAMPLE {sample_n}" if sample_n else "全量"
+            print(f"  ⏱️ SELECT预检（{sample_note}）...")
             r_pre = etl_executor.execute(select_sql)
             if not r_pre.success:
                 error_msg = r_pre.error[:200] if r_pre.error else "未知错误"
@@ -279,13 +293,21 @@ def main():
             r_result["pre_cols"] = pre_cols
             r_result["pre_rows"] = pre_rows
             # 执行计划两门槛（未采样 SQL；计划原文落盘可回溯；提示级不阻断——性能人判）
+            # 成功也打印结论行——静默通过看起来像"检查没了"（2026-09-03 内网反馈）
             plan_issues, plan_file = _explain_check(etl_executor, full_sql, rule_code, ts_path)
-            if plan_issues:
-                r_result["plan_issues"] = plan_issues
-                for pi in plan_issues:
-                    print(f"  ⚠️ 计划门槛: {pi}")
+            r_result["plan_issues"] = plan_issues
             if plan_file:
                 r_result["plan_file"] = plan_file
+            if plan_issues:
+                for pi in plan_issues:
+                    print(f"  ⚠️ 计划门槛: {pi}")
+            else:
+                streams = 0
+                try:
+                    streams = len(_STREAM_PATTERN.findall(Path(plan_file).read_text(encoding="utf-8")))
+                except Exception:
+                    pass
+                print(f"  📋 计划检查: 通过（STREAM {streams}/{STREAM_LIMIT}，无 Data Node Scan）→ {plan_file}")
             results.append(r_result)
 
     # 输出结果
