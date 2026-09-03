@@ -197,7 +197,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 - **按 schema 选源**：`schema_mapping` 映射 schema→数据源名，找不到回退 default。
 - **高层入口**：`create_executor_for_schema(schema, role="etl", config_path="")`——调用方只传 schema+role，不碰配置。低层用 `create_executor(config_path, source, role)`。
 - **statement_timeout**：连接建立时按 `security.timeout` 设一次，复用连接都带超时，防 agent kill 进程留僵尸查询。
-- **sample_blocks**：`security.sample_blocks`（开发环境配>0，UAT/生产配0）。**语义是"快速失败闸门"不是最终审视**：ut_execute 对 truncate_table 规则先采样试跑 INSERT（类型转换/约束类错误秒级暴露），通过后 TRUNCATE 清试跑数据再全量执行——**UT 终审按全量结果**（SELECT 跑通≠INSERT 全量跑通，目标列类型转换靠行数据触发，纯采样漏检）。`resolve_sample_blocks(config_path, cli_value)` 解析：CLI 传值（含 0=强制不采样）优先，否则读配置，否则 0。`inject_tablesample(sql, n)` 用 sqlglot AST 按 JOIN 类型注 TABLESAMPLE SYSTEM(n)：**FROM 主表 + INNER/逗号/CROSS JOIN 表注**（必要表，控制总量），**LEFT/RIGHT/FULL JOIN 从表不注**（外连接侧保留全量，避免切片后关联不上变 NULL），CTE/子查询里的表不注。
+- **sample_blocks 已退役（2026-09-03）**：采样试跑机制下线——6a 预检 EXPLAIN ANALYZE 已全量真实执行 SELECT（SELECT 侧错误在那拦），INSERT 侧值域错误由 precheck 值域探测+溢出路由兜底，采样闸门残余价值（小概率窗口早一个 pass 发现）不值机制复杂度。`resolve_sample_blocks`/`inject_tablesample` 已删；config 旧字段保留无害不读。
 
 **各 skill 脚本目录（design/coding/new-pipe/opt-pipe）都靠相对路径推算 design-dev-shared**（标准 bootstrap，搬动/新增脚本勿漏——曾漏过 slice_ts）：
 ```python

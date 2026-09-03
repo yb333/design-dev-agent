@@ -30,7 +30,7 @@ except AttributeError:
 # dws_db/config_paths/run_ut 在 shared 公共库（上方 bootstrap 已接通）
 from dws_db import create_executor, load_test_params
 from config_paths import db_sources_path
-from run_ut import substitute_params, resolve_all_params, read_select, inject_tablesample, resolve_sample_blocks
+from run_ut import substitute_params, resolve_all_params, read_select
 
 
 def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,

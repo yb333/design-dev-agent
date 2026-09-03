@@ -27,7 +27,7 @@ except AttributeError:
 # dws_db/config_paths/run_ut 在 shared 公共库（上方 bootstrap 已接通）；ut_diagnose 同目录
 from dws_db import create_executor
 from config_paths import db_sources_path
-from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, inject_tablesample, resolve_sample_blocks, run_dq_checks
+from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, run_dq_checks
 
 
 def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
@@ -42,7 +42,7 @@ def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
         ts_path: ts.json 路径（定位 _internal/）。
         rule_code: 规则号。
         target_table: 目标表全名。
-        select_sql: coder 的原始 SELECT（参数已替换，tablesample 已注入）。
+        select_sql: coder 的原始 SELECT（参数已替换）。
         insert_sql: wrap_write 拼接后的 INSERT/MERGE。
         insert_result: INSERT 执行结果摘要（成功带行数/失败带报错）。
         ut_checks: run_ut_check 返回的检查列表（每个含 sql/status/detail）。
@@ -58,7 +58,7 @@ def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
         f"   落地时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"   ===================================================== */",
         "",
-        f"/* ===== 原始 SELECT（coder 产出，参数已替换/tablesample已注入）===== */",
+        f"/* ===== 原始 SELECT（coder 产出，参数已替换）===== */",
         select_sql.strip().rstrip(";") + ";",
         "",
         f"/* ===== 拼接后 INSERT（wrap_write 产出）===== {insert_result} */",
@@ -131,7 +131,6 @@ def main():
     parser.add_argument("--source", default="", help="数据源名")
     parser.add_argument("--report", default="", help="UT 报告输出路径（ut_report.md）")
     parser.add_argument("--precheck-result", default="", help="预检结果 JSON（默认 ts 同级 ut_precheck_result.json）")
-    parser.add_argument("--sample-blocks", type=int, default=None, help="主表块采样百分比（如 10=SYSTEM(10)）。不传=读 config 默认；0=强制不采样；N>0=采样。开发环境加速用")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -236,13 +235,9 @@ def main():
                 all_results.append(rule_result)
                 continue
             select_sql = substitute_params(select_sql, param_values)
-            # 采样语义（防"加速导致数据错误"）：采样只当【快速失败闸门】，不做最终审视——
-            # SELECT 跑通 ≠ INSERT 全量跑通（目标列类型转换靠行数据触发，采样会漏检脏行）。
-            # 流程：truncate_table 模式且采样开启 → 采样试跑 INSERT → 失败秒级快速报 /
-            # 通过 → TRUNCATE 清试跑数据 → 全量 INSERT（终审按全量）。
-            # ★ 其他 load_mode 不试跑：no_delete/merge 的表混有前序规则成果，试跑数据
-            #   无法辨清（TRUNCATE 会伤前序），全量失败由报错直接暴露。
-            sample_n = resolve_sample_blocks(config_path, args.sample_blocks)
+            # 采样试跑已退役（2026-09-03 用户定调）：6a 预检 EXPLAIN ANALYZE 已全量真实执行
+            # SELECT（SELECT 侧错误在那拦），INSERT 侧值域类错误由 precheck 值域探测+溢出
+            # 路由兜底——采样闸门只剩"小概率窗口早一个全量 pass 发现"，不值机制复杂度。
             load_mode = rule.get("load_mode", "truncate_table")
             write_condition = rule.get("write_condition", "")
 
@@ -278,38 +273,9 @@ def main():
                 prev_failed = True
                 continue
 
-            # ── 采样试跑（快速失败闸门，仅 truncate_table 模式）──
-            trial_used = False
-            if sample_n > 0 and load_mode == "truncate_table":
-                trial_select = inject_tablesample(select_sql, sample_n)
-                trial_insert = wrap_write(trial_select, target, tbl_fields, load_mode, write_condition)
-                print(f"  🧪 采样试跑(TABLESAMPLE {sample_n}%)...")
-                r_trial = executor.execute(trial_insert)
-                if not r_trial.success:
-                    error_msg = r_trial.error[:200] if r_trial.error else "未知错误"
-                    error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
-                    rule_result["status"] = "FAIL"
-                    rule_result["error_type"] = error_type
-                    rule_result["detail"] = f"试跑(采样{sample_n}%)失败: {error_msg}"
-                    print(f"  ❌ 试跑失败({error_type}): {error_msg}")
-                    # 类型转换类报错 → 自动诊断嫌疑脏数据（增益，不阻断）
-                    if _is_type_conversion_error(error_msg):
-                        diag = _diagnose_insert_failure(executor, rule, ts, ts_path, error_msg)
-                        if diag:
-                            rule_result["diagnosis"] = diag
-                            print(f"  🔍 {diag.splitlines()[0]}")
-                    _dump_rule_sql(ts_path, rule_code, target, trial_select, trial_insert,
-                                   f"试跑(采样{sample_n}%)失败({error_type}): {error_msg}", [])
-                    all_results.append(rule_result)
-                    prev_failed = True
-                    continue
-                print(f"  ✅ 试跑通过 → TRUNCATE 清试跑数据，全量执行（终审按全量）")
-                executor.execute(f"TRUNCATE TABLE {target}")
-                trial_used = True
-
             insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition)
 
-            print(f"  ⏳ INSERT 执行中..." + ("（试跑已过，全量）" if trial_used else ""))
+            print(f"  ⏳ INSERT 执行中...（全量）")
             r = executor.execute(insert_sql)
             if not r.success:
                 error_msg = r.error[:200] if r.error else "未知错误"
@@ -385,10 +351,6 @@ def main():
     report_lines.append("# UT 报告")
     report_lines.append(f"> 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     # 采样语义标注：试跑只是快速失败闸门，最终审视按全量（防"采样通过"被误读为"全量没问题"）
-    _eff_sample = resolve_sample_blocks(config_path, args.sample_blocks)
-    if _eff_sample > 0:
-        report_lines.append(f"> ⚠️ 采样模式：试跑 TABLESAMPLE({_eff_sample}%) 作快速失败闸门，"
-                            f"试跑通过后清表全量执行——**最终审视按全量结果**（仅 truncate_table 规则试跑）")
     report_lines.append("")
     report_lines.append(f"**汇总**: ✅{passed} 通过  ❌{failed} 失败  ⏭️{skipped} 跳过")
     if dq_results or dq_note:

@@ -96,7 +96,7 @@ class SecurityConfig:
     allow_write: bool = True     # 允许写操作（DDL/INSERT）
     max_rows: int = 1000         # 查询最大返回行数
     timeout: int = 0             # 超时（秒），0=不限制
-    sample_blocks: int = 0       # UT 采样块数（0=不采样，10=SYSTEM(10)）。开发环境配>0加速，UAT/生产配0
+    sample_blocks: int = 0       # 已退役（2026-09-03 采样机制下线）：字段保留读旧 config 兼容，无消费方
 
 
 def resolve_password(password: str) -> str:

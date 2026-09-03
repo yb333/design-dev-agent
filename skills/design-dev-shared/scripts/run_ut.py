@@ -9,7 +9,6 @@ new-pipe 的 UT 执行走两阶段（ut_precheck 秒级预检 + ut_execute 分�
 提供的函数：
 - 参数替换：resolve_test_value / substitute_params / resolve_all_params
 - SELECT 包装：wrap_insert / wrap_write / read_select
-- 采样：resolve_sample_blocks / inject_tablesample
 - UT 检查：run_ut_check（主键唯一 / 审计非空 / 行数，失败抓样例供归因）
 """
 
@@ -131,29 +130,6 @@ def _type_fallback(pdecl: dict) -> str:
         return "0"
     return ""
 
-
-def resolve_sample_blocks(config_path: str, cli_value: int = None) -> int:
-    """解析采样块数：CLI 参数（含显式 0）> 配置文件默认值 > 0。
-
-    - CLI 传了 --sample-blocks N → 用 N（含 0=强制不采样）
-    - CLI 没传（None）→ 从 db-sources.json 的 security.sample_blocks 读默认值
-    - 都没有 → 0（不采样）
-
-    default=None 区分"没传"（读 config）vs"传 0"（强制不采样）——
-    避免 CLI 传 0 被当成"没传"反而读了 config 的非 0 值。
-    """
-    if cli_value is not None:
-        return cli_value  # 显式传（含 0=强制不采样）
-    try:
-        import json
-        from pathlib import Path
-        p = Path(config_path)
-        if p.exists():
-            raw = json.loads(p.read_text(encoding="utf-8"))
-            return int(raw.get("security", {}).get("sample_blocks", 0))
-    except Exception:
-        pass
-    return 0
 
 
 def _resolve_insert_columns(select_sql: str, table_fields: list) -> list[str]:
@@ -350,138 +326,6 @@ def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
         results.append(entry)
     return results
 
-
-def inject_tablesample(select_sql: str, sample_blocks: int = 0) -> str:
-    """给 SELECT 注入 TABLESAMPLE SYSTEM（只切 FROM 主表 + INNER/逗号/CROSS JOIN 表）。
-
-    切片范围（避免切片太狠导致空表 UT 假通过 / 外连接从表关联不上变 NULL）：
-    - FROM 主表：切
-    - INNER JOIN / 隐式逗号 JOIN / CROSS JOIN 表：切（必要表，两边都要匹配才有结果）
-    - LEFT/RIGHT/FULL JOIN 从表：**不切**（外连接侧保留全量，避免切片后关联不上字段变 NULL）
-    - 子查询里的表 / CTE 定义里的表：不切（只在主查询层注入）
-
-    设计原则（不可违背）：
-    - 注入失败时必须返回原 SQL，绝不破坏 coder 的 SQL 可执行性。
-    - 用 sqlglot 定位物理表位置 + 判断 JOIN 类型（只读 AST 的 side/kind），用字符串插入注入（从后往前，避免位置偏移）。
-
-    Args:
-        select_sql: coder 产的 SELECT SQL。
-        sample_blocks: 采样块数百分比（如 10 = SYSTEM(10)）。0=不注入。
-
-    Returns:
-        注入后的 SQL；sample_blocks=0 或注入失败时返回原 SQL。
-    """
-    if sample_blocks <= 0:
-        return select_sql
-
-    try:
-        import sqlglot
-        from sqlglot import exp
-    except ImportError:
-        return select_sql
-
-    try:
-        trees = sqlglot.parse(select_sql, dialect="postgres")
-        tree = None
-        for t in trees:
-            if t is not None:
-                tree = t
-                break
-        if tree is None:
-            return select_sql
-
-        # 找最外层 SELECT（跳过 CTE 定义体内的 SELECT）
-        # 如果有 WITH，主查询的 SELECT 在 CTE 定义之后
-        main_select_start = 0
-        if select_sql.strip().upper().startswith("WITH"):
-            cte_end = _find_cte_section_end(select_sql)
-            if cte_end is not None:
-                main_select_start = cte_end
-
-        select_node = tree if isinstance(tree, exp.Select) else tree.find(exp.Select)
-        if select_node is None:
-            return select_sql
-
-        # 收集要切 TABLESAMPLE 的物理表（按 JOIN 类型筛选）
-        # - FROM 主表：切
-        # - INNER/隐式逗号/CROSS JOIN 表：切（side 为空 = 必要表）
-        # - LEFT/RIGHT/FULL JOIN 从表：不切（外连接侧保留全量，避免切片后关联不上变 NULL）
-        # 只看主查询的直接表（args["from_"]/args["joins"]），不深入子查询
-        import re
-
-        all_tables = []
-        # ① FROM 主表（from_.this 是直接表，不深入子查询）
-        from_node = select_node.args.get("from_") or select_node.args.get("from")
-        if from_node:
-            ft = from_node.this
-            if isinstance(ft, exp.Table) and ft.db:
-                all_tables.append((ft.db, ft.name, ft.alias or ""))
-        # ② 主查询的直接 JOIN（不深入子查询里的 JOIN）
-        for j in (select_node.args.get("joins") or []):
-            side = j.args.get("side")
-            if side in ("LEFT", "RIGHT", "FULL"):
-                continue  # 外连接从表不切
-            jt = j.this
-            if isinstance(jt, exp.Table) and jt.db:
-                all_tables.append((jt.db, jt.name, jt.alias or ""))
-
-        if not all_tables:
-            return select_sql
-
-        # 对每张表，在原 SQL 中找其引用位置并注入
-        insertions = []
-        for schema, table, alias in all_tables:
-            # 在原 SQL 中匹配 schema.table [AS] alias
-            if alias:
-                pattern_t = re.compile(
-                    rf'\b{re.escape(schema)}\.{re.escape(table)}\s+(?:AS\s+)?{re.escape(alias)}\b',
-                    re.IGNORECASE,
-                )
-            else:
-                pattern_t = re.compile(
-                    rf'\b{re.escape(schema)}\.{re.escape(table)}\b',
-                    re.IGNORECASE,
-                )
-
-            match = pattern_t.search(select_sql)
-            if not match:
-                continue
-
-            pos = match.end()
-
-            # 排除已经在 TABLESAMPLE 里的（避免重复注入）
-            after = select_sql[pos:pos + 30]
-            if "TABLESAMPLE" in after:
-                continue
-
-            # 排除 CTE 定义体里的表（位置在 CTE 段内的跳过）
-            if select_sql.strip().upper().startswith("WITH"):
-                cte_end = _find_cte_section_end(select_sql)
-                if cte_end is not None and pos < cte_end:
-                    continue  # 在 CTE 定义内，跳过
-
-            insertions.append(pos)
-
-
-        if not insertions:
-            return select_sql
-
-        # 从后往前插入（避免位置偏移）
-        sample_clause = f" TABLESAMPLE SYSTEM ({sample_blocks})"
-        result = select_sql
-        for pos in sorted(insertions, reverse=True):
-            result = result[:pos] + sample_clause + result[pos:]
-
-        # 验证注入后 SQL 仍可解析（不破坏结构）
-        try:
-            sqlglot.parse_one(result, dialect="postgres")
-        except Exception:
-            return select_sql  # 注入后解析失败，回退原 SQL
-
-        return result
-
-    except Exception:
-        return select_sql
 
 
 def _find_cte_section_end(sql: str) -> int | None:

@@ -364,6 +364,7 @@ python PIPE_SCRIPTS/ut_execute.py \
 
 > ⚠️ `--precheck-result` 路径与 5a 的 `--result` 一致（都在 `_internal/` 下）。读不到直接退出（避免预检未通过误灌数据）。
 > **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms（数据库端 statement_timeout 自动兜底）。
+> ★ 采样试跑已退役（2026-09-03）：6a 预检已全量真实执行 SELECT，INSERT 侧值域错误由值域探测+溢出路由兜底——6b 直接 TRUNCATE+全量 INSERT，无采样闸门。
 > ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**。无需分开调，脚本内部有序两阶段；init 挂了基线就废，后续增量自动跳过。
 > ★ **DQ 检查内嵌 5b 尾部**（`ts.dq_rules` 非空且数据完整时自动执行）：0 行=通过，非 0 行=告警。告警/报错阻断出口（exit 1），UT 报告有 DQ 段——分流见步骤 6。
 
