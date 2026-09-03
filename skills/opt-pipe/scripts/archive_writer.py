@@ -3,8 +3,8 @@
 档案 = 资产当前态唯一真身（ts.json/ts.md + etl/ + ddl/ + dq/ + decisions.yaml），
 入 git（gitignore 白名单），演进史 = git 提交历史（每次交付覆盖 + 一次 commit）。
 
-两动作（子命令）：
-  adopt   首优收档：new-pipe 平铺产出原地收纳进 archive/（一次性；交付即建档，无归档动作）
+两动作（子命令；调用方都是 opt-pipe 步骤——new-pipe 零改动，收档是首优时才付的成本）：
+  adopt   首优收档：new-pipe 平铺产出原地收纳进 archive/（一次性；此后交付即有档）
   advance 交付收口：优化现场（opt/）推进档案（闸口②'确认后调；确认前档案零改动=天然回归点）
 """
 import argparse

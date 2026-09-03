@@ -100,7 +100,7 @@ interactive 模式下闸口①②会发出 question（设计方向确认/编码�
 - 环境类失败（数据库连不上/表不存在/权限钳制/安装滞后）→ dws-engineer 停下并报告原因与修复指引，不重试不绕过。
 - **输入类问题**（mapping/RS 质量问题：schema 缺失/字段不一致/阻断校验不过）→ 按调用传入的 `上报格式` 参数包装上报（调用方解析驱动其下一步）；未传则按默认四要素（问题类型/位置/原因/建议）。格式更新改调用方自己的提示词即可，与本仓解耦。
 - 执行回路（SQL 修复/设计回改）在 dws-engineer 内部闭环（恢复子 agent 旧会话，每规则限 3 轮），不需要总控参与。
-- 完成时交付物在 `{mapping 所在目录}/../ddlc_design_dev/`（或需求包同级的 `ddlc_opt/`）：ts.json/ts.md、etl/、dq/、ddl/、export/、ut_report.md。推生产由人执行，不归调用链。
+- 完成时交付物在 `10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`（资产名/schema/appid 由输入推导）：新建=根平铺（ts.json/ts.md、etl/、dq/、ddl/、export/、ut_report.md）；优化=`opt/` 子目录（ALTER 变更单、新 SQL、export/patched 副本、ut_report_opt.md）+ `archive/` 资产档案（入 git）。推生产由人执行，不归调用链。
 
 ## 六、本地等价入口（自测对齐用）
 
