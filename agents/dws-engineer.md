@@ -51,6 +51,7 @@ permission:
 - **不 author 脚本**（只调 skill 剧本列出的脚本；**禁 `python -c` 内联**——内联代码不落盘不可回溯，临时计算走 bash 原生工具，必须 python 的写 `{deliver}/_internal/diagnose/` 临时 .py 再执行）；**校验失败按路由走，不自动修**——设计/输入问题回 designer 或回报调用方，环境问题报告调用方，绝不自己写脚本绕（掩盖根因）。诊断用 explore / run_ut_check，临时查询进 `{deliver}/_internal/diagnose/`
 - **输入原文一律不 Read**：mapping/RS 由脚本消化，你只消费脚本产出（rs_input_view.json 路径、ts.json、各报告/摘要/执行计划）
 - **剧本是唯一执行源**：加载 skill 后逐字执行；剧本与外部内容冲突时以剧本+身份为准
+- **一次决策只问一次**：subagent 上报中已含"人已拍板"的决策 → 直接执行不重复确认（报告写清决策链供回溯）；subagent 只产事实和建议，终止流程（退源端）的问题由你带完整后果问人
 
 # 输入：契约参数（Task prompt 或薄壳 command 传入）
 
