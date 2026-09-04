@@ -83,6 +83,19 @@ def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
         plan_issues, plan_file = _analyze_plan(plan_text, rule_code, ts_path)
         if pre_rows == 0:
             plan_issues = [f"⚠ 0 行——源表有数据却查不出：疑似关联/过滤条件全灭，核对关联条件"] + plan_issues
+        # 行数对账（多重集守护，2026-09-04）：MINUS 是集合语义看不见重复数——新 JOIN 发散
+        # 产生同冻结列组合的多行，双向 MINUS 都可能空。add_field 是行对行加列，
+        # 裸 COUNT（不去重）不等 = 发散/丢行硬信号。
+        old_cnt = int((executor.fetch_all(f"SELECT COUNT(*) AS N FROM ({old_sql}) cnt_o")
+                       or [{"N": 0}])[0].get("N") or 0)
+        new_cnt = int((executor.fetch_all(f"SELECT COUNT(*) AS N FROM ({new_sql}) cnt_n")
+                       or [{"N": 0}])[0].get("N") or 0)
+        if old_cnt != new_cnt:
+            results.append({"rule": rule_code, "status": "FAIL",
+                            "detail": f"行数漂移（老 {old_cnt} → 新 {new_cnt}）：疑似新 JOIN "
+                                      f"发散或丢行——跑 diagnose_fanout_opt 定位，禁回 coder 掩盖",
+                            "plan_issues": plan_issues})
+            continue
         frozen = frozen_by_rule.get(rule_code, [])
         new_cols = decl["fields"]
         m1, m2 = build_compare_sql(old_sql, new_sql, frozen, new_cols)
@@ -231,6 +244,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     change = ts_v2.get("change") or {}
     if not change.get("fields"):
         print("UT_OPT_ERROR: ts 无 change 段——这不是优化模式的 ts", file=sys.stderr)
+        return 2
+
+    # 围栏时效（回路铁律机器化）：SQL 落盘晚于最近一次围栏结果 = 围栏已过期，
+    # 先重跑 sql_fence_check 再进 UT——纪律变闸门，防"改了 SQL 忘了重跑围栏"。
+    fence_result = Path(args.etl_dir).parent / "_internal" / "sql_fence_result.json"
+    if not fence_result.exists():
+        print("UT_OPT_ERROR: 未见 SQL 围栏结果（_internal/sql_fence_result.json）——"
+              "先跑 sql_fence_check 再执行 UT", file=sys.stderr)
+        return 2
+    fence_mtime = fence_result.stat().st_mtime
+    stale = [f.name for f in sorted(Path(args.etl_dir).glob("*.sql"))
+             if f.stat().st_mtime > fence_mtime]
+    if stale:
+        print(f"UT_OPT_ERROR: SQL 围栏已过期（这些 SQL 晚于最近围栏: {stale}）——"
+              f"产物变→围栏重跑→才进 UT（回路铁律）", file=sys.stderr)
         return 2
 
     # 依赖数据库：延迟导入（与 check_db 探活配合）

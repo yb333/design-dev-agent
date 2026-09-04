@@ -23,7 +23,10 @@ def pair():
         "new_joins": []}]}
     # 中间表也要落位该字段（否则 fence 漏改）——decisions 上下两处都放
     dec["fields"][0]["placed_rules"] = ["R0001", "R0002"]
-    return b, apply_decisions(b, dec)
+    v2 = apply_decisions(b, dec)
+    # 测 I 视图重建路径：补 i_view 元数据（demo 契约未带）
+    v2["meta"]["target"]["i_view"] = {"schema": "dws", "table": "dwb_trade_order_i", "cn": "订单"}
+    return b, v2
 
 
 class TestAlterDdl:
@@ -49,7 +52,10 @@ class TestAlterDdl:
         assert rc == 0
         assert (tmp_path / "ddl/alter_table_dwb_trade_order_d.sql").exists()
         assert (tmp_path / "ddl/alter_table_tmp_trade_order.sql").exists()
-        assert (tmp_path / "ddl_full/create_table_dwb_trade_order_d.sql").exists()
+        assert not (tmp_path / "ddl_full").exists(), "全量 DDL 退役（ts 可再生投影）"
+        # I 视图重建：meta 有 i_view 时产出
+        assert (tmp_path / "ddl/create_or_replace_view_dwb_trade_order_i.sql").exists(), \
+            "F 表加列后 I 视图镜像须同步（语法结构决定的真交付物）"
 
 
 class TestAudit:

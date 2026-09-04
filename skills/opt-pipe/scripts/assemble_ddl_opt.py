@@ -88,9 +88,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     out = Path(args.outdir)
     (out / "ddl").mkdir(parents=True, exist_ok=True)
-    (out / "ddl_full").mkdir(parents=True, exist_ok=True)
 
-    # 1. ALTER 变更单（目标表 + 中间表，一表一文件）
+    # 1. ALTER 变更单（目标表 + 中间表，一表一文件；DDL 交付物只有变更单——
+    #    全量建表 DDL 是 ts 的可再生投影不入交付不入档案，2026-09-04 裁决）
     schema = v2["meta"]["target"]["f_table"]["schema"]
     n_alters = 0
     for t, adds in sorted(declared_additions_by_table(v2).items()):
@@ -98,13 +98,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             build_alter_ddl(schema, t, adds), encoding="utf-8")
         n_alters += len(adds)
 
-    # 2. 全量 DDL（档案推进用；复用 generate_ddl——ts_v2 是完整 ts）
-    ddl_files, _ = generate_ddl(v2)
-    for name, content in ddl_files.items():
-        (out / "ddl_full" / name).write_text(content, encoding="utf-8")
+    # 2. I 视图重建 DDL（F 表加列后镜像须同步——CREATE OR REPLACE 全量重建是语法
+    #    结构决定的真交付物；复用 generate_i_view 单源，ts_v2.tables 已含新列）
+    f_table = v2["meta"]["target"]["f_table"]
+    i_view = v2["meta"]["target"].get("i_view") or {}
+    n_view = 0
+    if (i_view.get("table") or "").strip():
+        from assemble_ddl import generate_i_view
+        f_short = f_table["table"]
+        view_sql = generate_i_view(f_table["schema"], f_short, f_table.get("cn", ""),
+                                   v2["tables"][f_short]["fields"], {})
+        (out / "ddl" / f"create_or_replace_view_{i_view['table']}.sql").write_text(
+            view_sql, encoding="utf-8")
+        n_view = 1
 
     print(f"alter 变更单: {out / 'ddl'}（{n_alters} 列）")
-    print(f"全量 DDL（档案）: {out / 'ddl_full'}（{len(ddl_files)} 文件）")
+    if n_view:
+        print(f"I 视图重建: {out / 'ddl'}/create_or_replace_view_{i_view['table']}.sql")
     return 0
 
 

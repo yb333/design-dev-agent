@@ -26,8 +26,9 @@ class TestAdopt:
         assert dest == ddlc / "archive"
         assert (dest / "ts.json").exists() and (dest / "ts.md").exists()
         assert (dest / "etl/R0001.sql").exists()
-        assert (dest / "ddl/create_table_t.sql").exists()
         assert (dest / "dq/dq_01_null.sql").exists()
+        assert not (dest / "ddl").exists(), "DDL 是 ts 可再生投影，不入档案（2026-09-04 裁决）"
+        assert (ddlc / "ddl/create_table_t.sql").exists(), "new-pipe 的 ddl 留交付现场"
         assert (dest / "decisions.yaml").exists()
         # 平铺原件移走（mv）；交付现场与过程产物留原位
         assert not (ddlc / "ts.json").exists() and not (ddlc / "etl").exists()
@@ -75,11 +76,9 @@ class TestAdvance:
         ddlc = tmp_path / "ddlc"
         _mk(ddlc, {"archive/ts.json": '{"v": 1}', "archive/etl/R0001.sql": "OLD",
                    "archive/etl/R0002.sql": "KEEP",
-                   "archive/ddl/old.sql": "CREATE",
                    "archive/decisions.yaml": "old: 1"})
         _mk(ddlc / "opt", {"ts_v2.json": '{"v": 2}', "ts.md": "# v2",
                            "etl/R0001.sql": "NEW",
-                           "ddl_full/new.sql": "CREATE2",
                            "_internal/design_decisions_opt.yaml": "opt: 1"})
         return ddlc
 
@@ -91,7 +90,6 @@ class TestAdvance:
         assert (arc / "ts.md").read_text() == "# v2"
         assert (arc / "etl/R0001.sql").read_text() == "NEW", "同名覆盖=该规则当前版"
         assert (arc / "etl/R0002.sql").read_text() == "KEEP", "未变更规则零接触"
-        assert (arc / "ddl/new.sql").exists() and (arc / "ddl/old.sql").exists()
         assert (arc / "decisions.yaml").read_text() == "opt: 1"
         # opt 现场保留（交付物人取用）
         assert (ddlc / "opt/ts_v2.json").exists()

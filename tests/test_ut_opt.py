@@ -35,6 +35,11 @@ class FakeExecutor:
 
     def fetch_all(self, sql):
         self.queries.append(sql)
+        # 行数对账（cnt_o=老 / cnt_n=新，裸 COUNT 不含 MINUS）
+        if "cnt_o" in sql and "COUNT" in sql:
+            return [{"N": self.counts.get("old_rows", 10)}]
+        if "cnt_n" in sql and "COUNT" in sql:
+            return [{"N": self.counts.get("new_rows", 10)}]
         for key, n in self.counts.items():
             if key in sql and "COUNT" in sql:
                 return [{"N": n}]
@@ -93,8 +98,9 @@ class TestCompareVerdict:
         # 老→新方向有差集（第一个 MINUS）→ FAIL；新→老方向（第二个）为 0
         ex = FakeExecutor({})
         ex.fetch_all = lambda sql: ([{"N": 3}] if "fence_old MINUS" in sql or
-                                    (sql.index("MINUS") < sql.index("fence_new")
-                                     and "COUNT" in sql) else
+                                    ("MINUS" in sql and "COUNT" in sql
+                                     and sql.index("MINUS") < sql.index("fence_new")
+                                     and "cnt_" not in sql) else
                                     ([{"N": 0}] if "COUNT" in sql else []))
         res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
         assert res[0]["status"] == "FAIL" and "回归失败" in res[0]["detail"]
@@ -154,3 +160,67 @@ class TestNewColumnNulls:
         # 干净：无提示
         out2 = check_new_column_nulls(NullEx({"total": 10, "null_c1": 0}), ts, "dws")
         assert out2[0]["note"] == ""
+
+
+class TestRowCountReconciliation:
+    """行数对账（多重集守护）：MINUS 是集合语义看不见重复数——新 JOIN 发散的行级硬信号。"""
+
+    def _setup(self, tmp_path):
+        etl = tmp_path / "etl"; etl.mkdir()
+        base = tmp_path / "base"; base.mkdir()
+        (etl / "R0002.sql").write_text("SELECT 1 AS a, 2 AS b", encoding="utf-8")
+        (base / "R0002.sql").write_text("SELECT 1 AS a", encoding="utf-8")
+        return etl, base
+
+    def _ts(self):
+        return {"change": {"fields": [
+            {"field": "b", "target_table": "t1", "placed_rules": ["R0002"],
+             "intermediate_tables": [], "new_joins": []}]},
+            "rules": {"R0002": {"field_targets": ["a", "b"],
+                                "source_tables": [{"schema": "ods", "table": "o", "alias": "a"}]}},
+            "meta": {"target": {"f_table": {"schema": "dws", "table": "t1"}}}}
+
+    def test_row_drift_fails_with_diagnose_hint(self, tmp_path):
+        etl, base = self._setup(tmp_path)
+        ex = FakeExecutor({"old_rows": 100, "new_rows": 340})   # 发散 3.4 倍
+        res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
+        assert res[0]["status"] == "FAIL"
+        assert "行数漂移" in res[0]["detail"] and "diagnose_fanout_opt" in res[0]["detail"]
+
+    def test_equal_rows_proceeds_to_minus(self, tmp_path):
+        etl, base = self._setup(tmp_path)
+        ex = FakeExecutor({"old_rows": 100, "new_rows": 100, "MINUS": 0})
+        res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
+        assert res[0]["status"] == "PASS"
+
+
+class TestFenceStalenessGate:
+    """围栏时效闸门：SQL 晚于围栏结果 = 过期，UT 拒跑（回路铁律机器化）。"""
+
+    def _run_main(self, tmp_path, fence_exists=True, stale=False):
+        import os, time
+        etl = tmp_path / "etl"; etl.mkdir(exist_ok=True)
+        (etl / "R0002.sql").write_text("SELECT 1", encoding="utf-8")
+        internal = tmp_path / "_internal"
+        if fence_exists:
+            internal.mkdir(exist_ok=True)
+            fr = internal / "sql_fence_result.json"
+            fr.write_text('{"passed": true}', encoding="utf-8")
+            if stale:
+                past = time.time() - 100
+                os.utime(etl / "R0002.sql", (time.time() + 50, time.time() + 50))
+        ts_path = tmp_path / "ts_v2.json"
+        ts_path.write_text(json.dumps(self._ts()), encoding="utf-8")
+        from ut_opt import main
+        return main(["--ts", str(ts_path), "--etl-dir", str(etl), "--baseline-dir", str(tmp_path),
+                     "--ddl-dir", str(tmp_path), "--report", str(tmp_path / "r.md")])
+
+    def _ts(self):
+        return {"change": {"fields": [{"field": "b", "target_table": "t1"}]},
+                "meta": {"target": {"f_table": {"schema": "dws", "table": "t1"}}}}
+
+    def test_missing_fence_result_exit_2(self, tmp_path):
+        assert self._run_main(tmp_path, fence_exists=False) == 2
+
+    def test_stale_fence_exit_2(self, tmp_path):
+        assert self._run_main(tmp_path, fence_exists=True, stale=True) == 2

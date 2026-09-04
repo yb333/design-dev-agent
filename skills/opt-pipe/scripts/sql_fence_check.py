@@ -42,6 +42,17 @@ def main(argv: Optional[list] = None) -> int:
             continue
         all_violations.extend(check_sql_fence(old_sql, new_sql, rule_declaration(change, rc)))
 
+    # 结果落盘（ut_opt 开跑校验围栏时效——"产物变→围栏重跑→才进 UT"从剧本纪律变机器闸门）
+    result_path = etl_dir.parent / "_internal" / "sql_fence_result.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+    result_path.write_text(json.dumps({
+        "passed": not all_violations,
+        "rules": touched,
+        "violations": all_violations,
+        "checked_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
     if all_violations:
         over = sum(1 for v in all_violations if v["type"] != "missing")
         miss = sum(1 for v in all_violations if v["type"] == "missing")
@@ -49,7 +60,7 @@ def main(argv: Optional[list] = None) -> int:
         for v in all_violations:
             print(f"  {v['message']}", file=sys.stderr)
         return 1
-    print(f"SQL_FENCE_PASS（{len(touched)} 规则）")
+    print(f"SQL_FENCE_PASS（{len(touched)} 规则）→ {result_path}")
     return 0
 
 

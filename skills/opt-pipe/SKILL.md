@@ -20,8 +20,8 @@ description: >-
 ├── export/ ut_report.md   ← new-pipe 交付现场（收档后留原位）
 ├── _internal/             ← new-pipe 过程产物（收档后留原位）
 └── opt/             ← 本次优化更新（每次开工重建；gitignore）
-    ├── ts_v2.json / ts.md / etl/（新 SQL {rule_code}.sql）/ ddl/（ALTER 变更单）
-    ├── ddl_full/（全量 DDL，推进材料）/ export/（patch 副本+notes）/ ut_report_opt.md
+    ├── ts_v2.json / ts.md / etl/（新 SQL {rule_code}.sql）/ ddl/（ALTER 变更单+I视图重建）
+    ├── export/（patch 副本+notes）/ ut_report_opt.md
     └── _internal/（baseline_v1.json / baseline_view.md / exemptions.json /
                     change_request.json / design_decisions_opt.yaml / diagnose/）
 ```
@@ -37,7 +37,7 @@ description: >-
 
 0. 环境探针（一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——exit 1 = 环境/依赖不符 → 停。工具面自检同 new-pipe 步骤0。
 1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`，`{opt}` = `{ddlc}/opt`。
-2. **建 {opt} 目录树**（开工即全貌，空目录=进度看板）：`mkdir -p {opt}/etl {opt}/ddl {opt}/ddl_full {opt}/export {opt}/_internal/diagnose`
+2. **建 {opt} 目录树**（开工即全貌，空目录=进度看板）：`mkdir -p {opt}/etl {opt}/ddl {opt}/export {opt}/_internal/diagnose`
 3. **查基线（三段式）**：
    - **`{arc}/ts.json` 存在** → 有档，直接当 baseline。跳到步骤 1。
    - **无档但 `{ddlc}/ts.json` 存在**（new-pipe 平铺产出，未优化过）→ **首优收档**：
@@ -45,7 +45,7 @@ description: >-
 ```bash
 python PIPE_SCRIPTS/archive_writer.py adopt --ddlc {ddlc}
 ```
-     （收档即建档；git 提交由人按自己的节奏做——流程不内嵌 git 操作）。跳到步骤 1。
+     收档收 ts/etl/dq/decisions（**ddl 不入档**——ts 的可再生投影，留交付现场）；git 提交由人按自己的节奏做。跳到步骤 1。
    - **都没有** → 要求 baseline_v1.json（用户给路径；没有则停：指引"先由逆向侧产出"）。入料建档：
 
 ```bash
@@ -133,7 +133,8 @@ python PIPE_SCRIPTS/sql_fence_check.py \
   --ts-v2 {opt}/ts_v2.json --etl-dir {opt}/etl \
   --baseline-dir {arc}/etl
 ```
-越界 → `[SQL围栏]` 报错回该规则 coder（恢复会话）改，限 3 轮。**回路铁律：任何 SQL 变化后重跑本步再进 UT。**
+越界/漏改（exit 1）→ `[SQL围栏]` 报错回该规则 coder（恢复会话）改，限 3 轮。结果落盘
+`_internal/sql_fence_result.json`——**回路铁律已机器化**：ut_opt 开跑校验围栏时效，SQL 晚于围栏结果 = 拒跑（exit 2，先重跑本步）。
 
 ## 步骤 5：DDL 变更单 → UT（需要数据库）
 
@@ -143,7 +144,7 @@ python PIPE_SCRIPTS/sql_fence_check.py \
 python PIPE_SCRIPTS/assemble_ddl_opt.py \
   --ts-v2 {opt}/ts_v2.json --ts-baseline {arc}/ts.json --outdir {opt}
 ```
-产出 `{opt}/ddl/alter_table_*.sql`（交付）+ `{opt}/ddl_full/`（推进材料）。
+产出 `{opt}/ddl/alter_table_*.sql`（变更单）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）。全量建表 DDL 不产（ts 的可再生投影）。
 
 ```bash
 python SHARED_SCRIPTS/check_db.py --ts {opt}/ts_v2.json
@@ -196,7 +197,7 @@ python PIPE_SCRIPTS/artifact_patcher.py \
 ```bash
 python PIPE_SCRIPTS/archive_writer.py advance --opt {opt} --archive {arc}
 ```
-ts_v2/ts.md/新 SQL（同名覆盖=规则当前版）/ddl_full/decisions_opt → 档案当前态推进；`{opt}/` 现场保留（交付物在人取用），下次优化开工重建。git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
+ts_v2/ts.md/新 SQL（同名覆盖=规则当前版）/decisions_opt → 档案当前态推进（DDL 不入档）；`{opt}/` 现场保留（交付物在人取用），下次优化开工重建。git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
 
 ## 硬性规则
 

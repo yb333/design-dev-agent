@@ -17,8 +17,9 @@ from typing import Optional
 def adopt(ddlc: Path) -> Path:
     """首优收档：ddlc_design_dev 平铺的 new-pipe 产出 → archive/。
 
-    mv ts.json/ts.md/etl//ddl//dq/（dq 可缺）→ archive/；cp _internal/design_decisions.yaml
-    → archive/decisions.yaml。export//ut_report.md/_internal/ 留原位（new-pipe 交付现场）。
+    mv ts.json/ts.md/etl//dq/（dq 可缺）→ archive/；cp _internal/design_decisions.yaml
+    → archive/decisions.yaml。ddl/ 不入档（DDL 是 ts 的可再生投影——档案=本源集合，
+    2026-09-04 裁决）；export//ut_report.md/_internal/ 留原位（new-pipe 交付现场）。
     """
     archive = ddlc / "archive"
     if archive.exists():
@@ -26,7 +27,7 @@ def adopt(ddlc: Path) -> Path:
     if not (ddlc / "ts.json").exists():
         raise ValueError(f"{ddlc} 无 new-pipe 产出（ts.json 缺）——不能收档")
     archive.mkdir(parents=True)
-    for name in ("ts.json", "ts.md", "etl", "ddl", "dq"):
+    for name in ("ts.json", "ts.md", "etl", "dq"):
         src = ddlc / name
         if src.exists():
             shutil.move(str(src), str(archive / name))
@@ -41,7 +42,7 @@ def advance(opt: Path, archive: Path) -> Path:
     """交付收口：优化现场（opt/）推进档案当前态。
 
     ts_v2.json→ts.json、ts.md→ts.md、etl/*.sql→etl/（{rule_code}.sql 同名覆盖=该规则当前版）、
-    ddl_full/→ddl/、_internal/design_decisions_opt.yaml→decisions.yaml。
+    _internal/design_decisions_opt.yaml→decisions.yaml。（DDL 不入档案——ts 的可再生投影。）
     opt/ 现场保留（最近一次优化的交付物：ALTER 单/patch 副本，人取用），下次优化开工重建。
     """
     if not (opt / "ts_v2.json").exists():
@@ -55,8 +56,6 @@ def advance(opt: Path, archive: Path) -> Path:
         (archive / "etl").mkdir(exist_ok=True)
         for f in (opt / "etl").glob("*.sql"):
             shutil.copy2(f, archive / "etl" / f.name)
-    if (opt / "ddl_full").is_dir():
-        shutil.copytree(opt / "ddl_full", archive / "ddl", dirs_exist_ok=True)
     decisions = opt / "_internal" / "design_decisions_opt.yaml"
     if not decisions.exists():
         raise ValueError(f"推进缺设计决策: {decisions}")
