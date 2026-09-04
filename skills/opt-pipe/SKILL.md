@@ -45,7 +45,7 @@ description: >-
 ```bash
 python PIPE_SCRIPTS/archive_writer.py adopt --ddlc {ddlc}
 ```
-     收档收 ts/etl/dq/decisions（**ddl 不入档**——ts 的可再生投影，留交付现场）；git 提交由人按自己的节奏做。跳到步骤 1。
+     收档收 ts/etl/dq/**export**/decisions（**ddl 不入档**——ts 的可再生投影，留交付现场）；git 提交由人按自己的节奏做。跳到步骤 1。
    - **都没有** → 要求 baseline_v1.json（用户给路径；没有则停：指引"先由逆向侧产出"）。入料建档：
 
 ```bash
@@ -185,8 +185,8 @@ python PIPE_SCRIPTS/artifact_patcher.py \
   --source {原始制品：xlsx 或代码仓规则组目录} \
   --outdir {opt}/export
 ```
-`--source` 定位顺序：ts_v2 的 `_baseline.provenance`（逆向入料带的原始制品路径清单）→ 取不到问人。
-产出：`{opt}/ddl/alter_table_*.sql`（变更单）+ `{opt}/ddl_full/` + `{opt}/export/patched/`（更新后制品副本）+ `patch_notes.md`。patch 缺失/定位失败项照 notes 报告，不自动补。
+`--source` 定位顺序：**`{arc}/export/`（档案的制品当前态——patch 链底本，首选）** → ts_v2 的 `_baseline.provenance`（逆向入料带的原始路径）→ 取不到问人。
+产出：`{opt}/ddl/alter_table_*.sql`（变更单）+ view 重建 + `{opt}/export/patched/`（更新后制品副本）+ `patch_notes.md`。patch 缺失/定位失败项照 notes 报告，不自动补。
 
 ## 步骤 7：闸口②' → 档案推进
 
@@ -197,7 +197,7 @@ python PIPE_SCRIPTS/artifact_patcher.py \
 ```bash
 python PIPE_SCRIPTS/archive_writer.py advance --opt {opt} --archive {arc}
 ```
-ts_v2/ts.md/新 SQL（同名覆盖=规则当前版）/decisions_opt → 档案当前态推进（DDL 不入档）；`{opt}/` 现场保留（交付物在人取用），下次优化开工重建。git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
+ts_v2/ts.md/新 SQL（同名覆盖）/export/patched 制品副本/decisions_opt → 档案当前态推进（DDL 不入档）；`{opt}/` 现场保留（交付物在人取用），下次优化开工重建。git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
 
 ## 硬性规则
 

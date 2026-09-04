@@ -17,9 +17,9 @@ from typing import Optional
 def adopt(ddlc: Path) -> Path:
     """首优收档：ddlc_design_dev 平铺的 new-pipe 产出 → archive/。
 
-    mv ts.json/ts.md/etl//dq/（dq 可缺）→ archive/；cp _internal/design_decisions.yaml
-    → archive/decisions.yaml。ddl/ 不入档（DDL 是 ts 的可再生投影——档案=本源集合，
-    2026-09-04 裁决）；export//ut_report.md/_internal/ 留原位（new-pipe 交付现场）。
+    mv ts.json/ts.md/etl//dq//export/（dq 可缺）→ archive/；cp _internal/design_decisions.yaml
+    → archive/decisions.yaml。export 入档（平台制品包=运行配置物化形态，opt patch 链底本
+    ——非 ts 纯投影）；ddl/ 不入档（ts 的可再生投影）；ut_report.md/_internal/ 留原位。
     """
     archive = ddlc / "archive"
     if archive.exists():
@@ -27,7 +27,7 @@ def adopt(ddlc: Path) -> Path:
     if not (ddlc / "ts.json").exists():
         raise ValueError(f"{ddlc} 无 new-pipe 产出（ts.json 缺）——不能收档")
     archive.mkdir(parents=True)
-    for name in ("ts.json", "ts.md", "etl", "dq"):
+    for name in ("ts.json", "ts.md", "etl", "dq", "export"):
         src = ddlc / name
         if src.exists():
             shutil.move(str(src), str(archive / name))
@@ -42,7 +42,8 @@ def advance(opt: Path, archive: Path) -> Path:
     """交付收口：优化现场（opt/）推进档案当前态。
 
     ts_v2.json→ts.json、ts.md→ts.md、etl/*.sql→etl/（{rule_code}.sql 同名覆盖=该规则当前版）、
-    _internal/design_decisions_opt.yaml→decisions.yaml。（DDL 不入档案——ts 的可再生投影。）
+    export/patched/*.xlsx→export/（本次交付后的制品当前态——下次 patch 的底本）、
+    _internal/design_decisions_opt.yaml→decisions.yaml。（DDL 不入档——ts 的可再生投影。）
     opt/ 现场保留（最近一次优化的交付物：ALTER 单/patch 副本，人取用），下次优化开工重建。
     """
     if not (opt / "ts_v2.json").exists():
@@ -56,6 +57,12 @@ def advance(opt: Path, archive: Path) -> Path:
         (archive / "etl").mkdir(exist_ok=True)
         for f in (opt / "etl").glob("*.sql"):
             shutil.copy2(f, archive / "etl" / f.name)
+    patched = opt / "export" / "patched"
+    if patched.is_dir():
+        (archive / "export").mkdir(exist_ok=True)
+        for f in patched.iterdir():
+            if f.is_file():
+                shutil.copy2(f, archive / "export" / f.name)
     decisions = opt / "_internal" / "design_decisions_opt.yaml"
     if not decisions.exists():
         raise ValueError(f"推进缺设计决策: {decisions}")

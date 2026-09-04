@@ -27,12 +27,14 @@ class TestAdopt:
         assert (dest / "ts.json").exists() and (dest / "ts.md").exists()
         assert (dest / "etl/R0001.sql").exists()
         assert (dest / "dq/dq_01_null.sql").exists()
+        assert (dest / "export/制品.xlsx").exists(), "平台制品包入档（patch 链底本）"
         assert not (dest / "ddl").exists(), "DDL 是 ts 可再生投影，不入档案（2026-09-04 裁决）"
         assert (ddlc / "ddl/create_table_t.sql").exists(), "new-pipe 的 ddl 留交付现场"
         assert (dest / "decisions.yaml").exists()
         # 平铺原件移走（mv）；交付现场与过程产物留原位
         assert not (ddlc / "ts.json").exists() and not (ddlc / "etl").exists()
-        assert (ddlc / "export/制品.xlsx").exists() and (ddlc / "ut_report.md").exists()
+        assert not (ddlc / "export").exists(), "export 随收档入档"
+        assert (ddlc / "ut_report.md").exists()
         assert (ddlc / "_internal/design_decisions.yaml").exists()
 
     def test_adopt_without_dq_ok(self, tmp_path):
@@ -76,9 +78,11 @@ class TestAdvance:
         ddlc = tmp_path / "ddlc"
         _mk(ddlc, {"archive/ts.json": '{"v": 1}', "archive/etl/R0001.sql": "OLD",
                    "archive/etl/R0002.sql": "KEEP",
+                   "archive/export/shujia_t.xlsx": "old-bin",
                    "archive/decisions.yaml": "old: 1"})
         _mk(ddlc / "opt", {"ts_v2.json": '{"v": 2}', "ts.md": "# v2",
                            "etl/R0001.sql": "NEW",
+                           "export/patched/shujia_t.xlsx": "new-bin",
                            "_internal/design_decisions_opt.yaml": "opt: 1"})
         return ddlc
 
@@ -91,6 +95,7 @@ class TestAdvance:
         assert (arc / "etl/R0001.sql").read_text() == "NEW", "同名覆盖=该规则当前版"
         assert (arc / "etl/R0002.sql").read_text() == "KEEP", "未变更规则零接触"
         assert (arc / "decisions.yaml").read_text() == "opt: 1"
+        assert (arc / "export/shujia_t.xlsx").read_text() == "new-bin", "patched 副本=制品当前态"
         # opt 现场保留（交付物人取用）
         assert (ddlc / "opt/ts_v2.json").exists()
 

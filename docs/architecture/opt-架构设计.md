@@ -74,11 +74,12 @@ N 系校验适用性：新字段适用的等价物已补（N36→引用门禁 / 
 
 ```
 10_project_deliver/{appid}/{schema}/{资产=I名}/ddlc_design_dev/
-├── archive/         ← ★档案=本源集合（入 git，gitignore 白名单）：
-│                       ts.json/ts.md/etl/{rule}.sql/dq//decisions.yaml
-│                       （DDL 不入档——tables 是 DDL 唯一源，全量 DDL 是 ts 的可再生投影；
-│                        要用时从档案 ts 现生成。演进史=git 提交历史，提交由人管理）
-├── （new-pipe 平铺产出/交付现场——首优收档后 ts/etl/dq 移入档案，ddl 留现场）
+├── archive/         ← ★资产档案（入 git，gitignore 白名单）：
+│                       ts.json/ts.md/etl/{rule}.sql/dq//export//decisions.yaml
+│                       （export=平台制品包：运行配置物化形态+opt patch 链底本——平台侧有
+│                        ts 外的状态，非纯投影；DDL 不入档——tables 是 DDL 唯一源，
+│                        全量 DDL 为 ts 可再生投影。演进史=git 提交历史，提交由人管理）
+├── （new-pipe 平铺产出/交付现场——首优收档后 ts/etl/dq/export 移入档案，ddl 留现场）
 └── opt/             ← 本次优化更新（每次开工重建；目录树开工即建=进度看板）
     ├── ts_v2.json / ts.md / etl/{rule_code}.sql（与档案同名=规则当前版）
     ├── ddl/（ALTER 变更单 + create_or_replace_view——I 视图镜像是语法结构决定的真交付物）
@@ -100,7 +101,7 @@ N 系校验适用性：新字段适用的等价物已补（N36→引用门禁 / 
 3. **fence_check**（ts 级恰好等于）→ `gate_summary_opt` 产闸口材料（确定性产出）→ **闸口①'三问**（落位/回刷/建议追加；分场景模板，检出过问题必含"退 BA"一等选项）。
 4. **coder 并行**（dws-coding-opt：底稿加列，落盘 {rule_code}.sql）→ pipe 跑 **sql_fence_check**（AST 等价 + 漏改拦，结果落盘）。
 5. **assemble_ddl_opt**（ALTER 变更单 + I 视图重建 + ts diff 审计）→ check_db → **ut_opt**（围栏时效闸门 → ALTER → 每规则 EXPLAIN ANALYZE 两门槛 → 行数对账 + 双向 MINUS → INSERT → 新列空值检查）。失败分流表见 SKILL；对比 FAIL/行数漂移先跑 diagnose_fanout_opt 产证据再人定根因。
-6. **artifact_patcher**（--source 按 ts_v2._baseline.provenance 定位 → 问人）。
+6. **artifact_patcher**（--source 首选 `{arc}/export/` 档案制品当前态[patch 链底本] → provenance → 问人）。
 7. **闸口②'**（新列合理性/交付清单/资产健康）→ `archive_writer advance`（档案推进，DDL 不入档）→ 人拿交付物执行。
 
 ## 八、组件清单
