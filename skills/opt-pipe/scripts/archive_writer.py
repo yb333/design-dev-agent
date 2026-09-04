@@ -81,7 +81,7 @@ def main(argv: Optional[list] = None) -> int:
         print(f"ARCHIVE_ERROR: {e}", file=sys.stderr)
         return 2
     print(f"archive: {dest}")
-    print("提示: git add 该档案目录并提交（message 记变更摘要）——演进史 = git 提交历史")
+    print("档案已更新——git 提交由人按自己的节奏做（演进史 = git 提交历史，流程不内嵌 git 操作）")
     return 0
 
 

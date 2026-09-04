@@ -51,6 +51,11 @@ python {skills根}/dws-coding/scripts/check_sql.py --sql {SQL文件} --ts {opt}/
 `{opt}/etl/{rule_code}.sql`（**与档案同名**——opt 语境里一个规则一个文件，新 SQL 即该规则当前版）。
 新账旧账不同目录：**{opt}/etl/ 是你的，{arc}/etl/ 是档案（只读勿改）**。
 
+## 会话与标识
+
+task_id / 会话管理归编排者（pipe 记录并按需恢复你的会话）——你不在 SQL 产物或回报里
+记录任何会话标识。
+
 ## 三、UT 失败回退时
 
 - SQL 报错（COLUMN/TYPE/SYNTAX）→ 你改语法（恢复本会话）

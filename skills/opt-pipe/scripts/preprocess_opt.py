@@ -40,6 +40,34 @@ VERB_TO_CHANGE = {"新增": "add", "修改": "modify", "调整": "modify", "变�
 SUPPORTED_CHANGE_TYPES = {"add"}   # 第一刀全流程仅 add；其余识别+报告待扩展
 
 
+def render_baseline_view_from_ts(ts: dict) -> str:
+    """从档案 ts 渲染 baseline_view 简化版（档案/收档路径——无逆向契约元信息，
+    规则清单/写入类型/源表/字段从 ts 全量可得；json 入料的完整版优先不覆盖）。"""
+    meta = ts.get("meta", {})
+    f_table = meta.get("target", {}).get("f_table", {})
+    lines = [
+        f"# baseline_view · {f_table.get('schema','')}.{f_table.get('table','')}",
+        "",
+        "> 档案基线（当前态 ts 投影）。逆向 warnings/平台代数等契约元信息仅在 json 入料路径"
+        "的完整版 baseline_view 中（本文件由 preprocess_opt 从档案渲染）。",
+        "",
+        "## 规则清单",
+        "",
+        "| 规则 | 写入 | 目标表 | 源表 |",
+        "|------|------|--------|------|",
+    ]
+    for code, r in sorted((ts.get("rules") or {}).items(), key=lambda kv: (kv[1].get("exec_sequence", 1), kv[0])):
+        srcs = ", ".join(f"{s.get('schema','')}.{s.get('table','')}" for s in (r.get("source_tables") or []))
+        lines.append(f"| {code} | {r.get('load_mode','')} | {r.get('target_table','')} | {srcs} |")
+    lines += ["", "## 目标表字段数", ""]
+    for tb, td in sorted((ts.get("tables") or {}).items()):
+        lines.append(f"- {tb}: {len(td.get('fields') or [])} 字段")
+    if ts.get("_baseline"):
+        lines += ["", "> 语义空位（存量不补，回归由输出对比保障）：主键/粒度/关联安全"
+                  "（见 _internal/exemptions.json）。"]
+    return "\n".join(lines)
+
+
 def norm_asset(name: str) -> str:
     """资产名镜像归一：剥 schema 前缀 + 去 _i/_f 尾（资产铆定 I，mapping 写 I 视图、
     baseline 记 F 表是同一资产的两面——I 视图是 F 表的固定镜像）。"""
@@ -344,6 +372,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     out = Path(args.outdir)
     out.mkdir(parents=True, exist_ok=True)
+    # baseline_view 补产（designer 契约：三段式入口 ①档案②收档 无 json 契约——从 ts 渲染
+    # 简化版；③json 入料的完整版已存在则保留）
+    view_path = out / "baseline_view.md"
+    if not view_path.exists():
+        view_path.write_text(render_baseline_view_from_ts(ts_baseline), encoding="utf-8")
+        print(f"baseline_view: {view_path}（档案 ts 简化版）")
     cr = build_change_request(facts, version, add_fields, unsupported, row, rs_section,
                               {"mapping": str(mapping_path), "rs": str(rs_path),
                                "ts_baseline": str(args.ts_baseline)})

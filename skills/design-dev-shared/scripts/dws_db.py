@@ -217,6 +217,15 @@ class DBExecutor(ABC):
         """测试连接是否正常。"""
         ...
 
+    def fetch_all(self, sql: str) -> list[dict]:
+        """便捷查询：执行并返回 rows；失败抛异常（调用方 try/except 兜底）。
+        2026-09-04 补：ut_opt / diagnose_fanout_opt 消费（此前调用方臆造了本方法——
+        DB 边界接口以本类为唯一真相源，新消费方先看这里）。"""
+        r = self.execute(sql)
+        if not r.success:
+            raise RuntimeError(r.error or f"query failed: {sql[:80]}")
+        return list(r.rows or [])
+
     @abstractmethod
     def switch_source(self, source_name: str):
         """切换数据源（多 schema 多账号）。"""

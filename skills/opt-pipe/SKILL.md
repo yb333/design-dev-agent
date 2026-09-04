@@ -37,14 +37,15 @@ description: >-
 
 0. 环境探针（一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——exit 1 = 环境/依赖不符 → 停。工具面自检同 new-pipe 步骤0。
 1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`，`{opt}` = `{ddlc}/opt`。
-2. **查基线（三段式）**：
+2. **建 {opt} 目录树**（开工即全貌，空目录=进度看板）：`mkdir -p {opt}/etl {opt}/ddl {opt}/ddl_full {opt}/export {opt}/_internal/diagnose`
+3. **查基线（三段式）**：
    - **`{arc}/ts.json` 存在** → 有档，直接当 baseline。跳到步骤 1。
    - **无档但 `{ddlc}/ts.json` 存在**（new-pipe 平铺产出，未优化过）→ **首优收档**：
 
 ```bash
 python PIPE_SCRIPTS/archive_writer.py adopt --ddlc {ddlc}
 ```
-     然后 `git add {arc} && git commit`（收档即建档）。跳到步骤 1。
+     （收档即建档；git 提交由人按自己的节奏做——流程不内嵌 git 操作）。跳到步骤 1。
    - **都没有** → 要求 baseline_v1.json（用户给路径；没有则停：指引"先由逆向侧产出"）。入料建档：
 
 ```bash
@@ -195,7 +196,7 @@ python PIPE_SCRIPTS/artifact_patcher.py \
 ```bash
 python PIPE_SCRIPTS/archive_writer.py advance --opt {opt} --archive {arc}
 ```
-ts_v2/ts.md/新 SQL（同名覆盖=规则当前版）/ddl_full/decisions_opt → 档案当前态推进；`{opt}/` 现场保留（交付物在人取用），下次优化开工重建。然后 `git add {arc} && git commit`（message 记变更摘要）。流程结束，人拿交付物去执行（推生产不自主）。
+ts_v2/ts.md/新 SQL（同名覆盖=规则当前版）/ddl_full/decisions_opt → 档案当前态推进；`{opt}/` 现场保留（交付物在人取用），下次优化开工重建。git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
 
 ## 硬性规则
 

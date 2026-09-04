@@ -248,3 +248,19 @@ def demo_baseline(tmp_path_factory):
     assert m.main(["--baseline", str(src), "--archive-dir", str(archive),
                    "--internal-dir", str(internal)]) == 0
     return archive / "ts.json"
+
+
+class TestBaselineViewBackfill:
+    def test_view_rendered_when_missing(self):
+        """档案路径（无 json 契约）——preprocess_opt 从 ts 渲染简化版 baseline_view。"""
+        from preprocess_opt import render_baseline_view_from_ts
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_d"}}},
+              "rules": {"R0002": {"load_mode": "truncate_table", "target_table": "dws.dwb_x_d",
+                                  "exec_sequence": 1,
+                                  "source_tables": [{"schema": "ods", "table": "ods_order"}]}},
+              "tables": {"dwb_x_d": {"fields": [{"target_field": "a"}] * 3}},
+              "_baseline": {"source": "archive"}}
+        text = render_baseline_view_from_ts(ts)
+        assert "baseline_view" in text and "R0002" in text
+        assert "ods_order" in text and "3 字段" in text
+        assert "语义空位" in text

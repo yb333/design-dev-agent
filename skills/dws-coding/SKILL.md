@@ -214,6 +214,10 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 
 ---
 
+## 会话与标识
+
+task_id / 会话管理归编排者（pipe 记录并按需恢复你的会话）——你不在 SQL 产物或回报里记录任何会话标识。
+
 ## 6. 产出检查清单
 
 产出 SELECT 前自检：
