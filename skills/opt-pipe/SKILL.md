@@ -37,7 +37,7 @@ description: >-
 
 0. 环境探针（一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——exit 1 = 环境/依赖不符 → 停。工具面自检同 new-pipe 步骤0。
 1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`，`{opt}` = `{ddlc}/opt`。
-2. **建 {opt} 目录树**（开工即全貌，空目录=进度看板）：`mkdir -p {opt}/etl {opt}/ddl {opt}/export {opt}/_internal/diagnose`
+2. **清场重建 {opt} 目录树**（每次开工：上次现场的 ALTER 单/patch 副本残留会混入本次交付物误导执行——清掉重来；交付物在流程结束人已执行完，无损失）：`rm -rf {opt} && mkdir -p {opt}/etl {opt}/ddl {opt}/export {opt}/_internal/diagnose`（空目录=进度看板）
 3. **查基线（三段式）**：
    - **`{arc}/ts.json` 存在** → 有档，直接当 baseline。跳到步骤 1。
    - **无档但 `{ddlc}/ts.json` 存在**（new-pipe 平铺产出，未优化过）→ **首优收档**：
