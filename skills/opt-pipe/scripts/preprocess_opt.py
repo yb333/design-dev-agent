@@ -242,6 +242,8 @@ def extract_and_check(mapping: Dict[str, List[dict]], facts: dict, version: str,
                 "source": {"schema": ent.get("source_schema", ""),
                            "table": ent.get("source_table", ""), "alias": alias,
                            "field": row.get("source_column", ""),
+                           # mapping 声明源类型（precheck_opt 连库以库为准对账修正）
+                           "source_type": row.get("source_type", ""),
                            "rule": row.get("mapping_rule", ""),
                            "expr": row.get("mapping_expression", ""),
                            "join_condition": ent.get("join_condition", "")},

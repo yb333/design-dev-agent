@@ -28,7 +28,9 @@ description: >-
 
 ### 1. 读输入
 - `baseline_view.md`——老资产长什么样（规则清单/写入类型/增量材料/血缘/warnings/语义空位）
-- `change_request.json`——这次要加什么（业务说了什么；`new_source_table: true` = 新来源信号）
+- `change_request.json`——这次要加什么（业务说了什么；`new_source_table: true` = 新来源信号）。
+  **字段带 `decision` 标记 = 类型风险已人定（原始输入='直接复制'，勿推翻方向）——译守卫式
+  转换 design_logic；`join_type_decisions` 段的处置=转换 → 对应 joins 必须声明 cast**
 - RS 优化章节原文在 change_request.rs_opt_section——口径从这读
 
 ### 2. 落位决策（核心判断，一个）

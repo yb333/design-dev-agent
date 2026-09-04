@@ -69,6 +69,19 @@ python PIPE_SCRIPTS/preprocess_opt.py \
 - exit 1 = 有 warn（漏标漂移/RS 未提及）→ 展示后**直接继续**（信息性告知，随 change_request 汇进闸口①'材料）；
 - 产出 `change_request.json`（含 version/变更记录摘要——闸口①'把简述与提取字段并排亮给人扫漏标）。
 
+## 步骤 1b：优化预检（只检新增子集，对齐 new-pipe 1b）
+
+```bash
+python PIPE_SCRIPTS/precheck_opt.py \
+  --change-request {opt}/_internal/change_request.json \
+  --ts-baseline {arc}/ts.json \
+  --outdir {opt}/_internal
+```
+- 检查项：新增字段命名规范 / 源字段连库存在性+类型对账（**以库为准**修正回填）/ 类型风险决策（人三选：转换/不加/返源端）/ 值域探测（整数位溢出退 BA、字符超长披露）/ 新来源 JOIN 键类型对账（三选：转换/改关联键/接受）。存量零预检（围栏+双跑兜底）。
+- stdout `TYPE_RISK_PENDING` / `JOIN_TYPE_RISK_PENDING` → **用 question 收集决策再填**（同 new-pipe 1b：`python SHARED_SCRIPTS/fill_type_risk_decision.py --decision {opt}/_internal/type_risk_decision.yaml ...`），填完**重跑本步**放行。批量按类型对归并提问；`返源端`/`改关联键` = **本轮终止**（修 mapping/源端后重跑步骤 1）。
+- 决策回写 change_request（fields『decision』标记 + join_type_decisions）——designer 见标记勿推翻方向。
+- exit 2 = 阻断（命名/存在性/决策未过）→ 按 diff 报告人改输入，不自动修；exit 1 = warn 直接继续。无库降 warn（UT 兜底）。
+
 ## 步骤 2：designer（优化模式，显式声明）
 
 ```
