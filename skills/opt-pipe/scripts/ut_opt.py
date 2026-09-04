@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 from run_ut import wrap_insert, read_select
 from sql_fence import check_sql_fence, rule_declaration
+from explain_check import _analyze_plan, _parse_actual_rows, _STREAM_PATTERN, STREAM_LIMIT
 
 # MINUS 结果取样上限（报告用样例，不搬全量数据）
 SAMPLE_LIMIT = 5
@@ -48,7 +49,7 @@ def build_compare_sql(old_sql: str, new_sql: str, frozen_cols: List[str],
 
 
 def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
-                       table_fields: Dict[str, List[str]]) -> List[dict]:
+                       table_fields: Dict[str, List[str]], ts_path: Path) -> List[dict]:
     """逐规则输出对比。返回检查结果列表（含 PASS/FAIL 与样例）。"""
     results = []
     change = ts_v2.get("change") or {}
@@ -69,6 +70,19 @@ def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
             results.append({"rule": rule_code, "status": "FENCE_FAIL",
                             "detail": "; ".join(f["message"] for f in hard)})
             continue
+        # EXPLAIN ANALYZE 全量真实执行一次（对齐 new-pipe 6a：真跑通验证 + 计划两门槛
+        # + 顶层行数；新 JOIN 改变计划形状，两门槛对新 SQL 同样成立）。提示级不阻断。
+        r_plan = executor.execute(f"EXPLAIN ANALYZE {new_sql}")
+        plan_issues, plan_file = [], ""
+        if not r_plan.success:
+            results.append({"rule": rule_code, "status": "ERROR",
+                            "detail": f"新 SELECT 执行失败: {(r_plan.error or '')[:200]}"})
+            continue
+        plan_text = "\n".join(str(v) for row in (r_plan.rows or []) for v in row.values())
+        pre_rows = _parse_actual_rows(plan_text)
+        plan_issues, plan_file = _analyze_plan(plan_text, rule_code, ts_path)
+        if pre_rows == 0:
+            plan_issues = [f"⚠ 0 行——源表有数据却查不出：疑似关联/过滤条件全灭，核对关联条件"] + plan_issues
         frozen = frozen_by_rule.get(rule_code, [])
         new_cols = decl["fields"]
         m1, m2 = build_compare_sql(old_sql, new_sql, frozen, new_cols)
@@ -91,12 +105,46 @@ def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
         if n1 > 0:
             results.append({"rule": rule_code, "status": "FAIL",
                             "detail": f"冻结列回归失败：老 MINUS 新 = {n1} 行",
-                            "samples": sample1})
+                            "samples": sample1, "plan_issues": plan_issues})
         else:
+            row_note = f"EXPLAIN {pre_rows}行" if pre_rows is not None else "行数未解析"
             results.append({"rule": rule_code, "status": "PASS",
-                            "detail": f"冻结列零差异；新→老差集 {n2} 行（新列引入，样例供审）",
-                            "samples": sample2})
+                            "detail": f"冻结列零差异（{row_note}）；新→老差集 {n2} 行（新列引入，样例供审）",
+                            "samples": sample2, "plan_issues": plan_issues,
+                            "plan_file": plan_file})
     return results
+
+
+def check_new_column_nulls(executor, ts_v2: dict, schema: str) -> List[dict]:
+    """新列空值检查（写路径后真实数据）：逐目标表统计新列 NULL——兑现 06 §一
+    '空值只查新列'的承诺；全 NULL = 疑似新 JOIN 关联不上的信号（LEFT JOIN 常态形态）。"""
+    change = ts_v2.get("change") or {}
+    by_table: Dict[str, List[str]] = {}
+    for f in change.get("fields", []):
+        by_table.setdefault(f.get("target_table", ""), []).append(f["field"])
+    out = []
+    for table, cols in sorted(by_table.items()):
+        null_exprs = ", ".join(f"COUNT(*) - COUNT(\"{c}\") AS null_{c}" for c in cols)
+        try:
+            rows = executor.fetch_all(
+                f'SELECT COUNT(*) AS total, {null_exprs} FROM {schema}.{table}') or [{}]
+            r = rows[0]
+            total = int(r.get("total") or 0)
+            for c in cols:
+                nulls = int(r.get(f"null_{c}") or 0)
+                rate = (nulls / total) if total else 0
+                note = ""
+                if total and nulls == total:
+                    note = " ⚠ 全 NULL——疑似新 JOIN 关联不上（LEFT JOIN 关联不上的常态形态），核对 ON 条件"
+                elif rate > 0.5:
+                    note = " ⚠ 过半 NULL——抽查关联条件"
+                out.append({"table": table, "col": c, "total": total,
+                            "nulls": nulls, "rate": f"{rate:.1%}".rstrip("0").rstrip("."),
+                            "note": note.strip()})
+        except Exception as e:
+            out.append({"table": table, "col": ",".join(cols), "total": 0, "nulls": 0,
+                        "rate": "-", "note": f"查询失败: {str(e)[:120]}"})
+    return out
 
 
 def _frozen_columns(ts_v2: dict, change: dict) -> Dict[str, List[str]]:
@@ -140,6 +188,14 @@ def render_report(ts_v2: dict, alters: List[str], compare: List[dict],
     lines.append("## INSERT 全量执行")
     for r in inserts:
         lines.append(f"- [{r['status']}] {r['rule']}：{r['detail']}")
+        for pi in (r.get("plan_issues") or [])[:5]:
+            lines.append(f"    - 计划门槛: {pi}")
+    lines.append("")
+
+    lines.append("## 新列空值检查（写路径后真实数据）")
+    for n in nulls:
+        lines.append(f"- {n['table']}.{n['col']}：{n['nulls']}/{n['total']} NULL"
+                     f"（{n['rate']}）{n['note']}")
     lines.append("")
     lines.append("> 闸口②'素材：新列 NULL 率/值分布请看新→老差集样例；"
                  "开发库数据代表性限制如实声明。")
@@ -200,7 +256,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 2+3. SELECT 预检隐含在对比执行里；输出对比
     compare = run_output_compare(executor, ts_v2, Path(args.etl_dir),
-                                 Path(args.baseline_dir), {})
+                                 Path(args.baseline_dir), {}, Path(args.ts))
 
     # 4. INSERT 全量执行（老列+新列全量写一遍，验证写路径）
     inserts = []
@@ -215,12 +271,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception as e:
             inserts.append({"rule": rule_code, "status": "FAIL", "detail": str(e)})
 
+    nulls = check_new_column_nulls(executor, ts_v2, schema)
     Path(args.report).write_text(
-        render_report(ts_v2, alters, compare, inserts), encoding="utf-8")
+        render_report(ts_v2, alters, compare, inserts, nulls), encoding="utf-8")
     failed = any(r["status"] in ("FAIL", "ERROR", "FENCE_FAIL") for r in compare + inserts)
     print(f"ut_report_opt: {args.report}")
+    null_notes = [n for n in nulls if n["note"]]
     print(f"compare: {len(compare)} 规则, inserts: {len(inserts)} 规则, "
           f"result: {'FAIL' if failed else 'PASS'}")
+    for n in null_notes:
+        print(f"  ⚠️ 新列空值: {n['table']}.{n['col']} {n['note']}")
     return 1 if failed else 0
 
 

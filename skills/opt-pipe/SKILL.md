@@ -157,6 +157,8 @@ python PIPE_SCRIPTS/ut_opt.py \
 ```
 - exit 2 = ALTER 变更单缺失（流程顺序错，回本步骤头部补跑 assemble_ddl_opt）；
 - exit 3 = 环境问题（表不存在/无库）→ 归人；
+- 每规则 EXPLAIN ANALYZE 真实执行一次（计划两门槛 + 0 行信号，计划落盘 diagnose/）+
+  **新列空值检查**（写路径后真实数据；全 NULL = 疑似新 JOIN 关联不上——闸口②'素材）；
 - 对比 FAIL（老列不一致）→ **question 人定根因**：新 JOIN 发散=设计问题（人定改法→回 designer→
   回闸口①'重确认→SQL 围栏重跑→UT 重跑）；源数据问题=环境归人；
 - SQL 报错 → 回 coder。限 3 轮。
