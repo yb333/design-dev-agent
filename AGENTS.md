@@ -30,7 +30,7 @@ skills/
                          #   dispatch_plan.py assemble_export.py ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
-│   ├── scripts/         # preprocess_opt.py fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
+│   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
                          #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py archive_writer.py baseline_contract.py(契约校验库)
 │   └── schemas/         # baseline_v1.schema.json(随 baseline_contract 归 opt)
 └── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
