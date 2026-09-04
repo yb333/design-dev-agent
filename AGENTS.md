@@ -26,7 +26,7 @@ skills/
 │   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
 ├── dws-dq/              # DQ 检查 SQL 生成 skill（coder agent 的 DQ 任务用，薄——仅 SKILL.md 定契约，工具复用 dws-coding 的 slice_ts --dq / check_sql）
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
-│   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py fill_type_risk_decision.py fill_join_risk_decision.py(决策填值器,剧本步骤1b)
+│   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py(决策填值器已下沉 shared)
                          #   dispatch_plan.py assemble_export.py ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
@@ -39,6 +39,9 @@ skills/
                          #   ★ 公共库（被多方 import）：
                          #   dws_db.py(连库) config_paths.py(★config路径集中) run_ut.py(UT函数库,无main,含dq_filename) type_compat.py(类型兼容)
                          #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量) ts_compat.py(ts结构兼容:分桶原语+旧结构升级) schema_query.py(字段查询能力层:check_field/pick_fields内核)
+                         #   ★ 预检/计划检测原语（2026-09-04 下沉，new-pipe 与 opt-pipe 共用——precheck/ut_precheck re-export 同名零破坏）：
+                         #   risk_checks.py(类型风险检测/决策骨架校验/值域探测/键值采样) schema_cache.py(表结构缓存设施)
+                         #   explain_check.py(执行计划两门槛解析) fill_type_risk_decision.py fill_join_risk_decision.py(决策填充共用入口)
                          #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import 任何 skill 目录；
                          #     skill 脚本（design/coding/new-pipe/opt-pipe）只能 import 自己目录 + shared，pipe 之间不互 import（test_layering AST 守护）
 agents/                  # dws-engineer.md(编排:身份+权限+契约参数+铁律) dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
@@ -304,7 +307,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 修正 2026-08"pipe 脚本集中住 shared"的粗归位——当时剧本还是 command（无目录无 base），集中安置是唯一解；**剧本迁 skill 后（有 base directory 有 scripts/）各归各 pipe 才可行**，这是迁移链收尾不是翻烧饼。判据一句话：**多于一个消费者 → shared（公共设施）；单一消费者 → 消费者自己的 scripts**（"谁的工具给谁"，用户定调）。
 
-- **new-pipe/scripts**：precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose + check_env（步骤0 探针，opt-pipe 跨剧本引用 `../new-pipe/scripts/check_env.py`——先例 dws-dq 借 slice_ts）+ fill_type_risk_decision/fill_join_risk_decision（2026-09-01 二轮搬正：原骑墙住 dws-design，消费者实为剧本步骤1b）。
+- **new-pipe/scripts**：precheck/gate_summary/dispatch_plan/assemble_export/ut_precheck/ut_execute/ut_diagnose + check_env（步骤0 探针，opt-pipe 跨剧本引用 `../new-pipe/scripts/check_env.py`——先例 dws-dq 借 slice_ts）（fill 两脚本 2026-09-04 再下沉 shared——opt 预检共用，见 shared 注释）。
 - **opt-pipe/scripts + schemas**：preprocess_opt/fence_check/sql_fence(库)/sql_fence_check/ut_opt/assemble_ddl_opt/assemble_ts_baseline/baseline_contract(库)/artifact_patcher/archive_writer + baseline_v1.schema.json（伴生数据随脚本走）。
 - **shared 瘦身为真公共设施**：共用入口（preprocess 两剧本共用 / check_db 两剧本共用 / assemble_ddl 被 new-pipe 直调+opt 侧 assemble_ddl_opt import / resolve_appid 被 preprocess·assemble_export import）+ 公共库（dws_db/config_paths/run_ut/sql_parse/dws_standards/ts_compat/type_compat/schema_query）。
 - **步骤0 双写收敛**：删 engineer.md 步骤0 段（曾带"skill 加载前就要 skill base"的时序死结），改"开工第一动作=加载剧本"——探针+工具面自检唯一源在剧本 SKILL 步骤0（opt-pipe 本轮补上）。
