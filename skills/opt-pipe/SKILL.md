@@ -102,9 +102,16 @@ python PIPE_SCRIPTS/fence_check.py \
 ```
 - 越界/漏改（exit 1）→ 报错带 `[围栏]` 回 designer（恢复会话）改，限 3 轮；designer 提的
   【建议追加变更】走本闸口确认后更新 change_request 再回步骤 2。
-- **闸口①'（question，三问）**：① 落位确认（"X 挂 R00xx，新 JOIN T，中间表不动/加列——确认？"）
+- **闸口①' 材料（确定性脚本产出，不 AI 摘要）**：
+
+```bash
+python PIPE_SCRIPTS/gate_summary_opt.py \
+  --ts-v2 {opt}/ts_v2.json --ts-baseline {arc}/ts.json \
+  --change-request {opt}/_internal/change_request.json
+```
+- **闸口①'（question，三问）**：① 落位确认（拿 gate_summary_opt 的逐字段落位表："X 挂 R00xx，新 JOIN T，中间表不动/加列——确认？"）
   ② 回刷选择（增量基线才有；RS 已预填则确认）③ 建议追加的变更（如有）。
-  每问的 options 必含**"源端输入问题→退 BA（修 mapping/源数据后重来）"**（一等选项；与 new-pipe 闸口①同款）。
+  **分场景模板**：围栏/预检全干净 → 三问标准选项（确认/修改/放弃）；**检出过问题**（围栏越界/类型风险决策/值域披露/新 JOIN 类型）→ 四选项，必含**"源端输入问题→退 BA（修 mapping/源数据后重来）"**一等选项（现实大概率是源端问题；与 new-pipe 闸口①同款）。
   非交互跳过须显式声明（只豁免流程闸口；人工决策项照常阻断上报）。
 
 ## 步骤 4：编码（SQL 围栏闸门在你）

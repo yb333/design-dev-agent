@@ -22,6 +22,11 @@ from typing import Dict, List, Optional, Tuple
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+from sql_parse import (parse_join_pairs, find_unqualified_refs, find_three_part_refs,
+                       extract_qualified_refs)
+from type_compat import join_key_pair_risky
+
 # decisions 必填键（缺 = fail loud，防 designer 漏声明）
 FIELD_REQUIRED_KEYS = ("field", "target_table", "placed_rules", "field_type",
                        "field_comment", "design_logic")
@@ -45,8 +50,10 @@ def load_decisions(path: Path) -> dict:
     return d
 
 
-def validate_decisions(decisions: dict, ts_baseline: dict) -> None:
-    """decisions 自身合法性（与 ts_baseline 的对接面），fail loud。"""
+def validate_decisions(decisions: dict, ts_baseline: dict, cache: dict | None = None) -> None:
+    """decisions 自身合法性（与 ts_baseline 的对接面），fail loud。
+    cache: schema_cache（{(schema,table): {col:type}}）——新 JOIN 类型比对用；
+    None = 无缓存（比对降级，打印 warn 不硬拦——宁放过不误报）。"""
     fields = ts_baseline.get("tables", {})
     rules = ts_baseline.get("rules", {})
     target_asset = ts_baseline["meta"]["target"]["f_table"]["table"]
@@ -78,6 +85,55 @@ def validate_decisions(decisions: dict, ts_baseline: dict) -> None:
             js = j.get("join_safety") or {}
             if not js.get("strategy"):
                 _fail(f"fields[{i}].new_joins[{j['alias']}].join_safety.strategy 为空")
+
+        # ★ 引用门禁（N36 等价，2026-09-04 补）：design_logic 剥全角说明后——
+        # 三段式硬拦 / 未限定英文标识符拦（产出必须 100% 可结构化解析）
+        logic = f.get("design_logic") or ""
+        three = find_three_part_refs(logic)
+        if three:
+            _fail(f"fields[{i}].design_logic 含三段式引用 {three}——口径引用一律'别名.字段'两段")
+        bare = find_unqualified_refs(logic)
+        if bare:
+            _fail(f"fields[{i}].design_logic 含未限定标识符 {bare}——字段引用写'别名.字段'"
+                  f"（未限定归属是设计判断，脚本不猜）")
+
+        # ★ 新 JOIN 键类型比对（N_JOIN2 等价，2026-09-04 补）：ON 等值对两侧类型
+        # 跨大类须内联 cast（on 里 :: / cast()）；类型走 schema_cache（无 cache 降 warn 不硬拦）
+        if cache is not None:
+            _validate_join_types(f, i, ts_baseline, cache)
+
+
+def _validate_join_types(f: dict, i: int, ts_baseline: dict, cache: dict) -> None:
+    """ON 等值对两侧类型比对（跨大类须 cast——对齐 new-pipe N_JOIN2 语义）。
+
+    类型域：schema_cache（{(schema,table): {col: type}}）；alias 解析域 = baseline
+    全部规则源表 ∪ 本字段 new_joins 声明。查不到类型的对跳过（宁放过不误报）。
+    """
+    idx = {}
+    for r in (ts_baseline.get("rules") or {}).values():
+        for s in r.get("source_tables") or []:
+            if s.get("alias"):
+                idx[str(s["alias"]).lower()] = (s.get("schema", ""), s.get("table", ""))
+    for j in f.get("new_joins", []):
+        idx[str(j.get("alias", "")).lower()] = (j.get("schema", ""), j.get("table", ""))
+    for j in f.get("new_joins", []):
+        on = j.get("on") or ""
+        for (a1, c1), (a2, c2) in parse_join_pairs(on):
+            sides = []
+            for al, c in ((a1, c1), (a2, c2)):
+                st = idx.get(al)
+                ty = ""
+                if st:
+                    ty = (cache.get((st[0].lower(), st[1].lower())) or {}).get(c, "")
+                sides.append((f"{al}.{c}", ty))
+            if sides[0][1] and sides[1][1] and \
+                    join_key_pair_risky(sides[0][1], sides[1][1]):
+                has_cast = "::" in on or "cast(" in on.lower()
+                if not has_cast:
+                    _fail(f"fields[{i}].new_joins[{j.get('alias')}] 的 ON 键类型跨大类"
+                          f"（{sides[0][0]}:{sides[0][1]} vs {sides[1][0]}:{sides[1][1]}）"
+                          f"——须内联 cast（如 a.code::numeric）或改键；键类型以库为准"
+                          f"（precheck_opt 已对账）")
 
 
 def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
@@ -159,11 +215,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--ts-baseline", required=True)
     ap.add_argument("--decisions", required=True, help="design_decisions_opt.yaml")
     ap.add_argument("--output", required=True, help="ts_v2.json 输出路径")
+    ap.add_argument("--schema-cache", default="", help="schema_cache.json 路径（默认 decisions 同目录）")
     args = ap.parse_args(argv)
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
     decisions = load_decisions(Path(args.decisions))
-    validate_decisions(decisions, ts_baseline)
+    # schema_cache：默认 decisions 同目录（precheck_opt 步骤 1b 落的）；显式 --schema-cache 覆盖
+    cache_path = (Path(args.schema_cache) if args.schema_cache
+                  else Path(args.decisions).parent / "schema_cache.json")
+    cache = None
+    if cache_path.exists():
+        try:
+            _c = json.loads(cache_path.read_text(encoding="utf-8")).get("tables", {})
+            cache = {k: v for k, v in _c.items()}
+        except Exception:
+            cache = None
+    if cache is None:
+        print("WARN: 无 schema_cache——新 JOIN 键类型比对降级跳过（precheck_opt 连库后会落缓存）",
+              file=sys.stderr)
+    validate_decisions(decisions, ts_baseline, cache)
     v2 = apply_decisions(ts_baseline, decisions)
 
     out = Path(args.output)

@@ -60,9 +60,14 @@ def _alias_index(ts: dict) -> dict[str, tuple[str, str]]:
 
 
 def _get_schema_types(ts: dict, cr: dict, cache_path: Path, result: PrecheckResult) -> dict | None:
-    """收集新增字段的源表集合，schema_cache 命中或连库批量查（24h 缓存）。无库返回 None。"""
+    """收集待查表（新源表 ∪ baseline 全部源表——新 JOIN 类型比对需要 ON 两侧），
+    schema_cache 命中或连库批量查（24h 缓存）。无库返回 None。"""
     tables = {(f["source"]["schema"], f["source"]["table"])
               for f in cr.get("fields", []) if f.get("source", {}).get("table")}
+    for r in (ts.get("rules") or {}).values():
+        for s in r.get("source_tables") or []:
+            if s.get("table"):
+                tables.add((s.get("schema", ""), s.get("table")))
     if not tables:
         return {}
     cache = _load_schema_cache(cache_path)

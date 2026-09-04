@@ -152,3 +152,78 @@ class TestMain:
         assert v2["generated_by"] == "assemble_ts_opt"
         assert check(baseline, v2, cr_for("channel_name")) == [], \
             "main 产出的 ts_v2 必须过围栏（组装器与围栏同契约）"
+
+
+# ============================================================
+# 包2 补强（2026-09-04）：引用门禁（N36 等价）+ 新 JOIN 键类型比对（N_JOIN2 等价）
+# ============================================================
+class TestLogicRefGate:
+    def test_unqualified_identifier_rejected(self, baseline, tmp_path):
+        d = dec_direct()
+        d["fields"][0]["design_logic"] = "channel_name 直取（渠道编码）"
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        with pytest.raises(SystemExit):
+            validate_decisions(load_decisions(p2), baseline)
+
+    def test_three_part_ref_rejected(self, baseline, tmp_path):
+        d = dec_direct()
+        d["fields"][0]["design_logic"] = "dws.ods_order.pay_channel 直取"
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        with pytest.raises(SystemExit):
+            validate_decisions(load_decisions(p2), baseline)
+
+    def test_qualified_and_chinese_pass(self, baseline, tmp_path):
+        d = dec_direct()
+        d["fields"][0]["design_logic"] = "a.pay_channel 直取（渠道编码，NULL 保留）"
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        validate_decisions(load_decisions(p2), baseline)  # 不炸
+
+    def test_fullwidth_note_words_not_flagged(self, baseline, tmp_path):
+        d = dec_direct()
+        d["fields"][0]["design_logic"] = "NVL(a.pay_channel, '未知')（空值给默认）"
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        validate_decisions(load_decisions(p2), baseline)
+
+
+CACHE_CROSS = {("dws", "dim_channel"): {"order_id": "varchar(20)"},
+               ("ods", "ods_trade_order_di"): {"order_id": "numeric(10)"}}
+
+class TestJoinTypeCheck:
+    def _dec_with_on(self, on):
+        d = dec_new_join()
+        d["fields"][0]["new_joins"][0]["on"] = on
+        return d
+
+    def _baseline_with_t_alias(self, baseline):
+        b = copy.deepcopy(baseline)
+        for r in b["rules"].values():
+            for s in r.get("source_tables") or []:
+                if s.get("alias"):
+                    s["alias"] = "t"
+                    s["schema"], s["table"] = "ods", "ods_trade_order_di"
+        return b
+
+    def test_cross_category_without_cast_rejected(self, baseline, tmp_path):
+        d = self._dec_with_on("t.order_id = c.order_id")
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        with pytest.raises(SystemExit):
+            validate_decisions(load_decisions(p2), self._baseline_with_t_alias(baseline),
+                               CACHE_CROSS)
+
+    def test_inline_cast_passes(self, baseline, tmp_path):
+        d = self._dec_with_on("t.order_id::varchar(20) = c.order_id")
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        validate_decisions(load_decisions(p2), self._baseline_with_t_alias(baseline),
+                           CACHE_CROSS)  # 不炸
+
+    def test_same_type_passes(self, baseline, tmp_path):
+        cache = {("dws", "dim_channel"): {"order_id": "numeric(10)"},
+                 ("ods", "ods_trade_order_di"): {"order_id": "numeric(10)"}}
+        d = self._dec_with_on("t.order_id = c.order_id")
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        validate_decisions(load_decisions(p2), self._baseline_with_t_alias(baseline), cache)
+
+    def test_no_cache_degrades_silently(self, baseline, tmp_path):
+        d = self._dec_with_on("t.order_id = c.order_id")
+        p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
+        validate_decisions(load_decisions(p2), self._baseline_with_t_alias(baseline), None)
