@@ -66,6 +66,12 @@ python PIPE_SCRIPTS/preprocess_opt.py \
 ```
 版本锚点（RS 变更记录最新"优化"行日期归一 YYYYMM）→ 备注标记提取（属性级新增=字段候选、实体级新增=新来源；其他动词识别归类报告"待扩展"）→ 校验（冲突/别名悬空/**资产一致[I/F 镜像归一比基名]**/版本定位；漏标/RS 未提及 warn）→ `change_request.json`（只装业务说了什么；闸口①'把简述↔提取字段并排供人扫漏标）。exit 0/1/2 对齐 precheck 分级。
 
+### 步骤 1b · 优化预检（2026-09-04 补齐——对齐 new-pipe 1b；只检新增子集）
+```bash
+python PIPE_SCRIPTS/precheck_opt.py   --change-request {opt}/_internal/change_request.json   --ts-baseline {arc}/ts.json --outdir {opt}/_internal
+```
+命名规范 / 源字段连库存在性+类型对账（**以库为准**回填）/ 类型风险决策（人三选，回写 fields『decision』标记——原始输入='直接复制'勿推翻）/ 值域探测（整数位溢出退 BA）/ 新来源 JOIN 键对账（转换/改关联键/接受）。`TYPE_RISK_PENDING`/`JOIN_TYPE_RISK_PENDING` 同款决策流（question → fill 脚本[shared] → 重跑放行；返源端/改关联键=本轮终止）。检测原语复用 shared（risk_checks/schema_cache）。无库降 warn（UT 兜底）。
+
 ### 步骤 2 · designer（优化模式，prompt 显式声明）
 dws-designer 加载 **dws-design-opt** skill：读 `{opt}/_internal/baseline_view.md` + `change_request.json` → 落位决策（opt-playbook 取舍树）→ 新 JOIN 声明 join_safety（强制）→ 回刷判断 → 写增量 decisions → 组装：
 
@@ -82,7 +88,7 @@ python PIPE_SCRIPTS/fence_check.py \
   --ts-baseline {arc}/ts.json --ts-v2 {opt}/ts_v2.json \
   --change-request {opt}/_internal/change_request.json
 ```
-**恰好等于双向判定**：diff 的每项必须被声明罩住（越界硬拦：偷加字段/改存量/动冻结槽位/未声明 JOIN…），声明的每条必须有落点（漏改/漏接/夹带硬拦）。过 → **闸口①'三问**（落位确认 / 回刷选择 / 建议追加变更；options 必含"退 BA"一等选项）。
+**恰好等于双向判定**：diff 的每项必须被声明罩住（越界硬拦：偷加字段/改存量/动冻结槽位/未声明 JOIN…），声明的每条必须有落点（漏改/漏接/夹带硬拦）。过 → `gate_summary_opt.py` 产**闸口①'材料**（确定性脚本产出不 AI 摘要：逐字段落位表/新 JOIN/决策标记/回刷/预检汇总）→ **闸口①'三问**（落位确认 / 回刷选择 / 建议追加变更；分场景模板，检出过问题的必含"退 BA"一等选项）。组装侧：assemble_ts_opt validate 含引用门禁（N36 等价）+ 新 JOIN 键类型比对（N_JOIN2 等价，cache 门控跨大类须 cast）。
 
 ### 步骤 4 · 编码 + SQL 围栏（闸门单点在 pipe）
 对 placed_rules 每规则并行发起 coder（dws-coding-opt：以 baseline SQL 为底稿**只加列**，切片带 `--baseline-sql {arc}/etl/{rule}.sql`——档案只读）。**落盘名 = {rule_code}.sql 与档案同名**（一个规则一个文件，新 SQL 即该规则当前版）。全部落盘后 pipe 独立跑：
@@ -104,7 +110,7 @@ python PIPE_SCRIPTS/ut_opt.py \
   --ts {opt}/ts_v2.json --etl-dir {opt}/etl \
   --baseline-dir {arc}/etl --ddl-dir {opt}/ddl --report {opt}/ut_report_opt.md
 ```
-独立入口（零触碰 ut_precheck/ut_execute）：ALTER 应用（表不存在=环境归人）→ **双向 MINUS 输出对比**（老/新 SELECT 同库同时执行；冻结列差集必须为空）→ INSERT 全量执行。主键检查豁免（双跑更强）、空值只查新列。对比失败 → 人定根因：新 JOIN 发散=设计问题回 designer→回闸口①'；源数据=环境归人。
+独立入口（零触碰 ut_precheck/ut_execute）：ALTER 应用（变更单缺失 fail loud exit 2——先 assemble_ddl_opt；表不存在=环境归人）→ 每规则 **EXPLAIN ANALYZE 真实执行**（计划两门槛[不下推/STREAM≤50]+0 行信号，计划落盘 diagnose/，复用 shared explain_check）→ **双向 MINUS 输出对比**（老/新 SELECT 同库同时执行；冻结列差集必须为空）→ INSERT 全量执行 → **新列空值检查**（写路径后真实数据；全 NULL=疑似新 JOIN 关联不上）。主键检查豁免（双跑更强）。对比 FAIL → 先跑 `diagnose_fanout_opt`（逐表键唯一性主判据 + join_safety 断言对照）产证据再 question 人定根因：新 JOIN 发散=设计问题回 designer→回闸口①'；源数据=环境归人。完整分流表见 opt-pipe SKILL 步骤 5。
 
 ### 步骤 6 · 制品
 ```bash
@@ -139,13 +145,16 @@ ts_v2/ts.md/新 SQL（同名覆盖=规则当前版）/ddl_full/decisions_opt →
 
 **agents**：dws-designer.md / dws-coder.md 各加 opt skill 指针 + `ddlc_design_dev/opt/` 写权限；岗位/权限/角色认知零改动。
 
-**脚本**（全住 `skills/opt-pipe/scripts`（含 schemas/baseline_v1.schema.json）；assemble_ts_opt 在 dws-design）：
+**脚本**（全住 `skills/opt-pipe/scripts`（含 schemas/baseline_v1.schema.json）；assemble_ts_opt 在 dws-design；检测原语 risk_checks/schema_cache/explain_check + fill 两脚本在 design-dev-shared，与 new-pipe 共用——2026-09-04 搬体留名下沉，new-pipe re-export 零破坏）：
 
 | 脚本 | 职责 | 调用方 |
 |------|------|--------|
 | baseline_contract.py | 契约校验（schema+版本 1.0/1.1+dm=6 语义） | assemble_ts_baseline / 测试 |
 | assemble_ts_baseline.py | json 入料建档（档案件→archive/，过程件→opt/_internal/；provenance 落 ts） | opt-pipe 步骤 0 |
 | preprocess_opt.py | 标注 → change_request + 校验（--mapping/--rs 直传；I/F 镜像归一） | opt-pipe 步骤 1 |
+| precheck_opt.py | 优化预检（只检新增子集：存在性/类型风险决策/值域/JOIN 对账） | opt-pipe 步骤 1b |
+| gate_summary_opt.py | 闸口①'材料确定性产出 | opt-pipe 步骤 3 |
+| diagnose_fanout_opt.py | 关联发散定位（逐表键唯一性+断言对照，轻量版） | opt-pipe 步骤 5 |
 | assemble_ts_opt.py（dws-design） | 增量 decisions → ts_v2 + ts.md + change 段 | designer |
 | fence_check.py | ts 级围栏 | opt-pipe 步骤 3 |
 | sql_fence.py / sql_fence_check.py | SQL 围栏（库 + CLI） | opt-pipe 步骤 4 |

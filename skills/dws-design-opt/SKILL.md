@@ -60,6 +60,8 @@ python {skills根}/dws-design/scripts/assemble_ts_opt.py \
 
 想顺手修存量（口径错/关联发散/声明漂移）——**不许直接改**。回报调用方走
 【建议追加的变更】通道（闸口①'人确认后进 change_request）。这是唯一的路。
+涉及"改输入"的终止型问题（mapping/RS/源端要修）同样**不问**——停手上报编排者
+（带完整后果问人），问人分流判据同 dws-design SKILL。
 
 ## 四、验收口径
 

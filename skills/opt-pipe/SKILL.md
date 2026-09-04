@@ -159,9 +159,21 @@ python PIPE_SCRIPTS/ut_opt.py \
 - exit 3 = 环境问题（表不存在/无库）→ 归人；
 - 每规则 EXPLAIN ANALYZE 真实执行一次（计划两门槛 + 0 行信号，计划落盘 diagnose/）+
   **新列空值检查**（写路径后真实数据；全 NULL = 疑似新 JOIN 关联不上——闸口②'素材）；
-- 对比 FAIL（老列不一致）→ **question 人定根因**：新 JOIN 发散=设计问题（人定改法→回 designer→
-  回闸口①'重确认→SQL 围栏重跑→UT 重跑）；源数据问题=环境归人；
-- SQL 报错 → 回 coder。限 3 轮。
+- 对比 FAIL（老列不一致）/ 新列全 NULL → **先跑定位工具产证据，再 question 人定根因**：
+
+```bash
+python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {opt}/ts_v2.json [--rule {rule}]
+```
+  （逐表键唯一性主判据 + join_safety 断言对照，证据落盘 diagnose/fanout_{rule}.md）
+
+**UT 失败分流表**（按表路由，不发明表外动作）：
+
+| 类型 | 识别 | 去向 |
+|------|------|------|
+| SQL 报错 | 新 SELECT/INSERT 报错含 COLUMN/TYPE/SYNTAX | 回该规则 coder（恢复会话），限 3 轮 |
+| 对比 FAIL | 冻结列回归失败（老列不一致） | question 人定根因：新 JOIN 发散=设计问题（改法→回 designer→回闸口①'重确认→SQL 围栏重跑→UT 重跑）；源数据=环境归人 |
+| 新列全 NULL / 0 行 / 计划门槛 | 提示级（披露不代答） | 闸口②'人判（关联不上→designer 核 ON；数据真缺→人定） |
+| 环境问题 | ALTER 失败/表不存在/无库（exit 3） | 归人，不回调 agent |
 
 ## 步骤 6：制品
 

@@ -31,7 +31,7 @@ skills/
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
-                         #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py archive_writer.py baseline_contract.py(契约校验库)
+                         #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py archive_writer.py baseline_contract.py(契约校验库) diagnose_fanout_opt.py(关联发散定位:逐表键唯一性+断言对照)
 │   └── schemas/         # baseline_v1.schema.json(随 baseline_contract 归 opt)
 └── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
     └── scripts/         # ★ 共用入口（>1 消费者才留这，2026-09 按消费者归位定调）：
@@ -329,6 +329,9 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 - **★ 目录与档案定调（2026-09-01，基石）**：资产标识 = mapping 声明的目标表（铆定 I 视图；只存 F 的资产即 F 名）。档案 = `ddlc_design_dev/archive/`（ts.json/ts.md/etl/{rule}.sql/ddl//dq//decisions.yaml）**当前态唯一真身**，入 git（.gitignore 白名单），演进史 = git 提交历史（每次交付覆盖+commit，NNN 序列退役）。new-pipe 平铺产出零改动；**首优收档**（archive_writer `adopt`：平铺产物原地收纳进 archive/，交付即建档）；**交付收口**（`advance`：opt/ 现场推进档案，闸口②'确认后才动档案——确认前零改动=天然回归点）。baseline = archive/ 本体直读（脚本只读，无快照拷贝）。opt/ = 本次优化更新（每次开工重建）。
 - **入口三段式**：①`archive/ts.json` 存在→直接当 baseline；②无档但 ddlc_design_dev 有平铺 new-pipe 产出→收档；③都没有→收 baseline_v1.json（逆向侧 peer agent 文件交接，**不调它的脚本**）入料建档（档案件落 archive/、过程件落 opt/_internal/，provenance 进 ts._baseline 供 artifact_patcher 定位原始制品）。**不验真输入**（默认准确，压力给供方）。
 - **输入（真实格式 2026-08-21；分拣器 2026-09-01 退役——契约参数直传）**：全量 mapping（备注列 `{YYYYMM}版本{动词}` 标记变更，动词可扩展归类）+ RS（3.3 变更记录表定位版本 + 正文版本锚定段给口径）都是契约参数 `--mapping/--rs` 文件路径直传 preprocess_opt（内网命名无关键词约定，脚本不猜输入）；版本锚点 = 最新"优化"行日期归一 YYYYMM。资产一致性校验按 **I/F 镜像归一**比基名（mapping 写 I 视图、baseline 记 F 表是同一资产）。
+- **步骤 1b 优化预检（precheck_opt，2026-09-04 补齐——对齐 new-pipe 1b）**：只检新增子集——命名规范/源字段连库存在性+类型对账（**以库为准**回填）/类型风险决策（人三选，回写 change_request『decision』标记：原始输入='直接复制'勿推翻）/值域探测（整数位溢出退 BA）/新来源 JOIN 键对账（转换/改关联键/接受）。检测原语复用 shared（risk_checks/schema_cache，2026-09-04 搬体留名下沉，new-pipe re-export 零破坏）。无库降 warn。
+- **设计侧校验补齐（2026-09-04）**：assemble_ts_opt 补引用门禁（N36 等价：三段式/未限定硬拦）+ 新 JOIN 键类型比对（N_JOIN2 等价：schema_cache 门控，跨大类须内联 cast）。闸口①'材料 = gate_summary_opt 确定性产出（逐字段落位表/新 JOIN/决策标记/回刷——不 AI 摘要），分场景模板含退 BA 一等选项。
+- **UT 增强（2026-09-04）**：ut_opt 每规则 EXPLAIN ANALYZE 真实执行+计划两门槛落盘（复用 explain_check）+ 新列空值检查实现（全 NULL=疑似新 JOIN 关联不上）+ 失败分流表（SQL→coder/对比 FAIL→先跑 diagnose_fanout_opt 产证据再人定根因/提示级→闸口②'）。
 - **两级声明 + 三段审计**：change_request（业务说了什么，preprocess_opt 产）+ ts.change 段（落位，designer 声明、assemble_ts_opt 组装）→ fence_check（ts 级围栏，恰好等于双向）→ sql_fence_check（SQL 级围栏，**闸门单点在 pipe**）。回路铁律：产物变→围栏重跑→才进 UT。
 - **存量语义不补**（主键/粒度/关联安全留空+豁免，双跑兜底）；新 JOIN 必须 join_safety（opt-playbook）。
 - **步骤顺序（2026-09-01 修正）**：DDL 变更单（assemble_ddl_opt）**先于 UT**——ut_opt 依赖 ALTER 应用新列，变更单缺失 fail loud（exit 2 流程顺序错，不再静默跳过错分 coder）。
