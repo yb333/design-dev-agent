@@ -191,7 +191,7 @@ python PIPE_SCRIPTS/artifact_patcher.py \
 ```bash
 python SHARED_SCRIPTS/archive_writer.py advance --opt {opt_v} --archive {arc}
 ```
-ts.json/ts.md/新 SQL（同名覆盖）/export/patched 制品副本/decisions_opt → 档案当前态推进 + MANIFEST 追加本次记录（DDL 不入档）；`{opt_v}/` 版本目录留存（目录数=优化次数），交付物在其中人取用。（制品包链路：patched 半成品 → 人填元数据+backfill 取码 → 内网网页模拟生成完整包导入；**完整包建议存回 {arc}/export/ 覆盖同名**——档案升级为完整态，下次 patch 底本更准。）git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
+ts.json/ts.md/新 SQL（同名覆盖）/export/patched 制品副本/decisions_opt → 档案当前态推进 + MANIFEST 追加本次记录（DDL 不入档）；`{opt_v}/` 版本目录留存（目录数=优化次数），交付物在其中人取用。（制品包链路：patched 半成品 → 跑 backfill_rule_codes[术加：脚本内模拟网页取编码/依赖/可选上传]产完整包 → 导入；**完整包建议存回 {arc}/export/ 覆盖同名**——档案升级为完整态，下次 patch 底本更准。LTS 同款脚本待建。）git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
 
 ## 硬性规则
 
