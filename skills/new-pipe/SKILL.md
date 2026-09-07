@@ -470,11 +470,20 @@ python PIPE_SCRIPTS/assemble_export.py \
 
 **必须调 question 展示结果摘要等用户确认**（摘要含 UT 通过/失败数 + **DQ 检查结果（0 行=通过；有告警必须列样例与去向判断）** + 产出文件清单），跑完必须停下，不允许自己结束流程：
 
-- 用户选"确认" → 结束流程
+- 用户选"确认" → **交付建档**（收尾，脚本做）→ 结束流程：
+
+```bash
+python SHARED_SCRIPTS/archive_writer.py adopt --build {deliver}
+```
+  从 build/ 提取本源件（ts/etl/dq/export + decisions）生成 `{deliver}/../archive/` + MANIFEST 首建（v1 建造）；
+  build/ 剩余（ddl/ut_report/_internal）就地定格为建造现场——此后资产有档、可优化（opt 两段式入口直接用档）。
 - 用户选"修改"（说明哪里改）→ 回对应步骤（编码问题回 coder / 设计问题回 designer）
-- 用户选"放弃" → 结束
+- 用户选"放弃" → 结束（**不建档**——build/ 工作区留草稿，重跑覆盖；档案被动过则停问人）
 
 > 非交互例外同闸口①（仅显式声明时跳过；人工决策项不豁免，见步骤 3 的非交互条款）。
+> 非交互下建档**照常执行**（交付动作非决策闸口；产物人后审=审归档后形态）。
+
+**交付物链路（人执行，推生产不自主）**：export/ 制品包（半成品）→ 人填元数据 + backfill_rule_codes 取码 → 内网网页模拟生成完整包 → 导入平台；**完整包建议存回 `{deliver}/../archive/export/` 覆盖同名**（档案升级为完整态，未来 opt patch 底本更准）。
 
 ---
 

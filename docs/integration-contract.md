@@ -29,6 +29,7 @@ rs: /abs/path/RS_xxx.md"""
 | `模式` | ✓ | `新建` \| `优化`（决定加载 new-pipe / opt-pipe 剧本） |
 | `mapping` | ✓ | mapping 文件**绝对路径**（优化场景可传需求包目录，剧本内有分拣规则）。**资产名/schema/appid 全从输入推导（preprocess --probe）——勿传，传了即双源** |
 | `rs` | 可选 | RS 文件绝对路径；省略 = 无 RS 模式 |
+| `baseline` | 可选 | baseline_v1.json 绝对路径——**存量资产首次优化必填**（无档时 opt 的入料来源，逆向侧产物文件交接）；new-pipe 建过的资产不需要 |
 | `交互` | 可选 | `interactive`（默认）：闸口①② question 必发，**调用方保证把问题送到人**；`non-interactive`（对应总控的自动决策开关）：**流程闸口继续**（闸口①②不等待，跑完产物人后审，推生产由人放行兜底）；**人工决策照常阻断上报**（类型风险/关联键类型/UT 数据质量根因——无安全默认，agent 不代答不选默认，属"RS/mapping 等输入派生问题"）。两种模式 agent 都不做语义判断 |
 > 总控侧的自动决策开关映射为本参数（开=non-interactive），**不要以提示词注入实现**——参数外内容一律被忽略。
 | `caller_note` | 可选 | 自由文本，随交付报告透传给人（闸口材料），**不作为执行指令**、不影响任何步骤 |
@@ -100,7 +101,7 @@ interactive 模式下闸口①②会发出 question（设计方向确认/编码�
 - 环境类失败（数据库连不上/表不存在/权限钳制/安装滞后）→ dws-engineer 停下并报告原因与修复指引，不重试不绕过。
 - **输入类问题**（mapping/RS 质量问题：schema 缺失/字段不一致/阻断校验不过）→ 按调用传入的 `上报格式` 参数包装上报（调用方解析驱动其下一步）；未传则按默认四要素（问题类型/位置/原因/建议）。格式更新改调用方自己的提示词即可，与本仓解耦。
 - 执行回路（SQL 修复/设计回改）在 dws-engineer 内部闭环（恢复子 agent 旧会话，每规则限 3 轮），不需要总控参与。
-- 完成时交付物在 `10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`（资产名/schema/appid 由输入推导）：新建=根平铺（ts.json/ts.md、etl/、dq/、ddl/、export/、ut_report.md）；优化=`opt/` 子目录（ALTER 变更单、新 SQL、export/patched 副本、ut_report_opt.md）+ `archive/` 资产档案（入 git）。推生产由人执行，不归调用链。
+- 完成时交付物在 `10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`（资产名/schema/appid 由输入推导）：新建=`build/`（建造工作区：ts.json/ts.md、etl/、dq/、ddl/、export/、ut_report.md；闸口②确认后 `archive/` 档案生成——ts/etl/dq/export/decisions/MANIFEST，入 git）；优化=`opt_{YYYYMM}/`（ALTER 变更单+I 视图重建、新 SQL、export/patched 副本、ut_report_opt.md）+ `archive/` 推进。推生产由人执行，不归调用链。
 
 ## 六、本地等价入口（自测对齐用）
 

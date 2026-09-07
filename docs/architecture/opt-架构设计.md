@@ -77,8 +77,9 @@ N 系校验适用性：新字段适用的等价物已补（N36→引用门禁 / 
 ├── archive/         ← ★当前态唯一真身（入 git）：ts.json/ts.md/etl/{rule}.sql/dq//export/
 │                       （平台制品包，patch 链底本）/decisions.yaml/MANIFEST.md（版本索引）；
 │                       DDL 不入档（ts 可再生投影）。当前最新 = archive/ 本体 + MANIFEST。
-├── build/           ← 建造现场（new-pipe 的 ddl/ut_report/_internal，adopt 时归置）；
-│                       存在=自建资产，存量资产（json 入料）无——目录形态自解释来源
+├── build/           ← 建造工作区 → 定格建造现场（new-pipe 流程中一切产出在此——位置不
+│                       漂移；闸口②确认后 adopt 提取本源件进档案，剩余 ddl/ut_report/_internal
+│                       原地定格。存在=自建资产，存量资产（json 入料）无——形态自解释来源）
 └── opt_{YYYYMM}/    ← 每次优化一个版本目录（留存不删——目录数=优化次数；preprocess_opt
                         解析版本后自建；产物 ts.json 与档案同名）
     ├── ts.json / ts.md / etl/{rule_code}.sql / ddl/（ALTER+I视图重建）

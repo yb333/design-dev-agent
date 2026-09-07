@@ -22,11 +22,11 @@ permission:
     "~/.config/opencode/skills/**": allow
   edit:
     "*": deny
-    "**/ddlc_design_dev/_internal/design_decisions.yaml": allow
+    "**/ddlc_design_dev/build/_internal/design_decisions.yaml": allow
     "**/ddlc_design_dev/opt/_internal/design_decisions_opt.yaml": allow
   write:
     "*": deny
-    "**/ddlc_design_dev/_internal/design_decisions.yaml": allow
+    "**/ddlc_design_dev/build/_internal/design_decisions.yaml": allow
     "**/ddlc_design_dev/opt/_internal/design_decisions_opt.yaml": allow
   skill:
     "*": deny
@@ -104,17 +104,17 @@ $c = @'
 
 # 产出
 
-`10_project_deliver/{资产名}/ddlc_design_dev/` 下：
+`10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/build/`（建造工作区）下：
 1. `_internal/design_decisions.yaml`——**你写**（骨架读 skill 的 `assets/design-decisions-template.yaml`）
-2. `ts.json` + `ts.md`——**脚本写**（你调 assemble_ts，落在 ddlc_design_dev/ 根）
+2. `ts.json` + `ts.md`——**脚本写**（你调 assemble_ts，落在 build/ 根）
 
 ## 调脚本组装
 
 ```bash
 python {skill目录}/scripts/assemble_ts.py \
-  --rs 10_project_deliver/{资产名}/ddlc_design_dev/_internal/rs_input.json \
-  --decisions 10_project_deliver/{资产名}/ddlc_design_dev/_internal/design_decisions.yaml \
-  --outdir 10_project_deliver/{资产名}/ddlc_design_dev
+  --rs 10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/build/_internal/rs_input.json \
+  --decisions 10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/build/_internal/design_decisions.yaml \
+  --outdir 10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/build
 ```
 
 - 校验失败 → 按报错 `[第X层]` 标识查对应 playbook 修正后重跑

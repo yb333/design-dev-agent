@@ -31,7 +31,7 @@ skills/
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py
-                         #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py archive_writer.py baseline_contract.py(契约校验库) diagnose_fanout_opt.py(关联发散定位:逐表键唯一性+断言对照)
+                         #   assemble_ddl_opt.py assemble_ts_baseline.py artifact_patcher.py baseline_contract.py(契约校验库) diagnose_fanout_opt.py(关联发散定位:逐表键唯一性+断言对照)
 │   └── schemas/         # baseline_v1.schema.json(随 baseline_contract 归 opt)
 └── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
     └── scripts/         # ★ 共用入口（>1 消费者才留这，2026-09 按消费者归位定调）：
@@ -42,6 +42,7 @@ skills/
                          #   ★ 预检/计划检测原语（2026-09-04 下沉，new-pipe 与 opt-pipe 共用——precheck/ut_precheck re-export 同名零破坏）：
                          #   risk_checks.py(类型风险检测/决策骨架校验/值域探测/键值采样) schema_cache.py(表结构缓存设施)
                          #   explain_check.py(执行计划两门槛解析) fill_type_risk_decision.py fill_join_risk_decision.py(决策填充共用入口)
+                         #   archive_writer.py(档案两动作:new-pipe 收尾 adopt 交付建档/opt advance 收口推进——2026-09-07 双消费者归位)
                          #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import 任何 skill 目录；
                          #     skill 脚本（design/coding/new-pipe/opt-pipe）只能 import 自己目录 + shared，pipe 之间不互 import（test_layering AST 守护）
 agents/                  # dws-engineer.md(编排:身份+权限+契约参数+铁律) dws-designer.md dws-coder.md（subagent 定义：身份+权限+skill指针+工具清单）
@@ -75,17 +76,20 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 
 ## 产出目录约定（★ 关键，常被搞错）
 
-所有产出在 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/` 下（appid/schema 两层按 schema 从 schema_apps.json 查；resolve_appid.py 查 appid）。**对外产出 vs 过程产物严格分开放**：
+所有产出在 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/build/` 下（建造工作区，2026-09-07 目录定调：流程中位置不漂移，闸口②确认后 adopt 提取本源件生成 `../archive/` 档案+MANIFEST，build/ 剩余定格建造现场；appid/schema 两层按 schema 从 schema_apps.json 查；resolve_appid.py 查 appid）。**对外产出 vs 过程产物严格分开放**：
 
 ```
 ddlc_design_dev/
-├── ts.json / ts.md      ← 对外（设计产出）
-├── etl/                 ← 对外（coder 的 SELECT，R0001.sql）
-├── ddl/                 ← 对外（脚本生成的建表 DDL）
-├── dq/                  ← 对外（DQ 检查 SQL）
-├── ut_report.md         ← 对外（UT 报告，给人看）
-├── export/              ← 对外（平台制品包 xlsx，UT 通过后才生成）
-└── _internal/           ← ★ 过程产物（验证完就没用，不对外）
+├── build/               ← 建造工作区（new-pipe 流程中的一切产出）
+│   ├── ts.json / ts.md      ← 对外（设计产出；确认后进档案）
+│   ├── etl/                 ← 对外（coder 的 SELECT，R0001.sql）
+│   ├── ddl/                 ← 对外（脚本生成的建表 DDL）
+│   ├── dq/                  ← 对外（DQ 检查 SQL）
+│   ├── ut_report.md         ← 对外（UT 报告，给人看）
+│   ├── export/              ← 对外（平台制品包 xlsx，UT 通过后才生成）
+│   └── _internal/           ← ★ 过程产物（验证完就没用，不对外）
+├── archive/             ← 资产档案（闸口②确认后 adopt 生成；见「优化场景」节）
+└── opt_{YYYYMM}/        ← 优化现场（有优化时才有）
     ├── rs_input.json              # 预处理产出（完整，给脚本读）
     ├── rs_input_view.json         # 预处理产出（compact 紧凑视图，给 designer 读）
     ├── design_decisions.yaml      # designer 的设计决策
@@ -327,7 +331,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 存量资产精确变更交付。设计全集见 `docs/specs/opt/00-08` + 总览 `docs/architecture/opt-架构设计.md`；测试指引见 `docs/specs/opt/11-测试指引.md`。要点：
 
 - **★ 目录与档案定调（2026-09-01 基石；2026-09-04 档案定形；2026-09-07 文件系统自解释）**：资产标识 = mapping 声明的目标表（铆定 I 视图；只存 F 的资产即 F 名）。**文件系统自解释**（不查 git 一眼看懂）：`archive/` = 当前态唯一真身（ts.json/ts.md/etl/{rule}.sql/dq//**export**（平台制品包——patch 链底本，非 ts 纯投影）/decisions.yaml/**MANIFEST.md** 版本索引——DDL 不入档[ts 可再生投影]）；`build/` = 建造现场归置（new-pipe 的 ddl/ut_report/_internal；**存量资产无此目录**——目录形态自解释资产来源）；`opt_{YYYYMM}/` = 每次优化一个版本目录（**留存不删**，目录数=优化次数；preprocess_opt 解析版本后自建，产物 ts.json 同档案名）。git = **独立回溯备份通道**（archive/ 入 git 白名单，提交由人管理，流程不内嵌 git）。首优收档（`adopt`：ts/etl/dq/export/decisions 入档+build/ 归置+MANIFEST 首建）；交付收口（`advance`：opt_{version}/ 推进档案+MANIFEST 追加，闸口②'确认后才动档案——确认前零改动=天然回归点）。baseline = archive/ 本体直读。
-- **入口三段式**：①`archive/ts.json` 存在→直接当 baseline；②无档但 ddlc_design_dev 有平铺 new-pipe 产出→收档；③都没有→收 baseline_v1.json（逆向侧 peer agent 文件交接，**不调它的脚本**）入料建档（档案件落 archive/、过程件落 opt/_internal/，provenance 进 ts._baseline 供 artifact_patcher 定位原始制品）。**不验真输入**（默认准确，压力给供方）。
+- **入口两段式（2026-09-07：new-pipe 交付即建档——adopt 钉在闸口②确认后的收尾，opt 不再收档）**：①`archive/ts.json` 存在→直接当 baseline（new-pipe 建的档或历次 advance 推进过）；②无档→收 baseline_v1.json（契约参数 `baseline` 传路径；逆向侧 peer agent 文件交接，**不调它的脚本**）入料建档（档案件落 archive/、过程件落 opt/_internal/，provenance 进 ts._baseline）。边界：有档又交 json=线上被外力改过→问人后覆盖重入料。**不验真输入**（默认准确，压力给供方）。
 - **输入（真实格式 2026-08-21；分拣器 2026-09-01 退役——契约参数直传）**：全量 mapping（备注列 `{YYYYMM}版本{动词}` 标记变更，动词可扩展归类）+ RS（3.3 变更记录表定位版本 + 正文版本锚定段给口径）都是契约参数 `--mapping/--rs` 文件路径直传 preprocess_opt（内网命名无关键词约定，脚本不猜输入）；版本锚点 = 最新"优化"行日期归一 YYYYMM。资产一致性校验按 **I/F 镜像归一**比基名（mapping 写 I 视图、baseline 记 F 表是同一资产）。
 - **步骤 1b 优化预检（precheck_opt，2026-09-04 补齐——对齐 new-pipe 1b）**：只检新增子集——命名规范/源字段连库存在性+类型对账（**以库为准**回填）/类型风险决策（人三选，回写 change_request『decision』标记：原始输入='直接复制'勿推翻）/值域探测（整数位溢出退 BA）/新来源 JOIN 键对账（转换/改关联键/接受）。检测原语复用 shared（risk_checks/schema_cache，2026-09-04 搬体留名下沉，new-pipe re-export 零破坏）。无库降 warn。
 - **设计侧校验补齐（2026-09-04）**：assemble_ts_opt 补引用门禁（N36 等价：三段式/未限定硬拦）+ 新 JOIN 键类型比对（N_JOIN2 等价：schema_cache 门控，跨大类须内联 cast）。闸口①'材料 = gate_summary_opt 确定性产出（逐字段落位表/新 JOIN/决策标记/回刷——不 AI 摘要），分场景模板含退 BA 一等选项。

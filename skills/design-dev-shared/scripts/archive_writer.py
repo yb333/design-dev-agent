@@ -4,12 +4,14 @@
 入 git（gitignore 白名单——git 是独立的回溯备份通道，文件系统自解释为主：
 MANIFEST 一眼看懂版本史，opt_{YYYYMM}/ 目录数 = 优化次数）。
 
-两动作（子命令；调用方都是 opt-pipe 剧本——new-pipe 零改动，收档是首优时才付的成本）：
-  adopt   首优收档：new-pipe 平铺产出原地收纳进 archive/（ts/etl/dq/export + decisions），
-          建造现场（ddl/ut_report.md/_internal）归置进 build/（存量资产[json 入料]无 build/，
-          目录形态自解释资产来源），首建 MANIFEST。
-  advance 交付收口：优化现场（opt_{version}/）推进档案当前态（ts/etl/制品副本/decisions），
-          MANIFEST 追加本次记录（闸口②'确认后调；确认前档案零改动=天然回归点）。
+两动作（子命令；住 shared——new-pipe 收尾调 adopt、opt-pipe 收口调 advance，双消费者）：
+  adopt   交付建档（new-pipe 闸口②确认后）：从建造工作区 build/ 提取本源件
+          （ts/etl/dq/export + decisions）生成 {build父}/archive/ + MANIFEST 首建；
+          build/ 剩余（ddl/ut_report/_internal）就地定格为建造现场。
+          new-pipe 流程中一切产出在 build/ 下（{deliver}={ddlc}/build——位置不漂移，
+          确认时只发生一次提取定稿）；放弃分支不建档。
+  advance 交付收口（opt 闸口②'确认后）：优化现场（opt_{version}/）推进档案当前态
+          （ts/etl/制品副本/decisions）+ MANIFEST 追加；确认前档案零改动=天然回归点。
 """
 import argparse
 import json
@@ -31,30 +33,25 @@ def _read_cr(opt_dir: Path) -> dict:
         return {}
 
 
-def adopt(ddlc: Path) -> Path:
-    """首优收档：平铺产出 → archive/；建造现场 → build/；首建 MANIFEST。"""
+def adopt(build: Path) -> Path:
+    """交付建档：build/ 工作区 → 提取本源件生成 archive/；剩余定格建造现场；首建 MANIFEST。"""
+    ddlc = build.parent
     archive = ddlc / "archive"
     if archive.exists():
-        raise ValueError(f"档案已存在（无需收档）: {archive}")
-    if not (ddlc / "ts.json").exists():
-        raise ValueError(f"{ddlc} 无 new-pipe 产出（ts.json 缺）——不能收档")
+        raise ValueError(f"档案已存在（无需建档）: {archive}——如为推倒重来（人发起的重建），"
+                         f"档案处置由人定，本脚本不自动覆盖")
+    if not (build / "ts.json").exists():
+        raise ValueError(f"{build} 无产出（ts.json 缺）——不能建档")
     archive.mkdir(parents=True)
     for name in ("ts.json", "ts.md", "etl", "dq", "export"):
-        src = ddlc / name
+        src = build / name
         if src.exists():
             shutil.move(str(src), str(archive / name))
-    decisions = ddlc / "_internal" / "design_decisions.yaml"
+    decisions = build / "_internal" / "design_decisions.yaml"
     if not decisions.exists():
         raise ValueError(f"收档缺设计决策: {decisions}")
     shutil.copy2(decisions, archive / "decisions.yaml")
-    # 建造现场归置（ddl/ut_report/_internal 移入 build/——目录角色命名空间化：
-    # 根下只剩 archive/ + build/ + opt_{version}*/，一眼分明）
-    build = ddlc / "build"
-    for name in ("ddl", "ut_report.md", "_internal"):
-        src = ddlc / name
-        if src.exists():
-            build.mkdir(exist_ok=True)
-            shutil.move(str(src), str(build / name))
+    # 本源件已 mv 走，build/ 剩余（ddl/ut_report/_internal）就地定格为建造现场
     ts = json.loads((archive / "ts.json").read_text(encoding="utf-8"))
     f = ts.get("meta", {}).get("target", {}).get("f_table", {})
     (archive / "MANIFEST.md").write_text(
@@ -111,15 +108,15 @@ def advance(opt: Path, archive: Path) -> Path:
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description="资产档案两动作：adopt 首优收档 / advance 交付收口")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p_adopt = sub.add_parser("adopt", help="new-pipe 平铺产出收档进 archive/，建造现场归置 build/")
-    p_adopt.add_argument("--ddlc", required=True, help="ddlc_design_dev 目录（平铺产出所在）")
+    p_adopt = sub.add_parser("adopt", help="交付建档：从 build/ 工作区提取本源件生成 archive/（闸口②确认后）")
+    p_adopt.add_argument("--build", required=True, help="建造工作区目录（new-pipe 的 {deliver}=ddlc/build）")
     p_adv = sub.add_parser("advance", help="优化现场推进档案当前态（闸口②'确认后）")
     p_adv.add_argument("--opt", required=True, help="opt_{version}/ 优化现场目录")
     p_adv.add_argument("--archive", required=True, help="archive/ 档案目录")
     args = ap.parse_args(argv)
 
     try:
-        dest = adopt(Path(args.ddlc)) if args.cmd == "adopt" else \
+        dest = adopt(Path(args.build)) if args.cmd == "adopt" else \
             advance(Path(args.opt), Path(args.archive))
     except ValueError as e:
         print(f"ARCHIVE_ERROR: {e}", file=sys.stderr)

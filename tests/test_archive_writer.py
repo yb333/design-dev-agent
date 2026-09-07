@@ -17,43 +17,44 @@ def _mk(p, files: dict):
 
 
 class TestAdopt:
-    def test_adopt_moves_newpipe_outputs_and_build_site(self, tmp_path):
-        """收档：ts/etl/dq/export 入档案；ddl/ut_report/_internal 归置 build/；MANIFEST 首建。"""
+    def test_adopt_extracts_from_build_workspace(self, tmp_path):
+        """交付建档：从 build/ 工作区提取本源件生成 archive/；剩余定格建造现场；MANIFEST 首建。"""
         ddlc = tmp_path / "ddlc_design_dev"
-        _mk(ddlc, {"ts.json": "{}", "ts.md": "# ts", "etl/R0001.sql": "SELECT 1",
-                   "ddl/create_table_t.sql": "CREATE...", "dq/dq_01_null.sql": "SELECT 2",
-                   "export/制品.xlsx": "bin", "ut_report.md": "# ut",
-                   "_internal/design_decisions.yaml": "grain: ...",
-                   "_internal/rs_input.json": "{}"})
-        dest = adopt(ddlc)
+        build = ddlc / "build"
+        _mk(build, {"ts.json": "{}", "ts.md": "# ts", "etl/R0001.sql": "SELECT 1",
+                    "ddl/create_table_t.sql": "CREATE...", "dq/dq_01_null.sql": "SELECT 2",
+                    "export/制品.xlsx": "bin", "ut_report.md": "# ut",
+                    "_internal/design_decisions.yaml": "grain: ...",
+                    "_internal/rs_input.json": "{}"})
+        dest = adopt(build)
         assert dest == ddlc / "archive"
         assert (dest / "ts.json").exists() and (dest / "ts.md").exists()
         assert (dest / "etl/R0001.sql").exists()
         assert (dest / "dq/dq_01_null.sql").exists()
         assert (dest / "export/制品.xlsx").exists(), "平台制品包入档（patch 链底本）"
         assert (dest / "decisions.yaml").exists()
-        # 建造现场归置 build/（命名空间化——根下不再散落）
-        assert (ddlc / "build/ddl/create_table_t.sql").exists()
-        assert (ddlc / "build/ut_report.md").exists()
-        assert (ddlc / "build/_internal/rs_input.json").exists()
-        assert not (ddlc / "_internal").exists() and not (ddlc / "ut_report.md").exists()
+        # 剩余就地定格为建造现场（位置不漂移——流程中在 build，定稿后还在 build）
+        assert (build / "ddl/create_table_t.sql").exists()
+        assert (build / "ut_report.md").exists()
+        assert (build / "_internal/rs_input.json").exists()
+        assert not (build / "ts.json").exists(), "本源件已提取进档案"
         assert not (dest / "ddl").exists(), "DDL 是 ts 可再生投影，不入档案"
         mf = (dest / "MANIFEST.md").read_text(encoding="utf-8")
         assert "v1" in mf and "建造" in mf
 
     def test_adopt_without_dq_ok(self, tmp_path):
         """无 DQ 资产（dq/ 可缺）照常收档。"""
-        ddlc = tmp_path / "ddlc_design_dev"
-        _mk(ddlc, {"ts.json": "{}", "etl/R0001.sql": "SELECT 1",
-                   "ddl/x.sql": "CREATE", "_internal/design_decisions.yaml": "d: 1"})
-        adopt(ddlc)
-        assert not (ddlc / "archive/dq").exists()
+        build = (tmp_path / "ddlc_design_dev" / "build")
+        _mk(build, {"ts.json": "{}", "etl/R0001.sql": "SELECT 1",
+                    "ddl/x.sql": "CREATE", "_internal/design_decisions.yaml": "d: 1"})
+        adopt(build)
+        assert not (build.parent / "archive/dq").exists()
 
     def test_adopt_without_newpipe_outputs_rejected(self, tmp_path):
-        ddlc = tmp_path / "ddlc_design_dev"
-        _mk(ddlc, {"export/x.xlsx": "bin"})
+        build = tmp_path / "ddlc_design_dev" / "build"
+        _mk(build, {"export/x.xlsx": "bin"})
         with pytest.raises(ValueError, match="ts.json"):
-            adopt(ddlc)
+            adopt(build)
 
     def test_advance_json_ingested_asset_has_no_build(self, tmp_path):
         """存量资产（json 入料）无 build/——advance 照常（目录形态自解释资产来源）。"""
@@ -75,11 +76,11 @@ class TestAdopt:
             adopt(ddlc)
 
     def test_adopt_main(self, tmp_path):
-        ddlc = tmp_path / "ddlc"
-        _mk(ddlc, {"ts.json": "{}", "_internal/design_decisions.yaml": "d: 1"})
-        assert main(["adopt", "--ddlc", str(ddlc)]) == 0
-        assert (ddlc / "archive/decisions.yaml").exists()
-        assert (ddlc / "build/_internal/design_decisions.yaml").exists()
+        build = tmp_path / "ddlc" / "build"
+        _mk(build, {"ts.json": "{}", "_internal/design_decisions.yaml": "d: 1"})
+        assert main(["adopt", "--build", str(build)]) == 0
+        assert (tmp_path / "ddlc/archive/decisions.yaml").exists()
+        assert (build / "_internal/design_decisions.yaml").exists(), "现场原地定格"
 
 
 class TestAdvance:
