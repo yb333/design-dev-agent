@@ -28,8 +28,8 @@ python {SKILL_BASE}/scripts/check_env.py
 
 ```
 10_project_deliver/{appid}/{schema}/{资产名}/    ← appid/schema 层按 schema 查；不存在则你建
-└── ddlc_design_dev/                      ← 你建（标识产出范围）
-    ├── ts.json                           ← 设计产出（对外）
+└── ddlc_design_dev/build/                 ← 你建（建造工作区=产出范围）
+        ├── ts.json                       ← 设计产出（确认后进档案）
     ├── ts.md                             ← 设计产出（人读）
     ├── etl/                              ← 编码产出（coder 产的 SELECT）
     │   └── R0001.sql
@@ -52,7 +52,9 @@ python {SKILL_BASE}/scripts/check_env.py
         └── diagnose/                     ← 数据质量诊断的临时产物（步骤6b 产）
 ```
 
-> 下文用 `{deliver}` 代指 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev`。
+> 下文用 `{deliver}` 代指 `10_project_deliver/{appid}/{schema}/{资产名}/ddlc_design_dev/build`——
+> **建造工作区**（目录定调 2026-09-07）：流程中一切产出在 build/ 下（位置不漂移，
+> 闸口②确认后 adopt 提取本源件生成 `{ddlc}/archive/` 档案，build/ 剩余定格为建造现场）。
 > **资产名/schema/appid 全从输入推导**（preprocess --probe，见下节）——调用方不传，双源即漂移。
 
 ### 脚本路径定位
