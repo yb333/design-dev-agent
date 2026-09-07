@@ -4,7 +4,7 @@ description: >-
   DWS ETL 优化模式设计工作流（add_field）。被 dws-designer agent 在【优化场景】加载
   （调用方 prompt 显式声明优化模式时）。身份与权限不变；工作流换成优化版：
   读 baseline_view + change_request，只写增量 design_decisions_opt.yaml，
-  调 assemble_ts_opt 组装 ts_v2。设计知识与工具路径引用 dws-design（不搬家）。
+  调 assemble_ts_opt 组装 ts.json（本次产出）。设计知识与工具路径引用 dws-design（不搬家）。
 ---
 
 ## ⚠️ 文件路径规则
@@ -21,8 +21,8 @@ description: >-
 1. **只写增量，不写存量**：每个新增字段一条 decisions，存量一概不碰（重写存量=红线）。
 2. **存量语义不补**：baseline 的主键/粒度/关联安全是空位——**不需要你补**（存量回归由输出
    对比保障）；你只为**新 JOIN** 声明关联安全性（生产在跑不是新 JOIN 的理由）。
-3. **围栏罩着你**：ts_v2 会被 fence_check 机器审计（越界/漏改硬阻断）。decisions 说什么，
-   ts_v2 就是什么——组装器是确定性的，你夹带不了任何东西，别试。
+3. **围栏罩着你**：组装产物会被 fence_check 机器审计（越界/漏改硬阻断）。decisions 说什么，
+   ts 就是什么——组装器是确定性的，你夹带不了任何东西，别试。
 
 ## 二、单线工作流（五步）
 
@@ -50,8 +50,8 @@ intermediate_tables——**这是围栏许可的边界，落错位会连锁漏�
 ```bash
 python {skills根}/dws-design/scripts/assemble_ts_opt.py \
   --ts-baseline {arc}/ts.json \
-  --decisions {opt}/_internal/design_decisions_opt.yaml \
-  --output {opt}/ts_v2.json
+  --decisions {opt_v}/_internal/design_decisions_opt.yaml \
+  --output {opt_v}/ts.json
 ```
 模板骨架读 `assets/opt-decisions-template.yaml`（必填项见模板注释；缺了组装器 fail loud）。
 组装成功即回报调用方（围栏由 pipe 跑，不是你跑）。
@@ -67,4 +67,4 @@ python {skills根}/dws-design/scripts/assemble_ts_opt.py \
 
 - decisions 每条与 change_request 字段一一对应（不多不少——多了是夹带，少了是漏接）
 - 新 JOIN 全部带 safety；回刷意向已按决策表填
-- 产出：`_internal/design_decisions_opt.yaml` + `ts_v2.json`（脚本写）
+- 产出：`_internal/design_decisions_opt.yaml` + `ts.json`（脚本写）

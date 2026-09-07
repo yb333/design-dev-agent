@@ -74,35 +74,33 @@ N 系校验适用性：新字段适用的等价物已补（N36→引用门禁 / 
 
 ```
 10_project_deliver/{appid}/{schema}/{资产=I名}/ddlc_design_dev/
-├── archive/         ← ★资产档案（入 git，gitignore 白名单）：
-│                       ts.json/ts.md/etl/{rule}.sql/dq//export//decisions.yaml
-│                       （export=平台制品包：运行配置物化形态+opt patch 链底本——平台侧有
-│                        ts 外的状态，非纯投影；DDL 不入档——tables 是 DDL 唯一源，
-│                        全量 DDL 为 ts 可再生投影。演进史=git 提交历史，提交由人管理）
-├── （new-pipe 平铺产出/交付现场——首优收档后 ts/etl/dq/export 移入档案，ddl 留现场）
-└── opt/             ← 本次优化更新（每次开工重建；目录树开工即建=进度看板）
-    ├── ts_v2.json / ts.md / etl/{rule_code}.sql（与档案同名=规则当前版）
-    ├── ddl/（ALTER 变更单 + create_or_replace_view——I 视图镜像是语法结构决定的真交付物）
-    ├── export/（patched/ + patch_notes.md）/ ut_report_opt.md
-    └── _internal/（baseline_v1.json / baseline_view.md[三条入口路径全有：档案路径由
-                    preprocess_opt 从 ts 渲染简化版] / exemptions.json / change_request.json
-                    / design_decisions_opt.yaml / schema_cache.json / sql_fence_result.json
-                    / type_risk_decision.yaml / join_type_decision.yaml / diagnose/）
+├── archive/         ← ★当前态唯一真身（入 git）：ts.json/ts.md/etl/{rule}.sql/dq//export/
+│                       （平台制品包，patch 链底本）/decisions.yaml/MANIFEST.md（版本索引）；
+│                       DDL 不入档（ts 可再生投影）。当前最新 = archive/ 本体 + MANIFEST。
+├── build/           ← 建造现场（new-pipe 的 ddl/ut_report/_internal，adopt 时归置）；
+│                       存在=自建资产，存量资产（json 入料）无——目录形态自解释来源
+└── opt_{YYYYMM}/    ← 每次优化一个版本目录（留存不删——目录数=优化次数；preprocess_opt
+                        解析版本后自建；产物 ts.json 与档案同名）
+    ├── ts.json / ts.md / etl/{rule_code}.sql / ddl/（ALTER+I视图重建）
+    ├── export/patched/ / ut_report_opt.md
+    └── _internal/（change_request / design_decisions_opt / baseline_view[三条入口路径全有：
+                    档案路径由 preprocess_opt 从 ts 渲染简化版] / exemptions / baseline_v1.json
+                    [入料时] / schema_cache / sql_fence_result / 决策 yaml / diagnose/）
 ```
 
 **回归能力**：确认前档案零改动（工作产物只进 opt/），放弃 = 扔现场；确认后 advance 推进（覆盖），反悔 = git revert。数据库层回归（ALTER 已应用）不承诺，开发库重建。
 
 ## 七、流程详解（{ddlc}=ddlc_design_dev，{arc}={ddlc}/archive，{opt}={ddlc}/opt）
 
-0. **入口**：check_env 探针（跨剧本引用 new-pipe）→ `preprocess --probe` 定位 → 建 opt/ 目录树 → 三段式查基线（`{arc}/ts.json` 有档直接用 / 无档有平铺 new-pipe 产出 → `archive_writer adopt` 首优收档 / 都没有 → baseline_v1.json 入料建档：`assemble_ts_baseline --archive-dir {arc} --internal-dir {opt}/_internal`，provenance 落 ts._baseline）。
-1. **preprocess_opt**（`--mapping/--rs` 契约参数直传，分拣器已退役）：版本锚定 → 备注标记提取 → 校验（冲突/别名悬空/资产一致 I/F 镜像归一）→ change_request.json + baseline_view 补产。
+0. **入口**：check_env 探针（跨剧本引用 new-pipe）→ `preprocess --probe` 定位 → 三段式查基线（opt_{version}/ 由步骤 1 自建）（`{arc}/ts.json` 有档直接用 / 无档有平铺 new-pipe 产出 → `archive_writer adopt` 首优收档 / 都没有 → baseline_v1.json 入料建档：`assemble_ts_baseline --archive-dir {arc} --internal-dir {opt}/_internal`，provenance 落 ts._baseline）。
+1. **preprocess_opt**（`--mapping/--rs` 契约参数直传，分拣器已退役；`--opt-root` 后自建版本目录）：版本锚定 → 备注标记提取 → 校验（冲突/别名悬空/资产一致 I/F 镜像归一）→ 自建 `opt_{version}/` 现场 + change_request.json + baseline_view 补产。
 1b. **precheck_opt**（只检新增子集）：命名规范 / 连库存在性+类型对账（以库为准回填）/ 类型风险决策（人三选，回写 fields『decision』）/ 值域探测 / 新来源 JOIN 键对账。PENDING → question → fill（shared）→ 重跑放行；返源端/改关联键 = 本轮终止。
 2. **designer**（dws-design-opt skill）：读 baseline_view + change_request → 落位/新 JOIN safety/回刷 → design_decisions_opt.yaml → assemble_ts_opt 组装 ts_v2+ts.md（validate 含引用门禁 + 新 JOIN 键类型比对）。
 3. **fence_check**（ts 级恰好等于）→ `gate_summary_opt` 产闸口材料（确定性产出）→ **闸口①'三问**（落位/回刷/建议追加；分场景模板，检出过问题必含"退 BA"一等选项）。
 4. **coder 并行**（dws-coding-opt：底稿加列，落盘 {rule_code}.sql）→ pipe 跑 **sql_fence_check**（AST 等价 + 漏改拦，结果落盘）。
 5. **assemble_ddl_opt**（ALTER 变更单 + I 视图重建 + ts diff 审计）→ check_db → **ut_opt**（围栏时效闸门 → ALTER → 每规则 EXPLAIN ANALYZE 两门槛 → 行数对账 + 双向 MINUS → INSERT → 新列空值检查）。失败分流表见 SKILL；对比 FAIL/行数漂移先跑 diagnose_fanout_opt 产证据再人定根因。
 6. **artifact_patcher**（--source 首选 `{arc}/export/` 档案制品当前态[patch 链底本] → provenance → 问人）。
-7. **闸口②'**（新列合理性/交付清单/资产健康）→ `archive_writer advance`（档案推进，DDL 不入档）→ 人拿交付物执行。
+7. **闸口②'**（新列合理性/交付清单/资产健康）→ `archive_writer advance`（档案推进+MANIFEST 追加，DDL 不入档）→ 人拿交付物执行。
 
 ## 八、组件清单
 

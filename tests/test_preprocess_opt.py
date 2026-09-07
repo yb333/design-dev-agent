@@ -202,9 +202,9 @@ class TestRemarkMarkers:
 class TestMainEndToEnd:
     def test_direct_paths_flow(self, tmp_path, demo_baseline):
         pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
-        out = tmp_path / "internal"
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
-                   "--ts-baseline", str(demo_baseline), "--outdir", str(out)])
+                   "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
+        out = tmp_path / "opt_202608" / "_internal"
         assert rc == 0
         cr = json.loads((out / "change_request.json").read_text(encoding="utf-8"))
         assert cr["version"] == "202608" and cr["change_type"] == "add_field"
@@ -217,23 +217,23 @@ class TestMainEndToEnd:
         pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(demo_baseline),
-                   "--outdir", str(tmp_path / "internal"), "--version", "202609"])
+                   "--opt-root", str(tmp_path), "--version", "202609"])
         assert rc in (0, 1)   # 无 202609 标记行 → 提取为空 + rs warn；不阻断（版本是显式的）
-        cr = json.loads((tmp_path / "internal" / "change_request.json").read_text(encoding="utf-8"))
+        cr = json.loads((tmp_path / "opt_202609" / "_internal" / "change_request.json")
+                        .read_text(encoding="utf-8"))
         assert cr["version"] == "202609" and cr["fields"] == []
 
     def test_blocked_exit_2(self, tmp_path, demo_baseline):
         entity, attr_rows = std_rows(extra_attr=[attr(remark="202608版本新增", tcol="order_id")])
         pkg = make_pkg(tmp_path / "rs_mapping", entity, attr_rows)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
-                   "--ts-baseline", str(demo_baseline),
-                   "--outdir", str(tmp_path / "internal")])
+                   "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
         assert rc == 2
-        assert not (tmp_path / "internal" / "change_request.json").exists()
+        assert not (tmp_path / "opt_202608" / "_internal" / "change_request.json").exists()
 
     def test_missing_input_file_exit_2(self, tmp_path, demo_baseline):
         rc = main(["--mapping", str(tmp_path / "不存在.xlsx"), "--rs", str(tmp_path / "r.md"),
-                   "--ts-baseline", str(demo_baseline), "--outdir", str(tmp_path / "internal")])
+                   "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
         assert rc == 2
 
 

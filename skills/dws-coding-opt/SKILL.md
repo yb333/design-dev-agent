@@ -25,10 +25,10 @@ description: >-
 
 ## 二、单线工作流（四步）
 
-### 1. 拿优化切片（不要直接读 ts_v2.json）
+### 1. 拿优化切片（不要直接读 ts.json）
 ```bash
 python {skills根}/dws-coding/scripts/slice_ts.py \
-  --ts {opt}/ts_v2.json --rule {rule_code} \
+  --ts {opt_v}/ts.json --rule {rule_code} \
   --baseline-sql {arc}/etl/{rule_code}.sql
 ```
 切片含：规则上下文 + `opt.baseline_sql`（底稿）+ `opt.declared_new_fields`（要加的列）
@@ -42,14 +42,14 @@ python {skills根}/dws-coding/scripts/slice_ts.py \
 
 ### 3. 自检（可选习惯，闸门在 pipe）
 ```bash
-python {skills根}/dws-coding/scripts/check_sql.py --sql {SQL文件} --ts {opt}/ts_v2.json --rule {rule_code}
+python {skills根}/dws-coding/scripts/check_sql.py --sql {SQL文件} --ts {opt_v}/ts.json --rule {rule_code}
 ```
 调 check_sql 静态对比；通过与否都落盘——pipe 的 SQL 围栏（sql_fence）是唯一强制闸门，
 越界会带着 `[SQL围栏]` 报错回来找你（恢复本会话改，限 3 轮）。
 
 ### 4. 落盘
-`{opt}/etl/{rule_code}.sql`（**与档案同名**——opt 语境里一个规则一个文件，新 SQL 即该规则当前版）。
-新账旧账不同目录：**{opt}/etl/ 是你的，{arc}/etl/ 是档案（只读勿改）**。
+`{opt_v}/etl/{rule_code}.sql`（**与档案同名**——opt 语境里一个规则一个文件，新 SQL 即该规则当前版）。
+新账旧账不同目录：**{opt_v}/etl/ 是你的，{arc}/etl/ 是档案（只读勿改）**。
 
 ## 会话与标识
 

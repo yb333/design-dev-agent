@@ -327,7 +327,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--mapping", required=True, help="全量 mapping xlsx 路径（调用方指定）")
     ap.add_argument("--rs", required=True, help="RS md 路径（变更记录所在，opt 场景必有）")
     ap.add_argument("--ts-baseline", required=True, help="档案 ts（archive/ts.json，只读）")
-    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--opt-root", required=True,
+                    help="ddlc_design_dev 目录——解析出 version 后自建 {opt-root}/opt_{version}/（目录名版本由脚本确定性生成）")
     ap.add_argument("--version", default="", help="覆盖版本号（默认 RS 变更记录最新优化行 YYYYMM）")
     args = ap.parse_args(argv)
 
@@ -364,14 +365,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[INFO] 识别到 {u['change_type']} 变更（{u['level']} {u['name']}，"
               f"备注动词'{u['verb']}'）——本刀流程未支持，待扩展", file=sys.stderr)
 
+    # 优化现场目录 = {opt-root}/opt_{version}/（版本由脚本确定——文件系统自解释：
+    # 目录数 = 优化次数，每次优化留存不复用）
+    opt_dir = Path(args.opt_root) / f"opt_{version}"
+    out = opt_dir / "_internal"
+    out.mkdir(parents=True, exist_ok=True)
+    for sub in ("etl", "ddl", "export"):
+        (opt_dir / sub).mkdir(exist_ok=True)
+    (out / "diagnose").mkdir(exist_ok=True)
+    print(f"opt_workspace: {opt_dir}")
+
     if errors:
-        out = Path(args.outdir)
-        out.mkdir(parents=True, exist_ok=True)
         print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断，{len(warns)} 项 warn。", file=sys.stderr)
         return 2
-
-    out = Path(args.outdir)
-    out.mkdir(parents=True, exist_ok=True)
     # baseline_view 补产（designer 契约：三段式入口 ①档案②收档 无 json 契约——从 ts 渲染
     # 简化版；③json 入料的完整版已存在则保留）
     view_path = out / "baseline_view.md"
