@@ -4,14 +4,17 @@
 入 git（gitignore 白名单——git 是独立的回溯备份通道，文件系统自解释为主：
 MANIFEST 一眼看懂版本史，opt_{YYYYMM}/ 目录数 = 优化次数）。
 
-两动作（子命令；住 shared——new-pipe 收尾调 adopt、opt-pipe 收口调 advance，双消费者）：
-  adopt   交付建档（new-pipe 闸口②确认后）：从建造工作区 build/ 提取本源件
-          （ts/etl/dq/export + decisions）生成 {build父}/archive/ + MANIFEST 首建；
-          build/ 剩余（ddl/ut_report/_internal）就地定格为建造现场。
-          new-pipe 流程中一切产出在 build/ 下（{deliver}={ddlc}/build——位置不漂移，
-          确认时只发生一次提取定稿）；放弃分支不建档。
-  advance 交付收口（opt 闸口②'确认后）：优化现场（opt_{version}/）推进档案当前态
-          （ts/etl/制品副本/decisions）+ MANIFEST 追加；确认前档案零改动=天然回归点。
+两动作（子命令；住 shared——new-pipe 收尾调 adopt、opt-pipe 收口调 advance，双消费者；
+目录模型 2026-09-07 终态：build=增量现场[新建全部/优化变更，开工清场]、
+archive=资产档案可信基线、archive_tmp=优化进度态全量档案）：
+  adopt   交付建档（new-pipe 闸口②确认后）：从增量现场 build/ 提取本源件
+          （ts/etl/dq/ddl/export + decisions）生成 {build父}/archive/ + MANIFEST 首建
+          （v1 建造）。放弃分支不建档（build 留草稿，重跑覆盖）。
+  advance 交付收口（opt 闸口②'确认后）：**三步全量替换**——
+          mv {arc} {arc}.replaced → mv {arc_tmp} {arc} → rm -rf {arc}.replaced
+          （崩在任意一步均可恢复；替换前清掉 tmp 里混入的过程产物 _internal）+ MANIFEST 追加。
+          优化的中间产物（ts/etl/DDL/制品）在过程中已落位 archive_tmp（进度态随时可用），
+          确认即整体上位——档案要么旧版要么新版，无中间态。
 """
 import argparse
 import json
@@ -43,7 +46,7 @@ def adopt(build: Path) -> Path:
     if not (build / "ts.json").exists():
         raise ValueError(f"{build} 无产出（ts.json 缺）——不能建档")
     archive.mkdir(parents=True)
-    for name in ("ts.json", "ts.md", "etl", "dq", "export"):
+    for name in ("ts.json", "ts.md", "etl", "dq", "ddl", "export"):
         src = build / name
         if src.exists():
             shutil.move(str(src), str(archive / name))
@@ -51,7 +54,7 @@ def adopt(build: Path) -> Path:
     if not decisions.exists():
         raise ValueError(f"收档缺设计决策: {decisions}")
     shutil.copy2(decisions, archive / "decisions.yaml")
-    # 本源件已 mv 走，build/ 剩余（ddl/ut_report/_internal）就地定格为建造现场
+    # 本源件已 mv 走，build/ 剩余（ut_report/_internal 等）留下待下次清场
     ts = json.loads((archive / "ts.json").read_text(encoding="utf-8"))
     f = ts.get("meta", {}).get("target", {}).get("f_table", {})
     (archive / "MANIFEST.md").write_text(
@@ -61,47 +64,48 @@ def adopt(build: Path) -> Path:
     return archive
 
 
-def advance(opt: Path, archive: Path) -> Path:
-    """交付收口：opt_{version}/ 推进档案当前态 + MANIFEST 追加。"""
-    if not (opt / "ts.json").exists():
-        raise ValueError(f"{opt} 无优化产出（ts.json 缺）——不能推进")
+def advance(archive: Path, arc_tmp: Path, build: Path) -> Path:
+    """交付收口：三步全量替换（archive_tmp 整体上位）+ MANIFEST 追加。
+
+    替换前清掉 tmp 里混入的过程产物（_internal——诊断/计划落盘应走 build，
+    此为双保险）；MANIFEST 摘自 build/_internal/change_request.json。
+    """
+    if not (arc_tmp / "ts.json").exists():
+        raise ValueError(f"临时档案缺产物（ts.json）: {arc_tmp}——不能替换")
     if not archive.is_dir():
-        raise ValueError(f"档案不存在: {archive}（先收档或入料建档）")
-    shutil.copy2(opt / "ts.json", archive / "ts.json")
-    if (opt / "ts.md").exists():
-        shutil.copy2(opt / "ts.md", archive / "ts.md")
-    if (opt / "etl").is_dir():
-        (archive / "etl").mkdir(exist_ok=True)
-        for f in (opt / "etl").glob("*.sql"):
-            shutil.copy2(f, archive / "etl" / f.name)
-    patched = opt / "export" / "patched"
-    if patched.is_dir():
-        (archive / "export").mkdir(exist_ok=True)
-        for f in patched.iterdir():
-            if f.is_file():
-                shutil.copy2(f, archive / "export" / f.name)
-    decisions = opt / "_internal" / "design_decisions_opt.yaml"
-    if not decisions.exists():
-        raise ValueError(f"推进缺设计决策: {decisions}")
-    shutil.copy2(decisions, archive / "decisions.yaml")
-    # MANIFEST 追加（确定性摘自 change_request：版本/字段数/变更记录一句话）
-    cr = _read_cr(opt)
-    ver = cr.get("version", opt.name.removeprefix("opt_"))
+        raise ValueError(f"资产档案不存在: {archive}（先建档）")
+    # MANIFEST 追加在替换前（对 tmp 里的 MANIFEST 写——随替换进档案）
+    mf = arc_tmp / "MANIFEST.md"
+    if not mf.exists():
+        raise ValueError(f"临时档案缺 MANIFEST: {mf}")
+    cr = {}
+    try:
+        import json
+        cr = json.loads((build / "_internal" / "change_request.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    ver = str(cr.get("version", "")) or "本次"
     fields = ", ".join(f.get("field", "?") for f in cr.get("fields", [])[:5]) or "-"
     row = cr.get("change_log_summary") or {}
-    desc = row.get("desc", "")
     line = f"| {ver} | 优化：+{len(cr.get('fields', []))} 字段（{fields}）"
-    if desc:
-        line += f"——{desc[:40]}"
+    if row.get("desc"):
+        line += f"——{row['desc'][:40]}"
     line += " |\n"
-    mf = archive / "MANIFEST.md"
-    if not mf.exists():
-        ts = json.loads((archive / "ts.json").read_text(encoding="utf-8"))
-        f2 = ts.get("meta", {}).get("target", {}).get("f_table", {})
-        mf.write_text(_manifest_head(f"{f2.get('schema','')}.{f2.get('table','')}")
-                      + "| 版本 | 内容 |\n|------|------|\n", encoding="utf-8")
     with mf.open("a", encoding="utf-8") as fh:
         fh.write(line)
+    # 清过程产物（诊断/计划等应落 build——双保险防污染档案）
+    shutil.rmtree(arc_tmp / "_internal", ignore_errors=True)
+    # 三步全量替换（每步失败均可恢复）
+    replaced = archive.parent / (archive.name + ".replaced")
+    if replaced.exists():
+        shutil.rmtree(replaced)
+    shutil.move(str(archive), str(replaced))
+    try:
+        shutil.move(str(arc_tmp), str(archive))
+    except Exception:
+        shutil.move(str(replaced), str(archive))  # 回滚旧档
+        raise
+    shutil.rmtree(replaced, ignore_errors=True)
     return archive
 
 
@@ -110,14 +114,15 @@ def main(argv: Optional[list] = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_adopt = sub.add_parser("adopt", help="交付建档：从 build/ 工作区提取本源件生成 archive/（闸口②确认后）")
     p_adopt.add_argument("--build", required=True, help="建造工作区目录（new-pipe 的 {deliver}=ddlc/build）")
-    p_adv = sub.add_parser("advance", help="优化现场推进档案当前态（闸口②'确认后）")
-    p_adv.add_argument("--opt", required=True, help="opt_{version}/ 优化现场目录")
-    p_adv.add_argument("--archive", required=True, help="archive/ 档案目录")
+    p_adv = sub.add_parser("advance", help="全量替换：archive_tmp 整体上位为资产档案（闸口②'确认后）")
+    p_adv.add_argument("--archive", required=True, help="archive/ 资产档案目录")
+    p_adv.add_argument("--tmp", required=True, help="archive_tmp/ 临时档案目录")
+    p_adv.add_argument("--build", required=True, help="build/ 增量现场（MANIFEST 数据源）")
     args = ap.parse_args(argv)
 
     try:
         dest = adopt(Path(args.build)) if args.cmd == "adopt" else \
-            advance(Path(args.opt), Path(args.archive))
+            advance(Path(args.archive), Path(args.tmp), Path(args.build))
     except ValueError as e:
         print(f"ARCHIVE_ERROR: {e}", file=sys.stderr)
         return 2

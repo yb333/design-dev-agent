@@ -25,14 +25,8 @@ permission:
     "*": deny
     "**/ddlc_design_dev/build/etl/*.sql": allow
     "**/ddlc_design_dev/build/dq/*.sql": allow
-    "**/ddlc_design_dev/opt/etl/*.sql": allow
-    "**/ddlc_design_dev/opt/dq/*.sql": allow
   write:
     "*": deny
-    "**/ddlc_design_dev/build/etl/*.sql": allow
-    "**/ddlc_design_dev/build/dq/*.sql": allow
-    "**/ddlc_design_dev/opt/etl/*.sql": allow
-    "**/ddlc_design_dev/opt/dq/*.sql": allow
   # 禁止 MCP 工具
   "mcp_*": deny
   skill:

@@ -66,10 +66,13 @@ def _parse_actual_rows(plan_text: str):
     return None
 
 
-def _analyze_plan(plan_text: str, rule_code: str, ts_path) -> tuple[list[str], str]:
+def _analyze_plan(plan_text: str, rule_code: str, ts_path, diag_dir=None) -> tuple[list[str], str]:
     """分析计划文本跑两门槛：①不下推（Data Node Scan 官方判据）②STREAM 算子数≤50。
-    计划原文（含 actual 值）落盘可回溯。返回 (问题列表[空=通过], 计划文件路径)。"""
-    plan_path = ts_path.parent / "_internal" / "diagnose" / f"plan_{rule_code}.txt"
+    计划原文（含 actual 值）落盘可回溯。返回 (问题列表[空=通过], 计划文件路径)。
+    diag_dir 可指定落盘目录（默认 ts 同级 _internal/diagnose——opt 场景 ts 在 archive_tmp
+    时必须显式指 build 侧，防过程产物污染临时档案）。"""
+    plan_path = (Path(diag_dir) if diag_dir
+                 else ts_path.parent / "_internal" / "diagnose") / f"plan_{rule_code}.txt"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(f"-- EXPLAIN ANALYZE {rule_code}\n\n{plan_text}\n", encoding="utf-8")
     issues = []

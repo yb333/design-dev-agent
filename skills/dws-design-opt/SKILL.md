@@ -50,8 +50,8 @@ intermediate_tables——**这是围栏许可的边界，落错位会连锁漏�
 ```bash
 python {skills根}/dws-design/scripts/assemble_ts_opt.py \
   --ts-baseline {arc}/ts.json \
-  --decisions {opt_v}/_internal/design_decisions_opt.yaml \
-  --output {opt_v}/ts.json
+  --decisions {build}/_internal/design_decisions_opt.yaml \
+  --output {arc_tmp}/ts.json（全量态直产临时档案）
 ```
 模板骨架读 `assets/opt-decisions-template.yaml`（必填项见模板注释；缺了组装器 fail loud）。
 组装成功即回报调用方（围栏由 pipe 跑，不是你跑）。

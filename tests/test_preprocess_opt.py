@@ -199,12 +199,24 @@ class TestRemarkMarkers:
         assert any(d["code"] == "add_field_conflict" for d in diags)
 
 
+def _opt_ready(root, baseline_ts):
+    """造 ddlc 结构：archive（demo ts）+ 旧残留（build/archive_tmp 的上次现场）——验证清场重建。"""
+    import shutil
+    (root / "archive").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(baseline_ts, root / "archive" / "ts.json")
+    (root / "build" / "etl" / "OLD.sql").parent.mkdir(parents=True, exist_ok=True)
+    (root / "build" / "etl" / "OLD.sql").write_text("STALE", encoding="utf-8")
+    (root / "archive_tmp").mkdir(exist_ok=True)
+    (root / "archive_tmp" / "stale.txt").write_text("STALE", encoding="utf-8")
+    return root / "build" / "_internal"
+
+
 class TestMainEndToEnd:
     def test_direct_paths_flow(self, tmp_path, demo_baseline):
         pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
+        out = _opt_ready(tmp_path, demo_baseline)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
-        out = tmp_path / "opt_202608" / "_internal"
         assert rc == 0
         cr = json.loads((out / "change_request.json").read_text(encoding="utf-8"))
         assert cr["version"] == "202608" and cr["change_type"] == "add_field"
@@ -215,21 +227,23 @@ class TestMainEndToEnd:
 
     def test_explicit_version_override(self, tmp_path, demo_baseline):
         pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
+        _opt_ready(tmp_path, demo_baseline)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(demo_baseline),
                    "--opt-root", str(tmp_path), "--version", "202609"])
         assert rc in (0, 1)   # 无 202609 标记行 → 提取为空 + rs warn；不阻断（版本是显式的）
-        cr = json.loads((tmp_path / "opt_202609" / "_internal" / "change_request.json")
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json")
                         .read_text(encoding="utf-8"))
         assert cr["version"] == "202609" and cr["fields"] == []
 
     def test_blocked_exit_2(self, tmp_path, demo_baseline):
         entity, attr_rows = std_rows(extra_attr=[attr(remark="202608版本新增", tcol="order_id")])
         pkg = make_pkg(tmp_path / "rs_mapping", entity, attr_rows)
+        _opt_ready(tmp_path, demo_baseline)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
         assert rc == 2
-        assert not (tmp_path / "opt_202608" / "_internal" / "change_request.json").exists()
+        assert not (tmp_path / "build" / "_internal" / "change_request.json").exists()
 
     def test_missing_input_file_exit_2(self, tmp_path, demo_baseline):
         rc = main(["--mapping", str(tmp_path / "不存在.xlsx"), "--rs", str(tmp_path / "r.md"),
@@ -264,3 +278,18 @@ class TestBaselineViewBackfill:
         assert "baseline_view" in text and "R0002" in text
         assert "ods_order" in text and "3 字段" in text
         assert "语义空位" in text
+
+
+class TestWorkspaceReady:
+    def test_build_cleared_and_tmp_created(self, tmp_path, demo_baseline):
+        """现场就绪：旧 build/archive_tmp 残留清掉；tmp=档案副本起步。"""
+        _opt_ready(tmp_path, demo_baseline)
+        pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(demo_baseline),
+                   "--opt-root", str(tmp_path)])
+        assert rc == 0
+        assert not (tmp_path / "build" / "etl" / "OLD.sql").exists(), "旧残留清场"
+        assert (tmp_path / "build" / "_internal" / "change_request.json").exists()
+        assert (tmp_path / "archive_tmp" / "ts.json").exists(), "临时档案=档案副本"
+        assert not (tmp_path / "archive_tmp" / "stale.txt").exists(), "旧 tmp 清场"

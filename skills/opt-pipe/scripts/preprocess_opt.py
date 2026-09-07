@@ -328,7 +328,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--rs", required=True, help="RS md 路径（变更记录所在，opt 场景必有）")
     ap.add_argument("--ts-baseline", required=True, help="档案 ts（archive/ts.json，只读）")
     ap.add_argument("--opt-root", required=True,
-                    help="ddlc_design_dev 目录——解析出 version 后自建 {opt-root}/opt_{version}/（目录名版本由脚本确定性生成）")
+                    help="ddlc_design_dev 目录——现场就绪（清场重建 build/ + cp archive→archive_tmp/）")
     ap.add_argument("--version", default="", help="覆盖版本号（默认 RS 变更记录最新优化行 YYYYMM）")
     args = ap.parse_args(argv)
 
@@ -365,15 +365,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[INFO] 识别到 {u['change_type']} 变更（{u['level']} {u['name']}，"
               f"备注动词'{u['verb']}'）——本刀流程未支持，待扩展", file=sys.stderr)
 
-    # 优化现场目录 = {opt-root}/opt_{version}/（版本由脚本确定——文件系统自解释：
-    # 目录数 = 优化次数，每次优化留存不复用）
-    opt_dir = Path(args.opt_root) / f"opt_{version}"
-    out = opt_dir / "_internal"
+    # 现场就绪（目录模型 2026-09-07 终态，脚本做确定性动作）：
+    #   build/ = 增量现场（清场重建只留最新——上次的过程产物/交付物残留不混入本次）
+    #   archive_tmp/ = 临时档案（档案副本起步——优化过程维护进度态全量，最终整体替换上位）
+    ddlc = Path(args.opt_root)
+    build = ddlc / "build"
+    arc_tmp = ddlc / "archive_tmp"
+    import shutil
+    shutil.rmtree(build, ignore_errors=True)
+    shutil.rmtree(arc_tmp, ignore_errors=True)
+    out = build / "_internal"
     out.mkdir(parents=True, exist_ok=True)
     for sub in ("etl", "ddl", "export"):
-        (opt_dir / sub).mkdir(exist_ok=True)
+        (build / sub).mkdir(exist_ok=True)
     (out / "diagnose").mkdir(exist_ok=True)
-    print(f"opt_workspace: {opt_dir}")
+    shutil.copytree(ddlc / "archive", arc_tmp)
+    print(f"build: {build}（增量现场，清场重建）")
+    print(f"archive_tmp: {arc_tmp}（临时档案=档案副本起步）")
 
     if errors:
         print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断，{len(warns)} 项 warn。", file=sys.stderr)

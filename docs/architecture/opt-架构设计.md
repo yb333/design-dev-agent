@@ -2,8 +2,8 @@
 status: active
 last_reviewed: 2026-09-04
 depends_on: [../specs/opt/00-总纲与范围.md]
-edition: 实现版 v4（2026-09-04 本质重审重写：三条不变式/围栏四层矩阵/刀与守护分级/
-工具同构矩阵/档案=本源集合——设计过程版见 git 历史与 specs/opt 系列）
+edition: 实现版 v4.1（2026-09-07 目录模型终态：archive 可信基线[DDL 入档]/build 增量现场[新建=特殊
+优化场景，两场景统一]/archive_tmp 临时档案[进度态全量+三步全量替换]——v4 推导框架不变）
 ---
 
 # 优化场景架构与操作手册（opt，实现版）
@@ -72,36 +72,29 @@ N 系校验适用性：新字段适用的等价物已补（N36→引用门禁 / 
 
 **资产标识** = mapping 声明的目标表（铆定 I 视图；只存 F 的资产即 F 名——按人写的算）。
 
-```
 10_project_deliver/{appid}/{schema}/{资产=I名}/ddlc_design_dev/
-├── archive/         ← ★当前态唯一真身（入 git）：ts.json/ts.md/etl/{rule}.sql/dq//export/
-│                       （平台制品包，patch 链底本）/decisions.yaml/MANIFEST.md（版本索引）；
-│                       DDL 不入档（ts 可再生投影）。当前最新 = archive/ 本体 + MANIFEST。
-├── build/           ← 建造工作区 → 定格建造现场（new-pipe 流程中一切产出在此——位置不
-│                       漂移；闸口②确认后 adopt 提取本源件进档案，剩余 ddl/ut_report/_internal
-│                       原地定格。存在=自建资产，存量资产（json 入料）无——形态自解释来源）
-└── opt_{YYYYMM}/    ← 每次优化一个版本目录（留存不删——目录数=优化次数；preprocess_opt
-                        解析版本后自建；产物 ts.json 与档案同名）
-    ├── ts.json / ts.md / etl/{rule_code}.sql / ddl/（ALTER+I视图重建）
-    ├── export/patched/ / ut_report_opt.md
-    └── _internal/（change_request / design_decisions_opt / baseline_view[三条入口路径全有：
-                    档案路径由 preprocess_opt 从 ts 渲染简化版] / exemptions / baseline_v1.json
-                    [入料时] / schema_cache / sql_fence_result / 决策 yaml / diagnose/）
+├── archive/        ← ★资产档案=可信基线（git 合入对象）：ts.json/ts.md/etl/{rule}.sql/dq/
+│                      ddl/（完整可用资产形态——重建环境一目录全搞定，ts 落位同产保一致）/
+│                      export/（制品包，patch 链底本）/decisions.yaml/MANIFEST.md（版本索引）
+├── build/          ← 增量现场（本次变更产出；开工清场只留最新、不进 git——与 new-pipe 的
+│                      {deliver} 同一目录同一语义：新建=特殊优化场景，其增量=全部产出）
+└── archive_tmp/    ← 临时档案（档案副本起步；优化过程 ts/DDL/新 SQL/patched 落位于此=
+                       进度态全量随时可用；最终确认后三步全量替换上位；中止留存=保存进度）
 ```
 
-**回归能力**：确认前档案零改动（工作产物只进 opt/），放弃 = 扔现场；确认后 advance 推进（覆盖），反悔 = git revert。数据库层回归（ALTER 已应用）不承诺，开发库重建。
+**回归能力**：确认前档案零改动（工作产物只进 build/ 与 archive_tmp/），放弃 = tmp 留存保存进度；确认后三步全量替换，反悔 = git revert。数据库层回归（ALTER 已应用）不承诺，开发库重建。
 
 ## 七、流程详解（{ddlc}=ddlc_design_dev，{arc}={ddlc}/archive，{opt}={ddlc}/opt）
 
 0. **入口**：check_env 探针（跨剧本引用 new-pipe）→ `preprocess --probe` 定位 → 三段式查基线（opt_{version}/ 由步骤 1 自建）（`{arc}/ts.json` 有档直接用 / 无档有平铺 new-pipe 产出 → `archive_writer adopt` 首优收档 / 都没有 → baseline_v1.json 入料建档：`assemble_ts_baseline --archive-dir {arc} --internal-dir {opt}/_internal`，provenance 落 ts._baseline）。
-1. **preprocess_opt**（`--mapping/--rs` 契约参数直传，分拣器已退役；`--opt-root` 后自建版本目录）：版本锚定 → 备注标记提取 → 校验（冲突/别名悬空/资产一致 I/F 镜像归一）→ 自建 `opt_{version}/` 现场 + change_request.json + baseline_view 补产。
+1. **preprocess_opt**（`--mapping/--rs` 契约参数直传；`--opt-root`）：**现场就绪**（清场重建 build/ + cp archive→archive_tmp/）→ 版本锚定 → 备注标记提取 → 校验（冲突/别名悬空/资产一致 I/F 镜像归一）→ change_request.json + baseline_view 补产。
 1b. **precheck_opt**（只检新增子集）：命名规范 / 连库存在性+类型对账（以库为准回填）/ 类型风险决策（人三选，回写 fields『decision』）/ 值域探测 / 新来源 JOIN 键对账。PENDING → question → fill（shared）→ 重跑放行；返源端/改关联键 = 本轮终止。
-2. **designer**（dws-design-opt skill）：读 baseline_view + change_request → 落位/新 JOIN safety/回刷 → design_decisions_opt.yaml → assemble_ts_opt 组装 ts_v2+ts.md（validate 含引用门禁 + 新 JOIN 键类型比对）。
+2. **designer**（dws-design-opt skill）：读 baseline_view + change_request → 落位/新 JOIN safety/回刷 → design_decisions_opt.yaml → assemble_ts_opt 组装 **{arc_tmp}/ts.json+ts.md**（全量态直产临时档案；validate 含引用门禁 + 新 JOIN 键类型比对）→ `assemble_ddl --ts {arc_tmp}/ts.json` DDL 同产落位。
 3. **fence_check**（ts 级恰好等于）→ `gate_summary_opt` 产闸口材料（确定性产出）→ **闸口①'三问**（落位/回刷/建议追加；分场景模板，检出过问题必含"退 BA"一等选项）。
-4. **coder 并行**（dws-coding-opt：底稿加列，落盘 {rule_code}.sql）→ pipe 跑 **sql_fence_check**（AST 等价 + 漏改拦，结果落盘）。
+4. **coder 并行**（dws-coding-opt：底稿加列，落盘 build/etl/{rule_code}.sql）→ pipe 跑 **sql_fence_check**（AST 等价 + 漏改拦，结果落盘）→ 围栏过 → 新 SQL cp 进 {arc_tmp}/etl/（进度态全量）。
 5. **assemble_ddl_opt**（ALTER 变更单 + I 视图重建 + ts diff 审计）→ check_db → **ut_opt**（围栏时效闸门 → ALTER → 每规则 EXPLAIN ANALYZE 两门槛 → 行数对账 + 双向 MINUS → INSERT → 新列空值检查）。失败分流表见 SKILL；对比 FAIL/行数漂移先跑 diagnose_fanout_opt 产证据再人定根因。
 6. **artifact_patcher**（--source 首选 `{arc}/export/` 档案制品当前态[patch 链底本] → provenance → 问人）。
-7. **闸口②'**（新列合理性/交付清单/资产健康）→ `archive_writer advance`（档案推进+MANIFEST 追加，DDL 不入档）→ 人拿交付物执行。
+7. **闸口②'**（新列合理性/交付清单/资产健康）→ `archive_writer advance`（**三步全量替换**：archive_tmp 整体上位+MANIFEST 追加）→ 人拿交付物执行。
 
 ## 八、组件清单
 

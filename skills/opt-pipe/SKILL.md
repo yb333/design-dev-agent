@@ -14,18 +14,16 @@ description: >-
 
 ```
 10_project_deliver/{appid}/{schema}/{资产=I名}/ddlc_design_dev/
-├── archive/          ← ★资产档案=当前态唯一真身（入 git；ts.json/ts.md/etl/{rule}.sql/
-│                       ddl//dq//decisions.yaml）。演进史=git 提交历史（每次交付覆盖+commit）。
-│                       确认前零改动=天然回归点（放弃优化=扔掉 opt/ 现场，档案无损）。
-├── export/ ut_report.md   ← new-pipe 交付现场（收档后留原位）
-├── _internal/             ← new-pipe 过程产物（收档后留原位）
-└── opt/             ← 本次优化更新（每次开工重建；gitignore）
-    ├── ts.json / ts.md / etl/（新 SQL {rule_code}.sql）/ ddl/（ALTER 变更单+I视图重建）
-    ├── export/（patch 副本+notes）/ ut_report_opt.md
-    └── _internal/（baseline_v1.json / baseline_view.md / exemptions.json /
-                    change_request.json / design_decisions_opt.yaml / diagnose/）
+├── archive/        ← ★资产档案=可信基线（git 合入对象；DDL 入档——档案是完整可用的资产形态：
+│                      重建环境一个目录全搞定）：ts.json/ts.md/etl/{rule}.sql/dq//ddl//
+│                      export/（制品包）/decisions.yaml/MANIFEST.md（版本索引）
+├── build/          ← 增量现场（本次变更产出：新 SQL/ALTER/view/patched/报告/过程产物；
+│                      开工清场只留最新，不进 git——与 new-pipe 的 {deliver} 同一目录同一语义：
+│                      新建=特殊优化场景，其增量恰好是全部产出）
+└── archive_tmp/    ← 临时档案（仅优化场景：档案副本起步，优化过程维护进度态全量——
+                       ts/DDL/新 SQL/patched 落位于此，随时可用；最终确认后三步全量替换上位；
+                       中止留存=保存进度，开工清场重建）
 ```
-
 - **资产标识 = mapping 声明的目标表**（正常 I 视图名；只存 F 的资产即 F 名——按人写的算）。
 - baseline = **archive/ 本体**（脚本只读消费，无快照拷贝；写坏有 git 兜底）。
 - 档案两动作（archive_writer 子命令）：`adopt` 首优收档 / `advance` 交付收口（闸口②'确认后）。
@@ -36,16 +34,16 @@ description: >-
 ## 步骤 0：环境自检 + 入口与基线
 
 0. 环境探针（一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——exit 1 = 环境/依赖不符 → 停。工具面自检同 new-pipe 步骤0。
-1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`。（优化现场目录 `opt_{version}/` 由步骤 1 解析版本后自建，不预建）
+1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`。（现场就绪——清场重建 build/ + cp archive→archive_tmp/——由步骤 1 的 preprocess_opt 做，不预建）
 3. **查基线（两段式）**：
    - **`{arc}/ts.json` 存在** → 有档（new-pipe 交付即建档；或历次优化 advance 推进过），直接当 baseline。跳到步骤 1。
    - **无档** → 要求 baseline_v1.json（契约参数 `baseline` 传路径——存量资产首次优化必填；没有则停：指引"先由逆向侧产出"）。入料建档：
 
 ```bash
 python PIPE_SCRIPTS/assemble_ts_baseline.py \
-  --baseline {baseline_v1.json} --archive-dir {arc} --internal-dir {opt_v}/_internal
+  --baseline {baseline_v1.json} --archive-dir {arc} --internal-dir {build}/_internal
 ```
-     档案件（ts.json + etl/{rule}.sql）落 `{arc}`，过程件（baseline_view.md + exemptions.json）落 `{opt_v}/_internal`。exit 2 = 契约违约 → 停，报告（契约问题归逆向侧）。
+     档案件（ts.json + etl/{rule}.sql）落 `{arc}`，过程件（baseline_view.md + exemptions.json）落 `{build}/_internal`。exit 2 = 契约违约 → 停，报告（契约问题归逆向侧）。
      （边界：有档又交 baseline json = 线上被外力改过 → **问人确认**后覆盖重入料——重入料会清掉档案攒的 decisions/export patch 历史，明知才做。）
 
 ## 步骤 1：优化输入预处理（契约参数直传）
@@ -62,18 +60,19 @@ python PIPE_SCRIPTS/preprocess_opt.py \
 - 变更提取：mapping 备注列 `{YYYYMM}版本{动词}` 匹配本次版本——属性级"新增"= 新增字段候选、实体级"新增"= 新来源；**其他动词（修改/下线…）识别归类并报告"待扩展"，不是非法输入**；
 - exit 2 = 阻断（冲突/别名悬空/资产不一致[已按 I/F 镜像归一比较]/版本定位失败）→ 报告人改输入，不自动修；
 - exit 1 = 有 warn（漏标漂移/RS 未提及）→ 展示后**直接继续**（信息性告知，随 change_request 汇进闸口①'材料）；
-- 产出 `opt_{version}/` 现场（**目录名版本由脚本确定性生成**）+ `change_request.json`（含 version/变更记录摘要——闸口①'把简述与提取字段并排亮给人扫漏标）。此后 `{opt_v}` = 该目录。
+- **现场就绪**（脚本做确定性动作）：清场重建 `{build}/`（上次残留不混入本次）+ `cp -r {arc} {arc_tmp}`（临时档案=档案副本起步）。
+- 产出 `change_request.json`（含 version/变更记录摘要——闸口①'把简述与提取字段并排亮给人扫漏标）。
 
 ## 步骤 1b：优化预检（只检新增子集，对齐 new-pipe 1b）
 
 ```bash
 python PIPE_SCRIPTS/precheck_opt.py \
-  --change-request {opt_v}/_internal/change_request.json \
+  --change-request {build}/_internal/change_request.json \
   --ts-baseline {arc}/ts.json \
-  --outdir {opt_v}/_internal
+  --outdir {build}/_internal
 ```
 - 检查项：新增字段命名规范 / 源字段连库存在性+类型对账（**以库为准**修正回填）/ 类型风险决策（人三选：转换/不加/返源端）/ 值域探测（整数位溢出退 BA、字符超长披露）/ 新来源 JOIN 键类型对账（三选：转换/改关联键/接受）。存量零预检（围栏+双跑兜底）。
-- stdout `TYPE_RISK_PENDING` / `JOIN_TYPE_RISK_PENDING` → **用 question 收集决策再填**（同 new-pipe 1b：`python SHARED_SCRIPTS/fill_type_risk_decision.py --decision {opt_v}/_internal/type_risk_decision.yaml ...`），填完**重跑本步**放行。批量按类型对归并提问；`返源端`/`改关联键` = **本轮终止**（修 mapping/源端后重跑步骤 1）。
+- stdout `TYPE_RISK_PENDING` / `JOIN_TYPE_RISK_PENDING` → **用 question 收集决策再填**（同 new-pipe 1b：`python SHARED_SCRIPTS/fill_type_risk_decision.py --decision {build}/_internal/type_risk_decision.yaml ...`），填完**重跑本步**放行。批量按类型对归并提问；`返源端`/`改关联键` = **本轮终止**（修 mapping/源端后重跑步骤 1）。
 - 决策回写 change_request（fields『decision』标记 + join_type_decisions）——designer 见标记勿推翻方向。
 - exit 2 = 阻断（命名/存在性/决策未过）→ 按 diff 报告人改输入，不自动修；exit 1 = warn 直接继续。无库降 warn（UT 兜底）。
 
@@ -81,19 +80,25 @@ python PIPE_SCRIPTS/precheck_opt.py \
 
 ```
 Task(subagent_type="dws-designer", description="优化模式设计 {资产}",
-  prompt="优化模式：加载 dws-design-opt skill。读 {opt_v}/_internal/baseline_view.md 与
+  prompt="优化模式：加载 dws-design-opt skill。读 {build}/_internal/baseline_view.md 与
           change_request.json，按 opt-decisions-template 写增量设计决策到
-          {opt_v}/_internal/design_decisions_opt.yaml，然后调 assemble_ts_opt 组装
-          {opt_v}/ts.json。新 JOIN 必须声明 join_safety；发现存量问题走回报不直改。")
+          {build}/_internal/design_decisions_opt.yaml，然后调 assemble_ts_opt 组装
+          {arc_tmp}/ts.json（全量态直产临时档案）。新 JOIN 必须声明 join_safety；
+          发现存量问题走回报不直改。")
+记下 designer 的 task_id（回路用）。ts 落位后**同产 DDL 入临时档案**（ts 的投影，同源同刻保一致）：
+
+```bash
+python SHARED_SCRIPTS/assemble_ddl.py --ts {arc_tmp}/ts.json --outdir {arc_tmp}
 ```
-记下 designer 的 task_id（回路用）。验证 `{opt_v}/ts.json` + `ts.md` 已产出。
+```
+记下 designer 的 task_id（回路用）。验证 `{arc_tmp}/ts.json` + `ts.md` 已产出。
 
 ## 步骤 3：ts 级围栏 → 闸口①'
 
 ```bash
 python PIPE_SCRIPTS/fence_check.py \
-  --ts-baseline {arc}/ts.json --ts-v2 {opt_v}/ts.json \
-  --change-request {opt_v}/_internal/change_request.json
+  --ts-baseline {arc}/ts.json --ts-v2 {arc_tmp}/ts.json \
+  --change-request {build}/_internal/change_request.json
 ```
 - 越界/漏改（exit 1）→ 报错带 `[围栏]` 回 designer（恢复会话）改，限 3 轮；designer 提的
   【建议追加变更】走本闸口确认后更新 change_request 再回步骤 2。
@@ -101,8 +106,8 @@ python PIPE_SCRIPTS/fence_check.py \
 
 ```bash
 python PIPE_SCRIPTS/gate_summary_opt.py \
-  --ts-v2 {opt_v}/ts.json --ts-baseline {arc}/ts.json \
-  --change-request {opt_v}/_internal/change_request.json
+  --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json \
+  --change-request {build}/_internal/change_request.json --output {build}/gate_summary_opt.md
 ```
 - **闸口①'（question，三问）**：① 落位确认（拿 gate_summary_opt 的逐字段落位表："X 挂 R00xx，新 JOIN T，中间表不动/加列——确认？"）
   ② 回刷选择（增量基线才有；RS 已预填则确认）③ 建议追加的变更（如有）。
@@ -115,20 +120,21 @@ python PIPE_SCRIPTS/gate_summary_opt.py \
 
 ```
 Task(subagent_type="dws-coder", description="优化编码 {rule_code}",
-  prompt="优化模式：加载 dws-coding-opt skill。ts_v2 路径 {opt_v}/ts.json，
+  prompt="优化模式：加载 dws-coding-opt skill。ts 路径 {arc_tmp}/ts.json（全量态直产临时档案），
           规则 {rule_code}，baseline SQL 在 {arc}/etl/{rule_code}.sql（档案只读勿改；
           切片加 --baseline-sql 参数）。以底稿加列，老列投影不许动，
-          产出到 {opt_v}/etl/，文件名 {rule_code}.sql（与档案同名=该规则当前版）。")
+          产出到 {build}/etl/，文件名 {rule_code}.sql（与档案同名=该规则当前版）。")
 ```
 每规则记 task_id。全部落盘后**你独立跑 SQL 围栏**（对每条 placed_rule，闸门单点在你）：
 
 ```bash
 python PIPE_SCRIPTS/sql_fence_check.py \
-  --ts-v2 {opt_v}/ts.json --etl-dir {opt_v}/etl \
+  --ts-v2 {arc_tmp}/ts.json --etl-dir {build}/etl \
   --baseline-dir {arc}/etl
 ```
 越界/漏改（exit 1）→ `[SQL围栏]` 报错回该规则 coder（恢复会话）改，限 3 轮。结果落盘
 `_internal/sql_fence_result.json`——**回路铁律已机器化**：ut_opt 开跑校验围栏时效，SQL 晚于围栏结果 = 拒跑（exit 2，先重跑本步）。
+围栏全过 → **新 SQL 入临时档案**（进度态 etl 全量）：`cp {build}/etl/*.sql {arc_tmp}/etl/`（同名覆盖=规则当前版）。
 
 ## 步骤 5：DDL 变更单 → UT（需要数据库）
 
@@ -136,20 +142,20 @@ python PIPE_SCRIPTS/sql_fence_check.py \
 
 ```bash
 python PIPE_SCRIPTS/assemble_ddl_opt.py \
-  --ts-v2 {opt_v}/ts.json --ts-baseline {arc}/ts.json --outdir {opt_v}
+  --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json --outdir {build}
 ```
-产出 `{opt_v}/ddl/alter_table_*.sql`（变更单）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）。全量建表 DDL 不产（ts 的可再生投影）。
+产出 `{build}/ddl/alter_table_*.sql`（变更单）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）。全量建表 DDL 不产（ts 的可再生投影）。
 
 ```bash
-python SHARED_SCRIPTS/check_db.py --ts {opt_v}/ts.json
+python SHARED_SCRIPTS/check_db.py --ts {arc_tmp}/ts.json
 ```
 NO_DB_SOURCE → 跳过 UT（闸口②告知），直接步骤 6。DB_OK：
 
 ```bash
 python PIPE_SCRIPTS/ut_opt.py \
-  --ts {opt_v}/ts.json --etl-dir {opt_v}/etl \
-  --baseline-dir {arc}/etl --ddl-dir {opt_v}/ddl \
-  --report {opt_v}/ut_report_opt.md
+  --ts {arc_tmp}/ts.json --etl-dir {build}/etl \
+  --baseline-dir {arc}/etl --ddl-dir {build}/ddl \
+  --report {build}/ut_report_opt.md
 ```
 - exit 2 = ALTER 变更单缺失（流程顺序错，回本步骤头部补跑 assemble_ddl_opt）；
 - exit 3 = 环境问题（表不存在/无库）→ 归人；
@@ -158,7 +164,7 @@ python PIPE_SCRIPTS/ut_opt.py \
 - 对比 FAIL（老列不一致）/ 新列全 NULL → **先跑定位工具产证据，再 question 人定根因**：
 
 ```bash
-python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {opt_v}/ts.json [--rule {rule}]
+python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {arc_tmp}/ts.json [--rule {rule}]
 ```
   （逐表键唯一性主判据 + join_safety 断言对照，证据落盘 diagnose/fanout_{rule}.md）
 
@@ -175,12 +181,12 @@ python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {opt_v}/ts.json [--rule {rule
 
 ```bash
 python PIPE_SCRIPTS/artifact_patcher.py \
-  --ts-v2 {opt_v}/ts.json --etl-dir {opt_v}/etl \
+  --ts-v2 {arc_tmp}/ts.json --etl-dir {build}/etl \
   --source {原始制品：xlsx 或代码仓规则组目录} \
-  --outdir {opt_v}/export
+  --outdir {build}/export
 ```
 `--source` 定位顺序：**`{arc}/export/`（档案的制品当前态——patch 链底本，首选）** → ts（本次产出）的 `_baseline.provenance`（逆向入料带的原始路径）→ 取不到问人。
-产出：`{opt_v}/ddl/alter_table_*.sql`（变更单）+ view 重建 + `{opt_v}/export/patched/`（更新后制品副本）+ `patch_notes.md`。patch 缺失/定位失败项照 notes 报告，不自动补。
+产出：`{build}/ddl/alter_table_*.sql`（变更单）+ view 重建 + `{build}/export/patched/`（更新后制品副本）+ `patch_notes.md`。patch 缺失/定位失败项照 notes 报告，不自动补。
 
 ## 步骤 7：闸口②' → 档案推进
 
@@ -189,14 +195,17 @@ python PIPE_SCRIPTS/artifact_patcher.py \
 + 资产健康提示 = baseline warnings 摘要一屏）。确认后**交付收口**（推进档案）：
 
 ```bash
-python SHARED_SCRIPTS/archive_writer.py advance --opt {opt_v} --archive {arc}
+python SHARED_SCRIPTS/archive_writer.py advance --archive {arc} --tmp {arc_tmp} --build {build}
 ```
-ts.json/ts.md/新 SQL（同名覆盖）/export/patched 制品副本/decisions_opt → 档案当前态推进 + MANIFEST 追加本次记录（DDL 不入档）；`{opt_v}/` 版本目录留存（目录数=优化次数），交付物在其中人取用。（制品包链路：patched 半成品 → 跑 backfill_rule_codes[术加：脚本内模拟网页取编码/依赖/可选上传]产完整包 → 导入；**完整包建议存回 {arc}/export/ 覆盖同名**——档案升级为完整态，下次 patch 底本更准。LTS 同款脚本待建。）git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
+**三步全量替换**（tmp 整体上位——档案要么旧版要么新版无中间态；替换前自动清 tmp 混入的过程产物 + MANIFEST 追加；崩在任意一步均可恢复）。
+`{build}/` 增量现场留存（交付物人取用：ALTER/view 变更单、patched 副本、报告）——下次开工清场。
+（制品包链路：patched 半成品 → 跑 backfill_rule_codes[术加：脚本内模拟网页取编码/依赖/可选上传]产完整包 → 导入；**完整包建议存回 {arc}/export/ 覆盖同名**——档案升级为完整态，下次 patch 底本更准。LTS 同款脚本待建。）
+git 提交由人按自己的节奏做（流程不内嵌 git 操作）。流程结束，人拿交付物去执行（推生产不自主）。
 
 ## 硬性规则
 
 - **围栏永远在 UT 之前**；产物变了（SQL/ts）→ 对应层围栏重跑 + UT 重跑
-- **档案（{arc}/）确认前零改动**——所有工作产物只进 {opt_v}/；回归=放弃 {opt_v}/ 现场（版本目录留存不删）
+- **档案（{arc}/）确认前零改动**——工作产物落 {build}/（增量）与 {arc_tmp}/（进度态全量）；回归=放弃（tmp 留存保存进度，开工清场重建）
 - 不调任何逆向侧脚本；不验真输入（缺 json/档案不存在 = 停 + 指引）
 - 记所有 agent task_id；失败恢复旧会话不新开；每规则限 3 轮
 - 未经用户确认不结束流程；全程中文

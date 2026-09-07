@@ -80,7 +80,9 @@ def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
             continue
         plan_text = "\n".join(str(v) for row in (r_plan.rows or []) for v in row.values())
         pre_rows = _parse_actual_rows(plan_text)
-        plan_issues, plan_file = _analyze_plan(plan_text, rule_code, ts_path)
+        plan_issues, plan_file = _analyze_plan(
+            plan_text, rule_code, ts_path,
+            diag_dir=etl_dir.parent / "_internal" / "diagnose")
         if pre_rows == 0:
             plan_issues = [f"⚠ 0 行——源表有数据却查不出：疑似关联/过滤条件全灭，核对关联条件"] + plan_issues
         # 行数对账（多重集守护，2026-09-04）：MINUS 是集合语义看不见重复数——新 JOIN 发散
