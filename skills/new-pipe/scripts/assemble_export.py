@@ -386,7 +386,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
                 raise ValueError(f"跨集群依赖路径段不全（集群|appId|itemName|任务组|任务名）: 上游 {task}，"
                                  f"got cluster={remote_cluster!r} app={app!r} project={project!r} group={group!r}")
             path = "|".join(segs)
-            dep_task_id = resolve_dep_task_id(remote_cluster, project, group, lts_cfg)
+            dep_task_id = resolve_dep_task_id(remote_cluster, project, group, task, lts_cfg)
             params = _tskdep_params(main_job, job_name, task, job_name,
                                     remote_cluster, project, group,
                                     cross_src=cluster_local, cross_dep_name=remote_cluster,

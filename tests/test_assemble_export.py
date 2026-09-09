@@ -653,7 +653,7 @@ class TestGenerateScheduleExcel:
             "job": "PJob_REMOTE_J",
         }]
         cfg = json.loads(json.dumps(sample_config))
-        cfg["lts"]["dep_task_ids"] = {"edw_pro|ITEM_X|GRP_X": "20224946"}
+        cfg["lts"]["dep_task_ids"] = {"edw_pro|ITEM_X|GRP_X|TASK_REMOTE_T": "20224946"}
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(ts, cfg, out)
         wb = openpyxl.load_workbook(out)

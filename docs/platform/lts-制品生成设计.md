@@ -110,7 +110,7 @@ jobRunParams 内嵌 JSON 固定 4 键：
 - job名称 = name = depJobName = **远端真实 job 名**（upstream 新字段 `job`，输入直传——⚠️ 字段规则表说 name=路径末段，但样本②实测跨集群 name=远端 job 名，以样本为准）
 - depTaskName = 路径末段（upstream.task）
 - 路径首段 = upstream 新字段 `cluster`（生产集群名，输入直出）
-- **depTaskId 三级取值**：config `dep_task_ids` 显式表（人填，优先——语义=人工确认）→ 未过期缓存（30 天）→ 内网脚本现场查询（契约见 §七 `dep_id_resolver`，用户已实测可用）；全落空 fail-loud 指名三元组+可手跑命令。（三元组固定=稳定映射——照片规律原文）
+- **depTaskId 三级取值**：config `dep_task_ids` 显式表（人填，优先——语义=人工确认）→ 未过期缓存（30 天）→ 内网脚本现场查询（契约见 §七 `dep_id_resolver`，用户已实测可用）；全落空 fail-loud 指名键+可手跑命令。**键=四元组「集群|itemName|任务组|任务名」**（用户定调：id 一任务一 id；照片"三元组固定"只到组级，任务名才唯一——组级粒度时同组多键只是多查几次，无正确性问题）。
 - productionClusterName = 路径首段；crossClusterDepName = 路径首段；crossClusterDepKey = `{集群}|{pro\}` `[?]`字面量待样本核对；crossClusterSrcName = 本集群名字面量
 
 **job参数 JSON 全量键**（两种场景共骨架，按上述差异填充）：
@@ -248,12 +248,12 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
     "group_code": "",            // 业务组编码值（暂空待回填，参数恒定义）
     "datasource_type": "gauss200"
   },
-  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 显式表（人工兜底/优先源）：键="集群|itemName|taskGroupName"（三元组固定）
-    "示例集群|示例调度组|示例任务组": "20224946"
+  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 显式表（人工兜底/优先源）：键="集群|itemName|任务组|任务名"（四元组，一任务一 id）
+    "示例集群|示例调度组|示例任务组|示例任务名": "20224946"
   },
-  "dep_id_resolver": {           // 内网查 id 脚本融合契约（用户已实测可用；脚本名/调用方式/产出格式由我们定义）
-    "script": "",                // 脚本路径（内网；空=功能关闭，仅走显式表）
-    "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group}",
+  "dep_id_resolver": {           // 内网查 id 脚本融合契约（用户已实测可用；脚本名/调用方式/产出格式由我们定义，对接要求见 lts-deptaskid脚本契约.md）
+    "script": "",                // 脚本绝对路径（内网；文件名固定 query_deptaskid.py；空=功能关闭，仅走显式表）
+    "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group} --task {task}",
     "output": "json",            // json | text
     "field": "depTaskId",        // output=json 时的取值字段
     "timeout_sec": 30,

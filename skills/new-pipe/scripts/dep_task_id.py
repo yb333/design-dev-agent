@@ -25,9 +25,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 from config_paths import dep_id_cache_path
 
 
-def dep_id_key(cluster: str, item_name: str, task_group: str) -> str:
-    """缓存/显式表的键：集群|itemName|taskGroupName（与平台固定规律一致）。"""
-    return f"{cluster}|{item_name}|{task_group}"
+def dep_id_key(cluster: str, item_name: str, task_group: str, task: str) -> str:
+    """缓存/显式表的键：集群|itemName|taskGroupName|任务名。
+
+    depTaskId 粒度=被依赖任务一对一（用户定调 2026-09-09；照片"三元组固定标识任务组"
+    只到组级）——键必须含任务名才唯一。若平台真实粒度是组级，同组不同任务各自建键，
+    只是多查几次，无正确性问题。
+    """
+    return f"{cluster}|{item_name}|{task_group}|{task}"
 
 
 def _read_cache(cache_file: Path) -> dict:
@@ -94,17 +99,18 @@ def _parse_output(stdout: str, resolver: dict):
     return ""
 
 
-def resolve_dep_task_id(cluster: str, item_name: str, task_group: str, lts_config: dict,
-                        cache_path: str = "", diagnose_dir: str = "",
+def resolve_dep_task_id(cluster: str, item_name: str, task_group: str, task: str,
+                        lts_config: dict, cache_path: str = "", diagnose_dir: str = "",
                         now=None, cmd_runner=None) -> str:
     """三级取值，返回 depTaskId；全落空 raise RuntimeError。
 
     lts_config: platform_config 的 lts 块（含 dep_task_ids / dep_id_resolver）。
+    task: 被依赖的远端任务名（depTaskName）——id 一任务一 id，键必含。
     cache_path/diagnose_dir: 测试与调用方可注入；cache 缺省 config 目录。
     now/cmd_runner: 测试注入（时钟 / 假脚本执行器）。
     """
-    key = dep_id_key(cluster, item_name, task_group)
-    fail_hint = (f"depTaskId 未取得（显式表无、缓存无/过期）。三元组={key}。\n"
+    key = dep_id_key(cluster, item_name, task_group, task)
+    fail_hint = (f"depTaskId 未取得（显式表无、缓存无/过期）。键={key}。\n"
                  f"处理：platform_config lts.dep_task_ids 手工补填 "
                  f"(键 \"{key}\")，或配置 lts.dep_id_resolver 接内网查询脚本。")
 
@@ -141,7 +147,8 @@ def resolve_dep_task_id(cluster: str, item_name: str, task_group: str, lts_confi
            .replace("{script}", script)
            .replace("{cluster}", cluster)
            .replace("{item}", item_name)
-           .replace("{group}", task_group))
+           .replace("{group}", task_group)
+           .replace("{task}", task))
     if "{script}" not in template:
         # 模板里没有 {script} 占位 = 配置不完整，按 fail-loud 处理不猜
         raise RuntimeError(f"dep_id_resolver.cmd_template 缺 {{script}} 占位符：{template!r}")
@@ -153,7 +160,7 @@ def resolve_dep_task_id(cluster: str, item_name: str, task_group: str, lts_confi
         code, out, err = runner(cmd, timeout)
     except subprocess.TimeoutExpired:
         _dump_diagnose(diagnose_dir, key, diag + ["result: TIMEOUT"])
-        raise RuntimeError(f"depTaskId 查询脚本超时（>{timeout}s）。三元组={key}。\n"
+        raise RuntimeError(f"depTaskId 查询脚本超时（>{timeout}s）。键={key}。\n"
                            f"可手工执行查得后填入 lts.dep_task_ids：\n  {cmd}")
     diag += [f"returncode: {code}", f"stdout: {out}", f"stderr: {err}"]
 
@@ -163,7 +170,7 @@ def resolve_dep_task_id(cluster: str, item_name: str, task_group: str, lts_confi
     _dump_diagnose(diagnose_dir, key, diag + [f"parsed: {dep_id or '(空)'}"])
 
     if not dep_id:
-        raise RuntimeError(f"depTaskId 查询脚本未返回有效 id（returncode={code}）。三元组={key}。\n"
+        raise RuntimeError(f"depTaskId 查询脚本未返回有效 id（returncode={code}）。键={key}。\n"
                            f"可手工执行查得后填入 lts.dep_task_ids：\n  {cmd}")
 
     cache[key] = {"id": dep_id, "cached_at": now.isoformat()}
