@@ -673,6 +673,18 @@ class TestGenerateScheduleExcel:
         assert params["itemName"] == "ITEM_X"
         assert params["taskGroupName"] == "GRP_X"
 
+    def test_tskdep_cross_cluster_missing_id_fails(self, sample_ts, sample_config, tmp_path):
+        """跨集群依赖 config 显式表无 id 键 → fail-loud 报四段键+补填指引。"""
+        ts = json.loads(json.dumps(sample_ts))
+        ts["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
+            "table": "ods_remote", "task": "TASK_REMOTE_T", "env": "edw_pro",
+            "app": "com.huawei.x", "project": "ITEM_X", "group": "GRP_X",
+            "job": "PJob_REMOTE_J",
+        }]
+        out = tmp_path / "schedule_tasks.xlsx"
+        with pytest.raises(ValueError, match=r"edw_pro\|ITEM_X\|GRP_X\|TASK_REMOTE_T"):
+            generate_schedule_excel(ts, sample_config, out)
+
     def test_tskdep_cross_cluster_missing_job_fails(self, sample_ts, sample_config, tmp_path):
         """跨集群缺 job 字段 → fail-loud（输入直传不推导）。"""
         ts = json.loads(json.dumps(sample_ts))

@@ -119,7 +119,7 @@ jobRunParams 内嵌 JSON 固定 4 键：
 - job名称 = name = depJobName = **远端真实 job 名**（upstream 新字段 `job`，输入直传——⚠️ 字段规则表说 name=路径末段，但样本②实测跨集群 name=远端 job 名，以样本为准）
 - depTaskName = 路径末段（upstream.task）
 - 路径首段 = upstream 新字段 `cluster`（生产集群名，输入直出）
-- **depTaskId 三级取值（第一级=唯一常态）**：config `dep_task_ids` 显式表（人上平台查得后填——当前唯一常态来源）→ 未过期缓存（30 天，仅脚本启用后才会写入）→ 脚本查询（**预留口子默认关闭**，契约见 [lts-deptaskid脚本契约.md](./lts-deptaskid脚本契约.md)，平台开放接口后启用）；落空 fail-loud 带补填指引。**键=四段「集群|调度组|任务组|任务名」**（id 与 task 同粒度——用户终稿更正；upstream.job 只是引用名不参与定位）。
+- **depTaskId = config 直读**：`lts.dep_task_ids` 显式表（人上平台查得后填——唯一来源），键=四段「集群|调度组|任务组|任务名」（id 与 task 同粒度——用户终稿更正；upstream.job 只是引用名不参与定位）；缺键 fail-loud 带补填指引。外部接口获取为预留（对接规范见 [lts-deptaskid脚本契约.md](./lts-deptaskid脚本契约.md)，平台开放接口后按契约接回）。
 - productionClusterName = 路径首段；crossClusterDepName = 路径首段；crossClusterDepKey = `{集群}|{pro\}` `[?]`字面量待样本核对；crossClusterSrcName = 本集群名字面量
 
 **job参数 JSON 全量键**（两种场景共骨架，按上述差异填充）：
@@ -257,16 +257,8 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
     "group_code": "",            // 业务组编码值（暂空待回填，参数恒定义）
     "datasource_type": "gauss200"
   },
-  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 显式表——★当前唯一常态来源（id 与 task 同粒度）：键="集群|调度组|任务组|任务名"（四段）。人上平台查得后填/平台导全量表灌入，id 稳定填一次永续复用
+  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 表——exporter 直读（id 与 task 同粒度）：键="集群|调度组|任务组|任务名"（四段）。人上平台查得后填/平台导全量表灌入，id 稳定填一次永续复用；缺键 fail-loud 指引补填
     "示例集群|示例调度组|示例任务组|示例任务名": "20224946"
-  },
-  "dep_id_resolver": {           // 内网查 id 脚本融合契约（用户已实测可用；脚本名/调用方式/产出格式由我们定义，对接要求见 lts-deptaskid脚本契约.md）
-    "script": "",                // 脚本绝对路径（内网；文件名固定 query_deptaskid.py；空=功能关闭，仅走显式表）
-    "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group} --task {task}",
-    "output": "json",            // json | text
-    "field": "depTaskId",        // output=json 时的取值字段
-    "timeout_sec": 30,
-    "cache_ttl_days": 30
   }
 }
 ```
@@ -274,9 +266,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 - `appid` 不进 config：V_APPID 值 = schema_apps 反查的字面量（一租户一 appid，跨环境相同——用户定调）。
 - **三套环境集群名（用户口径）**：生产 `fin_pro` / 测试 `BIZBAETA` / 开发 `LTSBETA`——我们建的任务都在这三个集群下；上游依赖大部分在**别的集群**（各 upstream 声明自带集群信息，RS 输入提供来源任务信息——用户确认）。
 - 租户标识（V_RENTER_*）：用户定调"某些任务的设计，暂不管"→ consts 不配则不生成。
-- **depTaskId 三级取值**：显式表 > 缓存 > 内网脚本（`dep_id_resolver` 配了才启用；`script` 空=关闭）。缓存文件在 config 目录（`config_paths.dep_id_cache_path()`，跨资产复用不进 git），结构 `{三元组键: {id, cached_at}}`，超 TTL 重查。
-- **缓存写权限语义（2026-09-09 权限分析）**：缓存写在管线脚本进程里（bash `python *` 放行链），不经过 agent 的 write 工具，不受 `ddlc_design_dev/**` 允许目录约束；OS 层 config 目录是用户自有可写目录。写失败（config 目录只读/被环境拦截）静默降级为每次现查、不炸导出，tmp+rename 原子写防并行会话竞态。待内网验证：魔改版 bash 若有允许目录沙箱，跨目录写是否被拦（拦了也不影响产出，只损失缓存加速）。
-- **工程保障**：脚本调用记录（命令+原始输出+解析结果）落盘 `_internal/diagnose/`（过程可视）；超时/报错按"查询失败"降级 fail-loud（提示语带可手跑的完整命令）；单测注入假脚本命令，不碰内网。
+- **depTaskId = 显式表直读**（无缓存/无脚本——独立取值脚本与缓存机制随脚本路搁置一并移除，2026-09-09 内联定稿；外部接口预留见 §4.2）。
 - 空 `vars` 值 = 待回填项，生成器遇空 fail-loud 提示配置缺失（不猜）。
 - 不做环境维度、不做 `--env`（一期面向生产；二期预留见 §二.9）。
 
@@ -286,7 +276,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
    - `job` 字段（**跨集群 tskdep 与虚拟依赖共用**，语义=依赖引用名直传）：跨集群 tskdep=依赖引用名（name/depJobName/本行 job名称 三处同值，多为 job 名——仅显示/引用，id 是 task 级不参与定位）；虚拟依赖=抽取 job 完整名（含编号/版本戳/后缀，本行命名+jobRunParams 自指）。跨集群 tskdep 与虚拟依赖时必填，缺失 fail-loud（**跨集群⇒job 必填**是输入校验）。同集群（task 级）不读该字段。
    - `cluster`（跨集群 tskdep 时必填）：上游所在生产集群名（5 段路径首段）——**RS 输入已提供来源任务相关信息（用户确认）**，优先复用 upstream 现有字段（`env` 预计即集群名，实现时以真实 RS 样本核对映射）；designer upstream_added 显式支持。
 2. **V_FLAG 声明通道**：复用 `lts_params`（designer 在 decisions.schedule.lts_params 加 `{lts_var: V_FLAG, etl_param: P_FLAG, desc: ...}` + 值）——机制已有，SKILL 指引补"何时加 V_FLAG"一句。
-3. **depTaskId 不进输入**：三级取值（显式表→缓存→内网脚本，§七）。
+3. **depTaskId 不进输入**：config 显式表直读（§七）。
 4. 其余设计侧不动（任务骨架/路径原料/cron 均已具备）。
 
 ## 九、出厂校验（生成后即跑，硬阻断）
@@ -294,7 +284,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 1. **${V_XXX} 引用闭合**：所有 job 格子（job参数/执行路径/变量设置/SQL）里出现的 `${V_XXX}` 引用 ⊆ 该任务 taskParams 定义集。（照片 §2 铁律）
 2. **父节点引用闭合**：每行 `job的父节点名称` ∈ {start, EMPTY} ∪ 本任务已生成 job 名集合。
 3. **tskdep 路径完整**：4 段或 5 段各段非空（appid/project/group/task 任一缺失 → 指名报哪条上游；跨集群另要求 `cluster`+`job` 字段非空）。
-4. **depTaskId 取得**：跨集群 tskdep 经三级取值（显式表→缓存→脚本[默认关闭]）仍未获得 → 阻断，报错带四段键+人工补填指引。
+4. **depTaskId 取得**：跨集群 tskdep 的四段键在 config `dep_task_ids` 无命中 → 阻断，报错带键+人工补填指引。
 5. **P_ 变量供给链**：术加 RULE 行运行条件引用的 `${P_XXX}` ⊆ 主 job params 数组供给的 P_ 变量集 ⊆ taskParams 定义集。（堵现状 P_FLAG 静默断供）
 
 ## 十、模拟案例（实现后的验收基准）
@@ -328,7 +318,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 3. tskdep JSON 完整键集（样本带 `...` 尾，可能有未见字段）+ `applyName` 取值（同集群样本①空、跨集群样本是业务域英文名且输入侧无来源——默认留空核对）；`crossClusterDepKey` 精确字面量（`{集群}|{pro\}` 待核）。
 4. tskdep 行工程属性列（超时/重试/间隔）是否需要填。
 5. 主 job 8 键 JSON 的键序/多余键以真实导出对齐一次。
-6. **dep_id_resolver（预留口子，默认关闭）**：内网脚本仅开发环境可跑而制品对齐生产、生产 id 拿不到——2026-09-09 定调搁置；契约文档保留（[lts-deptaskid脚本契约.md](./lts-deptaskid脚本契约.md)），平台开放接口后配 script 即启用。上游任务测试环境约六成存在——二期重写表需带"无对应任务"的显式处理。另：内网联调时顺手核对管线调用命令形态（python/python3）与权限白名单 `python *` 的匹配。
+6. **depTaskId 外部接口（预留）**：内网脚本仅开发环境可跑而制品对齐生产、生产 id 拿不到——2026-09-09 搁置并内联为 config 直读；对接规范保留纯文档（[lts-deptaskid脚本契约.md](./lts-deptaskid脚本契约.md)），平台开放接口后按契约接回（实现参考 git 历史曾有的三级取值+缓存）。上游任务测试环境约六成存在——二期重写表需带"无对应任务"的显式处理。另：内网联调时顺手核对管线调用命令形态（python/python3）与权限白名单 `python *` 的匹配。
 7. init 任务一次性表示：照抄现状（周期任务+cron），平台侧有意见再调。
 
 ## 十二、实施切分（对齐后按此落地）

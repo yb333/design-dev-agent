@@ -286,6 +286,22 @@ def _collect_v_refs(text: str) -> set:
     return set(_V_REF.findall(text or ""))
 
 
+def _resolve_dep_task_id(lts_cfg: dict, cluster: str, item_name: str, task_group: str, task: str) -> str:
+    """跨集群 tskdep 的 depTaskId：config lts.dep_task_ids 直读（id 与 task 同粒度，
+    键四段「集群|调度组|任务组|任务名」）。id 由人上平台查得后填入（稳定，填一次
+    永续复用）；无键 fail-loud 带补填指引。外部接口获取为预留口子（对接要求见
+    docs/platform/lts-deptaskid脚本契约.md——平台开放接口后按契约接入）。
+    """
+    key = f"{cluster}|{item_name}|{task_group}|{task}"
+    dep_id = str((lts_cfg.get("dep_task_ids") or {}).get(key, "") or "").strip()
+    if not dep_id:
+        raise ValueError(
+            f"depTaskId 未取得（config 显式表无此键）。键=\"{key}\"。\n"
+            f"处理：上平台查得该任务的 id 后，填入 platform_config "
+            f"lts.dep_task_ids（键 \"{key}\"，值=id）——id 稳定，填一次永续复用。")
+    return dep_id
+
+
 def validate_lts_package(ts: dict, lts_params: list, job_rows: list, param_names: set) -> list:
     """出厂校验（设计文档 §九五条中可在行集上静态判定的三条；路径/depTaskId 在构建期 fail-loud）。
 
@@ -334,8 +350,6 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
       dq/init  = 主job + tskdep×N
     一期面向生产（§二.9）：本集群名/depTaskId 走 consts/三级取值，不做 --env。
     """
-    from dep_task_id import resolve_dep_task_id
-
     meta = ts.get("meta", {})
     sched = meta.get("schedule", {})
     tasks_sched = sched.get("tasks", {})
@@ -370,8 +384,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         ① 同集群·task 级（资产内 I→F）：4 段路径，job名称/name=depTaskName=任务名，depJobName="end"，无 id。
         ② 跨集群依赖（f 上游湖表依赖，主场景）：5 段路径（末段=任务名），
           job名称/name/depJobName=upstream.job（输入直传的依赖引用名，多为 job 名——仅显示/引用，
-          不参与 id 定位）；depTaskId 与 task 同粒度，键四段「集群|调度组|任务组|任务名」查 config 显式表
-          （当前唯一常态来源，人上平台查得后填；脚本 resolver 为预留口子默认关闭——生产 id 内网拿不到）。
+          不参与 id 定位）；depTaskId 与 task 同粒度，键四段「集群|调度组|任务组|任务名」
+          直读 config 显式表（唯一来源：人上平台查得后填，缺键 fail-loud 带补填指引；
+          外部接口获取为预留——平台开放后按 docs/platform/lts-deptaskid脚本契约.md 接入）。
         跨集群缺 cluster/job → fail-loud（输入直传不推导）；同集群 job 字段不读（task 级）。
         """
         p, g = _resolve_path(task_info)
@@ -393,7 +408,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
                 raise ValueError(f"跨集群依赖路径段不全（集群|appId|itemName|任务组|任务名）: 上游 {task}，"
                                  f"got cluster={remote_cluster!r} app={app!r} project={project!r} group={group!r}")
             path = "|".join(segs)
-            dep_task_id = resolve_dep_task_id(remote_cluster, project, group, task, lts_cfg)
+            dep_task_id = _resolve_dep_task_id(lts_cfg, remote_cluster, project, group, task)
             params = _tskdep_params(main_job, job_name, task, job_name,
                                     remote_cluster, project, group,
                                     cross_src=cluster_local, cross_dep_name=remote_cluster,
