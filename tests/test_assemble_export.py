@@ -653,7 +653,7 @@ class TestGenerateScheduleExcel:
             "job": "PJob_REMOTE_J",
         }]
         cfg = json.loads(json.dumps(sample_config))
-        cfg["lts"]["dep_task_ids"] = {"edw_pro|ITEM_X|GRP_X|TASK_REMOTE_T|PJob_REMOTE_J": "20224946"}
+        cfg["lts"]["dep_task_ids"] = {"edw_pro|ITEM_X|GRP_X|TASK_REMOTE_T": "20224946"}
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(ts, cfg, out)
         wb = openpyxl.load_workbook(out)
@@ -664,7 +664,7 @@ class TestGenerateScheduleExcel:
         assert r[header.index("执行路径信息")] == "edw_pro|com.huawei.x|ITEM_X|GRP_X|TASK_REMOTE_T"
         params = json.loads(r[header.index("job参数")])
         assert params["depTaskId"] == "20224946"
-        assert params["name"] == params["depJobName"] == "PJob_REMOTE_J"  # 跨集群=被依赖 job 名（用户定调 job 级）
+        assert params["name"] == params["depJobName"] == "PJob_REMOTE_J"  # 跨集群=upstream.job 引用名（id 是 task 级，键不含 job）
         assert params["depTaskName"] == "TASK_REMOTE_T"
         assert params["productionClusterName"] == "edw_pro"   # 被依赖任务的集群
         assert params["crossClusterDepName"] == "edw_pro"

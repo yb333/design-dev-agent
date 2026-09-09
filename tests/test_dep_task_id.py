@@ -9,10 +9,10 @@ import pytest
 from dep_task_id import resolve_dep_task_id, dep_id_key
 
 LTS = {
-    "dep_task_ids": {"edw_pro|ITEM|GRP|TASK|JOB": "11111"},
+    "dep_task_ids": {"edw_pro|ITEM|GRP|TASK": "11111"},
     "dep_id_resolver": {
         "script": "q.py",
-        "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group} --task {task} --job {job}",
+        "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group} --task {task}",
         "output": "json",
         "field": "depTaskId",
         "timeout_sec": 5,
@@ -34,13 +34,13 @@ def fake_runner(stdout='{"depTaskId": "22222"}', code=0):
 
 
 def test_key_format():
-    assert dep_id_key("edw_pro", "ITEM", "GRP", "TASK", "JOB") == "edw_pro|ITEM|GRP|TASK|JOB"
+    assert dep_id_key("edw_pro", "ITEM", "GRP", "TASK") == "edw_pro|ITEM|GRP|TASK"
 
 
 def test_explicit_table_wins(tmp_path):
     """显式表优先（人工确认源），不调脚本不读缓存。"""
     runner = fake_runner()
-    assert resolve_dep_task_id("edw_pro", "ITEM", "GRP", "TASK", "JOB", LTS,
+    assert resolve_dep_task_id("edw_pro", "ITEM", "GRP", "TASK", LTS,
                                cache_path=str(tmp_path / "c.json"),
                                cmd_runner=runner) == "11111"
     assert runner.calls == []
@@ -50,18 +50,18 @@ def test_script_query_then_cache_hit(tmp_path):
     """未命中显式表 → 调脚本 → 写缓存；二次直接命中缓存不再调脚本。"""
     runner = fake_runner()
     cp = tmp_path / "c.json"
-    id1 = resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(cp), cmd_runner=runner)
+    id1 = resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(cp), cmd_runner=runner)
     assert id1 == "22222"
     assert len(runner.calls) == 1
     assert "{script}" not in runner.calls[0][0]        # 模板占位符已替换
-    assert "--cluster c1" in runner.calls[0][0] and "--task t" in runner.calls[0][0] and "--job j" in runner.calls[0][0]
+    assert "--cluster c1" in runner.calls[0][0] and "--task t" in runner.calls[0][0]
 
-    id2 = resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(cp), cmd_runner=runner)
+    id2 = resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(cp), cmd_runner=runner)
     assert id2 == "22222"
     assert len(runner.calls) == 1                      # 缓存命中
     cache = json.loads(cp.read_text(encoding="utf-8"))
-    assert cache["c1|i|g|t|j"]["id"] == "22222"
-    assert cache["c1|i|g|t|j"]["cached_at"]
+    assert cache["c1|i|g|t"]["id"] == "22222"
+    assert cache["c1|i|g|t"]["cached_at"]
 
 
 def test_cache_expired_requeries(tmp_path):
@@ -69,8 +69,8 @@ def test_cache_expired_requeries(tmp_path):
     runner = fake_runner()
     cp = tmp_path / "c.json"
     old = (datetime.now() - timedelta(days=31)).isoformat()
-    cp.write_text(json.dumps({"c1|i|g|t|j": {"id": "99999", "cached_at": old}}), encoding="utf-8")
-    got = resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(cp), cmd_runner=runner)
+    cp.write_text(json.dumps({"c1|i|g|t": {"id": "99999", "cached_at": old}}), encoding="utf-8")
+    got = resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(cp), cmd_runner=runner)
     assert got == "22222"
     assert len(runner.calls) == 1
 
@@ -80,22 +80,22 @@ def test_cache_fresh_no_query(tmp_path):
     runner = fake_runner()
     cp = tmp_path / "c.json"
     fresh = (datetime.now() - timedelta(days=1)).isoformat()
-    cp.write_text(json.dumps({"c1|i|g|t|j": {"id": "99999", "cached_at": fresh}}), encoding="utf-8")
-    got = resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(cp), cmd_runner=runner)
+    cp.write_text(json.dumps({"c1|i|g|t": {"id": "99999", "cached_at": fresh}}), encoding="utf-8")
+    got = resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(cp), cmd_runner=runner)
     assert got == "99999"
     assert runner.calls == []
 
 
 def test_all_miss_fail_loud(tmp_path):
-    """无显式表、无缓存、未配脚本 → fail-loud 带三元组与补填指引。"""
-    with pytest.raises(RuntimeError, match="c1\\|i\\|g\\|t\\|j"):
-        resolve_dep_task_id("c1", "i", "g", "t", "j", {}, cache_path=str(tmp_path / "c.json"))
+    """无显式表、无缓存、未配脚本（当前常态）→ fail-loud 指引人工填 config。"""
+    with pytest.raises(RuntimeError, match="dep_task_ids.*填一次永续复用"):
+        resolve_dep_task_id("c1", "i", "g", "t", {}, cache_path=str(tmp_path / "c.json"))
 
 
 def test_script_failure_fail_loud(tmp_path):
     runner = fake_runner(code=1)
     with pytest.raises(RuntimeError, match="未返回有效 id"):
-        resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(tmp_path / "c.json"),
+        resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(tmp_path / "c.json"),
                             cmd_runner=runner)
 
 
@@ -105,7 +105,7 @@ def test_text_output_mode(tmp_path):
     lts["dep_id_resolver"]["output"] = "text"
     lts["dep_id_resolver"].pop("field", None)
     runner = fake_runner(stdout="\n  33333  \nother\n")
-    got = resolve_dep_task_id("c1", "i", "g", "t", "j", lts, cache_path=str(tmp_path / "c.json"),
+    got = resolve_dep_task_id("c1", "i", "g", "t", lts, cache_path=str(tmp_path / "c.json"),
                               cmd_runner=runner)
     assert got == "33333"
 
@@ -116,7 +116,7 @@ def test_timeout_fail_loud_with_manual_cmd(tmp_path):
         raise subprocess.TimeoutExpired(cmd, timeout)
 
     with pytest.raises(RuntimeError, match="python q.py --cluster c1"):
-        resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(tmp_path / "c.json"),
+        resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(tmp_path / "c.json"),
                             cmd_runner=slow)
 
 
@@ -126,7 +126,7 @@ def test_cache_write_failure_degrades(tmp_path):
     ro.mkdir()
     ro.chmod(0o555)
     try:
-        got = resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(ro / "c.json"),
+        got = resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(ro / "c.json"),
                                   cmd_runner=fake_runner())
         assert got == "22222"
     finally:
@@ -170,10 +170,10 @@ def test_project_layout_cache_follows_skill_root(tmp_path, monkeypatch):
 def test_diagnose_dump(tmp_path):
     """过程可视：脚本调用记录（命令+输出+解析结果）落盘 diagnose 目录。"""
     d = tmp_path / "diag"
-    resolve_dep_task_id("c1", "i", "g", "t", "j", LTS, cache_path=str(tmp_path / "c.json"),
+    resolve_dep_task_id("c1", "i", "g", "t", LTS, cache_path=str(tmp_path / "c.json"),
                         diagnose_dir=str(d), cmd_runner=fake_runner())
     files = list(d.glob("dep_id_query_*.txt"))
     assert len(files) == 1
     content = files[0].read_text(encoding="utf-8")
-    assert "cmd: python q.py --cluster c1 --item i --group g --task t --job j" in content
+    assert "cmd: python q.py --cluster c1 --item i --group g --task t" in content
     assert "parsed: 22222" in content

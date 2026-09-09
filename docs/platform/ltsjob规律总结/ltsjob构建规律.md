@@ -77,9 +77,9 @@ tskdep = 挂在父节点 job（普通 job 或组节点）上，声明对上游�
 
 | 字段 | 规则 |
 |---|---|
-| depTaskId | **仅跨集群有**；**job 级 id**（被依赖 job 的平台 id，2026-09-09 用户定调——原文"三元组固定标识任务组"归纳不足，job 名才唯一定位依赖对象） |
+| depTaskId | **仅跨集群有**；**task 级 id**（被依赖任务的平台 id——2026-09-09 用户终稿；原文"三元组固定"缺任务名段，键=「集群|调度组|任务组|任务名」四段） |
 | depJobName | 同集群=`"end"`；跨集群=远端真实 job 名 |
-| name / depTaskName | 同集群：name=depTaskName=路径末段（任务名）。跨集群：仅 depTaskName=路径末段（被依赖 job 所属的任务名），name=depJobName=**被依赖的 job 名**（输入提供，≠路径末段）——跨集群依赖挂远端任务下的具体 job（2026-09-09 用户定调：id 是 job 级） |
+| name / depTaskName | 同集群：name=depTaskName=路径末段（任务名）。跨集群：仅 depTaskName=路径末段（任务名），name=depJobName=**依赖引用名**（输入提供，多为 job 名，≠路径末段——仅显示/引用；id 是 task 级，定位靠四段键不含此名） |
 | crossClusterDepKey | 跨集群=`{远端集群}|{pro\}` `[?]` |
 | crossClusterDepName | 跨集群=路径首段（生产集群名） |
 | crossClusterSrcName | 跨集群=`fin_pro`（源侧集群） |
