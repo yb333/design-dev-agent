@@ -366,7 +366,12 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     # --- job 行 builders（闭包取 consts/appid/lts_cfg） ---
 
     def _tskdep_row(task_info, main_job_name, upstream):
-        """同集群 4 段 / 跨集群 5 段。跨集群缺 cluster/job → fail-loud（输入直传不推导）。"""
+        """两个常态场景（2026-09-09 与用户定调收敛；③同集群job级/④跨集群task级无案例不支持）：
+        ① 同集群·task 级（资产内 I→F）：4 段路径，job名称/name=depTaskName=任务名，depJobName="end"，无 id。
+        ② 跨集群·job 级（f 上游湖表依赖，主场景）：5 段路径（末段=任务名），
+          job名称/name/depJobName=被依赖 job 名（upstream.job 输入直传），depTaskId 按 job 查。
+        跨集群缺 cluster/job → fail-loud（输入直传不推导）；同集群 job 字段不读（task 级）。
+        """
         p, g = _resolve_path(task_info)
         task = upstream.get("task", "")
         project = upstream.get("project", "") or p
@@ -386,7 +391,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
                 raise ValueError(f"跨集群依赖路径段不全（集群|appId|itemName|任务组|任务名）: 上游 {task}，"
                                  f"got cluster={remote_cluster!r} app={app!r} project={project!r} group={group!r}")
             path = "|".join(segs)
-            dep_task_id = resolve_dep_task_id(remote_cluster, project, group, task, lts_cfg)
+            dep_task_id = resolve_dep_task_id(remote_cluster, project, group, task, job_name, lts_cfg)
             params = _tskdep_params(main_job, job_name, task, job_name,
                                     remote_cluster, project, group,
                                     cross_src=cluster_local, cross_dep_name=remote_cluster,

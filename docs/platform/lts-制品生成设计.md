@@ -93,7 +93,11 @@ jobRunParams 内嵌 JSON 固定 4 键：
 
 ### 4.2 tskdep（每条上游一行）
 
-> **场景权重定调（用户）**：我们的依赖**大部分跨集群**（上游任务在别的团队的集群），5 段形态是主场景；同集群主要是资产内依赖（如 view→f）。
+> **场景矩阵（2026-09-09 与用户定调收敛——只支持两个常态格）**：
+> - ① **同集群 · task 级**（资产内 I→F）：4 段路径，job名称/name=depTaskName=任务名，depJobName=`"end"`（挂任务结束节点），无 id。
+> - ② **跨集群 · job 级**（f 上游湖表依赖，主场景）：5 段路径（末段=任务名），job名称/name/depJobName=**被依赖 job 名**（upstream.job 输入直传），depTaskId 按 job 查（键五段）。
+> - ③ 同集群·job 级 / ④ 跨集群·task 级：**无真实案例，不支持**（2026-09-09 用户拍板"先不管，遇到再说"）；**跨集群⇒job 必填**是输入校验（缺 job fail-loud）。
+> - 依赖大部分跨集群（上游在别的团队的集群），②是主场景；同集群主要是资产内依赖（如 view→f）走①。
 
 | 列 | 值 |
 |---|---|
@@ -110,7 +114,7 @@ jobRunParams 内嵌 JSON 固定 4 键：
 - job名称 = name = depJobName = **远端真实 job 名**（upstream 新字段 `job`，输入直传——⚠️ 字段规则表说 name=路径末段，但样本②实测跨集群 name=远端 job 名，以样本为准）
 - depTaskName = 路径末段（upstream.task）
 - 路径首段 = upstream 新字段 `cluster`（生产集群名，输入直出）
-- **depTaskId 三级取值**：config `dep_task_ids` 显式表（人填，优先——语义=人工确认）→ 未过期缓存（30 天）→ 内网脚本现场查询（契约见 §七 `dep_id_resolver`，用户已实测可用）；全落空 fail-loud 指名键+可手跑命令。**键=四元组「集群|itemName|任务组|任务名」**（用户定调：id 一任务一 id；照片"三元组固定"只到组级，任务名才唯一——组级粒度时同组多键只是多查几次，无正确性问题）。
+- **depTaskId 三级取值**：config `dep_task_ids` 显式表（人填，优先——语义=人工确认）→ 未过期缓存（30 天）→ 内网脚本现场查询（对接要求见 [lts-deptaskid脚本契约.md](./lts-deptaskid脚本契约.md)，五参数）；全落空 fail-loud 指名键+可手跑命令。**键=五段「集群|调度组|任务组|任务名|job名」**（用户定调：id 是 job 的 id——路径定位任务，job 名唯一定位依赖对象）。
 - productionClusterName = 路径首段；crossClusterDepName = 路径首段；crossClusterDepKey = `{集群}|{pro\}` `[?]`字面量待样本核对；crossClusterSrcName = 本集群名字面量
 
 **job参数 JSON 全量键**（两种场景共骨架，按上述差异填充）：
@@ -248,12 +252,12 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
     "group_code": "",            // 业务组编码值（暂空待回填，参数恒定义）
     "datasource_type": "gauss200"
   },
-  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 显式表（人工兜底/优先源）：键="集群|itemName|任务组|任务名"（四元组，一任务一 id）
-    "示例集群|示例调度组|示例任务组|示例任务名": "20224946"
+  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 显式表（人工兜底/优先源）：键="集群|调度组|任务组|任务名|job名"（五段，id 是 job 的 id）
+    "示例集群|示例调度组|示例任务组|示例任务名|示例job名": "20224946"
   },
   "dep_id_resolver": {           // 内网查 id 脚本融合契约（用户已实测可用；脚本名/调用方式/产出格式由我们定义，对接要求见 lts-deptaskid脚本契约.md）
     "script": "",                // 脚本绝对路径（内网；文件名固定 query_deptaskid.py；空=功能关闭，仅走显式表）
-    "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group} --task {task}",
+    "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group} --task {task} --job {job}",
     "output": "json",            // json | text
     "field": "depTaskId",        // output=json 时的取值字段
     "timeout_sec": 30,
@@ -274,7 +278,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 ## 八、设计侧改动（assemble_ts / RS 声明）
 
 1. **upstream 项增强**（RS @upstream / designer upstream_added 同步）：
-   - `job` 字段（**跨集群 tskdep 与虚拟依赖共用**，语义统一为"远端 job 名直传"）：跨集群 tskdep=远端真实 job 名；虚拟依赖=抽取 job 完整名（含编号/版本戳/后缀）。跨集群 tskdep 与虚拟依赖时必填，缺失 fail-loud。
+   - `job` 字段（**跨集群 tskdep 与虚拟依赖共用**，语义=依赖关联的 job 名直传）：跨集群 tskdep=**被依赖的远端 job 名**（name/depJobName/本行 job名称 三处同值，id 按 job 查）；虚拟依赖=抽取 job 完整名（含编号/版本戳/后缀，本行命名+jobRunParams 自指）。跨集群 tskdep 与虚拟依赖时必填，缺失 fail-loud（**跨集群⇒job 必填**是输入校验）。同集群（task 级）不读该字段。
    - `cluster`（跨集群 tskdep 时必填）：上游所在生产集群名（5 段路径首段）——**RS 输入已提供来源任务相关信息（用户确认）**，优先复用 upstream 现有字段（`env` 预计即集群名，实现时以真实 RS 样本核对映射）；designer upstream_added 显式支持。
 2. **V_FLAG 声明通道**：复用 `lts_params`（designer 在 decisions.schedule.lts_params 加 `{lts_var: V_FLAG, etl_param: P_FLAG, desc: ...}` + 值）——机制已有，SKILL 指引补"何时加 V_FLAG"一句。
 3. **depTaskId 不进输入**：三级取值（显式表→缓存→内网脚本，§七）。
