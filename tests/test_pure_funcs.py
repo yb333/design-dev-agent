@@ -741,6 +741,16 @@ class TestViewCommentSyntax:
         assert "COMMENT ON VIEW dws.dwb_x_i" in out
         assert "COMMENT ON TABLE" not in out
 
+    def test_generate_i_view_source_table_alias(self):
+        """源表带别名、列引用带前缀（团队 SQL 规范：SELECT t.xxx FROM sss t）。"""
+        from assemble_ddl import generate_i_view
+        fields = [{"target_field": "id", "field_comment": "ID"},
+                  {"target_field": "amt", "field_comment": "金额"}]
+        out = generate_i_view("dws", "dwb_x_f", "宽表", fields, {})
+        assert "FROM dws.dwb_x_f t;" in out, "源表带别名 t"
+        assert "    t.id," in out and "    t.amt" in out, "列引用带别名前缀"
+        assert "    id," not in out and "    amt" not in out, "不留裸列"
+
     def test_create_table_keeps_comment_on_table(self):
         from assemble_ddl import generate_create_table
         rule = {"target_table": "dws.dwb_x_f", "rule_name": "宽表"}

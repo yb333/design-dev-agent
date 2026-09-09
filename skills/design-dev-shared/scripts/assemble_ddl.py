@@ -222,11 +222,13 @@ def generate_i_view(schema: str, f_table: str, cn: str, fields: list, audit_fiel
     lines.append(f"CREATE OR REPLACE VIEW {schema}.{i_table} AS")
     lines.append(f"SELECT")
 
+    # 源表带别名（团队 SQL 规范：列引用带别名前缀，与 ETL SQL 风格一致）
+    alias = "t"
     for i, (fname, _) in enumerate(all_fields):
         comma = "," if i < len(all_fields) - 1 else ""
-        lines.append(f"    {fname}{comma}")
+        lines.append(f"    {alias}.{fname}{comma}")
 
-    lines.append(f"FROM {schema}.{f_table};")
+    lines.append(f"FROM {schema}.{f_table} {alias};")
     lines.append("")
     lines.append(f"COMMENT ON VIEW {schema}.{i_table} IS '{cn}（视图）';")
     lines.append("")
