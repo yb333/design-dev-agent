@@ -27,7 +27,8 @@ skills/
 ├── dws-dq/              # DQ 检查 SQL 生成 skill（coder agent 的 DQ 任务用，薄——仅 SKILL.md 定契约，工具复用 dws-coding 的 slice_ts --dq / check_sql）
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
 │   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py(决策填值器已下沉 shared)
-                         #   dispatch_plan.py assemble_export.py ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
+                         #   dispatch_plan.py assemble_export.py(含LTS制品生成,2026-09重写) ut_precheck.py ut_execute.py ut_diagnose.py(类型诊断,ut_execute用)
+                         #   dep_task_id.py(跨集群depTaskId三级取值:显式表>缓存>内网脚本,assemble_export用)
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py

@@ -22,6 +22,7 @@ from assemble_export import (
     generate_execution_excel,
     generate_schedule_excel,
     validate_code_closure,
+    validate_lts_package,
     AUDIT_FIELDS,
     RULE_COLUMNS,
     GROUPVARS_COLUMNS,
@@ -30,6 +31,7 @@ from assemble_export import (
     JOBS_COLUMNS,
     TASKPARAMS_COLUMNS,
     _RULE_COL,
+    _JOBS_COL,
     _cfg,
     _split_schema_table,
 )
@@ -115,6 +117,8 @@ def sample_config():
         "lts": {
             "project_name": "SRP_DAILY",
             "task_group": "GROUP_SPRD",
+            "consts": {"cluster_local": "fin_pro", "db_name": "GAUSS_EDW_BFD_BNIL",
+                       "group_code": "URG_123456"},
         },
     }
 
@@ -514,110 +518,268 @@ class TestGenerateExecutionExcel:
 
 
 class TestGenerateScheduleExcel:
+    """LTS 制品生成（设计依据 docs/platform/lts-制品生成设计.md §四/§五/§十）。"""
+
+    def _rows(self, wb, sheet):
+        ws = wb[sheet]
+        header = [c.value for c in ws[1]]
+        return header, list(ws.iter_rows(min_row=2, values_only=True))
+
+    def _jobs_by(self, wb, **kw):
+        """按列值筛 jobs 行，返回 (header, rows)。"""
+        header, rows = self._rows(wb, "jobs")
+        for col, val in kw.items():
+            idx = header.index(col)
+            rows = [r for r in rows if r[idx] == val]
+        return header, rows
 
     def test_3_sheets(self, sample_ts, sample_config, tmp_path):
-        """schedule Excel 有 3 个 sheet"""
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(sample_ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
         assert wb.sheetnames == ["tasks", "jobs", "taskParams"]
 
     def test_tasks_has_f_view_dq(self, sample_ts, sample_config, tmp_path):
-        """tasks 有 F 表 + 视图 + DQ 三行"""
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(sample_ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
-        ws = wb["tasks"]
-        assert ws.max_row == 4  # 表头 + F + 视图 + DQ
+        assert wb["tasks"].max_row == 4  # 表头 + F + 视图 + DQ
 
-    def test_jobs_has_upstream_deps(self, sample_ts, sample_config, tmp_path):
-        """jobs 含 upstream 依赖行 + view/dq 执行行和依赖"""
+    def test_jobs_composition_full_asset(self, sample_ts, sample_config, tmp_path):
+        """案例 A（全量资产）：f=主job+2tskdep；view=占位job+tskdep；dq=主job+tskdep。"""
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(sample_ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
-        ws = wb["jobs"]
-        # 表头 + F执行 + 2依赖 + view执行 + view依赖 + dq执行 + dq依赖 = 8
-        assert ws.max_row == 8
+        header, rows = self._rows(wb, "jobs")
+        types = [r[header.index("job类型")] for r in rows]
+        assert types.count("url") == 2        # f/dq 主 job（全量无 GETDATE）
+        assert types.count("database") == 1   # view 占位 job
+        assert types.count("tskdep") == 4
 
-    def test_cross_project_upstream_uses_dep_project(self, sample_ts, sample_config, tmp_path):
-        """跨项目上游依赖：jobs 依赖行的 project/group 用 upstream 项的（不是当前表的）。"""
-        # 构造一个跨项目的上游依赖
-        ts_cross = json.loads(json.dumps(sample_ts))  # 深拷贝
-        ts_cross["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
-            "table": "ods_cross_f",
-            "task": "task_ods_cross_f",
-            "dep_type": "宽依赖",
-            "project": "CROSS_PROJECT",  # 上游在别的项目
-            "group": "CROSS_GROUP",
-            "app": "CROSS_APP",
+    def test_main_job_shape(self, sample_ts, sample_config, tmp_path):
+        """主 job：异步 POST 8 键正确形态 + ${V_URL} + 工程属性 + 通用三列。"""
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(sample_ts, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, 任务名称="task_dwb_xxx_f", job类型="url")
+        assert len(rows) == 1
+        r = rows[0]
+        assert r[header.index("job名称")] == "Pjob_dwb_xxx_f"
+        assert r[header.index("job的父节点名称")] == "start"  # 无 init=全量
+        assert r[header.index("执行路径信息")] == "${V_URL}"
+        assert r[header.index("job调用方法")] == "POST"
+        assert r[header.index("job超时时间")] == "60"
+        assert r[header.index("job重试次数")] == "3"
+        assert r[header.index("job重试间隔")] == "60"
+        assert r[header.index("job是否跳过清场")] == "跟随任务"
+        assert r[header.index("job超时处理")] == "一次邮件提醒"
+        assert r[header.index("job执行节点")] == "任一节点"
+        assert r[header.index("job异常处理方式")] == "fail"
+        assert r[header.index("参数空值校验")] == "否"
+        params = json.loads(r[header.index("job参数")])
+        assert params["headers"] == "Content-Type:application/json;charset=UTF-8"
+        assert params["invokingMode"] == "异步"
+        assert params["appToken"] == "${V_TOKEN}"
+        assert params["appId"] == "${V_APPID}"
+        assert params["authenticationType"] == "手动输入"
+        assert params["timeout"] == 10
+        run_params = json.loads(params["jobRunParams"])
+        assert run_params["batch_number"] == "${V_BATCH_NUMBER}"
+        assert run_params["group_code"] == "${V_GROUP_CODE}"
+        assert run_params["sch_from"] == "${V_SCH_FROM}"
+        assert {"name": "P_CYCLE_ID", "type": "constants", "value": "${V_CYCLE_ID}"} in run_params["params"]
+
+    def test_appid_not_literal_in_job_params(self, sample_ts, sample_config, tmp_path):
+        """主 job appId 是 ${V_APPID} 变量引用；appid 字面量只在 taskParams 的 V_APPID 行。"""
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(sample_ts, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, 任务名称="task_dwb_xxx_f", job类型="url")
+        assert "APP001" not in rows[0][header.index("job参数")]
+        ws = wb["taskParams"]
+        vals = {r[3]: r[4] for r in ws.iter_rows(min_row=2, values_only=True)
+                if r[2] == "task_dwb_xxx_f"}
+        assert vals["V_APPID"] == "APP001"
+
+    def test_view_placeholder_database_job(self, sample_ts, sample_config, tmp_path):
+        """视图任务 job = database 占位查询（SELECT 1 WHERE 1=2）+ 6 键 + 10/3/1。"""
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(sample_ts, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, 任务名称="task_dwb_xxx_i", job类型="database")
+        assert len(rows) == 1
+        r = rows[0]
+        assert r[header.index("job名称")] == "Pjob_dwb_xxx_i"
+        assert r[header.index("执行路径信息")] == "SELECT 1 FROM dws.dwb_xxx_i WHERE 1 = 2"
+        assert r[header.index("job调用方法")] == "sql"
+        assert r[header.index("job超时时间")] == "10"
+        assert r[header.index("job是否跳过清场")] == "否"
+        params = json.loads(r[header.index("job参数")])
+        assert params["schema"] == "dws"
+        assert params["dbsource"] == "[*].[GAUSS_EDW_BFD_BNIL]"
+        assert params["datasourceTypeName"] == "gauss200"
+
+    def test_tskdep_row_current_task_and_path(self, sample_ts, sample_config, tmp_path):
+        """tskdep 行归属恒=当前任务；4 段路径=appid|项目组|任务组|任务名（上游缺省回退当前任务）。"""
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(sample_ts, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, job类型="tskdep", job名称="task_ods_order_f")
+        assert len(rows) == 1
+        r = rows[0]
+        assert r[header.index("项目名称")] == "SRP_DAILY"     # 当前任务（非上游）
+        assert r[header.index("任务组名称")] == "GROUP_SPRD"
+        assert r[header.index("任务名称")] == "task_dwb_xxx_f"
+        assert r[header.index("job的父节点名称")] == "Pjob_dwb_xxx_f"
+        assert r[header.index("执行路径信息")] == "APP001|SRP_DAILY|GROUP_SPRD|task_ods_order_f"
+        params = json.loads(r[header.index("job参数")])
+        assert params["type"] == "tskdep"
+        assert params["mainJobName"] == "Pjob_dwb_xxx_f"
+        assert params["depJobName"] == "end"                  # 同集群恒 end
+        assert params["name"] == params["depTaskName"] == "task_ods_order_f"
+        assert params["productionClusterName"] == "fin_pro"
+        assert params["crossClusterDepKey"] == ""
+        assert params["crossClusterSrcName"] == ""            # 同集群照样本①留空
+        assert params["itemName"] == "SRP_DAILY"
+        assert params["taskGroupName"] == "GROUP_SPRD"
+        assert "depTaskId" not in params                      # 仅跨集群有
+
+    def test_tskdep_cross_cluster(self, sample_ts, sample_config, tmp_path):
+        """跨集群 5 段：cluster/job 输入直传；depTaskId 显式表命中；name=depJobName=远端 job 名。"""
+        ts = json.loads(json.dumps(sample_ts))
+        ts["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
+            "table": "ods_remote", "task": "TASK_REMOTE_T", "dep_type": "宽依赖",
+            "env": "edw_pro", "app": "com.huawei.x", "project": "ITEM_X", "group": "GRP_X",
+            "job": "PJob_REMOTE_J",
+        }]
+        cfg = json.loads(json.dumps(sample_config))
+        cfg["lts"]["dep_task_ids"] = {"edw_pro|ITEM_X|GRP_X": "20224946"}
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(ts, cfg, out)
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, job类型="tskdep", job名称="PJob_REMOTE_J")
+        assert len(rows) == 1
+        r = rows[0]
+        assert r[header.index("项目名称")] == "SRP_DAILY"     # 行归属仍是当前任务
+        assert r[header.index("执行路径信息")] == "edw_pro|com.huawei.x|ITEM_X|GRP_X|TASK_REMOTE_T"
+        params = json.loads(r[header.index("job参数")])
+        assert params["depTaskId"] == "20224946"
+        assert params["name"] == params["depJobName"] == "PJob_REMOTE_J"  # 跨集群≠路径末段（样本②）
+        assert params["depTaskName"] == "TASK_REMOTE_T"
+        assert params["productionClusterName"] == "edw_pro"   # 被依赖任务的集群
+        assert params["crossClusterDepName"] == "edw_pro"
+        assert params["crossClusterSrcName"] == "fin_pro"     # 本集群
+        assert params["crossClusterDepKey"] == "edw|pro|"
+        assert params["itemName"] == "ITEM_X"
+        assert params["taskGroupName"] == "GRP_X"
+
+    def test_tskdep_cross_cluster_missing_job_fails(self, sample_ts, sample_config, tmp_path):
+        """跨集群缺 job 字段 → fail-loud（输入直传不推导）。"""
+        ts = json.loads(json.dumps(sample_ts))
+        ts["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
+            "table": "ods_remote", "task": "TASK_REMOTE_T", "env": "edw_pro",
+            "app": "com.huawei.x", "project": "ITEM_X", "group": "GRP_X",
         }]
         out = tmp_path / "schedule_tasks.xlsx"
-        generate_schedule_excel(ts_cross, sample_config, out)
-        wb = openpyxl.load_workbook(out)
-        ws = wb["jobs"]
-        # 找依赖行（job类型=tskdep 的那行）
-        header = [c.value for c in ws[1]]
-        proj_idx = header.index("项目名称")
-        group_idx = header.index("任务组名称")
-        jobtype_idx = header.index("job类型")
-        dep_rows = [row for row in ws.iter_rows(min_row=2, values_only=True)
-                    if row[jobtype_idx] == "tskdep"]
-        assert dep_rows, "应有依赖行"
-        # 依赖行的 project/group 应是上游的 CROSS_PROJECT/CROSS_GROUP
-        assert dep_rows[0][proj_idx] == "CROSS_PROJECT", \
-            f"跨项目依赖应用上游project，实际={dep_rows[0][proj_idx]}"
-        assert dep_rows[0][group_idx] == "CROSS_GROUP", \
-            f"跨项目依赖应用上游group，实际={dep_rows[0][group_idx]}"
+        with pytest.raises(ValueError, match="缺远端 job 名"):
+            generate_schedule_excel(ts, sample_config, out)
 
-    def test_same_project_upstream_fallback_current(self, sample_ts, sample_config, tmp_path):
-        """同项目上游（upstream 没配 project/group）→ 用当前表的（兜底）。"""
-        # sample_ts 的 upstream 没有 project/group → 应兜底用当前表的 SRP_DAILY/GROUP_SPRD
+    def test_virtual_dep_row(self, sample_ts, sample_config, tmp_path):
+        """虚拟依赖：${V_URL_virtualDependence} + 全空 8 键 + query 形态 jobName 自指。"""
+        ts = json.loads(json.dumps(sample_ts))
+        ts["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
+            "table": "src_t", "task": "TASK_SRC", "dep_type": "虚拟依赖",
+            "app": "com.huawei.so.master_data", "project": "IT_产品", "group": "IT_组",
+            "job": "PJob_EXT_2500_F_T_D2S",
+        }]
         out = tmp_path / "schedule_tasks.xlsx"
-        generate_schedule_excel(sample_ts, sample_config, out)
+        generate_schedule_excel(ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
-        ws = wb["jobs"]
-        header = [c.value for c in ws[1]]
-        proj_idx = header.index("项目名称")
-        jobtype_idx = header.index("job类型")
-        dep_rows = [row for row in ws.iter_rows(min_row=2, values_only=True)
-                    if row[jobtype_idx] == "tskdep"]
-        assert dep_rows
-        # 兜底用当前表的配置
-        assert dep_rows[0][proj_idx] == "SRP_DAILY", \
-            f"同项目应兜底用当前表project，实际={dep_rows[0][proj_idx]}"
+        header, rows = self._jobs_by(wb, job类型="url", job名称="PJob_EXT_2500_F_T_D2S")
+        assert len(rows) == 1
+        r = rows[0]
+        assert r[header.index("执行路径信息")] == "${V_URL_virtualDependence}"
+        assert r[header.index("job的父节点名称")] == "start"
+        assert r[header.index("job调用方法")] == "POST"
+        params = json.loads(r[header.index("job参数")])
+        assert params["headers"] == "" and params["appToken"] == "" and params["appId"] == ""
+        assert params["authenticationType"] == "无"
+        assert params["jobRunParams"] == (
+            "clusterName=${P_CLUSTER_EDW_PRO}&appId=com.huawei.so.master_data"
+            "&itemName=IT_产品&taskGroupName=IT_组&taskName=TASK_SRC"
+            "&jobName=PJob_EXT_2500_F_T_D2S&begin=${BEGIN_TIMES}&end=${END_TIMES}")
 
-    def test_appid_injected_from_config(self, sample_ts, sample_config, tmp_path):
-        """appid 经 resolve_config_by_schema 注入 shujia 段，exporter 直接用（不再自查 schema_apps）。"""
-        cfg = {
-            "shujia": {"appid": "MY_APP_123", "business_owner": "zhangsan"},
-            "lts": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
-        }
+    def test_virtual_dep_missing_job_fails(self, sample_ts, sample_config, tmp_path):
+        ts = json.loads(json.dumps(sample_ts))
+        ts["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
+            "table": "src_t", "task": "TASK_SRC", "dep_type": "虚拟依赖",
+            "app": "a", "project": "b", "group": "c",
+        }]
         out = tmp_path / "schedule_tasks.xlsx"
-        generate_schedule_excel(sample_ts, cfg, out)
-        wb = openpyxl.load_workbook(out)
-        ws = wb["jobs"]
-        header = [c.value for c in ws[1]]
-        params_idx = header.index("job参数")
-        exec_rows = [row for row in ws.iter_rows(min_row=2, values_only=True)
-                     if row[header.index("job类型")] == "url" and row[header.index("job的父节点名称")] == "start"]
-        assert exec_rows, "应有执行行"
-        assert "MY_APP_123" in str(exec_rows[0][params_idx]), "appid 应注入 job参数"
+        with pytest.raises(ValueError, match="虚拟依赖缺 job 全名"):
+            generate_schedule_excel(ts, sample_config, out)
 
-    def test_taskparams_v_group_code_empty(self, sample_ts, sample_config, tmp_path):
-        """V_GROUP_CODE 值留空"""
+    def test_incremental_getdate_and_parent(self, sample_ts, sample_config, tmp_path):
+        """案例 B（增量）：init 段存在 → GETDATE 行 + 主 job 父=GETDATE + 变量设置桥接。"""
+        ts = json.loads(json.dumps(sample_ts))
+        ts["init"] = {"group_mode": "separate", "rules": {"R0001_INIT": {"target_table": "dws.dwb_xxx_f"}}}
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(ts, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, 任务名称="task_dwb_xxx_f", job名称="GETDATE")
+        assert len(rows) == 1
+        g = rows[0]
+        assert g[header.index("job类型")] == "database"
+        assert g[header.index("job的父节点名称")] == "start"
+        sql = g[header.index("执行路径信息")]
+        assert "DW_LAST_UPDATE_DATE" in sql and "${V_CYCLE_ID}" in sql
+        vs = g[header.index("job变量设置")]
+        assert vs == "P_DW_LAST_UPDATE_DATE=DW_LAST_UPDATE_DATE;P_CUR_CYCLE_ID=CUR_CYCLE_ID"
+        header, rows = self._jobs_by(wb, 任务名称="task_dwb_xxx_f", job类型="url")
+        assert rows[0][header.index("job的父节点名称")] == "GETDATE"
+
+    def test_p_flag_supply_chain(self, sample_ts, sample_config, tmp_path):
+        """校验5：inline init 引用 ${P_FLAG} 但无 V_FLAG 声明 → 阻断；声明后全链路生成。"""
+        ts = json.loads(json.dumps(sample_ts))
+        ts["init"] = {"group_mode": "inline", "rules": {}}
+        out = tmp_path / "schedule_tasks.xlsx"
+        with pytest.raises(ValueError, match="P_FLAG"):
+            generate_schedule_excel(ts, sample_config, out)
+        # designer 在 lts_params 声明 V_FLAG（含取值）→ 通过
+        ts["meta"]["schedule"]["lts_params"].append(
+            {"lts_var": "V_FLAG", "etl_param": "P_FLAG", "value": "1", "desc": "增量标志"})
+        generate_schedule_excel(ts, sample_config, out)
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, 任务名称="task_dwb_xxx_f", job名称="GETDATE")
+        assert rows[0][header.index("job变量设置")].endswith(";P_FLAG=P_FLAG")
+        header, rows = self._jobs_by(wb, 任务名称="task_dwb_xxx_f", job类型="url")
+        run_params = json.loads(json.loads(rows[0][header.index("job参数")])["jobRunParams"])
+        assert {"name": "P_FLAG", "type": "constants", "value": "${V_FLAG}"} in run_params["params"]
+        ws = wb["taskParams"]
+        vals = {r[3]: r[4] for r in ws.iter_rows(min_row=2, values_only=True)
+                if r[2] == "task_dwb_xxx_f"}
+        assert vals["V_FLAG"] == "1"
+
+    def test_taskparams_base_set(self, sample_ts, sample_config, tmp_path):
+        """每任务 8 项基础参数；值模板为定稿字面量（方案 A）。"""
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(sample_ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["taskParams"]
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            param_name = row[3]
-            param_value = row[4]
-            if param_name == "V_GROUP_CODE":
-                assert param_value == "" or param_value is None
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert ws.max_row == 1 + 3 * 8   # f/view/dq × 8 基础参数
+        vals = {r[3]: r[4] for r in rows if r[2] == "task_dwb_xxx_f"}
+        assert vals["V_BATCH_NUMBER"] == "$getJobUUID(jobUUID)"
+        assert vals["V_SCH_FROM"] == "LTS"
+        assert vals["V_CYCLE_ID"] == "$getTaskPlanTime(plantime,@@yyyyMMdd000000@@,-24*60*60)"
+        assert vals["BEGIN_TIMES"] == "$getTaskPlanTime(plantime,@@yyyy-MM-dd 00:00:00@@)"
+        assert vals["END_TIMES"] == "$getTaskPlanTime(plantime,@@23:59:59@@)"
+        assert vals["V_DW_LAST_UPDATE_DATE"] == "$getCurrentTime(@@yyyy-MM-dd HH:mm:ss@@,0)"
+        assert vals["V_GROUP_CODE"] == "URG_123456"   # consts（暂空时值为空但参数恒定义）
+        assert vals["V_APPID"] == "APP001"
 
     def test_project_group_from_ts_json(self, sample_config, tmp_path):
-        """★ 任务四：ts.json 的 task 有 project_name/task_group 时，exporter 直接用（不走 platform_config）。"""
-        # 构造 ts，每个 task 带 project_name/task_group（设计阶段确定的）
+        """★ ts.json 的 task 带 project_name/task_group 时，exporter 直接用（不走 platform_config）。"""
         ts = {
             "meta": {
                 "target": {"f_table": {"schema": "dws", "table": "dwb_test_f"},
@@ -639,9 +801,9 @@ class TestGenerateScheduleExcel:
             },
             "rules": {},
         }
-        # platform_config 的 lts 配的是另一套（验证不被用）
-        cfg = {"lts": {"project_name": "PC_PROJ", "task_group": "PC_GRP", "appid": ""},
-               "shujia": {}}
+        cfg = {"lts": {"project_name": "PC_PROJ", "task_group": "PC_GRP",
+                       "consts": {"cluster_local": "fin_pro", "db_name": "DB"}},
+               "shujia": {"appid": "APP001"}}
         out = tmp_path / "schedule_tasks.xlsx"
         generate_schedule_excel(ts, cfg, out)
         wb = openpyxl.load_workbook(out)
@@ -650,16 +812,13 @@ class TestGenerateScheduleExcel:
         proj_idx = header.index("项目名称")
         group_idx = header.index("任务组名称")
         rows = list(ws.iter_rows(min_row=2, values_only=True))
-        # F 行用 ts.json 的 TS_PROJ_F
         assert rows[0][proj_idx] == "TS_PROJ_F"
         assert rows[0][group_idx] == "TS_GRP_F"
-        # view 行用 TS_PROJ_V
         assert rows[1][proj_idx] == "TS_PROJ_V"
-        # dq 行用 TS_PROJ_DQ
         assert rows[2][proj_idx] == "TS_PROJ_DQ"
 
     def test_project_group_fallback_to_platform_config(self, sample_config, tmp_path):
-        """★ 任务四兼容：旧 ts.json 没有 project/task_group -> fallback 到 platform_config 的 lts。"""
+        """★ 旧 ts.json 没有 project/task_group -> fallback 到 platform_config 的 lts。"""
         ts = {
             "meta": {
                 "target": {"f_table": {"schema": "dws", "table": "dwb_test_f"},
@@ -668,20 +827,54 @@ class TestGenerateScheduleExcel:
                     "cron": "0 30 3 * * ?",
                     "tasks": {
                         "f": {"task_name": "task_dwb_test_f", "job_name": "Pjob_dwb_test_f",
-                              "cron": "0 30 3 * * ?", "upstream": []},  # 无 project/task_group
+                              "cron": "0 30 3 * * ?", "upstream": []},
                     },
                 },
             },
             "rules": {},
         }
         out = tmp_path / "schedule_tasks.xlsx"
-        generate_schedule_excel(ts, sample_config, out)  # sample_config lts=SRP_DAILY/GROUP_SPRD
+        generate_schedule_excel(ts, sample_config, out)
         wb = openpyxl.load_workbook(out)
         ws = wb["tasks"]
         header = [c.value for c in ws[1]]
-        proj_idx = header.index("项目名称")
         rows = list(ws.iter_rows(min_row=2, values_only=True))
-        assert rows[0][proj_idx] == "SRP_DAILY", "旧 ts.json 应回退到 platform_config"
+        assert rows[0][header.index("项目名称")] == "SRP_DAILY"
+
+
+class TestLtsValidators:
+
+    def _row(self, **kw):
+        row = [""] * len(JOBS_COLUMNS)
+        for col, val in kw.items():
+            row[_JOBS_COL[col]] = val
+        return row
+
+    def test_v_ref_closure(self):
+        """校验1：job 引用 taskParams 未定义的 ${V_XXX} → 报出（平台注入变量豁免）。"""
+        rows = [self._row(任务名称="t1", job名称="j1",
+                          执行路径信息="${V_URL} ${V_UNKNOWN}")]
+        problems = validate_lts_package({}, [], rows, {"V_CYCLE_ID"})
+        assert any("V_UNKNOWN" in p for p in problems)
+        assert not any("V_URL" in p for p in problems)   # 平台注入豁免
+
+    def test_parent_closure(self):
+        """校验2：父节点须为 start/EMPTY 或本任务 job 名。"""
+        rows = [self._row(任务名称="t1", job名称="j1", job的父节点名称="ghost")]
+        problems = validate_lts_package({}, [], rows, set())
+        assert any("ghost" in p for p in problems)
+        ok = [self._row(任务名称="t1", job名称="j1", job的父节点名称="start"),
+              self._row(任务名称="t1", job名称="j2", job的父节点名称="j1")]
+        assert validate_lts_package({}, [], ok, set()) == []
+
+    def test_p_flag_chain(self):
+        """校验5：inline init 需要 V_FLAG→P_FLAG 全链路。"""
+        ts = {"init": {"group_mode": "inline"}}
+        rows = [self._row(任务名称="t1", job名称="j1")]
+        problems = validate_lts_package(ts, [], rows, {"V_CYCLE_ID"})
+        assert sum("P_FLAG" in p or "V_FLAG" in p for p in problems) == 2
+        lts_params = [{"lts_var": "V_FLAG", "etl_param": "P_FLAG", "value": "1"}]
+        assert validate_lts_package(ts, lts_params, rows, {"V_CYCLE_ID", "V_FLAG"}) == []
 
 
 # ============================================================

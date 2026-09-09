@@ -9,5 +9,24 @@
       "project_cn": "ETL项目",
       "business_owner": ""
     }
+  },
+
+  "lts": {
+    "_comment": "LTS 制品配置（2026-09 重写，详见 docs/platform/lts-制品生成设计.md §七）。consts=字面量（cluster_local 本集群名：生产 fin_pro/测试 BIZBAETA/开发 LTSBETA，默认生产；db_name 库名，dbsource 生成 [*].[库名]，[*] 由平台按环境解析）。dep_task_ids=跨集群 depTaskId 显式表（键=集群|itemName|taskGroupName，人工兜底/优先源）。dep_id_resolver=内网查 id 脚本契约（script 空=功能关闭；缓存 config 目录 dep_task_id_cache.json，TTL 内免重查）。",
+    "consts": {
+      "cluster_local": "fin_pro",
+      "db_name": "GAUSS_EDW_BFD_BNIL",
+      "group_code": "",
+      "datasource_type": "gauss200"
+    },
+    "dep_task_ids": {},
+    "dep_id_resolver": {
+      "script": "",
+      "cmd_template": "python {script} --cluster {cluster} --item {item} --group {group}",
+      "output": "json",
+      "field": "depTaskId",
+      "timeout_sec": 30,
+      "cache_ttl_days": 30
+    }
   }
 }

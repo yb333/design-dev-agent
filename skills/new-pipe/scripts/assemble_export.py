@@ -29,6 +29,7 @@ UT 通过后调用。把验证过的 ts.json + ETL SQL 翻译成
 
 import sys
 import os
+import re
 import json
 import argparse
 from datetime import datetime
@@ -129,8 +130,481 @@ TASKPARAMS_COLUMNS = ["项目名称", "任务组名称", "任务名称", "参数
 AUDIT_FIELDS = {"del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"}
 
 # 固定常量
-DEFAULT_JOB_PARAMS = '{"headers":"","invokingMode":"同步","returnVal":"","jobRunParams":"","appToken":"","appid":"","authenticationType":"无","timeout":"10"}'
-FIXED_PARAMS = ["V_CYCLE_ID", "V_GROUP_CODE"]
+
+
+# ============================================================
+# schedule_tasks.xlsx 构建（LTS 制品；设计依据 docs/platform/lts-制品生成设计.md）
+# ============================================================
+
+# 所有 job 通用属性（451 样本规律"总览"：无需特殊配置的恒取值）
+JOB_COMMON_ATTRS = {"job执行节点": "任一节点", "job异常处理方式": "fail", "参数空值校验": "否"}
+
+# taskParams 基础全集（每个任务必配；值模板为平台变量函数表达式，@@…@@ 为格式串定界符）
+LTS_PARAM_TEMPLATES = {
+    "V_BATCH_NUMBER": "$getJobUUID(jobUUID)",
+    "V_SCH_FROM": "LTS",
+    "V_CYCLE_ID": "$getTaskPlanTime(plantime,@@yyyyMMdd000000@@,-24*60*60)",
+    "BEGIN_TIMES": "$getTaskPlanTime(plantime,@@yyyy-MM-dd 00:00:00@@)",
+    "END_TIMES": "$getTaskPlanTime(plantime,@@23:59:59@@)",
+    "V_DW_LAST_UPDATE_DATE": "$getCurrentTime(@@yyyy-MM-dd HH:mm:ss@@,0)",
+}
+TASKPARAMS_BASE = ["V_BATCH_NUMBER", "V_GROUP_CODE", "V_SCH_FROM", "V_CYCLE_ID",
+                   "BEGIN_TIMES", "END_TIMES", "V_DW_LAST_UPDATE_DATE", "V_APPID"]
+
+# 平台/项目级注入变量（只引用、不在 taskParams 定义——引用闭合校验的豁免集）
+PLATFORM_INJECTED_REFS = {"V_URL", "V_URL_virtualDependence", "V_FILTER_QUERY_URL",
+                          "V_FILTER_UPDATE_URL", "V_TOKEN", "P_CLUSTER_EDW_PRO"}
+
+_JOBS_COL = {name: idx for idx, name in enumerate(JOBS_COLUMNS)}
+
+_V_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _new_job_row() -> list:
+    return [""] * len(JOBS_COLUMNS)
+
+
+def _fill_project_cols(row: list, project: str, group: str, task_name: str):
+    """tskdep 行归属恒=当前任务（用户定调：上游定位全在执行路径里）。"""
+    row[_JOBS_COL["项目名称"]] = project
+    row[_JOBS_COL["任务组名称"]] = group
+    row[_JOBS_COL["任务名称"]] = task_name
+
+
+def _fill_common_job_attrs(row: list):
+    for col, val in JOB_COMMON_ATTRS.items():
+        row[_JOBS_COL[col]] = val
+
+
+def _fill_engineering(row: list, timeout: int, retry: int, interval: int,
+                      skip_cleanup: str, timeout_handler: str = ""):
+    row[_JOBS_COL["job超时时间"]] = str(timeout)
+    row[_JOBS_COL["job重试次数"]] = str(retry)
+    row[_JOBS_COL["job重试间隔"]] = str(interval)
+    row[_JOBS_COL["job是否跳过清场"]] = skip_cleanup
+    if timeout_handler:
+        row[_JOBS_COL["job超时处理"]] = timeout_handler
+
+
+def _main_job_params(run_params_json: str) -> str:
+    """主 job 8 键（异步 POST 形态；与虚拟依赖的全空 8 键区分——曾拿错形态当通用模板）。"""
+    return json.dumps({
+        "headers": "Content-Type:application/json;charset=UTF-8",
+        "invokingMode": "异步",
+        "retVal": "",
+        "jobRunParams": run_params_json,
+        "appToken": "${V_TOKEN}",
+        "appId": "${V_APPID}",
+        "authenticationType": "手动输入",
+        "timeout": 10,
+    }, ensure_ascii=False)
+
+
+def _main_job_run_params(lts_params: list) -> str:
+    """主 job jobRunParams 内嵌 JSON 固定 4 键；params 数组 = lts_params（V→P）直译。"""
+    entries = [{"name": p.get("etl_param", ""), "type": "constants",
+                "value": "${%s}" % p.get("lts_var", "")}
+               for p in (lts_params or []) if p.get("etl_param")]
+    return json.dumps({
+        "batch_number": "${V_BATCH_NUMBER}",
+        "group_code": "${V_GROUP_CODE}",
+        "sch_from": "${V_SCH_FROM}",
+        "params": entries,
+    }, ensure_ascii=False)
+
+
+def _virtual_dep_params(run_params_query: str) -> str:
+    """虚拟依赖 8 键：headers/appToken/appId 全空 + authenticationType=无。"""
+    return json.dumps({
+        "headers": "", "invokingMode": "异步", "retVal": "",
+        "jobRunParams": run_params_query,
+        "appToken": "", "appId": "",
+        "authenticationType": "无", "timeout": 10,
+    }, ensure_ascii=False)
+
+
+def _database_job_params(schema: str, db_name: str, datasource_type: str) -> str:
+    """database 6 键恒定。dbsource=[*].[库名]——[*] 照样本原样（平台按环境解析）。"""
+    if not db_name:
+        raise ValueError("platform_config lts.consts.db_name 未配置（database job 库名，"
+                         "如 GAUSS_EDW_BFD_BNIL）")
+    return json.dumps({
+        "schema": schema,
+        "dbsource": f"[*].[{db_name}]",
+        "datasourceTypeName": datasource_type or "gauss200",
+        "retVal": "", "inParams": "", "outParams": "",
+    }, ensure_ascii=False)
+
+
+def _cross_dep_key(cluster: str) -> str:
+    """crossClusterDepKey 启发式：fin_oracc→oracc|pro|、edw_pro→edw|pro|（样本②③归纳）。
+
+    ⚠️ 字面量待真实导出核对（设计文档 §十一.3），不符时只改这里。
+    """
+    base = cluster
+    if base.startswith("fin_"):
+        base = base[len("fin_"):]
+    if base.endswith("_pro"):
+        base = base[:-len("_pro")]
+    return f"{base}|pro|"
+
+
+def _tskdep_params(main_job_name: str, name: str, dep_task_name: str, dep_job_name: str,
+                   production_cluster: str, item_name: str, task_group: str,
+                   cross_src: str = "", cross_dep_name: str = "", cross_key: str = "",
+                   dep_task_id: str = "") -> str:
+    """tskdep job参数 JSON（恒量字段 + 派生字段；同/跨集群差异由调用方传值）。"""
+    data = {
+        "type": "tskdep",
+        "mainJobName": main_job_name,
+        "depJobName": dep_job_name,
+        "name": name,
+        "depTaskName": dep_task_name,
+        "productionClusterName": production_cluster,
+        "declarativeDependency": 0,
+        "breadthSenior": ["0"],
+        "groupOk": "",
+        "start": "",
+        "depTaskGroupType": 0,
+        "rangeSenior": [],
+        "dotSenior": [],
+        "hourList": [],
+        "crossClusterDepKey": cross_key,
+        "crossClusterDepName": cross_dep_name,
+        "crossClusterSrcName": cross_src,
+        "applyName": "",
+        "itemName": item_name,
+        "taskGroupName": task_group,
+    }
+    if dep_task_id:
+        data["depTaskId"] = str(dep_task_id)
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _collect_v_refs(text: str) -> set:
+    """提取字符串里所有 ${V_XXX} 引用（引用闭合校验用）。"""
+    return set(_V_REF.findall(text or ""))
+
+
+def validate_lts_package(ts: dict, lts_params: list, job_rows: list, param_names: set) -> list:
+    """出厂校验（设计文档 §九五条中可在行集上静态判定的三条；路径/depTaskId 在构建期 fail-loud）。
+
+    1. ${V_XXX} 引用闭合：job 各格引用 ⊆ taskParams 定义集（照片 §2 铁律）
+    2. 父节点引用闭合：∈ {start, EMPTY} ∪ 本任务 job 名集合
+    5. P_ 变量供给链：inline init 的 ${P_FLAG} 必须有 params 数组供给 + taskParams 定义
+    """
+    problems = []
+    name_col = _JOBS_COL["job名称"]
+    task_col = _JOBS_COL["任务名称"]
+    parent_col = _JOBS_COL["job的父节点名称"]
+    ref_cols = [_JOBS_COL[c] for c in ("执行路径信息", "job参数", "job变量设置")]
+
+    job_names_by_task = {}
+    for r in job_rows:
+        job_names_by_task.setdefault(r[task_col], set()).add(r[name_col])
+
+    for r in job_rows:
+        task = r[task_col]
+        refs = set()
+        for c in ref_cols:
+            refs |= _collect_v_refs(r[c])
+        dangling = sorted(refs - param_names - PLATFORM_INJECTED_REFS)
+        if dangling:
+            problems.append(f"任务 {task} 的 job 引用了 taskParams 未定义的参数: {dangling}")
+        parent = r[parent_col]
+        if parent and parent not in ({"start", "EMPTY"} | job_names_by_task.get(task, set())):
+            problems.append(f"任务 {task} 的 job {r[name_col]!r} 父节点 {parent!r} 不存在（须为 start/EMPTY 或本任务 job 名）")
+
+    init_section = ts.get("init") or {}
+    if isinstance(init_section, dict) and init_section.get("group_mode") == "inline":
+        p_names = {p.get("etl_param") for p in (lts_params or []) if p.get("etl_param")}
+        if "P_FLAG" not in p_names:
+            problems.append("inline init 模式 RULE 运行条件引用 ${P_FLAG}，但 lts_params 无 V_FLAG→P_FLAG 映射（执行端拿不到 P_FLAG）")
+        if "V_FLAG" not in param_names:
+            problems.append("inline init 模式 taskParams 缺 V_FLAG（designer 需在 lts_params 声明 {lts_var: V_FLAG, value: ...}）")
+    return problems
+
+
+def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
+    """生成 lts_{表名}.xlsx（3 sheet：tasks/jobs/taskParams）——LTS 制品。
+
+    任务组合模型（设计文档 §三）：
+      f 任务   = [虚拟依赖×N] + [GETDATE(增量)] + 主job + tskdep×N
+      view 任务 = database 占位job + tskdep(声明 f 任务)
+      dq/init  = 主job + tskdep×N
+    一期面向生产（§二.9）：本集群名/depTaskId 走 consts/三级取值，不做 --env。
+    """
+    from dep_task_id import resolve_dep_task_id
+
+    meta = ts.get("meta", {})
+    sched = meta.get("schedule", {})
+    tasks_sched = sched.get("tasks", {})
+    lts_params = sched.get("lts_params", [])
+    lts_cfg = config.get("lts", {})
+    consts = lts_cfg.get("consts", {}) or {}
+    cluster_local = (consts.get("cluster_local") or "").strip()
+    db_name = (consts.get("db_name") or "").strip()
+    datasource_type = consts.get("datasource_type", "gauss200")
+
+    # 兜底默认值（旧 ts.json 无 project/task_group 时用 platform_config 的 lts 段）
+    fallback_project = _cfg(lts_cfg, "project_name")
+    fallback_group = _cfg(lts_cfg, "task_group")
+    appid = (config.get("shujia") or {}).get("appid", "")
+    owner = _cfg(config.get("shujia", {}), "business_owner", "")
+
+    incremental = bool(ts.get("init"))
+    v_flag_declared = any(p.get("lts_var") == "V_FLAG" for p in (lts_params or []))
+
+    def _resolve_path(task_info):
+        p = task_info.get("project_name") or fallback_project
+        g = task_info.get("task_group") or fallback_group
+        return p, g
+
+    def _schema_of(kind_table):
+        return (meta.get("target", {}).get(kind_table, {}) or {}).get("schema", "")
+
+    # --- job 行 builders（闭包取 consts/appid/lts_cfg） ---
+
+    def _tskdep_row(task_info, main_job_name, upstream):
+        """同集群 4 段 / 跨集群 5 段。跨集群缺 cluster/job → fail-loud（输入直传不推导）。"""
+        p, g = _resolve_path(task_info)
+        task = upstream.get("task", "")
+        project = upstream.get("project", "") or p
+        group = upstream.get("group", "") or g
+        app = upstream.get("app", "")
+        remote_cluster = (upstream.get("cluster", "") or upstream.get("env", "") or "").strip()
+        main_job = main_job_name or task_info.get("job_name", "")
+
+        if remote_cluster:
+            job_name = (upstream.get("job") or "").strip()
+            if not job_name:
+                raise ValueError(
+                    f"跨集群依赖缺远端 job 名：上游 {task}（集群 {remote_cluster}）。"
+                    "upstream 项需提供 job 字段（远端真实 job 名，输入直传不推导）")
+            segs = [remote_cluster, app, project, group, task]
+            if not all(segs):
+                raise ValueError(f"跨集群依赖路径段不全（集群|appId|itemName|任务组|任务名）: 上游 {task}，"
+                                 f"got cluster={remote_cluster!r} app={app!r} project={project!r} group={group!r}")
+            path = "|".join(segs)
+            dep_task_id = resolve_dep_task_id(remote_cluster, project, group, lts_cfg)
+            params = _tskdep_params(main_job, job_name, task, job_name,
+                                    remote_cluster, project, group,
+                                    cross_src=cluster_local, cross_dep_name=remote_cluster,
+                                    cross_key=_cross_dep_key(remote_cluster), dep_task_id=dep_task_id)
+        else:
+            if not cluster_local:
+                raise ValueError("platform_config lts.consts.cluster_local 未配置（本集群名，生产 fin_pro/"
+                                 "测试 BIZBAETA/开发 LTSBETA 三选一）——同集群 tskdep 集群字段需要它")
+            job_name = task
+            segs = [appid, project, group, task]
+            if not all(segs):
+                raise ValueError(f"同集群依赖路径段不全（appId|项目组|任务组|任务名）: 上游 {task}，"
+                                 f"got appid={appid!r} project={project!r} group={group!r}")
+            path = "|".join(segs)
+            params = _tskdep_params(main_job, job_name, task, "end",
+                                    cluster_local, project, group)
+
+        row = _new_job_row()
+        _fill_project_cols(row, p, g, task_info.get("task_name", ""))
+        _fill_common_job_attrs(row)
+        row[_JOBS_COL["job名称"]] = job_name
+        row[_JOBS_COL["job类型"]] = "tskdep"
+        row[_JOBS_COL["job的父节点名称"]] = main_job
+        row[_JOBS_COL["执行路径信息"]] = path
+        row[_JOBS_COL["job参数"]] = params
+        return row
+
+    def _virtual_dep_row(task_info, upstream):
+        """向远端集群发抽取请求（上游为手工起调的非周期任务时用；场景极少）。"""
+        p, g = _resolve_path(task_info)
+        task = upstream.get("task", "")
+        job_name = (upstream.get("job") or "").strip()
+        if not job_name:
+            raise ValueError(f"虚拟依赖缺 job 全名：上游 {task}。upstream 项需提供 job 字段"
+                             "（PJob_EXT_源系统编号_表名_版本戳_后缀 完整名，输入直传不推导）")
+        query = (f"clusterName=${{P_CLUSTER_EDW_PRO}}"
+                 f"&appId={upstream.get('app', '')}&itemName={upstream.get('project', '')}"
+                 f"&taskGroupName={upstream.get('group', '')}&taskName={task}"
+                 f"&jobName={job_name}&begin=${{BEGIN_TIMES}}&end=${{END_TIMES}}")
+        row = _new_job_row()
+        _fill_project_cols(row, p, g, task_info.get("task_name", ""))
+        _fill_common_job_attrs(row)
+        row[_JOBS_COL["job名称"]] = job_name
+        row[_JOBS_COL["job类型"]] = "url"
+        row[_JOBS_COL["job的父节点名称"]] = "start"
+        row[_JOBS_COL["执行路径信息"]] = "${V_URL_virtualDependence}"
+        row[_JOBS_COL["job参数"]] = _virtual_dep_params(query)
+        row[_JOBS_COL["job调用方法"]] = "POST"
+        _fill_engineering(row, 60, 3, 60, "跟随任务")
+        return row
+
+    def _main_job_row(task_info, parent):
+        p, g = _resolve_path(task_info)
+        row = _new_job_row()
+        _fill_project_cols(row, p, g, task_info.get("task_name", ""))
+        _fill_common_job_attrs(row)
+        row[_JOBS_COL["job名称"]] = task_info.get("job_name", "")
+        row[_JOBS_COL["job类型"]] = "url"
+        row[_JOBS_COL["job的父节点名称"]] = parent
+        row[_JOBS_COL["执行路径信息"]] = "${V_URL}"
+        row[_JOBS_COL["job参数"]] = _main_job_params(_main_job_run_params(lts_params))
+        row[_JOBS_COL["job调用方法"]] = "POST"
+        _fill_engineering(row, 60, 3, 60, "跟随任务", "一次邮件提醒")
+        return row
+
+    def _view_placeholder_row(task_info):
+        """视图任务 job = database 占位查询（数据由 DDL 视图承担，任务只为依赖挂线）。"""
+        p, g = _resolve_path(task_info)
+        view = meta.get("target", {}).get("i_view", {}) or {}
+        row = _new_job_row()
+        _fill_project_cols(row, p, g, task_info.get("task_name", ""))
+        _fill_common_job_attrs(row)
+        row[_JOBS_COL["job名称"]] = task_info.get("job_name", "")
+        row[_JOBS_COL["job类型"]] = "database"
+        row[_JOBS_COL["job的父节点名称"]] = "start"
+        row[_JOBS_COL["执行路径信息"]] = f"SELECT 1 FROM {view.get('schema', _schema_of('i_view'))}.{view.get('table', '')} WHERE 1 = 2"
+        row[_JOBS_COL["job参数"]] = _database_job_params(view.get("schema", ""), db_name, datasource_type)
+        row[_JOBS_COL["job调用方法"]] = "sql"
+        _fill_engineering(row, 10, 3, 1, "否")
+        return row
+
+    def _getdate_row(task_info):
+        """GETDATE 简化版（无 filter）：出 DW_LAST_UPDATE_DATE + CUR_CYCLE_ID 两列，桥接 P_ 变量。"""
+        p, g = _resolve_path(task_info)
+        sql = ("SELECT to_char(sysdate,'yyyy-mm-dd hh24:mi:ss') AS DW_LAST_UPDATE_DATE, "
+               "'${V_CYCLE_ID}' AS CUR_CYCLE_ID")
+        var_setting = "P_DW_LAST_UPDATE_DATE=DW_LAST_UPDATE_DATE;P_CUR_CYCLE_ID=CUR_CYCLE_ID"
+        if v_flag_declared:
+            var_setting += ";P_FLAG=P_FLAG"
+        row = _new_job_row()
+        _fill_project_cols(row, p, g, task_info.get("task_name", ""))
+        _fill_common_job_attrs(row)
+        row[_JOBS_COL["job名称"]] = "GETDATE"
+        row[_JOBS_COL["job类型"]] = "database"
+        row[_JOBS_COL["job的父节点名称"]] = "start"
+        row[_JOBS_COL["执行路径信息"]] = sql
+        row[_JOBS_COL["job参数"]] = _database_job_params(_schema_of("f_table"), db_name, datasource_type)
+        row[_JOBS_COL["job变量设置"]] = var_setting
+        row[_JOBS_COL["job调用方法"]] = "sql"
+        _fill_engineering(row, 60, 3, 60, "跟随任务", "一次邮件提醒")
+        return row
+
+    def _task_deps(task_info):
+        """按 dep_type 分流该任务的依赖行：虚拟依赖行在前（构建顺序 §七-3），宽/周期 tskdep 在主 job 后。"""
+        virtual, normal = [], []
+        for u in task_info.get("upstream", []):
+            if not u.get("task"):
+                continue
+            (virtual if u.get("dep_type") == "虚拟依赖" else normal).append(u)
+        return virtual, normal
+
+    project_name, task_group = _resolve_path(tasks_sched.get("f", {}))
+
+    wb = openpyxl.Workbook()
+
+    # --- Sheet 1: tasks（F + view + dq + init）---
+    ws = wb.active
+    ws.title = "tasks"
+    ws.append(TASKS_COLUMNS)
+
+    def _task_row(task_info):
+        p, g = _resolve_path(task_info)
+        return [p, g, task_info.get("task_name", ""), "周期任务",
+                "", "", task_info.get("cron", ""), "是", "", owner,
+                "", "", "", "", "", "", "", "", "", "", "", ""]
+
+    all_tasks = []
+    for kind in ("f", "view", "dq", "init"):
+        ti = tasks_sched.get(kind, {})
+        if ti.get("task_name"):
+            all_tasks.append(ti)
+            ws.append(_task_row(ti))
+
+    # --- Sheet 2: jobs（任务组合模型 §三）---
+    ws = wb.create_sheet("jobs")
+    ws.append(JOBS_COLUMNS)
+    job_rows = []
+
+    f_info = tasks_sched.get("f", {})
+    view_info = tasks_sched.get("view", {})
+    dq_info = tasks_sched.get("dq", {})
+    init_info = tasks_sched.get("init", {})
+
+    if f_info.get("task_name"):
+        virtual, normal = _task_deps(f_info)
+        for u in virtual:
+            _jr0 = _virtual_dep_row(f_info, u)
+            ws.append(_jr0)
+            job_rows.append(_jr0)
+        if incremental:
+            _jr1 = _getdate_row(f_info)
+            ws.append(_jr1)
+            job_rows.append(_jr1)
+        _jr2 = _main_job_row(f_info, "GETDATE" if incremental else "start")
+        ws.append(_jr2)
+        job_rows.append(_jr2)
+        for u in normal:
+            _jr3 = _tskdep_row(f_info, f_info.get("job_name", ""), u)
+            ws.append(_jr3)
+            job_rows.append(_jr3)
+
+    if view_info.get("task_name"):
+        _jr4 = _view_placeholder_row(view_info)
+        ws.append(_jr4)
+        job_rows.append(_jr4)
+        for u in view_info.get("upstream", []):
+            if u.get("task"):
+                _jr5 = _tskdep_row(view_info, view_info.get("job_name", ""), u)
+                ws.append(_jr5)
+                job_rows.append(_jr5)
+
+    if dq_info.get("task_name"):
+        _jr6 = _main_job_row(dq_info, "start")
+        ws.append(_jr6)
+        job_rows.append(_jr6)
+        for u in dq_info.get("upstream", []):
+            if u.get("task"):
+                _jr7 = _tskdep_row(dq_info, dq_info.get("job_name", ""), u)
+                ws.append(_jr7)
+                job_rows.append(_jr7)
+
+    if init_info.get("task_name"):
+        _jr8 = _main_job_row(init_info, "start")
+        ws.append(_jr8)
+        job_rows.append(_jr8)
+        for u in init_info.get("upstream", []):
+            if u.get("task"):
+                _jr9 = _tskdep_row(init_info, init_info.get("job_name", ""), u)
+                ws.append(_jr9)
+                job_rows.append(_jr9)
+
+    # --- Sheet 3: taskParams（基础全集 + designer 附加参数）---
+    ws = wb.create_sheet("taskParams")
+    ws.append(TASKPARAMS_COLUMNS)
+
+    extras = {p.get("lts_var", ""): p for p in (lts_params or [])
+              if p.get("lts_var") and p.get("lts_var") not in TASKPARAMS_BASE}
+    param_names = TASKPARAMS_BASE + list(extras)
+    for ti in all_tasks:
+        p, g = _resolve_path(ti)
+        for name in param_names:
+            if name in LTS_PARAM_TEMPLATES:
+                val = LTS_PARAM_TEMPLATES[name]
+            elif name == "V_GROUP_CODE":
+                val = consts.get("group_code", "")
+            elif name == "V_APPID":
+                val = appid
+            else:
+                val = (extras.get(name) or {}).get("value", "")
+            ws.append([p, g, ti["task_name"], name, val])
+
+    # --- 出厂校验（§九；路径段/depTaskId/配置缺失在构建期已 fail-loud）---
+    problems = validate_lts_package(ts, lts_params, job_rows, set(param_names))
+    if problems:
+        raise ValueError("LTS 制品出厂校验失败:\n  " + "\n  ".join(problems))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
 
 
 # ============================================================
@@ -527,172 +1001,6 @@ def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, output_path:
     for sheet_name, columns in empty_sheets:
         ws = wb.create_sheet(sheet_name)
         ws.append(columns)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(output_path)
-
-
-# ============================================================
-# schedule_tasks.xlsx 构建
-# ============================================================
-
-def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
-    """生成 schedule_tasks.xlsx（3 sheet）。
-
-    从 ts.json schedule.tasks 的 f/view/dq 三段取调度信息。
-    虚拟依赖（dep_type=虚拟依赖）在 jobs sheet 额外生成 URL 类型 job 行。
-
-    project_name/task_group 来源（★ 任务四）：
-    - 优先从 ts.json 每个 task 的 project_name/task_group 取（设计阶段确定：
-      assemble_ts 从 schedule_config.json 盖章）
-    - ts.json 没有（旧产出）→ fallback 到 platform_config 的 lts 段（兼容；
-      example 已不再包含 lts 段——单一来源是 schedule_config，缺路径返回"待配置"）
-    """
-    meta = ts.get("meta", {})
-    sched = meta.get("schedule", {})
-    tasks_sched = sched.get("tasks", {})
-
-    lts = config.get("lts", {})
-    # 兜底默认值（platform_config 的 lts 段，给旧 ts.json 没有 project/task_group 时用）
-    fallback_project = _cfg(lts, "project_name")
-    fallback_group = _cfg(lts, "task_group")
-    # appid 由 main 统一从 schema_apps 反查、经 resolve_config_by_schema 注入 shujia 段
-    appid = (config.get("shujia") or {}).get("appid", "")
-    owner = _cfg(config.get("shujia", {}), "business_owner", "")
-
-    def _resolve_path(task_info):
-        """从 ts.json task 取 project/task_group，没有用 platform_config 兜底。"""
-        p = task_info.get("project_name") or fallback_project
-        g = task_info.get("task_group") or fallback_group
-        return p, g
-
-    project_name, task_group = _resolve_path(tasks_sched.get("f", {}))
-
-    # job 参数模板（appid 从 schema_apps.json 注入）
-    job_params = DEFAULT_JOB_PARAMS.replace('"appid":""', f'"appid":"{appid}"') if appid else DEFAULT_JOB_PARAMS
-
-    wb = openpyxl.Workbook()
-
-    def _task_row(task_info):
-        """生成 tasks sheet 的任务行（project/task_group 从该 task 取）"""
-        p, g = _resolve_path(task_info)
-        return [
-            p, g, task_info.get("task_name", ""), "周期任务",
-            "", "", task_info.get("cron", ""), "是", "", owner,
-            "", "", "", "", "", "", "", "", "", "", "", "",
-        ]
-
-    def _exec_job_row(task_info):
-        """生成 jobs sheet 的执行行（url 类型，project/task_group 从该 task 取）"""
-        p, g = _resolve_path(task_info)
-        return [
-            p, g, task_info.get("task_name", ""),
-            task_info.get("job_name", ""), "url",
-            "start", "${V_URL}", job_params, "",
-            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-        ]
-
-    def _dep_job_row(task_info, dep_task, dep_project="", dep_group="", job_type="tskdep"):
-        """生成 jobs sheet 的依赖行。
-
-        上游依赖的项目/任务组从 upstream 项取（跨项目依赖归属正确），
-        upstream 没配则用当前表 task 的（同项目兜底）。
-        """
-        p, g = _resolve_path(task_info)
-        return [
-            dep_project or p, dep_group or g, task_info.get("task_name", ""),
-            dep_task, job_type,
-            task_info.get("job_name", ""), "", "", "",
-            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-        ]
-
-    def _virtual_dep_row(task_info, dep_task, dep_project="", dep_group=""):
-        """虚拟依赖：额外生成 URL 类型 job 行（查数据库判断依赖任务状态）"""
-        p, g = _resolve_path(task_info)
-        return [
-            dep_project or p, dep_group or g, task_info.get("task_name", ""),
-            dep_task, "url",
-            task_info.get("job_name", ""), "${V_URL}", job_params, "",
-            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-        ]
-
-    # --- Sheet 1: tasks（F + view + dq）---
-    ws = wb.active
-    ws.title = "tasks"
-    ws.append(TASKS_COLUMNS)
-    f_info = tasks_sched.get("f", {})
-    view_info = tasks_sched.get("view", {})
-    dq_info = tasks_sched.get("dq", {})
-    init_info = tasks_sched.get("init", {})
-
-    if f_info.get("task_name"):
-        ws.append(_task_row(f_info))
-    if view_info.get("task_name"):
-        ws.append(_task_row(view_info))
-    if dq_info.get("task_name"):
-        ws.append(_task_row(dq_info))
-    if init_info.get("task_name"):
-        ws.append(_task_row(init_info))
-
-    # --- Sheet 2: jobs（执行行 + 依赖行 + 虚拟依赖额外行）---
-    ws = wb.create_sheet("jobs")
-    ws.append(JOBS_COLUMNS)
-
-    # F 表执行行 + 依赖行
-    if f_info.get("task_name"):
-        ws.append(_exec_job_row(f_info))
-        for u in f_info.get("upstream", []):
-            dep_task = u.get("task", "")
-            if not dep_task:
-                continue
-            # 上游的 project/group 从 upstream 项取（跨项目依赖归属正确）
-            dep_project = u.get("project", "")
-            dep_group = u.get("group", "")
-            dep_type = u.get("dep_type", "宽依赖")
-            if dep_type == "虚拟依赖":
-                ws.append(_virtual_dep_row(f_info, dep_task, dep_project, dep_group))
-            else:
-                ws.append(_dep_job_row(f_info, dep_task, dep_project, dep_group))
-
-    # 视图执行行 + 依赖行
-    if view_info.get("task_name"):
-        ws.append(_exec_job_row(view_info))
-        for u in view_info.get("upstream", []):
-            dep_task = u.get("task", "")
-            if dep_task:
-                ws.append(_dep_job_row(view_info, dep_task))
-
-    # DQ 执行行 + 依赖行
-    if dq_info.get("task_name"):
-        ws.append(_exec_job_row(dq_info))
-        for u in dq_info.get("upstream", []):
-            dep_task = u.get("task", "")
-            if dep_task:
-                ws.append(_dep_job_row(dq_info, dep_task))
-
-    # init 执行行（一次性任务，独立规则组；group_mode=separate 时才有 init 任务）
-    if init_info.get("task_name"):
-        ws.append(_exec_job_row(init_info))
-        for u in init_info.get("upstream", []):
-            dep_task = u.get("task", "")
-            if dep_task:
-                ws.append(_dep_job_row(init_info, dep_task))
-
-    # --- Sheet 3: taskParams ---
-    ws = wb.create_sheet("taskParams")
-    ws.append(TASKPARAMS_COLUMNS)
-
-    lts_params = sched.get("lts_params", [])
-    param_names = [p.get("lts_var", "") for p in lts_params] if lts_params else list(FIXED_PARAMS)
-
-    all_tasks = []
-    for ti in [f_info, view_info, dq_info, init_info]:
-        if ti.get("task_name"):
-            all_tasks.append(ti)
-    for ti in all_tasks:
-        p, g = _resolve_path(ti)
-        for param in param_names:
-            ws.append([p, g, ti["task_name"], param, ""])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)

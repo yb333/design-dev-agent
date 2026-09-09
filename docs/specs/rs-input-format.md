@@ -127,7 +127,9 @@ RS 是 BA（业务分析师）写的 markdown 文档，有**固定模板**（`do
     "sla": "3:30",
     "strategy": "全量调度",
     "upstream": [                // 上游调度任务（原 source_tables.schedule_task）
-      { "table": "...", "task": "task_xxx", "env": "...", "app": "...", "project": "...", "group": "..." }
+      // env=上游所在集群名；job/cluster 供 LTS 跨集群依赖与虚拟依赖用（远端 job 名/生产集群名，直传不推导）
+      { "table": "...", "task": "task_xxx", "env": "...", "app": "...", "project": "...", "group": "...",
+        "job": "...", "cluster": "..." }
     ]
   },
 

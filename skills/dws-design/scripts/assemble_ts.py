@@ -2277,7 +2277,8 @@ def build_meta(rs_input, decisions):
         item.setdefault("dep_type", "宽依赖")
         f_upstream.append(item)
     for u in dec_sched.get("upstream_added", []):
-        # designer 新增的依赖：table/task/dep_type 必填，project/group/app 可选
+        # designer 新增的依赖：table/task/dep_type 必填，project/group/app 可选；
+        # job/cluster 供 LTS 跨集群 tskdep 与虚拟依赖用（远端 job 名/生产集群名，输入直传不推导）
         f_upstream.append({
             "table": u.get("table", ""),
             "task": u.get("task", ""),
@@ -2285,6 +2286,8 @@ def build_meta(rs_input, decisions):
             "project": u.get("project", ""),
             "group": u.get("group", ""),
             "app": u.get("app", ""),
+            "job": u.get("job", ""),
+            "cluster": u.get("cluster", ""),
         })
 
     # 调度任务路径（project_name/task_group）：从 schedule_config 取默认值，designer 可覆盖。

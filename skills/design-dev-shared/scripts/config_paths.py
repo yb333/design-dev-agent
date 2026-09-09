@@ -92,6 +92,15 @@ def requirements_path() -> Path:
     return config_dir() / "requirements.txt"
 
 
+def dep_id_cache_path() -> Path:
+    """dep_task_id_cache.json（LTS 跨集群依赖 depTaskId 查询缓存，dep_task_id 用）。
+
+    与资产无关、跨任务复用（平台 id 按三元组固定，TTL 内免重查），故放
+    config 目录而非资产 _internal/。
+    """
+    return config_dir() / "dep_task_id_cache.json"
+
+
 def resolve_appid(schema: str, config_path: str = "") -> str:
     """按 schema 反查所属 appid（schema_apps.json 标准源）。
 
