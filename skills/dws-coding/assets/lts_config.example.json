@@ -1,17 +1,36 @@
 {
-  "_comment": "LTS 制品配置（2026-09-10 自 platform_config 的 lts 块独立成文件；详见 docs/platform/lts-制品生成设计.md §七）。三段：default.consts=默认字面量（cluster_local 本集群名[生产 fin_pro/测试 BIZBAETA/开发 LTSBETA，默认生产]、db_name 库名[dbsource 生成 [*].[库名]，[*] 由平台按环境解析]、group_code 业务组编码）；schema_mappings.{schema}.consts=按目标 schema 覆盖（任务所在项目/库名/编码与 schema 挂钩——只覆盖差异键）；dep_task_ids=跨集群 depTaskId 表【全局，不参与 schema 覆盖——依赖的任务唯一与 schema 无关】（exporter 直读；缺键跳过该依赖行并汇总提示，人上平台查得后填，id 稳定填一次永续复用）。项目名称/任务组名称不在此（schedule_config.json 设计期盖章进 ts.tasks）；appid 不在此（schema_apps.json 反查）。",
+  "_comment": "LTS 平台信息（唯一 config——内容都是平台上已存在的事实，同域不同时机。2026-09-10 三合一：schedule_config[任务路径] 与 platform_config.lts[导出期 consts] 均并入退役）。设计期：assemble_ts 读任务路径（project_name/task_group + init/dq 子键）盖章进 ts.tasks 后冻结，闸口①人在 ts.md 可见归属；导出期：assemble_export 现读 cluster_local/db_name/group_code（datasource_type 纯常量归代码）；dep_task_ids 全局表（依赖任务唯一与 schema 无关），缺键跳过该依赖行并汇总提示，人上平台查得后填（id 稳定填一次永续复用）。解析：任务路径 schema块kind子键→schema平铺→default.kind子键→default平铺；consts schema浅合并覆盖 default。",
   "default": {
-    "consts": {
-      "cluster_local": "fin_pro",
-      "db_name": "GAUSS_EDW_BFD_BNIL",
-      "group_code": "",
-      "datasource_type": "gauss200"
-    }
+    "project_name": "SRP_DAILY",
+    "task_group": "GROUP_SPRD",
+    "init": {
+      "project_name": "",
+      "task_group": ""
+    },
+    "dq": {
+      "project_name": "",
+      "task_group": ""
+    },
+    "cluster_local": "fin_pro",
+    "db_name": "GAUSS_EDW_BFD_BNIL",
+    "group_code": ""
   },
   "schema_mappings": {
     "fin": {
-      "consts": {}
+      "project_name": "FIN_DAILY",
+      "task_group": "GROUP_FIN",
+      "init": {
+        "project_name": "FIN_INIT",
+        "task_group": "GROUP_FIN_INIT"
+      },
+      "dq": {
+        "project_name": "",
+        "task_group": ""
+      },
+      "db_name": "FIN_EDW_DB"
     }
   },
-  "dep_task_ids": {}
+  "dep_task_ids": {
+    "示例集群|示例调度组|示例任务组|示例任务名": "20224946"
+  }
 }

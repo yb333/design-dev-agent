@@ -349,9 +349,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path, lts_cfg: 
     consts = lts_cfg.get("consts", {}) or {}
     cluster_local = (consts.get("cluster_local") or "").strip()
     db_name = (consts.get("db_name") or "").strip()
-    datasource_type = consts.get("datasource_type", "gauss200")
+    datasource_type = "gauss200"
 
-    # 任务路径无兜底 config：project/group 只认 ts.tasks（schedule_config 设计期盖章）；
+    # 任务路径无兜底 config：project/group 只认 ts.tasks（lts_config 设计期盖章）；
     # 旧 ts.json 没有该字段 → "待配置"（platform_config.lts 兜底已随文件拆分退役）
     fallback_project = "待配置"
     fallback_group = "待配置"
@@ -661,21 +661,25 @@ def load_shujia_config(config_path: str = "") -> dict:
     return _load_config_raw(config_path, shujia_config_path())
 
 
-def load_lts_config(config_path: str = "", schema: str = "") -> dict:
-    """读 lts_config.json 并按 schema 解析（2026-09-10 自 platform_config 的 lts 块独立成文件）。
+# 导出期消费的 consts 键（与设计期路径键同层平铺——两消费者键不重叠互不干扰；
+# datasource_type 纯常量归代码，不进 config）
+LTS_CONST_KEYS = ("cluster_local", "db_name", "group_code")
 
-    三段结构：default.consts + schema_mappings.{schema}.consts 覆盖（集群/库名/编码等
-    跟目标 schema 走，只覆盖差异键）；dep_task_ids 全局（依赖的任务唯一，与 schema
-    无关，隔离在覆盖链外）。
+
+def load_lts_config(config_path: str = "", schema: str = "") -> dict:
+    """读 lts_config.json 并按 schema 解析导出期段（2026-09-10 与任务路径合一：
+    同文件 default/schema_mappings 平铺层里，assemble_ts 取路径键、本函数取 consts 键）。
+
+    schema_mappings.{schema} 浅合并覆盖 default（只覆盖差异键）；dep_task_ids 全局
+    （依赖的任务唯一，与 schema 无关，隔离在覆盖链外）。
     返回 {consts: {...}, dep_task_ids: {...}}
     """
     raw = _load_config_raw(config_path, lts_config_path())
     dflt = raw.get("default") or {}
     schema_cfg = ((raw.get("schema_mappings") or {}).get(schema) or {})
-    return {
-        "consts": {**(dflt.get("consts") or {}), **(schema_cfg.get("consts") or {})},
-        "dep_task_ids": raw.get("dep_task_ids") or {},
-    }
+    merged = {**dflt, **schema_cfg}
+    consts = {k: merged.get(k, "") for k in LTS_CONST_KEYS}
+    return {"consts": consts, "dep_task_ids": raw.get("dep_task_ids") or {}}
 
 
 def resolve_config_by_schema(raw_config: dict, schema: str, appid: str = "") -> dict:

@@ -268,36 +268,23 @@ def run():
         print("[7/9] 术加租户配置 example 未找到，跳过")
         print()
 
-    # ── 7b. LTS 制品配置初始化（assemble_export 用，2026-09-10 自 platform_config 拆分）──
+
+    # ── 8. LTS 配置初始化（2026-09-10 三合一：任务路径[设计期 assemble_ts 盖章] +
+    #    导出期 consts + 跨集群 depTaskIds；schedule_config/platform_config.lts 均并入退役）──
     lts_config = rules_dir / "lts_config.json"
     lts_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "lts_config.example.json"
     if not lts_config.exists() and lts_example.exists():
         shutil.copy2(str(lts_example), str(lts_config))
-        print("[8/9] LTS 制品配置初始化...")
+        print("[8/9] LTS 配置初始化（任务路径 + 导出期 consts + dep_task_ids）...")
         print(f"  ✓ 已创建 {lts_config}")
-        print(f"  ⚠️  请编辑此文件：consts 填本集群名/库名；有跨集群依赖时补 dep_task_ids")
+        print(f"  ⚠️  请编辑：各 schema 的 project_name/task_group（设计期盖章）；")
+        print(f"     cluster_local 本集群名（默认生产 fin_pro）/ db_name 库名；有跨集群依赖时补 dep_task_ids")
         print()
     elif lts_config.exists():
-        print("[8/9] LTS 制品配置已存在，跳过（不覆盖）")
+        print("[8/9] LTS 配置已存在，跳过（不覆盖）")
         print()
     else:
-        print("[8/9] LTS 制品配置 example 未找到，跳过")
-        print()
-
-    # ── 8. 调度任务路径配置初始化（assemble_ts 用，设计阶段确定 project/task_group）──
-    sc_config = rules_dir / "schedule_config.json"
-    sc_example = SCRIPT_DIR / "skills" / "dws-design" / "assets" / "schedule_config.example.json"
-    if not sc_config.exists() and sc_example.exists():
-        shutil.copy2(str(sc_example), str(sc_config))
-        print("[8/9] 调度任务路径配置初始化...")
-        print(f"  ✓ 已创建 {sc_config}")
-        print(f"  ⚠️  请编辑此文件，填入各 schema 的默认 project_name/task_group")
-        print()
-    elif sc_config.exists():
-        print("[8/9] 调度任务路径配置已存在，跳过（不覆盖）")
-        print()
-    else:
-        print("[8/9] 调度任务路径配置 example 未找到，跳过")
+        print("[8/9] LTS 配置 example 未找到，跳过")
         print()
 
     # ── 9. schema↔appid 映射初始化（deliver 目录层 + export job 参数的标准源）──

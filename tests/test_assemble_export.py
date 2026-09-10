@@ -181,9 +181,10 @@ class TestResolveConfigBySchema:
         """★ load_lts_config 三段结构：schema_mappings.{schema}.consts 覆盖 default.consts；
         dep_task_ids 全局隔离（不参与 schema 覆盖——依赖的任务唯一，与 schema 无关）。"""
         raw = {
-            "default": {"consts": {"cluster_local": "fin_pro", "db_name": "DB_A", "group_code": "G1"}},
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD",  # 路径键（assemble_ts 消费，此处应无感）
+                        "cluster_local": "fin_pro", "db_name": "DB_A", "group_code": "G1"},
             "schema_mappings": {
-                "fin": {"consts": {"db_name": "DB_FIN", "group_code": "G2"}},  # 只覆盖两个键
+                "fin": {"project_name": "FIN_DAILY", "db_name": "DB_FIN", "group_code": "G2"},  # 只覆盖差异键
             },
             "dep_task_ids": {"c1|i|g|t": "111"},
         }

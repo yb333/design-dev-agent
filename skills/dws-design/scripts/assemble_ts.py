@@ -29,7 +29,7 @@ from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
-from config_paths import schedule_config_path
+from config_paths import lts_config_path
 
 try:
     import yaml
@@ -2151,21 +2151,20 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
 
 
 # ============================================================
-# 调度任务路径配置（schedule_config.json）
+# 调度任务路径配置（lts_config.json 任务路径段）
 # ============================================================
 
 def load_schedule_config(config_path: str = "") -> dict:
-    """读 schedule_config.json。未找到返回空 dict。
+    """读 lts_config.json 的任务路径段（2026-09-10 与 LTS 导出配置合一，schedule_config 退役）。
 
-    实际配置在 ~/.config/opencode/schedule_config.json（install 时不覆盖已有，
-    和 db-sources/schedule_config 一致）。
-    结构：{default: {project_name, task_group},
-           schema_mappings: {schema: {project_name, task_group}},
-           init_override: {project_name, task_group}（可选）,
-           dq_override: {project_name, task_group}（可选）}
+    设计期只关心路径键；同文件其余段（cluster_local/db_name/group_code/dep_task_ids）
+    归 assemble_export 导出期消费，两消费者键不重叠互不干扰。
+    结构：{default: {project_name, task_group, init/dq 子键（可选，任务种类独立路径）, 导出期键...},
+           schema_mappings: {schema: 同 default 结构},
+           dep_task_ids: {...}}
     """
     if not config_path:
-        config_path = str(schedule_config_path())
+        config_path = str(lts_config_path())
     p = Path(config_path)
     if not p.exists():
         return {}
@@ -2178,10 +2177,14 @@ def load_schedule_config(config_path: str = "") -> dict:
 
 
 def resolve_schedule_path(sched_config: dict, schema: str, task_kind: str) -> dict:
-    """按 schema + 任务类型解析调度任务路径（project_name/task_group）。
+    """按 schema + 任务种类解析调度任务路径（project_name/task_group）。
 
-    task_kind: 'f' | 'view' | 'dq' | 'init'
-    查找优先级：override 段（init_override / dq_override）→ schema_mappings → default
+    task_kind: 'f' | 'view' | 'dq' | 'init'（f/view=main 路径）
+    查找优先级（两维度嵌套——schema 块内的任务种类子键差异化，修复旧
+    schedule_config 的 override 不分 schema 缺陷）：
+      schema_mappings.{schema}.{kind子键} → schema_mappings.{schema}.平铺
+      → default.{kind子键} → default.平铺
+    init/dq 子键为空或省略 = 同 main。
 
     返回 {project_name, task_group}（找不到都为空串，不报错）。
     """
@@ -2191,21 +2194,20 @@ def resolve_schedule_path(sched_config: dict, schema: str, task_kind: str) -> di
     default_cfg = sched_config.get("default", {}) or {}
     schema_cfg = (sched_config.get("schema_mappings", {}) or {}).get(schema, {}) or {}
 
-    # 任务类型 override：init → init_override；dq → dq_override；f/view 走 schema 默认
-    override_cfg = {}
-    if task_kind == "init":
-        override_cfg = sched_config.get("init_override", {}) or {}
-    elif task_kind == "dq":
-        override_cfg = sched_config.get("dq_override", {}) or {}
+    kind_key = {"init": "init", "dq": "dq"}.get(task_kind, "")  # f/view 走平铺
 
-    # 合并优先级：override > schema_mappings > default
-    project_name = (override_cfg.get("project_name")
-                    or schema_cfg.get("project_name")
-                    or default_cfg.get("project_name", ""))
-    task_group = (override_cfg.get("task_group")
-                  or schema_cfg.get("task_group")
-                  or default_cfg.get("task_group", ""))
-    return {"project_name": project_name, "task_group": task_group}
+    def _pick(layer: dict) -> tuple[str, str]:
+        if kind_key and isinstance(layer.get(kind_key), dict):
+            p_ = layer[kind_key].get("project_name") or layer.get("project_name") or ""
+            g_ = layer[kind_key].get("task_group") or layer.get("task_group") or ""
+        else:
+            p_ = layer.get("project_name") or ""
+            g_ = layer.get("task_group") or ""
+        return p_, g_
+
+    s_p, s_g = _pick(schema_cfg)
+    d_p, d_g = _pick(default_cfg)
+    return {"project_name": s_p or d_p, "task_group": s_g or d_g}
 
 
 def build_meta(rs_input, decisions):
@@ -2290,7 +2292,7 @@ def build_meta(rs_input, decisions):
             "cluster": u.get("cluster", ""),
         })
 
-    # 调度任务路径（project_name/task_group）：从 schedule_config 取默认值，designer 可覆盖。
+    # 调度任务路径（project_name/task_group）：从 lts_config 取默认值，designer 可覆盖。
     # 不同任务类型（F/view/dq/初始化）可能归属不同项目组，每个 task 单独确定。
     sched_config = load_schedule_config()
     # designer 的覆盖（task_project_override: {init: {...}, dq: {...}}）
@@ -2299,7 +2301,7 @@ def build_meta(rs_input, decisions):
     def _resolve_task_path(task_kind: str):
         """按任务类型解析 project_name/task_group。
         task_kind: 'f' | 'view' | 'dq' | 'init'
-        优先级：designer 覆盖 > schedule_config 的 override > schema 默认 > default
+        优先级：designer 覆盖 > schema 块 kind 子键 > schema 平铺 > default
         """
         # designer 显式覆盖最优先
         if task_kind in task_override and isinstance(task_override[task_kind], dict):
@@ -2309,7 +2311,7 @@ def build_meta(rs_input, decisions):
                     "project_name": ov.get("project_name", ""),
                     "task_group": ov.get("task_group", ""),
                 }
-        # schedule_config 按 schema 取默认（含 override 段）
+        # lts_config 按 schema + 任务种类取默认
         return resolve_schedule_path(sched_config, target_schema, task_kind)
 
     # 标准化构建 tasks（F / view / dq）
@@ -2815,7 +2817,7 @@ def render_md(ts):
         lines.append("|--------|-----|")
         lines.append(f"| 调度任务 | {task_info.get('task_name', '-')} |")
         lines.append(f"| 执行Job | {task_info.get('job_name', '-')} |")
-        # 调度任务路径（项目/任务组，来自 schedule_config，designer 可覆盖）
+        # 调度任务路径（项目/任务组，来自 lts_config，designer 可覆盖）
         project = task_info.get("project_name", "")
         group = task_info.get("task_group", "")
         if project or group:

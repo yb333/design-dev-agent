@@ -332,43 +332,60 @@ class TestResolveSchedulePath:
         r = resolve_schedule_path(cfg, "unknown", "f")
         assert r["project_name"] == "SRP_DAILY"
 
-    def test_dq_override(self):
-        """dq 任务类型走 dq_override 段。"""
+    def test_dq_kind_key(self):
+        """dq 任务走 schema 块/default 的 dq 子键（两维度嵌套——2026-09-10 修复旧
+        override 不分 schema 缺陷：fin 的 dq 与 default 的 dq 可各自配置）。"""
         cfg = {
-            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
-            "dq_override": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"},
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD",
+                        "dq": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"}},
         }
         r = resolve_schedule_path(cfg, "dws", "dq")
         assert r["project_name"] == "SRP_DQ"
         assert r["task_group"] == "GROUP_DQ"
 
-    def test_init_override(self):
-        """init 任务类型走 init_override 段。"""
+    def test_init_kind_key_schema_level(self):
+        """init 子键可按 schema 差异化（fin 的 init 与 default 的 init 不同）。"""
         cfg = {
-            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
-            "init_override": {"project_name": "SRP_INIT", "task_group": "GROUP_INIT"},
+            "default": {"project_name": "SRP_DAILY",
+                        "init": {"project_name": "SRP_INIT", "task_group": "GROUP_INIT"}},
+            "schema_mappings": {"fin": {"project_name": "FIN_DAILY",
+                                        "init": {"project_name": "FIN_INIT"}}},
         }
-        r = resolve_schedule_path(cfg, "dws", "init")
-        assert r["project_name"] == "SRP_INIT"
+        r_fin = resolve_schedule_path(cfg, "fin", "init")
+        assert r_fin["project_name"] == "FIN_INIT"
+        r_other = resolve_schedule_path(cfg, "dws", "init")
+        assert r_other["project_name"] == "SRP_INIT"
 
-    def test_override_priority_over_schema(self):
-        """override > schema_mappings > default。"""
+    def test_kind_key_priority_over_flat(self):
+        """schema 块 kind 子键 > schema 平铺 > default kind 子键 > default 平铺。"""
         cfg = {
+            "default": {"project_name": "DEF",
+                        "dq": {"project_name": "DEF_DQ"}},
+            "schema_mappings": {"fin": {"project_name": "FIN",
+                                        "dq": {"project_name": "FIN_DQ"}}},
+        }
+        assert resolve_schedule_path(cfg, "fin", "dq")["project_name"] == "FIN_DQ"
+        # schema 块无 dq 子键 → schema 平铺
+        cfg2 = {
             "default": {"project_name": "DEF"},
             "schema_mappings": {"fin": {"project_name": "FIN"}},
-            "dq_override": {"project_name": "DQ"},
         }
-        r = resolve_schedule_path(cfg, "fin", "dq")
-        assert r["project_name"] == "DQ", "override 应优先于 schema"
+        assert resolve_schedule_path(cfg2, "fin", "dq")["project_name"] == "FIN"
+        # schema 块整体无 → default 的 kind 子键
+        cfg3 = {
+            "default": {"project_name": "DEF", "dq": {"project_name": "DEF_DQ"}},
+            "schema_mappings": {},
+        }
+        assert resolve_schedule_path(cfg3, "fin", "dq")["project_name"] == "DEF_DQ"
 
-    def test_no_override_for_f_view(self):
-        """f/view 不走 override 段（只有 dq/init 有 override）。"""
+    def test_no_kind_key_for_f_view(self):
+        """f/view 走平铺路径（dq/init 子键不影响它们）。"""
         cfg = {
-            "default": {"project_name": "DEF", "task_group": "G_DEF"},
-            "dq_override": {"project_name": "DQ", "task_group": "G_DQ"},
+            "default": {"project_name": "DEF", "task_group": "G_DEF",
+                        "dq": {"project_name": "DQ", "task_group": "G_DQ"}},
         }
         r = resolve_schedule_path(cfg, "dws", "f")
-        assert r["project_name"] == "DEF", "f 不应被 dq_override 影响"
+        assert r["project_name"] == "DEF", "f 不应被 dq 子键影响"
         assert r["task_group"] == "G_DEF"
 
 
@@ -401,8 +418,8 @@ class TestBuildMetaTaskPath:
     def test_tasks_have_project_group(self, monkeypatch):
         """有 schedule_config + dq_rules 非空时，tasks.f/view/dq 都有 project_name/task_group。"""
         sched_cfg = {
-            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"},
-            "dq_override": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"},
+            "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD",
+                        "dq": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"}},
         }
         monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: sched_cfg)
         decisions = {"schedule": {"cron": "0 30 3 * * ?"},
@@ -413,7 +430,7 @@ class TestBuildMetaTaskPath:
         assert tasks["f"]["project_name"] == "SRP_DAILY"
         assert tasks["f"]["task_group"] == "GROUP_SPRD"
         assert tasks["view"]["project_name"] == "SRP_DAILY"
-        # dq 走 dq_override（仅 dq_rules 非空时才建）
+        # dq 走 default 的 dq 子键（仅 dq_rules 非空时才建）
         assert tasks["dq"]["project_name"] == "SRP_DQ"
         assert tasks["dq"]["task_group"] == "GROUP_DQ"
 

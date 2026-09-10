@@ -228,7 +228,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 
 | 生成内容 | 来源 | 状态 |
 |---|---|---|
-| 任务骨架（task_name/job_name/cron/project_name/task_group） | ts.json meta.schedule.tasks（schedule_config 盖章） | ✅ 已有 |
+| 任务骨架（task_name/job_name/cron/project_name/task_group） | ts.json meta.schedule.tasks（lts_config 任务路径段设计期盖章） | ✅ 已有 |
 | tskdep 路径 4 段 | upstream 项 app/project/group/task + schema_apps 反查 appid | ✅ 已有 |
 | params 数组内容 | ts.json meta.schedule.lts_params（designer V→P 声明） | ✅ 已有 |
 | V_FLAG 及取值 | designer 增量决策（ts.json 驱动） | ✅ 已有通道 |
@@ -266,7 +266,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 - **三套环境集群名（用户口径）**：生产 `fin_pro` / 测试 `BIZBAETA` / 开发 `LTSBETA`——我们建的任务都在这三个集群下；上游依赖大部分在**别的集群**（各 upstream 声明自带集群信息，RS 输入提供来源任务信息——用户确认）。
 - 租户标识（V_RENTER_*）：用户定调"某些任务的设计，暂不管"→ consts 不配则不生成。
 - **depTaskId = 显式表直读**（无缓存/无脚本——独立取值脚本与缓存机制随脚本路搁置一并移除，2026-09-09 内联定稿；外部接口预留见 §4.2）。
-- **schema 挂钩定调（2026-09-10）**：任务所在项目/库名/编码等与目标 schema 挂钩——consts 走 `default` + `schema_mappings.{schema}` 覆盖（resolve_config_by_schema 解析，只覆盖差异键）；`dep_task_ids` 全局隔离在覆盖链外（依赖的任务唯一，与 schema 无关——浅合并会顶掉，已用测试钉住）。项目名称/任务组名称不在本文件（schedule_config.json 设计期盖章进 ts.tasks，本身已按 schema 分组）；appid 不在本文件（schema_apps.json 反查）。
+- **三合一终态（2026-09-10 定稿）**：schedule_config（任务路径）并入 lts_config 退役——LTS 配置都是平台上已存在的事实（同域），设计期/导出期只是消费时机。default/schema_mappings **平铺层**共存两类键（两消费者键不重叠互不干扰）：任务路径（project_name/task_group + init/dq 任务种类子键，两维度嵌套——assemble_ts 盖章进 ts 后冻结）+ 导出期键（cluster_local/db_name/group_code，schema 浅合并覆盖差异键）；`dep_task_ids` 全局段（依赖的任务唯一，与 schema 无关——隔离在覆盖链外已用测试钉住）。appid 不在本文件（schema_apps.json 反查）；datasource_type 纯常量归代码。
 - 不做环境维度、不做 `--env`（一期面向生产；二期预留见 §二.9）。
 
 ## 八、设计侧改动（assemble_ts / RS 声明）
