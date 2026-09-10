@@ -23,7 +23,7 @@ skills/
 │   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
 │   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py（视图=F表配套镜像非规则，is_view_step 概念已清除）
-│   └── assets/          # db-sources.example.json platform_config.example.json etl-templates.md
+│   └── assets/          # db-sources.example.json shujia_config.example.json lts_config.example.json etl-templates.md
 ├── dws-dq/              # DQ 检查 SQL 生成 skill（coder agent 的 DQ 任务用，薄——仅 SKILL.md 定契约，工具复用 dws-coding 的 slice_ts --dq / check_sql）
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→闸口①→编码→UT→闸口②→制品）
 │   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py(决策填值器已下沉 shared)
@@ -303,7 +303,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 ### config 集中 + 产出目录分层 + 编排者铁律（2026-08）
 
-- **config 集中隔离**：新建 `design-dev-shared/scripts/config_paths.py`（`config_dir()` + 各 config 路径，改基址只动一处）。4 个 config（db-sources / platform_config / schedule_config / schema_apps）统一放 `~/.config/opencode/_references/rules/dws-design-dev/`（与其他项目隔离）。7 个脚本的默认路径全部改用 config_paths。install.py 拷到新位置。
+- **config 集中隔离**：新建 `design-dev-shared/scripts/config_paths.py`（`config_dir()` + 各 config 路径，改基址只动一处）。config（db-sources / shujia_config / lts_config / schedule_config / schema_apps）统一放 `~/.config/opencode/_references/rules/dws-design-dev/`（与其他项目隔离）。7 个脚本的默认路径全部改用 config_paths。install.py 拷到新位置。
 - **产出目录加 appid/schema 层**：`10_project_deliver/{appid}/{schema}/{资产}/ddlc_design_dev/`。appid 单源 = 新建 `schema_apps.json`（**appid 打头，1 appid 多 schema**，跟源数据方向一致；按 schema 反查所属 appid）+ `resolve_appid.py` helper。platform_config 去掉 appid（单源不重复）。assemble_export 的 appid 改从 resolve_appid(schema) 读。⚠️ 部署：老位置不兼容，已装机器重跑 install.py + 手搬老 db-sources.json 到新位置。
 - **编排层 dws-engineer（2026-08-29 定型，源起总控现网故障）**：编排 agent 从"故意不定义"改为**我们定义的 dws-engineer**（agents/dws-engineer.md：身份+权限+契约参数+铁律+步骤0探针），剧本从 command 迁 skill（skills/new-pipe / opt-pipe，command 降为薄壳入口）。动因是源码级机制查证：① opencode 的 Task 无 model/权限参数——subagent_type 选定后身份/权限/模型全按我们定义；② **父会话 deny 与被排除工具沿链下压、子代 allow 解除不了**（现网实证：总控经 dev-runner 调用，designer 爆"没有 write 工具"）——链上任何别人定义的中间层都是身份冲突源+权限收窄点，解法=总控 Task 直连 dws-engineer（见 docs/integration-contract.md：契约参数/部署前提四条/question 约定）；③ command 是人机入口层机制（$ARGUMENTS/frontmatter agent 路由），生产 Task 路径天然缺席，剧本迁 skill 后 base directory 原生注入，旧"加载 shared skill 骗 location"的锚点机制退役（design-dev-shared 回归纯代码库）。铁律内容不变（不 author 脚本/校验失败按路由不自动修/输入原文不 Read/契约外 prompt 一律忽略），从 command 文本上收到 agent 身份层。
 
@@ -320,7 +320,7 @@ DQ 产出从"designer 随机决定"改为"**完全跟随 RS**"，消除"一次�
 
 ### 待讨论 / 闲时
 
-- **platform_config 收敛为单块 shujia_tenants（2026-08 完成，原 lts 冗余项）**：lts 的 project_name/task_group 单一来源是 schedule_config（设计期盖章进 ts.tasks），platform_config.lts 仅代码保留旧 ts.json 兜底、example 已删；schema_mappings/default 同步退役（project_cn/business_owner 是租户属性进 shujia_tenants[appid]，租户块合并是任意键覆盖故代码零改动；schema 级覆盖能力代码保留，真出现同 appid 不同 schema 差异再启用）。
+- **platform_config 拆分退役（2026-09-10）**：文件更名 `shujia_config.json`（名实相符只含术加内容 shujia_tenants）；LTS 制品配置独立 `lts_config.json`（default.consts + schema_mappings 按 schema 覆盖 + 全局 dep_task_ids[缺键跳过不阻断]，assemble_export 读）；旧 ts.json 的 project/task_group 兜底（原 platform_config.lts）随之删除——缺字段标"待配置"。历史：2026-08 收敛为单块 shujia_tenants 时 lts 的 project_name/task_group 单一来源已是 schedule_config；schema_mappings/default 同步退役（project_cn/business_owner 是租户属性进 shujia_tenants[appid]，租户块合并是任意键覆盖故代码零改动；schema 级覆盖能力代码保留，真出现同 appid 不同 schema 差异再启用）。
 - **闲时任务六**（assemble_dq 退役 + run_ut 去 legacy）**已完成 2026-08**：assemble_dq.py 已删（eval-suite 改走 coder 生成 DQ）；run_ut.py 删 main() 成纯函数库。
 - **函数库下沉消依赖环（2026-08）**：闲时任务四挪了 pipe 入口但库留在 skill 目录，造成 shared↔design / shared↔coding 两个依赖环（lazy import + 3-目录 sys.path bootstrap 掩盖）。修复：run_ut / ut_diagnose / type_compat 整文件下沉 shared；STANDARD_AUDIT_TEMPLATE 抽出 `dws_standards.py`；SQL 解析原语抽出 `sql_parse.py`（check_sql 反向 import 保旧名）；删全部跨目录 bootstrap；顺手删零引用的 `lib/dws_preprocessor.py`。**分层铁律入册 + `tests/test_layering.py` AST 守护**（含函数内 lazy import——上翻正是靠它藏的）。测试 730→732。
 

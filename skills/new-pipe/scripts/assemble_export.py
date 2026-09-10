@@ -19,7 +19,9 @@ UT 通过后调用。把验证过的 ts.json + ETL SQL 翻译成
   交接流程：闸口②收集 项目中文名（配置预填可改）+ 子项目中文名 → 内网
   脚本补齐编码/英文名、取码替换占位符 → 人工上传。
   租户ID = appid（schema_apps 反查）；组织英文简称/数据源 = 术加租户属性
-  （platform_config 的 shujia_tenants[appid]，租户级覆盖 schema 级）。
+  （shujia_config 的 shujia_tenants[appid]，租户级覆盖 schema 级）。
+  LTS 制品配置独立 lts_config.json（consts 按 schema 覆盖 + 全局 dep_task_ids；
+  2026-09-10 拆分：platform_config 更名 shujia_config 只含术加内容）。
 
 用法:
   python assemble_export.py --ts ts.json --etl-dir etl/ --outdir .
@@ -39,7 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 
 # config_paths/resolve_appid 在 shared 公共库（上方 bootstrap 已接通）
-from config_paths import platform_config_path, resolve_appid
+from config_paths import shujia_config_path, lts_config_path, resolve_appid
 
 try:
     import openpyxl
@@ -226,7 +228,7 @@ def _virtual_dep_params(run_params_query: str) -> str:
 def _database_job_params(schema: str, db_name: str, datasource_type: str) -> str:
     """database 6 键恒定。dbsource=[*].[库名]——[*] 照样本原样（平台按环境解析）。"""
     if not db_name:
-        raise ValueError("platform_config lts.consts.db_name 未配置（database job 库名，"
+        raise ValueError("lts_config consts.db_name 未配置（database job 库名，"
                          "如 GAUSS_EDW_BFD_BNIL）")
     return json.dumps({
         "schema": schema,
@@ -330,7 +332,7 @@ def validate_lts_package(ts: dict, lts_params: list, job_rows: list, param_names
     return problems
 
 
-def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
+def generate_schedule_excel(ts: dict, config: dict, output_path: Path, lts_cfg: dict | None = None):
     """生成 lts_{表名}.xlsx（3 sheet：tasks/jobs/taskParams）——LTS 制品。
 
     任务组合模型（设计文档 §三）：
@@ -343,15 +345,16 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     sched = meta.get("schedule", {})
     tasks_sched = sched.get("tasks", {})
     lts_params = sched.get("lts_params", [])
-    lts_cfg = config.get("lts", {})
+    lts_cfg = lts_cfg or load_lts_config()
     consts = lts_cfg.get("consts", {}) or {}
     cluster_local = (consts.get("cluster_local") or "").strip()
     db_name = (consts.get("db_name") or "").strip()
     datasource_type = consts.get("datasource_type", "gauss200")
 
-    # 兜底默认值（旧 ts.json 无 project/task_group 时用 platform_config 的 lts 段）
-    fallback_project = _cfg(lts_cfg, "project_name")
-    fallback_group = _cfg(lts_cfg, "task_group")
+    # 任务路径无兜底 config：project/group 只认 ts.tasks（schedule_config 设计期盖章）；
+    # 旧 ts.json 没有该字段 → "待配置"（platform_config.lts 兜底已随文件拆分退役）
+    fallback_project = "待配置"
+    fallback_group = "待配置"
     appid = (config.get("shujia") or {}).get("appid", "")
     owner = _cfg(config.get("shujia", {}), "business_owner", "")
 
@@ -411,7 +414,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
                                     cross_key=_cross_dep_key(remote_cluster), dep_task_id=dep_id)
         else:
             if not cluster_local:
-                raise ValueError("platform_config lts.consts.cluster_local 未配置（本集群名，生产 fin_pro/"
+                raise ValueError("lts_config consts.cluster_local 未配置（本集群名，生产 fin_pro/"
                                  "测试 BIZBAETA/开发 LTSBETA 三选一）——同集群 tskdep 集群字段需要它")
             job_name = task
             segs = [appid, project, group, task]
@@ -640,35 +643,51 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
 # 配置加载
 # ============================================================
 
-def load_platform_config(config_path: str = "") -> dict:
-    """读 platform_config.json 原始内容。未找到返回空 dict。
-
-    结构：{ default: {shujia, lts}, schema_mappings: {schema: {shujia, lts}} }
-    """
-    if not config_path:
-        config_path = os.environ.get(
-            "PLATFORM_CONFIG",
-            str(platform_config_path()),
-        )
-    p = Path(config_path)
+def _load_config_raw(config_path: Path, default_path: Path) -> dict:
+    """读配置 JSON 原始内容（过滤 _ 前缀说明字段）。未找到返回空 dict。"""
+    p = Path(config_path) if config_path else default_path
     if not p.exists():
         return {}
     raw = json.loads(p.read_text(encoding="utf-8"))
-    # 过滤掉 _comment / _structure 等说明字段
     return {k: v for k, v in raw.items() if not k.startswith("_")}
 
 
-def resolve_config_by_schema(raw_config: dict, schema: str, appid: str = "") -> dict:
-    """按 schema 从 platform_config 取两套平台配置。
+def load_shujia_config(config_path: str = "") -> dict:
+    """读 shujia_config.json 原始内容（术加执行平台租户配置；2026-09-10 自
+    platform_config.json 改名——文件只含术加内容）。
 
-    查找顺序：schema_mappings[schema] → default。
-    术加租户块 shujia_tenants[appid]（org_abbr/datasource）是租户级属性，
-    覆盖 schema 级取值（数据源是术加租户属性，单一归属）。
+    结构：{ shujia_tenants: {appid: {...}}, default/schema_mappings 为保留的 schema 级覆盖 }
+    """
+    return _load_config_raw(config_path, shujia_config_path())
+
+
+def load_lts_config(config_path: str = "", schema: str = "") -> dict:
+    """读 lts_config.json 并按 schema 解析（2026-09-10 自 platform_config 的 lts 块独立成文件）。
+
+    三段结构：default.consts + schema_mappings.{schema}.consts 覆盖（集群/库名/编码等
+    跟目标 schema 走，只覆盖差异键）；dep_task_ids 全局（依赖的任务唯一，与 schema
+    无关，隔离在覆盖链外）。
+    返回 {consts: {...}, dep_task_ids: {...}}
+    """
+    raw = _load_config_raw(config_path, lts_config_path())
+    dflt = raw.get("default") or {}
+    schema_cfg = ((raw.get("schema_mappings") or {}).get(schema) or {})
+    return {
+        "consts": {**(dflt.get("consts") or {}), **(schema_cfg.get("consts") or {})},
+        "dep_task_ids": raw.get("dep_task_ids") or {},
+    }
+
+
+def resolve_config_by_schema(raw_config: dict, schema: str, appid: str = "") -> dict:
+    """按 schema 从 shujia_config 解析术加租户配置。
+
+    查找顺序：schema_mappings[schema].shujia → default.shujia → shujia_tenants[appid]
+    （租户级属性覆盖 schema 级：数据源是术加租户属性，单一归属）。
     appid 由调用方传入（main 用 resolve_appid 反查 schema_apps）。
-    返回 {shujia: {...含 appid/org_abbr}, lts: {...}}
+    返回 {shujia: {...含 appid/org_abbr}}（LTS 配置独立走 load_lts_config）
     """
     if not raw_config:
-        return {"shujia": {"appid": appid}, "lts": {}}
+        return {"shujia": {"appid": appid}}
     default_cfg = raw_config.get("default", {})
     mappings = raw_config.get("schema_mappings", {})
     schema_cfg = mappings.get(schema, {})
@@ -677,20 +696,7 @@ def resolve_config_by_schema(raw_config: dict, schema: str, appid: str = "") -> 
         tenant = (raw_config.get("shujia_tenants") or {}).get(appid) or {}
         shujia = {**shujia, **{k: v for k, v in tenant.items() if v}}
     shujia["appid"] = appid
-    # LTS 段三段结构：default.consts + schema_mappings.{schema}.consts 覆盖（集群/库名/
-    # 编码等跟目标 schema 走）；dep_task_ids 全局（依赖的任务唯一，与 schema 无关，
-    # 隔离在覆盖链外——浅合并会把它顶掉）；旧平铺 lts.project_name/task_group 兼容读取
-    lts_raw = raw_config.get("lts", {}) or {}
-    lts_default = lts_raw.get("default") or {}
-    lts_schema = ((lts_raw.get("schema_mappings") or {}).get(schema) or {})
-    lts_flat = {**default_cfg.get("lts", {}), **schema_cfg.get("lts", {})}  # 旧平铺兜底
-    lts = {
-        "consts": {**(lts_default.get("consts") or {}), **(lts_schema.get("consts") or {})},
-        "dep_task_ids": lts_raw.get("dep_task_ids") or {},
-        "project_name": lts_schema.get("project_name") or lts_default.get("project_name") or lts_flat.get("project_name", ""),
-        "task_group": lts_schema.get("task_group") or lts_default.get("task_group") or lts_flat.get("task_group", ""),
-    }
-    return {"shujia": shujia, "lts": lts}
+    return {"shujia": shujia}
 
 
 def _cfg(config: dict, key: str, fallback: str = "待配置") -> str:
@@ -1057,7 +1063,8 @@ def main():
     parser.add_argument("--etl-dir", required=True, help="ETL SQL 目录（etl/）")
     parser.add_argument("--ddl-dir", default="", help="（兼容保留，已不使用：视图不发术加规则行）")
     parser.add_argument("--outdir", required=True, help="产出根目录（export/ 建在此下）")
-    parser.add_argument("--config", default="", help="platform_config.json 路径")
+    parser.add_argument("--config", default="", help="shujia_config.json 路径（术加租户配置）")
+    parser.add_argument("--lts-config", default="", help="lts_config.json 路径（LTS 制品配置，默认 config 目录）")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -1072,10 +1079,11 @@ def main():
 
     # 读配置（按目标表 schema 映射两套平台配置；appid 从 schema_apps 反查，
     # 注入 shujia 段 → 租户ID 列 + shujia_tenants 租户块解析）
-    raw_config = load_platform_config(args.config)
+    raw_config = load_shujia_config(args.config)
     target_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
     appid = resolve_appid(target_schema)
     config = resolve_config_by_schema(raw_config, target_schema, appid)
+    lts_cfg = load_lts_config(args.lts_config, target_schema)
 
     # 产出（文件名带平台标识 + 表名，便于多资产区分）
     target_short = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "unknown")
@@ -1083,7 +1091,7 @@ def main():
     sched_path = export_dir / f"lts_{target_short}.xlsx"
 
     generate_execution_excel(ts, config, etl_dir, exec_path)
-    generate_schedule_excel(ts, config, sched_path)
+    generate_schedule_excel(ts, config, sched_path, lts_cfg=lts_cfg)
 
     print("=" * 50)
     print("平台制品包已生成:")

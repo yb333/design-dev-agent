@@ -1,0 +1,12 @@
+{
+  "_comment": "术加执行平台租户配置（2026-09-10 自 platform_config.json 改名——名实相符：文件只含术加内容，LTS 配置独立 lts_config.json）。exporter 读取。",
+  "_structure": "shujia_tenants: appid → 术加租户身份全集 { org_abbr(租户名), datasource(租户数据源), project_cn(项目中文名锚点), business_owner(责任人) }。appid 从 schema_apps.json 按 schema 反查。项目/责任人都挂租户（appid→项目→子项目），不随 schema 变。",
+  "shujia_tenants": {
+    "APP001": {
+      "org_abbr": "crm_tenant",
+      "datasource": "SRP_DWS",
+      "project_cn": "ETL项目",
+      "business_owner": ""
+    }
+  }
+}

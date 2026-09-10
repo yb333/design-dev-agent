@@ -241,7 +241,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 
 ## 七、config 设计
 
-`platform_config.json` 新增 `lts` 块（exporter 已单点读此文件，config_paths 已集中）：
+独立 `lts_config.json`（2026-09-10 自 platform_config 拆分——该文件更名 shujia_config 只含术加内容；config_paths.lts_config_path 单点定位）：
 
 ```json
 "lts": {

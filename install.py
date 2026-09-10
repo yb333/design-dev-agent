@@ -253,20 +253,35 @@ def run():
         print("[6/6] 数据库配置 example 未找到，跳过")
         print()
 
-    # ── 7. 平台配置初始化（exporter 用）──
-    pf_config = rules_dir / "platform_config.json"
-    pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "platform_config.example.json"
+    # ── 7. 术加租户配置初始化（exporter 用；2026-09-10 自 platform_config 改名）──
+    pf_config = rules_dir / "shujia_config.json"
+    pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "shujia_config.example.json"
     if not pf_config.exists() and pf_example.exists():
         shutil.copy2(str(pf_example), str(pf_config))
-        print("[7/8] 平台配置初始化...")
+        print("[7/9] 术加租户配置初始化...")
         print(f"  ✓ 已创建 {pf_config}")
-        print(f"  ⚠️  请编辑此文件，填入项目/子项目编码（部署到平台时用）")
         print()
     elif pf_config.exists():
-        print("[7/8] 平台配置已存在，跳过（不覆盖）")
+        print("[7/9] 术加租户配置已存在，跳过（不覆盖）")
         print()
     else:
-        print("[7/8] 平台配置 example 未找到，跳过")
+        print("[7/9] 术加租户配置 example 未找到，跳过")
+        print()
+
+    # ── 7b. LTS 制品配置初始化（assemble_export 用，2026-09-10 自 platform_config 拆分）──
+    lts_config = rules_dir / "lts_config.json"
+    lts_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "lts_config.example.json"
+    if not lts_config.exists() and lts_example.exists():
+        shutil.copy2(str(lts_example), str(lts_config))
+        print("[8/9] LTS 制品配置初始化...")
+        print(f"  ✓ 已创建 {lts_config}")
+        print(f"  ⚠️  请编辑此文件：consts 填本集群名/库名；有跨集群依赖时补 dep_task_ids")
+        print()
+    elif lts_config.exists():
+        print("[8/9] LTS 制品配置已存在，跳过（不覆盖）")
+        print()
+    else:
+        print("[8/9] LTS 制品配置 example 未找到，跳过")
         print()
 
     # ── 8. 调度任务路径配置初始化（assemble_ts 用，设计阶段确定 project/task_group）──

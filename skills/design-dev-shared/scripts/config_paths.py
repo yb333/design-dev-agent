@@ -51,7 +51,7 @@ def opencode_root() -> Path:
 
 
 def config_dir() -> Path:
-    """我们的 config 根目录（db-sources / platform_config / schedule_config / schema_apps 所在）。
+    """我们的 config 根目录（db-sources / shujia_config / lts_config / schedule_config / schema_apps 所在）。
 
     优先用环境变量 DWS_RULES_DIR（直接指向 rules 目录，部署/CI/测试隔离用）；
     否则从 opencode_root() 推算 = <opencode_root>/_references/rules/dws-design-dev/。
@@ -67,9 +67,16 @@ def db_sources_path() -> Path:
     return config_dir() / "db-sources.json"
 
 
-def platform_config_path() -> Path:
-    """platform_config.json（术加/LTS 部署配置，assemble_export 用；已不含 appid）"""
-    return config_dir() / "platform_config.json"
+def shujia_config_path() -> Path:
+    """shujia_config.json（术加执行平台租户配置，assemble_export 用；2026-09-10 自
+    platform_config.json 改名——名实相符：文件只含术加内容，LTS 配置独立 lts_config）"""
+    return config_dir() / "shujia_config.json"
+
+
+def lts_config_path() -> Path:
+    """lts_config.json（LTS 制品生成配置：consts + schema 覆盖 + 跨集群 depTaskId 表，
+    assemble_export 用；2026-09-10 自 platform_config 的 lts 块独立成文件）"""
+    return config_dir() / "lts_config.json"
 
 
 def schedule_config_path() -> Path:

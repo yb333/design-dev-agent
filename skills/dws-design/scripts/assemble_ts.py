@@ -2158,7 +2158,7 @@ def load_schedule_config(config_path: str = "") -> dict:
     """读 schedule_config.json。未找到返回空 dict。
 
     实际配置在 ~/.config/opencode/schedule_config.json（install 时不覆盖已有，
-    和 db-sources/platform_config 一致）。
+    和 db-sources/schedule_config 一致）。
     结构：{default: {project_name, task_group},
            schema_mappings: {schema: {project_name, task_group}},
            init_override: {project_name, task_group}（可选）,

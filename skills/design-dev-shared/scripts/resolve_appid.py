@@ -2,7 +2,7 @@
 """按 schema 查 appid（schema_apps.json 标准源）。
 
 编排 command 调：构造 deliver 目录 `10_project_deliver/{appid}/{schema}/{资产}/...` 时，
-先用本脚本按 schema 查 appid。appid 是 schema↔appid 的唯一来源（platform_config 已不带 appid）。
+先用本脚本按 schema 查 appid。appid 是 schema↔appid 的唯一来源。
 
 用法:
   python resolve_appid.py --schema slprd
