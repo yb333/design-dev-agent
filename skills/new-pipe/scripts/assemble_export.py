@@ -359,6 +359,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path, lts_cfg: 
     owner = _cfg(config.get("shujia", {}), "business_owner", "")
 
     incremental = bool(ts.get("init"))
+    target_short = (meta.get("target", {}).get("f_table", {}) or {}).get("table", "")
     skipped_deps = []   # (任务名, 缺 id 的四段键)——缺配置跳过不阻断，末尾汇总提示
     v_flag_declared = any(p.get("lts_var") == "V_FLAG" for p in (lts_params or []))
 
@@ -538,7 +539,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path, lts_cfg: 
     for kind in ("f", "view", "dq", "init"):
         ti = tasks_sched.get(kind, {})
         if ti.get("task_name"):
-            all_tasks.append(ti)
+            all_tasks.append((kind, ti))
             ws.append(_task_row(ti))
 
     # --- Sheet 2: jobs（任务组合模型 §三）---
@@ -610,13 +611,16 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path, lts_cfg: 
     extras = {p.get("lts_var", ""): p for p in (lts_params or [])
               if p.get("lts_var") and p.get("lts_var") not in TASKPARAMS_BASE}
     param_names = TASKPARAMS_BASE + list(extras)
-    for ti in all_tasks:
+    for kind, ti in all_tasks:
         p, g = _resolve_path(ti)
         for name in param_names:
             if name in LTS_PARAM_TEMPLATES:
                 val = LTS_PARAM_TEMPLATES[name]
             elif name == "V_GROUP_CODE":
-                val = consts.get("group_code", "")
+                # 规则组编码（业务组=规则组——用户定调 2026-09-10：资产级、值依赖术加
+                # 平台取码回填）：占位符与 RULE sheet 规则组编码同款，内网取码脚本一次
+                # 回填管两处；init 任务（separate）对应 init 规则组
+                val = f"GR_{target_short}_init" if kind == "init" else f"GR_{target_short}"
             elif name == "V_APPID":
                 val = appid
             else:
@@ -663,7 +667,7 @@ def load_shujia_config(config_path: str = "") -> dict:
 
 # 导出期消费的 consts 键（与设计期路径键同层平铺——两消费者键不重叠互不干扰；
 # datasource_type 纯常量归代码，不进 config）
-LTS_CONST_KEYS = ("cluster_local", "db_name", "group_code")
+LTS_CONST_KEYS = ("cluster_local", "db_name")
 
 
 def load_lts_config(config_path: str = "", schema: str = "") -> dict:

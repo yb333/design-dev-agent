@@ -207,7 +207,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 | 参数 | 值模板 |
 |---|---|
 | V_BATCH_NUMBER | `$getJobUUID(jobUUID)` |
-| V_GROUP_CODE | 业务组编码字面量（config；**值暂空待回填，参数恒定义**——jobRunParams.group_code 引用闭合要求） |
+| V_GROUP_CODE | **规则组编码占位符 `GR_{表名}`（资产级）**——业务组=规则组（2026-09-10 用户定调），值依赖术加平台取码回填：占位符与 RULE sheet 规则组编码同款，内网取码脚本一次回填管两处；init 任务（separate）用 `GR_{表名}_init` |
 | V_SCH_FROM | `LTS` |
 | V_CYCLE_ID | `$getTaskPlanTime(plantime,@@yyyyMMdd000000@@,-24*60*60)`（**方案 A 定稿**） |
 | BEGIN_TIMES | `$getTaskPlanTime(plantime,@@yyyy-MM-dd 00:00:00@@)` |
@@ -249,7 +249,6 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
     "consts": {
       "cluster_local": "fin_pro",  // 本集群名（无平台变量——用户定调；测试=BIZBAETA / 开发=LTSBETA 按需切换）
       "db_name": "GAUSS_EDW_BFD_BNIL", // database job 库名（[*] 前缀平台按环境解析 PRD/UAT）
-      "group_code": "",            // 业务组编码值（暂空待回填，参数恒定义）
       "datasource_type": "gauss200"
     }
   },
@@ -266,7 +265,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 - **三套环境集群名（用户口径）**：生产 `fin_pro` / 测试 `BIZBAETA` / 开发 `LTSBETA`——我们建的任务都在这三个集群下；上游依赖大部分在**别的集群**（各 upstream 声明自带集群信息，RS 输入提供来源任务信息——用户确认）。
 - 租户标识（V_RENTER_*）：用户定调"某些任务的设计，暂不管"→ consts 不配则不生成。
 - **depTaskId = 显式表直读**（无缓存/无脚本——独立取值脚本与缓存机制随脚本路搁置一并移除，2026-09-09 内联定稿；外部接口预留见 §4.2）。
-- **三合一终态（2026-09-10 定稿）**：schedule_config（任务路径）并入 lts_config 退役——LTS 配置都是平台上已存在的事实（同域），设计期/导出期只是消费时机。default/schema_mappings **平铺层**共存两类键（两消费者键不重叠互不干扰）：任务路径（project_name/task_group + init/dq 任务种类子键，两维度嵌套——assemble_ts 盖章进 ts 后冻结）+ 导出期键（cluster_local/db_name/group_code，schema 浅合并覆盖差异键）；`dep_task_ids` 全局段（依赖的任务唯一，与 schema 无关——隔离在覆盖链外已用测试钉住）。appid 不在本文件（schema_apps.json 反查）；datasource_type 纯常量归代码。
+- **三合一终态（2026-09-10 定稿）**：schedule_config（任务路径）并入 lts_config 退役——LTS 配置都是平台上已存在的事实（同域），设计期/导出期只是消费时机。default/schema_mappings **平铺层**共存两类键（两消费者键不重叠互不干扰）：任务路径（project_name/task_group + init/dq 任务种类子键，两维度嵌套——assemble_ts 盖章进 ts 后冻结）+ 导出期键（cluster_local/db_name，schema 浅合并覆盖差异键；V_GROUP_CODE 是资产级规则组编码不在此——出厂 GR_ 占位符由内网取码回填）；`dep_task_ids` 全局段（依赖的任务唯一，与 schema 无关——隔离在覆盖链外已用测试钉住）。appid 不在本文件（schema_apps.json 反查）；datasource_type 纯常量归代码。
 - 不做环境维度、不做 `--env`（一期面向生产；二期预留见 §二.9）。
 
 ## 八、设计侧改动（assemble_ts / RS 声明）

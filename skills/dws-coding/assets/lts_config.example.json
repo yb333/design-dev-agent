@@ -12,8 +12,7 @@
       "task_group": ""
     },
     "cluster_local": "fin_pro",
-    "db_name": "GAUSS_EDW_BFD_BNIL",
-    "group_code": ""
+    "db_name": "GAUSS_EDW_BFD_BNIL"
   },
   "schema_mappings": {
     "fin": {

@@ -125,8 +125,7 @@ def sample_config():
 def sample_lts():
     """load_lts_config 返回的结构（consts + 全局 dep_task_ids）"""
     return {
-        "consts": {"cluster_local": "fin_pro", "db_name": "GAUSS_EDW_BFD_BNIL",
-                   "group_code": "URG_123456"},
+        "consts": {"cluster_local": "fin_pro", "db_name": "GAUSS_EDW_BFD_BNIL"},
         "dep_task_ids": {},
     }
 
@@ -182,19 +181,19 @@ class TestResolveConfigBySchema:
         dep_task_ids 全局隔离（不参与 schema 覆盖——依赖的任务唯一，与 schema 无关）。"""
         raw = {
             "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD",  # 路径键（assemble_ts 消费，此处应无感）
-                        "cluster_local": "fin_pro", "db_name": "DB_A", "group_code": "G1"},
+                        "cluster_local": "fin_pro", "db_name": "DB_A"},
             "schema_mappings": {
-                "fin": {"project_name": "FIN_DAILY", "db_name": "DB_FIN", "group_code": "G2"},  # 只覆盖差异键
+                "fin": {"project_name": "FIN_DAILY", "db_name": "DB_FIN"},  # 只覆盖差异键
             },
             "dep_task_ids": {"c1|i|g|t": "111"},
         }
         cfg_file = tmp_path / "lts_config.json"
         cfg_file.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
         r_fin = load_lts_config(str(cfg_file), "fin")
-        assert r_fin["consts"] == {"cluster_local": "fin_pro", "db_name": "DB_FIN", "group_code": "G2"}
+        assert r_fin["consts"] == {"cluster_local": "fin_pro", "db_name": "DB_FIN"}
         assert r_fin["dep_task_ids"] == {"c1|i|g|t": "111"}   # schema 段不顶掉全局表
         r_other = load_lts_config(str(cfg_file), "other_schema")
-        assert r_other["consts"] == {"cluster_local": "fin_pro", "db_name": "DB_A", "group_code": "G1"}
+        assert r_other["consts"] == {"cluster_local": "fin_pro", "db_name": "DB_A"}
         assert r_other["dep_task_ids"] == {"c1|i|g|t": "111"}
 
     def test_schema_miss_use_default(self):
@@ -825,8 +824,26 @@ class TestGenerateScheduleExcel:
         assert vals["BEGIN_TIMES"] == "$getTaskPlanTime(plantime,@@yyyy-MM-dd 00:00:00@@)"
         assert vals["END_TIMES"] == "$getTaskPlanTime(plantime,@@23:59:59@@)"
         assert vals["V_DW_LAST_UPDATE_DATE"] == "$getCurrentTime(@@yyyy-MM-dd HH:mm:ss@@,0)"
-        assert vals["V_GROUP_CODE"] == "URG_123456"   # consts（暂空时值为空但参数恒定义）
+        assert vals["V_GROUP_CODE"] == "GR_dwb_xxx_f"   # 资产级规则组占位符（与 RULE sheet 同款，内网取码回填）
         assert vals["V_APPID"] == "APP001"
+
+    def test_taskparams_init_group_code(self, sample_ts, sample_config, sample_lts, tmp_path):
+        """separate init 任务执行 init 规则组：V_GROUP_CODE 占位 GR_{表}_init（f/view/dq 用主组）。"""
+        ts = json.loads(json.dumps(sample_ts))
+        ts["init"] = {"group_mode": "separate", "rules": {"R0001_INIT": {"target_table": "dwb_xxx_f"}}}
+        ts["meta"]["schedule"]["tasks"]["init"] = {
+            "task_name": "task_dwb_xxx_f_init", "job_name": "Pjob_dwb_xxx_f_init",
+            "cron": "0 30 3 * * ?", "upstream": [],
+            "project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"}
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(ts, sample_config, out, sample_lts)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["taskParams"]
+        pairs = [(r[2], r[4]) for r in ws.iter_rows(min_row=2, values_only=True) if r[3] == "V_GROUP_CODE"]
+        mains = [v for task, v in pairs if not task.endswith("_init")]
+        inits = [v for task, v in pairs if task.endswith("_init")]
+        assert mains and all(v == "GR_dwb_xxx_f" for v in mains)        # f/view/dq 主组占位
+        assert inits == ["GR_dwb_xxx_f_init"]                           # init 任务用 init 组占位
 
     def test_project_group_from_ts_json(self, sample_config, tmp_path):
         """★ ts.json 的 task 带 project_name/task_group 时，exporter 直接用。"""
