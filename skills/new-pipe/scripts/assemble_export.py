@@ -286,20 +286,9 @@ def _collect_v_refs(text: str) -> set:
     return set(_V_REF.findall(text or ""))
 
 
-def _resolve_dep_task_id(lts_cfg: dict, cluster: str, item_name: str, task_group: str, task: str) -> str:
-    """跨集群 tskdep 的 depTaskId：config lts.dep_task_ids 直读（id 与 task 同粒度，
-    键四段「集群|调度组|任务组|任务名」）。id 由人上平台查得后填入（稳定，填一次
-    永续复用）；无键 fail-loud 带补填指引。外部接口获取为预留口子（对接要求见
-    docs/platform/lts-deptaskid脚本契约.md——平台开放接口后按契约接入）。
-    """
-    key = f"{cluster}|{item_name}|{task_group}|{task}"
-    dep_id = str((lts_cfg.get("dep_task_ids") or {}).get(key, "") or "").strip()
-    if not dep_id:
-        raise ValueError(
-            f"depTaskId 未取得（config 显式表无此键）。键=\"{key}\"。\n"
-            f"处理：上平台查得该任务的 id 后，填入 platform_config "
-            f"lts.dep_task_ids（键 \"{key}\"，值=id）——id 稳定，填一次永续复用。")
-    return dep_id
+def _dep_id_key(cluster: str, item_name: str, task_group: str, task: str) -> str:
+    """depTaskId 显式表键：集群|调度组|任务组|任务名（四段，id 与 task 同粒度）。"""
+    return f"{cluster}|{item_name}|{task_group}|{task}"
 
 
 def validate_lts_package(ts: dict, lts_params: list, job_rows: list, param_names: set) -> list:
@@ -367,6 +356,7 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
     owner = _cfg(config.get("shujia", {}), "business_owner", "")
 
     incremental = bool(ts.get("init"))
+    skipped_deps = []   # (任务名, 缺 id 的四段键)——缺配置跳过不阻断，末尾汇总提示
     v_flag_declared = any(p.get("lts_var") == "V_FLAG" for p in (lts_params or []))
 
     def _resolve_path(task_info):
@@ -385,9 +375,10 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         ② 跨集群依赖（f 上游湖表依赖，主场景）：5 段路径（末段=任务名），
           job名称/name/depJobName=upstream.job（输入直传的依赖引用名，多为 job 名——仅显示/引用，
           不参与 id 定位）；depTaskId 与 task 同粒度，键四段「集群|调度组|任务组|任务名」
-          直读 config 显式表（唯一来源：人上平台查得后填，缺键 fail-loud 带补填指引；
-          外部接口获取为预留——平台开放后按 docs/platform/lts-deptaskid脚本契约.md 接入）。
-        跨集群缺 cluster/job → fail-loud（输入直传不推导）；同集群 job 字段不读（task 级）。
+          直读 config 显式表（唯一来源：人上平台查得后填，填一次永续复用）。
+        跨集群缺 cluster/job → fail-loud（输入直传不推导）；缺 id → 跳过该依赖行不阻断生成，
+        末尾汇总提示人补 config 重出或平台手工加依赖；同集群 job 字段不读（task 级）。
+        返回 job 行或 None（跳过）。
         """
         p, g = _resolve_path(task_info)
         task = upstream.get("task", "")
@@ -408,11 +399,16 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
                 raise ValueError(f"跨集群依赖路径段不全（集群|appId|itemName|任务组|任务名）: 上游 {task}，"
                                  f"got cluster={remote_cluster!r} app={app!r} project={project!r} group={group!r}")
             path = "|".join(segs)
-            dep_task_id = _resolve_dep_task_id(lts_cfg, remote_cluster, project, group, task)
+            dep_id = str((lts_cfg.get("dep_task_ids") or {}).get(
+                _dep_id_key(remote_cluster, project, group, task), "") or "").strip()
+            if not dep_id:
+                skipped_deps.append((task_info.get("task_name", ""),
+                                     _dep_id_key(remote_cluster, project, group, task)))
+                return None
             params = _tskdep_params(main_job, job_name, task, job_name,
                                     remote_cluster, project, group,
                                     cross_src=cluster_local, cross_dep_name=remote_cluster,
-                                    cross_key=_cross_dep_key(remote_cluster), dep_task_id=dep_task_id)
+                                    cross_key=_cross_dep_key(remote_cluster), dep_task_id=dep_id)
         else:
             if not cluster_local:
                 raise ValueError("platform_config lts.consts.cluster_local 未配置（本集群名，生产 fin_pro/"
@@ -567,8 +563,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         job_rows.append(_jr2)
         for u in normal:
             _jr3 = _tskdep_row(f_info, f_info.get("job_name", ""), u)
-            ws.append(_jr3)
-            job_rows.append(_jr3)
+            if _jr3 is not None:
+                ws.append(_jr3)
+                job_rows.append(_jr3)
 
     if view_info.get("task_name"):
         _jr4 = _view_placeholder_row(view_info)
@@ -577,8 +574,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         for u in view_info.get("upstream", []):
             if u.get("task"):
                 _jr5 = _tskdep_row(view_info, view_info.get("job_name", ""), u)
-                ws.append(_jr5)
-                job_rows.append(_jr5)
+                if _jr5 is not None:
+                    ws.append(_jr5)
+                    job_rows.append(_jr5)
 
     if dq_info.get("task_name"):
         _jr6 = _main_job_row(dq_info, "start")
@@ -587,8 +585,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         for u in dq_info.get("upstream", []):
             if u.get("task"):
                 _jr7 = _tskdep_row(dq_info, dq_info.get("job_name", ""), u)
-                ws.append(_jr7)
-                job_rows.append(_jr7)
+                if _jr7 is not None:
+                    ws.append(_jr7)
+                    job_rows.append(_jr7)
 
     if init_info.get("task_name"):
         _jr8 = _main_job_row(init_info, "start")
@@ -597,8 +596,9 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
         for u in init_info.get("upstream", []):
             if u.get("task"):
                 _jr9 = _tskdep_row(init_info, init_info.get("job_name", ""), u)
-                ws.append(_jr9)
-                job_rows.append(_jr9)
+                if _jr9 is not None:
+                    ws.append(_jr9)
+                    job_rows.append(_jr9)
 
     # --- Sheet 3: taskParams（基础全集 + designer 附加参数）---
     ws = wb.create_sheet("taskParams")
@@ -627,6 +627,13 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path):
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
+
+    if skipped_deps:
+        print(f"[LTS] {len(skipped_deps)} 条跨集群依赖缺 depTaskId，已跳过（制品可正常导入；"
+              f"补 id 后重出可自动生成，或导入后平台手工加依赖）：")
+        for task_name, key in skipped_deps:
+            print(f"  - 任务 {task_name}：lts.dep_task_ids 补 \"{key}\"（上平台查得该任务的 id）")
+    return skipped_deps
 
 
 # ============================================================
@@ -670,7 +677,19 @@ def resolve_config_by_schema(raw_config: dict, schema: str, appid: str = "") -> 
         tenant = (raw_config.get("shujia_tenants") or {}).get(appid) or {}
         shujia = {**shujia, **{k: v for k, v in tenant.items() if v}}
     shujia["appid"] = appid
-    lts = {**default_cfg.get("lts", {}), **schema_cfg.get("lts", {})}
+    # LTS 段三段结构：default.consts + schema_mappings.{schema}.consts 覆盖（集群/库名/
+    # 编码等跟目标 schema 走）；dep_task_ids 全局（依赖的任务唯一，与 schema 无关，
+    # 隔离在覆盖链外——浅合并会把它顶掉）；旧平铺 lts.project_name/task_group 兼容读取
+    lts_raw = raw_config.get("lts", {}) or {}
+    lts_default = lts_raw.get("default") or {}
+    lts_schema = ((lts_raw.get("schema_mappings") or {}).get(schema) or {})
+    lts_flat = {**default_cfg.get("lts", {}), **schema_cfg.get("lts", {})}  # 旧平铺兜底
+    lts = {
+        "consts": {**(lts_default.get("consts") or {}), **(lts_schema.get("consts") or {})},
+        "dep_task_ids": lts_raw.get("dep_task_ids") or {},
+        "project_name": lts_schema.get("project_name") or lts_default.get("project_name") or lts_flat.get("project_name", ""),
+        "task_group": lts_schema.get("task_group") or lts_default.get("task_group") or lts_flat.get("task_group", ""),
+    }
     return {"shujia": shujia, "lts": lts}
 
 

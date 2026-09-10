@@ -119,7 +119,7 @@ jobRunParams 内嵌 JSON 固定 4 键：
 - job名称 = name = depJobName = **远端真实 job 名**（upstream 新字段 `job`，输入直传——⚠️ 字段规则表说 name=路径末段，但样本②实测跨集群 name=远端 job 名，以样本为准）
 - depTaskName = 路径末段（upstream.task）
 - 路径首段 = upstream 新字段 `cluster`（生产集群名，输入直出）
-- **depTaskId = config 直读**：`lts.dep_task_ids` 显式表（人上平台查得后填——唯一来源），键=四段「集群|调度组|任务组|任务名」（id 与 task 同粒度——用户终稿更正；upstream.job 只是引用名不参与定位）；缺键 fail-loud 带补填指引。外部接口获取为预留（对接规范见 [lts-deptaskid脚本契约.md](./lts-deptaskid脚本契约.md)，平台开放接口后按契约接回）。
+- **depTaskId = config 直读**：`lts.dep_task_ids` 表（人上平台查得后填——唯一来源；**全局，不参与 schema 覆盖**），键=四段「集群|调度组|任务组|任务名」（id 与 task 同粒度——用户终稿更正；upstream.job 只是引用名不参与定位）；**缺键跳过该依赖行**（不阻断生成，制品可导入，末尾汇总打印跳过清单+补填指引——人补 config 重出或平台手工加依赖）。外部接口获取为预留（对接规范见 [lts-deptaskid脚本契约.md](./lts-deptaskid脚本契约.md)，平台开放接口后按契约接回）。
 - productionClusterName = 路径首段；crossClusterDepName = 路径首段；crossClusterDepKey = `{集群}|{pro\}` `[?]`字面量待样本核对；crossClusterSrcName = 本集群名字面量
 
 **job参数 JSON 全量键**（两种场景共骨架，按上述差异填充）：
@@ -234,7 +234,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 | V_FLAG 及取值 | designer 增量决策（ts.json 驱动） | ✅ 已有通道 |
 | 跨集群集群名 / 远端 job 名 / 虚拟依赖 job 全名 | upstream 项 `cluster` / `job`（新增字段，输入直传） | ➕ 增强两字段 |
 | depTaskId（跨集群） | config `dep_task_ids` 查表（三元组固定，补一次永久生效） | ➕ 新增查表 |
-| 本集群名、库名、业务组编码 | platform_config 新 `lts` 块字面量（本集群默认生产 fin_pro；租户标识/业务组编码暂空不生成——用户定调） | ➕ 新增 |
+| 本集群名、库名、业务组编码 | platform_config `lts` 块（default.consts + schema_mappings 按 schema 覆盖；本集群默认生产 fin_pro；租户标识/业务组编码暂空不生成——用户定调） | ➕ 新增 |
 | V_APPID 值 | schema_apps 反查 appid 字面量（租户绑定，跨环境同） | ✅ 已有 |
 | 值模板表达式 / 8键6键形态 / 工程属性 | 本文件 §四§五 常量表（依据规律文档） | ✅ 定稿 |
 | depTaskId（跨集群） | 人核回填 | ⛔ 不可生成 |
@@ -245,19 +245,18 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 
 ```json
 "lts": {
-  "vars": {                      // 变量名约定表：生成器照表引用，值在平台各环境项目配置
-    "cluster_extract": "P_CLUSTER_EDW_PRO",  // 抽取目标集群（现成）
-    "app_url": "V_URL",
-    "app_url_virtual": "V_URL_virtualDependence",
-    "token": "V_TOKEN"
+  "default": {                   // consts=默认字面量
+    "consts": {
+      "cluster_local": "fin_pro",  // 本集群名（无平台变量——用户定调；测试=BIZBAETA / 开发=LTSBETA 按需切换）
+      "db_name": "GAUSS_EDW_BFD_BNIL", // database job 库名（[*] 前缀平台按环境解析 PRD/UAT）
+      "group_code": "",            // 业务组编码值（暂空待回填，参数恒定义）
+      "datasource_type": "gauss200"
+    }
   },
-  "consts": {                    // 跨环境不变 / 默认生产的字面量
-    "cluster_local": "fin_pro",  // 本集群名（无平台变量——用户定调；测试=BIZBAETA / 开发=LTSBETA 按需切换）
-    "db_name": "GAUSS_EDW_BFD_BNIL", // database job 库名（跨环境同名；[*] 前缀平台按环境解析 PRD/UAT）
-    "group_code": "",            // 业务组编码值（暂空待回填，参数恒定义）
-    "datasource_type": "gauss200"
+  "schema_mappings": {           // 按目标 schema 覆盖 consts（任务所在项目/库名/编码与 schema 挂钩——只覆盖差异键）
+    "fin": { "consts": {} }
   },
-  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 表——exporter 直读（id 与 task 同粒度）：键="集群|调度组|任务组|任务名"（四段）。人上平台查得后填/平台导全量表灌入，id 稳定填一次永续复用；缺键 fail-loud 指引补填
+  "dep_task_ids": {              // 跨集群 tskdep 的 depTaskId 表——★全局，不参与 schema 覆盖（依赖的任务唯一与 schema 无关）。exporter 直读（id 与 task 同粒度）：键="集群|调度组|任务组|任务名"（四段）。人上平台查得后填/平台导全量表灌入，id 稳定填一次永续复用；**缺键跳过该依赖行**（不阻断生成，末尾汇总提示）
     "示例集群|示例调度组|示例任务组|示例任务名": "20224946"
   }
 }
@@ -267,7 +266,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 - **三套环境集群名（用户口径）**：生产 `fin_pro` / 测试 `BIZBAETA` / 开发 `LTSBETA`——我们建的任务都在这三个集群下；上游依赖大部分在**别的集群**（各 upstream 声明自带集群信息，RS 输入提供来源任务信息——用户确认）。
 - 租户标识（V_RENTER_*）：用户定调"某些任务的设计，暂不管"→ consts 不配则不生成。
 - **depTaskId = 显式表直读**（无缓存/无脚本——独立取值脚本与缓存机制随脚本路搁置一并移除，2026-09-09 内联定稿；外部接口预留见 §4.2）。
-- 空 `vars` 值 = 待回填项，生成器遇空 fail-loud 提示配置缺失（不猜）。
+- **schema 挂钩定调（2026-09-10）**：任务所在项目/库名/编码等与目标 schema 挂钩——consts 走 `default` + `schema_mappings.{schema}` 覆盖（resolve_config_by_schema 解析，只覆盖差异键）；`dep_task_ids` 全局隔离在覆盖链外（依赖的任务唯一，与 schema 无关——浅合并会顶掉，已用测试钉住）。项目名称/任务组名称不在本文件（schedule_config.json 设计期盖章进 ts.tasks，本身已按 schema 分组）；appid 不在本文件（schema_apps.json 反查）。
 - 不做环境维度、不做 `--env`（一期面向生产；二期预留见 §二.9）。
 
 ## 八、设计侧改动（assemble_ts / RS 声明）
@@ -284,7 +283,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 1. **${V_XXX} 引用闭合**：所有 job 格子（job参数/执行路径/变量设置/SQL）里出现的 `${V_XXX}` 引用 ⊆ 该任务 taskParams 定义集。（照片 §2 铁律）
 2. **父节点引用闭合**：每行 `job的父节点名称` ∈ {start, EMPTY} ∪ 本任务已生成 job 名集合。
 3. **tskdep 路径完整**：4 段或 5 段各段非空（appid/project/group/task 任一缺失 → 指名报哪条上游；跨集群另要求 `cluster`+`job` 字段非空）。
-4. **depTaskId 取得**：跨集群 tskdep 的四段键在 config `dep_task_ids` 无命中 → 阻断，报错带键+人工补填指引。
+4. **depTaskId 取得**：跨集群 tskdep 的四段键在 config `dep_task_ids` 无命中 → 跳过该依赖行（不阻断），stdout 汇总跳过清单（任务名+四段键+补填指引）。
 5. **P_ 变量供给链**：术加 RULE 行运行条件引用的 `${P_XXX}` ⊆ 主 job params 数组供给的 P_ 变量集 ⊆ taskParams 定义集。（堵现状 P_FLAG 静默断供）
 
 ## 十、模拟案例（实现后的验收基准）
@@ -308,7 +307,7 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 ## 十一、运行约定与遗留项
 
 **运行约定（写给运维/交付，生成器无感）**：
-- **跨集群依赖上线前补 id**：新跨集群上游首次出制品时若 config 显式表无该键 → 生成阻断并报四段键；处理=人上生产平台查得该任务 id 填入 `lts.dep_task_ids`（一次填写永续复用，后续资产同依赖零成本）。
+- **跨集群依赖上线前补 id**：新跨集群上游首次出制品时若 config 表无该键 → 该依赖行跳过（制品仍可导入），stdout 汇总提示；处理=人上生产平台查得该任务 id 填入 `lts.dep_task_ids` 后重出（一次填写永续复用），或导入后平台手工加依赖。
 - **停调恢复走补调**：跳周期不补调时，增量窗口（BEGIN/END_TIMES 锚计划时间）只覆盖恢复日前一天，窗口式增量会漏天；水位式增量不受影响。补调时 planTime 锚定使每周期批次正确回填。
 - depTaskId（跨集群依赖）：出厂留空，导入前人工按平台查表回填（或内网脚本查表替换——沿用术加占位符思路）。
 
@@ -325,6 +324,6 @@ clusterName=${P_CLUSTER_EDW_PRO}&appId={upstream.app}&itemName={upstream.project
 
 1. **exporter 重写**：`generate_schedule_excel` 拆 builder 函数族（主job/tskdep/虚拟依赖/占位/GETDATE 各一纯函数）+ 常量表集中 + §九四条校验。
 2. **设计侧增强**：upstream `job` 字段 + RS 格式说明 + V_FLAG 的 SKILL 指引一句。
-3. **config**：platform_config 加 `lts` 块骨架（vars 值待回填）。
+3. **config**：platform_config 加 `lts` 块（default.consts + schema_mappings 覆盖 + 全局 dep_task_ids，缺 id 跳过不阻断）。
 4. **测试**：不连库构造 ts.json → 生成 → 逐格断言（案例 A/B 为基准）；四条校验各配反例。
 5. **端到端**：模拟资产全链路（含 P_FLAG 供给链）→ 内网真实导入验证（顺带回收 §十一核对项）。

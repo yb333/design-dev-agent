@@ -170,6 +170,25 @@ class TestResolveConfigBySchema:
         assert result["shujia"]["project_code"] == "SLPRD"
         assert result["lts"]["project_name"] == "SLPRD_DAILY"
 
+    def test_lts_schema_override_and_global_ids(self):
+        """★ lts 三段结构：schema_mappings.{schema}.consts 覆盖 default.consts；
+        dep_task_ids 全局隔离（不参与 schema 覆盖——依赖的任务唯一，与 schema 无关）。"""
+        raw = {
+            "lts": {
+                "default": {"consts": {"cluster_local": "fin_pro", "db_name": "DB_A", "group_code": "G1"}},
+                "schema_mappings": {
+                    "fin": {"consts": {"db_name": "DB_FIN", "group_code": "G2"}},  # 只覆盖两个键
+                },
+                "dep_task_ids": {"c1|i|g|t": "111"},
+            },
+        }
+        r_fin = resolve_config_by_schema(raw, "fin")
+        assert r_fin["lts"]["consts"] == {"cluster_local": "fin_pro", "db_name": "DB_FIN", "group_code": "G2"}
+        assert r_fin["lts"]["dep_task_ids"] == {"c1|i|g|t": "111"}   # schema 段不顶掉全局表
+        r_other = resolve_config_by_schema(raw, "other_schema")
+        assert r_other["lts"]["consts"] == {"cluster_local": "fin_pro", "db_name": "DB_A", "group_code": "G1"}
+        assert r_other["lts"]["dep_task_ids"] == {"c1|i|g|t": "111"}
+
     def test_schema_miss_use_default(self):
         """schema 在 mappings 里没有 → 用 default"""
         raw = {
@@ -224,7 +243,8 @@ class TestResolveConfigBySchema:
         }
         result = resolve_config_by_schema(raw, "dws", appid="APP001")
         assert result["shujia"]["project_cn"] == "域A"
-        assert result["lts"] == {}   # lts 无兜底（调度路径以 ts.tasks 为准）
+        assert not result["lts"]["project_name"] and not result["lts"]["task_group"]  # 无兜底
+        assert result["lts"]["consts"] == {} and result["lts"]["dep_task_ids"] == {}
 
     def test_no_appid_no_tenant_merge(self):
         """没传 appid → 不做租户合并，datasource 走 schema 级"""
@@ -673,17 +693,29 @@ class TestGenerateScheduleExcel:
         assert params["itemName"] == "ITEM_X"
         assert params["taskGroupName"] == "GRP_X"
 
-    def test_tskdep_cross_cluster_missing_id_fails(self, sample_ts, sample_config, tmp_path):
-        """跨集群依赖 config 显式表无 id 键 → fail-loud 报四段键+补填指引。"""
+    def test_tskdep_cross_cluster_missing_id_skips(self, sample_ts, sample_config, tmp_path, capsys):
+        """缺 id → 跳过该依赖行不阻断（制品可导入），返回+打印跳过清单带四段键。"""
         ts = json.loads(json.dumps(sample_ts))
-        ts["meta"]["schedule"]["tasks"]["f"]["upstream"] = [{
-            "table": "ods_remote", "task": "TASK_REMOTE_T", "env": "edw_pro",
-            "app": "com.huawei.x", "project": "ITEM_X", "group": "GRP_X",
-            "job": "PJob_REMOTE_J",
-        }]
+        ts["meta"]["schedule"]["tasks"]["f"]["upstream"] = [
+            {"table": "ods_remote", "task": "TASK_REMOTE_T", "env": "edw_pro",
+             "app": "com.huawei.x", "project": "ITEM_X", "group": "GRP_X",
+             "job": "PJob_REMOTE_J"},
+            {"table": "ods_ok", "task": "TASK_OK_T", "env": "edw_pro",
+             "app": "com.huawei.x", "project": "ITEM_X", "group": "GRP_X",
+             "job": "PJob_OK"},
+        ]
+        cfg = json.loads(json.dumps(sample_config))
+        cfg["lts"]["dep_task_ids"] = {"edw_pro|ITEM_X|GRP_X|TASK_OK_T": "42"}
         out = tmp_path / "schedule_tasks.xlsx"
-        with pytest.raises(ValueError, match=r"edw_pro\|ITEM_X\|GRP_X\|TASK_REMOTE_T"):
-            generate_schedule_excel(ts, sample_config, out)
+        skipped = generate_schedule_excel(ts, cfg, out)
+        assert skipped == [("task_dwb_xxx_f", "edw_pro|ITEM_X|GRP_X|TASK_REMOTE_T")]
+        wb = openpyxl.load_workbook(out)
+        header, rows = self._jobs_by(wb, job类型="tskdep")
+        names = [r[header.index("job名称")] for r in rows]
+        assert "PJob_REMOTE_J" not in names      # 缺 id 行不生成
+        assert "PJob_OK" in names                # 有 id 行照常
+        out_text = capsys.readouterr().out
+        assert "edw_pro|ITEM_X|GRP_X|TASK_REMOTE_T" in out_text and "已跳过" in out_text
 
     def test_tskdep_cross_cluster_missing_job_fails(self, sample_ts, sample_config, tmp_path):
         """跨集群缺 job 字段 → fail-loud（输入直传不推导）。"""
