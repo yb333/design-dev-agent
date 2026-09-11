@@ -29,7 +29,10 @@ class TestAdopt:
         assert (dest / "ddl/create_table_t.sql").exists(), "DDL 入档（完整可重建资产）"
         assert (dest / "export/制品.xlsx").exists() and (dest / "decisions.yaml").exists()
         assert (build / "_internal/design_decisions.yaml").exists(), "过程产物留 build"
-        assert not (build / "ts.json").exists(), "本源件已提取"
+        # 复制不移动（2026-09-07 定调）：build 保留完整交付现场（全量部署内容）
+        assert (build / "ts.json").exists() and (build / "etl/R0001.sql").exists()
+        assert (build / "ddl/create_table_t.sql").exists() and (build / "export/制品.xlsx").exists()
+        assert (build / "ut_report.md").exists(), "报告留交付现场"
         mf = (dest / "MANIFEST.md").read_text(encoding="utf-8")
         assert "v1" in mf and "建造" in mf
 

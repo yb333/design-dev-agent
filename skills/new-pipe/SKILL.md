@@ -498,8 +498,8 @@ python PIPE_SCRIPTS/assemble_export.py \
 ```bash
 python SHARED_SCRIPTS/archive_writer.py adopt --build {deliver}
 ```
-  从 build/ 提取本源件（ts/etl/dq/export + decisions）生成 `{deliver}/../archive/` + MANIFEST 首建（v1 建造）；
-  build/ 剩余（ddl/ut_report/_internal）就地定格为建造现场——此后资产有档、可优化。
+  从 build/ **复制**本源件（ts/etl/dq/ddl/export + decisions）生成 `{deliver}/../archive/` + MANIFEST 首建（v1 建造）；
+  build/ 保留完整交付现场（全量部署内容：DDL/SQL/制品包/报告——人拿一个目录即可部署当前版本；下次优化开工清场重建）。此后资产有档、可优化。
 
 > 非交互例外同闸口①（仅显式声明时跳过；人工决策项不豁免，见步骤 3 的非交互条款）。
 > 非交互下走"直接建档"分支（无等待语义；产物人后审=审归档后形态），完善推后+回流兜底。

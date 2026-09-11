@@ -7,9 +7,10 @@ MANIFEST 一眼看懂版本史，opt_{YYYYMM}/ 目录数 = 优化次数）。
 两动作（子命令；住 shared——new-pipe 收尾调 adopt、opt-pipe 收口调 advance，双消费者；
 目录模型 2026-09-07 终态：build=增量现场[新建全部/优化变更，开工清场]、
 archive=资产档案可信基线、archive_tmp=优化进度态全量档案）：
-  adopt   交付建档（new-pipe 闸口②确认后）：从增量现场 build/ 提取本源件
+  adopt   交付建档（new-pipe 闸口②确认后）：从增量现场 build/ **复制**本源件
           （ts/etl/dq/ddl/export + decisions）生成 {build父}/archive/ + MANIFEST 首建
-          （v1 建造）。放弃分支不建档（build 留草稿，重跑覆盖）。
+          （v1 建造）——build 保留完整交付现场（全量部署内容：DDL/SQL/制品包/报告，
+          人拿一个目录即可部署当前版本）。放弃分支不建档（build 留草稿，重跑覆盖）。
   advance 交付收口（opt 闸口②'确认后）：**三步全量替换**——
           mv {arc} {arc}.replaced → mv {arc_tmp} {arc} → rm -rf {arc}.replaced
           （崩在任意一步均可恢复；替换前清掉 tmp 里混入的过程产物 _internal）+ MANIFEST 追加。
@@ -46,15 +47,18 @@ def adopt(build: Path) -> Path:
     if not (build / "ts.json").exists():
         raise ValueError(f"{build} 无产出（ts.json 缺）——不能建档")
     archive.mkdir(parents=True)
+    # 复制不移动：build 保留完整交付现场（全量部署内容），档案独立成份（2026-09-07 定调）
     for name in ("ts.json", "ts.md", "etl", "dq", "ddl", "export"):
         src = build / name
         if src.exists():
-            shutil.move(str(src), str(archive / name))
+            if src.is_dir():
+                shutil.copytree(src, archive / name, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, archive / name)
     decisions = build / "_internal" / "design_decisions.yaml"
     if not decisions.exists():
-        raise ValueError(f"收档缺设计决策: {decisions}")
+        raise ValueError(f"建档缺设计决策: {decisions}")
     shutil.copy2(decisions, archive / "decisions.yaml")
-    # 本源件已 mv 走，build/ 剩余（ut_report/_internal 等）留下待下次清场
     ts = json.loads((archive / "ts.json").read_text(encoding="utf-8"))
     f = ts.get("meta", {}).get("target", {}).get("f_table", {})
     (archive / "MANIFEST.md").write_text(
