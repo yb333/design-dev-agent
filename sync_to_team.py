@@ -125,6 +125,32 @@ def copy_md(src_dir: Path, dst_dir: Path):
             shutil.copy2(p, target)
 
 
+def switch_team_branch(team_repo: Path, branch: str):
+    """内部仓切到 branch（单分支克隆免疫）。
+
+    单分支克隆（clone --single-branch / fetch refspec 被改窄）下，裸 fetch origin
+    永远只拉 refspec 内的分支，显式按名 fetch 也不更新 origin/<分支> 跟踪引用
+    ——远端明明有，checkout 却报 pathspec。故按名显式 fetch、建分支起点用
+    FETCH_HEAD（刚 fetch 的真实远端状态，与 do_sync 对齐目标同款依据），
+    对任何克隆配置都成立。
+    """
+    r = run_git(["fetch", "origin", branch], cwd=team_repo, capture=True)
+    remote_ok = r.returncode == 0
+    if not remote_ok:
+        err_lines = [l for l in (r.stderr or "").splitlines() if l.strip()]
+        print(f"  [WARN] fetch origin {branch} 失败: "
+              f"{err_lines[-1][:120] if err_lines else '无输出'}（本地已有该分支时仍可切换）")
+    r = run_git(["checkout", "-f", branch], cwd=team_repo)
+    if r.returncode != 0 and remote_ok:
+        r = run_git(["checkout", "-b", branch, "FETCH_HEAD"], cwd=team_repo)
+    if r.returncode != 0:
+        if remote_ok:
+            fail(f"切换到 {branch} 失败：本地建分支出错（fetch 已成功，可手动 "
+                 f"git checkout -b {branch} FETCH_HEAD 看真实报错）")
+        fail(f"切换到 {branch} 失败：本地没有这个分支，远端也取不到"
+             f"（fetch 失败原因见上方 WARN；确认内部远端已建 {branch} 且网络可用）")
+
+
 def run_menu() -> list | None:
     """交互菜单：返回要执行的参数列表（[] = 直接同步），None = 退出。"""
     print()
@@ -219,13 +245,7 @@ def main() -> int:
         # config 工作区改动先快照（checkout -f 本地全弃，真实值不能丢）
         cfg_dir = team_repo / ".opencode" / "_references" / "rules" / resolve_rules_dir(src_repo)
         snap = snapshot_dir(cfg_dir)
-        if run_git(["fetch", "origin"], cwd=team_repo).returncode != 0:
-            fail("fetch 内部远端失败，请检查网络")
-        r = run_git(["checkout", "-f", branch], cwd=team_repo)
-        if r.returncode != 0:
-            r = run_git(["checkout", "-b", branch, f"origin/{branch}"], cwd=team_repo)
-        if r.returncode != 0:
-            fail(f"切换到 {branch} 失败：本地和远端都没有这个分支（确认内部远端已建 {branch}）")
+        switch_team_branch(team_repo, branch)
         if restore_dir(cfg_dir, snap):
             print("  config 工作区改动已带过来")
         team_branch = branch
@@ -405,7 +425,7 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
              "提示符显示 ((8.12)) 双括号即此状态）\n"
              "  处理: 在内部仓运行 git checkout 8.12 回到分支后重跑")
     if team_branch and cur_branch != team_branch:
-        fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（请手动 checkout）")
+        fail(f"内部仓当前分支是 {cur_branch}，配置要求 {team_branch}（用 --switch 切换，或手动 checkout）")
     # config 快照（用户拷来的内网真实值——唯一受保护的本地状态，循环外读一次）
     cfg_rel = next(m for m in managed if m.startswith(".opencode/_references"))
     cfg_dir = team_repo / cfg_rel
