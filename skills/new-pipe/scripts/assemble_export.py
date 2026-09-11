@@ -288,6 +288,39 @@ def _collect_v_refs(text: str) -> set:
     return set(_V_REF.findall(text or ""))
 
 
+def completeness_report_lines(ts: dict, skipped_deps: list) -> list[str]:
+    """制品完整度报告（固定格式，从制品结构确定性推导——agent 只转述不生成）。
+
+    占位符/空值形态是出厂常态（非缺陷）；报告是闸口②后固定二选一的"固定问题清单"来源：
+    选项1=就此结束（待补项走内网取码脚本/人工）；选项2=按本清单逐项收集（可跳过）。
+    铁律：这些值的来源只有 人提供/内网脚本回填/保持占位——agent 永不推测。
+    """
+    meta = ts.get("meta", {})
+    target_short = (meta.get("target", {}).get("f_table", {}) or {}).get("table", "")
+    has_separate_init = _has_separate_init(ts)
+    lines = [
+        "[制品完整度报告] 本制品为占位符形态（出厂常态），导入平台前需回填/补充：",
+        "  术加包 shujia_*.xlsx：",
+        "    - 项目编码 / 项目英文名（空——内网按项目中文名取码补齐，或补入 shujia_config 租户块后重出）",
+        "    - 子项目编码 / 中文名 / 英文名（空——人给中文名后内网脚本补编码英文名）",
+        f"    - 规则组编码 GR_{target_short}（占位——内网取码替换）",
+    ]
+    if has_separate_init:
+        lines.append(f"    - init 规则组编码 GR_{target_short}_init（占位）")
+    lines += [
+        "  LTS 包 lts_*.xlsx：",
+        f"    - V_GROUP_CODE = GR_{target_short}" + (f" / GR_{target_short}_init" if has_separate_init else "")
+        + "（与术加规则组编码同款占位，内网取码一次管两处）",
+    ]
+    if skipped_deps:
+        lines.append(f"    - 跳过的跨集群依赖（缺 depTaskId，{len(skipped_deps)} 条）：")
+        for task_name, key in skipped_deps:
+            lines.append(f'        任务 {task_name}：lts_config dep_task_ids 补 "{key}"')
+    else:
+        lines.append("    - 跨集群依赖完整（无跳过）")
+    return lines
+
+
 def _dep_id_key(cluster: str, item_name: str, task_group: str, task: str) -> str:
     """depTaskId 显式表键：集群|调度组|任务组|任务名（四段，id 与 task 同粒度）。"""
     return f"{cluster}|{item_name}|{task_group}|{task}"
@@ -332,7 +365,8 @@ def validate_lts_package(ts: dict, lts_params: list, job_rows: list, param_names
     return problems
 
 
-def generate_schedule_excel(ts: dict, config: dict, output_path: Path, lts_cfg: dict | None = None):
+def generate_schedule_excel(ts: dict, config: dict, output_path: Path,
+                            lts_cfg: dict | None = None, group_codes: dict | None = None):
     """生成 lts_{表名}.xlsx（3 sheet：tasks/jobs/taskParams）——LTS 制品。
 
     任务组合模型（设计文档 §三）：
@@ -617,10 +651,10 @@ def generate_schedule_excel(ts: dict, config: dict, output_path: Path, lts_cfg: 
             if name in LTS_PARAM_TEMPLATES:
                 val = LTS_PARAM_TEMPLATES[name]
             elif name == "V_GROUP_CODE":
-                # 规则组编码（业务组=规则组——用户定调 2026-09-10：资产级、值依赖术加
-                # 平台取码回填）：占位符与 RULE sheet 规则组编码同款，内网取码脚本一次
-                # 回填管两处；init 任务（separate）对应 init 规则组
-                val = f"GR_{target_short}_init" if kind == "init" else f"GR_{target_short}"
+                # 规则组编码（业务组=规则组——资产级）：默认占位符与 RULE sheet 同款
+                # （内网取码脚本一次回填管两处）；选项2真值经 --group-code/--init-group-code
+                val = ((group_codes or {}).get("init") if kind == "init" else (group_codes or {}).get("main")) \
+                    or (f"GR_{target_short}_init" if kind == "init" else f"GR_{target_short}")
             elif name == "V_APPID":
                 val = appid
             else:
@@ -760,7 +794,8 @@ def _pv_codes(ts: dict) -> list[str]:
     return ["PV0001"] + (["PV0002"] if _has_separate_init(ts) else [])
 
 
-def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
+def build_rule_rows(ts: dict, config: dict, etl_dir: Path,
+                   sub_project_cn: str = "", group_codes: dict | None = None) -> list[list]:
     """构建 RULE sheet 行。顺序：取数规则 → 参数变量规则（每规则组一行）。
 
     config: resolve_config_by_schema 返回的 {shujia, lts} 结构。
@@ -785,11 +820,11 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
     business_owner = _cfg(shujia, "business_owner", "")
     # 项目只填中文名（人可确认的锚点）；编码/英文名由内网脚本按中文名从平台补齐
     project_cn = _cfg(shujia, "project_cn")
-    project_code = ""
+    project_code = ""                # 内网按项目中文名取码补齐（选项2可经 shujia_config 提供）
     project_en = ""
     # 子项目三件套留空（schema 与子项目 N:M；中文名闸口②人填，编码/英文名脚本补）
     sub_code = ""
-    sub_cn = ""
+    sub_cn = sub_project_cn          # 选项2固定清单项：--sub-project-cn（资产级）
     sub_en = ""
 
     # init 管道规则（与增量 rules 合并发执行行；inline 靠 P_FLAG 选跑，separate 靠独立 init 任务）
@@ -801,9 +836,9 @@ def build_rule_rows(ts: dict, config: dict, etl_dir: Path) -> list[list]:
     merged += [(c, r, True) for c, r in init_rules.items()]
 
     rows = []
-    group_code = f"GR_{target_short}"
+    group_code = (group_codes or {}).get("main") or f"GR_{target_short}"   # 占位符/选项2真值
     init_group_name = f"{target_short}_init"
-    init_group_code = f"GR_{init_group_name}"
+    init_group_code = (group_codes or {}).get("init") or f"GR_{init_group_name}"
 
     # 公共列填充（每行都要填的项目）
     def _fill_common(row):
@@ -1012,9 +1047,10 @@ def validate_code_closure(rule_rows: list[list], gv_rows: list[list], tf_rows: l
     return problems
 
 
-def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, output_path: Path):
+def generate_execution_excel(ts: dict, config: dict, etl_dir: Path, output_path: Path,
+                             sub_project_cn: str = "", group_codes: dict | None = None):
     """生成 execution_tasks.xlsx（10 sheet）。出厂前做占位编码闭合校验。"""
-    rule_rows = build_rule_rows(ts, config, etl_dir)
+    rule_rows = build_rule_rows(ts, config, etl_dir, sub_project_cn=sub_project_cn, group_codes=group_codes)
     gv_rows = build_group_variables(ts)
     tf_rows = build_target_fields(ts)
 
@@ -1073,6 +1109,10 @@ def main():
     parser.add_argument("--outdir", required=True, help="产出根目录（export/ 建在此下）")
     parser.add_argument("--config", default="", help="shujia_config.json 路径（术加租户配置）")
     parser.add_argument("--lts-config", default="", help="lts_config.json 路径（LTS 制品配置，默认 config 目录）")
+    # 选项2固定清单项（闸口②后"补充项目信息"收集到的值，人提供才填——agent 永不推测）：
+    parser.add_argument("--sub-project-cn", default="", help="子项目中文名（资产级，RULE sheet 子项目三件套之中文名）")
+    parser.add_argument("--group-code", default="", help="规则组编码真值（默认占位符 GR_{{表名}} 内网取码替换；人直接提供时填此）")
+    parser.add_argument("--init-group-code", default="", help="init 规则组编码真值（separate 模式，默认占位符）")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -1098,8 +1138,13 @@ def main():
     exec_path = export_dir / f"shujia_{target_short}.xlsx"
     sched_path = export_dir / f"lts_{target_short}.xlsx"
 
-    generate_execution_excel(ts, config, etl_dir, exec_path)
-    generate_schedule_excel(ts, config, sched_path, lts_cfg=lts_cfg)
+    group_codes = {k: v for k, v in {"main": args.group_code, "init": args.init_group_code}.items() if v}
+    generate_execution_excel(ts, config, etl_dir, exec_path,
+                             sub_project_cn=args.sub_project_cn, group_codes=group_codes)
+    skipped = generate_schedule_excel(ts, config, sched_path, lts_cfg=lts_cfg, group_codes=group_codes)
+
+    for line in completeness_report_lines(ts, skipped):
+        print(line)
 
     print("=" * 50)
     print("平台制品包已生成:")

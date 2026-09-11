@@ -16,6 +16,7 @@ import openpyxl
 from assemble_export import (
     load_shujia_config,
     load_lts_config,
+    completeness_report_lines,
     resolve_config_by_schema,
     build_rule_rows,
     build_group_variables,
@@ -896,6 +897,57 @@ class TestGenerateScheduleExcel:
         header = [c.value for c in ws[1]]
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         assert rows[0][header.index("项目名称")] == "待配置"
+
+
+class TestCompletenessReport:
+    """完整度报告（固定格式待补清单——闸口②后固定二选一的问题来源，agent 只转述）。"""
+
+    def test_basic_full_asset(self, sample_ts):
+        lines = completeness_report_lines(sample_ts, [])
+        text = "\n".join(lines)
+        assert "[制品完整度报告]" in text and "占位符形态" in text
+        assert "项目编码 / 项目英文名" in text
+        assert "子项目编码 / 中文名 / 英文名" in text
+        assert "GR_dwb_xxx_f（占位" in text
+        assert "V_GROUP_CODE = GR_dwb_xxx_f" in text
+        assert "跨集群依赖完整（无跳过）" in text
+        assert "GR_dwb_xxx_f_init" not in text
+
+    def test_with_init_and_skipped(self, sample_ts):
+        ts = json.loads(json.dumps(sample_ts))
+        ts["init"] = {"group_mode": "separate", "rules": {"R0001_INIT": {}}}
+        lines = completeness_report_lines(ts, [("task_dwb_xxx_f", "edw_pro|I|G|T")])
+        text = "\n".join(lines)
+        assert "GR_dwb_xxx_f_init（占位）" in text
+        assert "V_GROUP_CODE = GR_dwb_xxx_f / GR_dwb_xxx_f_init" in text
+        assert 'lts_config dep_task_ids 补 "edw_pro|I|G|T"' in text
+        assert "任务 task_dwb_xxx_f" in text
+
+
+class TestSupplementParams:
+    """选项2固定清单项：--sub-project-cn/--group-code/--init-group-code 真值注入。"""
+
+    def test_group_code_real_value(self, sample_ts, sample_config, sample_lts, etl_dir, tmp_path):
+        """规则组编码真值：RULE sheet 与 LTS taskParams 两处同值（不再占位）。"""
+        out = tmp_path / "schedule_tasks.xlsx"
+        generate_schedule_excel(sample_ts, sample_config, out, sample_lts,
+                                group_codes={"main": "URG_000123"})
+        wb = openpyxl.load_workbook(out)
+        ws = wb["taskParams"]
+        vals = {r[3]: r[4] for r in ws.iter_rows(min_row=2, values_only=True)}
+        assert vals["V_GROUP_CODE"] == "URG_000123"
+
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir, group_codes={"main": "URG_000123"})
+        codes = {r[_RULE_COL["规则组编码"]] for r in rows}
+        assert "URG_000123" in codes and "GR_dwb_xxx_f" not in codes
+
+    def test_sub_project_cn(self, sample_ts, sample_config, etl_dir):
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir, sub_project_cn="订单子域")
+        assert all(r[_RULE_COL["子项目中文名"]] == "订单子域" for r in rows)
+
+    def test_group_codes_empty_keeps_placeholder(self, sample_ts, sample_config, etl_dir):
+        rows = build_rule_rows(sample_ts, sample_config, etl_dir, group_codes={})
+        assert all(r[_RULE_COL["规则组编码"]] == "GR_dwb_xxx_f" for r in rows)
 
 
 class TestLtsValidators:
