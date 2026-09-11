@@ -160,7 +160,12 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
         # 2. 落位规则：field_targets 投影 + fields 桶（design_logic → processed）
         for r in f["placed_rules"]:
             rule = v2["rules"][r]
-            rule["field_targets"] = sorted(set(rule.get("field_targets") or []) | {fname})
+            # 保序追加（不 sorted 重排）：存量序冻结自档案——重排会让 archive↔tmp 的行级
+            # diff 出现存量重排噪音；确定性 diff = 存量字节不变 + 新字段固定尾部追加
+            _targets = list(rule.get("field_targets") or [])
+            if fname not in _targets:
+                _targets.append(fname)
+            rule["field_targets"] = _targets
             _src = f.get("source") or {}
             _ref = f"{_src.get('alias','')}.{_src.get('field', fname)}".strip(".")
             rule.setdefault("fields", {"processed": [], "assign": [], "direct": []})["processed"].append(

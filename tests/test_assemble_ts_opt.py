@@ -227,3 +227,29 @@ class TestJoinTypeCheck:
         d = self._dec_with_on("t.order_id = c.order_id")
         p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
         validate_decisions(load_decisions(p2), self._baseline_with_t_alias(baseline), None)
+
+
+class TestStableOrdering:
+    def test_field_targets_append_preserves_baseline_order(self, baseline):
+        """保序追加（行级 diff 友好）：baseline 乱序 field_targets 不被重排，新字段尾部追加。"""
+        import copy
+        from assemble_ts_opt import apply_decisions as _apply
+        b = copy.deepcopy(baseline)
+        # 人为把 baseline 的 field_targets 改成非 sorted 序（模拟 new-pipe designer 手写序）
+        for r in b["rules"].values():
+            ft = list(r.get("field_targets") or [])
+            if len(ft) >= 2:
+                r["field_targets"] = list(reversed(ft))
+        dec = {"change_type": "add_field", "backfill": "none", "fields": [{
+            "field": "channel_name", "target_table": "dwb_trade_order_d",
+            "placed_rules": ["R0002"], "intermediate_tables": [],
+            "field_type": "VARCHAR(64)", "field_comment": "渠道",
+            "design_logic": "x", "transform_type": "direct", "source": {},
+            "new_joins": []}]}
+        v2 = _apply(b, dec)
+        for code, r in v2["rules"].items():
+            base_ft = list(b["rules"][code].get("field_targets") or [])
+            got = list(r.get("field_targets") or [])
+            if "channel_name" in got:
+                assert got[:-1] == base_ft, f"{code}: 存量序被重排（diff 噪音）"
+                assert got[-1] == "channel_name", "新字段固定尾部追加"
