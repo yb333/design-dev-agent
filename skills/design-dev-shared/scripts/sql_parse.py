@@ -520,7 +520,7 @@ def find_three_part_refs(text: str) -> list:
                    for m in _THREE_PART_CHAIN.finditer(s)})
 
 
-def find_unqualified_refs(text: str) -> list:
+def find_unqualified_refs(text: str, known_fields=None) -> list:
     """产出口径的纯语法检查：未限定的英文标识符（零漏报，不依赖任何登记处）。
 
     设计产出形态契约的守门原语：design_logic 里字段引用必须'别名.字段'——
@@ -530,6 +530,8 @@ def find_unqualified_refs(text: str) -> list:
     不可能含全角括号），说明句里提到的英文字段名不是产出的引用；'别名.字段'
     的两部分不算裸；函数调用形态（后跟'('）不算；噪音词/函数名/SQL 类型词不算；
     单字母豁免（'N'/'Y' 值在中文行文里常不带引号，真字段名几乎不会单字母）。
+    known_fields：已登记字段名集（自建字段/派生字段，归属已由 designer 显式声明）
+    ——裸引用命中即豁免（归属已知非猜测），不进未限定清单。
     语义边界：中文提字段（不写英文名）机器不可见——归闸口人审，不假装能拦。
     """
     s = strip_fullwidth_notes(text)
@@ -550,6 +552,8 @@ def find_unqualified_refs(text: str) -> list:
         wl = w.lower()
         if w.upper() in _LOGIC_NOISE_WORDS or wl in _SQL_TYPE_WORDS:
             continue
+        if known_fields is not None and wl in {str(k).lower() for k in known_fields}:
+            continue  # 已登记字段（自建/派生，designer 声明过归属）——裸引用豁免
         out.add(wl)
     return sorted(out)
 

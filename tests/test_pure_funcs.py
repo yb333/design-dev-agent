@@ -491,12 +491,11 @@ class TestSqlParseStringAwareness:
         assert bodies["b"].endswith("FROM t WHERE s = ')'") or "FROM t" in bodies["b"]
 
     def test_insert_columns_duplicate_raises(self):
+        """结构源含重复字段 → ValueError（fail-visible：同表重复列拼不出合法 INSERT）"""
         from run_ut import _resolve_insert_columns
         import pytest
-        dup_sql = "WITH b AS (SELECT x AS id FROM t) SELECT b.id AS id, b.id AS id2 FROM b"
-        # 手工构造重复别名场景（解析器正常但 SELECT 真重复输出）
-        with pytest.raises(ValueError, match="重复列"):
-            _resolve_insert_columns("SELECT a AS x, b AS x FROM t", [])
+        with pytest.raises(ValueError):
+            _resolve_insert_columns([{"target_field": "x"}, {"target_field": "x"}])
 
 
 class TestCastTypeStripping:
@@ -512,11 +511,10 @@ class TestCastTypeStripping:
         assert extract_select_aliases(sql) == ["amt2"]
 
     def test_two_int8_casts_no_duplicate_column_error(self):
-        # 两个 CAST AS int8 曾触发重复列报错（文案指向 CTE 边界，误导 coder）
+        # 两个 CAST AS int8 曾触发重复列报错（文案指向 CTE 边界，误导 coder）。
+        # 2026-09-11 列清单改结构源后不再解析 SELECT——该形态天然免疫，断言不再误报
         from run_ut import _resolve_insert_columns
-        sql = ("WITH c AS (SELECT 1 AS k) "
-               "SELECT CAST(a.k AS int8) AS k2, CAST(2 AS int8) AS j2 FROM t a")
-        assert _resolve_insert_columns(sql, []) == ["k2", "j2"]
+        assert _resolve_insert_columns([{"target_field": "k2"}, {"target_field": "j2"}]) == ["k2", "j2"]
 
     def test_precision_and_nested(self):
         from sql_parse import extract_select_aliases
@@ -911,3 +909,59 @@ class TestLogicFormPrimitives:
         # 引号串内的空白/多空格原样保留
         assert n("concat(a.x, '保 留  空白')") == "concat(a.x, '保 留  空白')"
         assert n("") == "" and n(None) == ""
+
+
+class TestFindUnqualifiedRefsExemption:
+    """known_fields 豁免参数（2026-09-11 设计产物字段通道）：已登记字段裸引用放行。"""
+
+    def test_exempt_known_field(self):
+        from sql_parse import find_unqualified_refs
+        text = "case when rn = 1 then org.org_name else null end"
+        # 未登记 → rn 裸拦
+        assert find_unqualified_refs(text) == ["rn"]
+        # 登记（自建/派生字段，归属已声明）→ 豁免
+        assert find_unqualified_refs(text, {"rn"}) == []
+        assert find_unqualified_refs(text, ["RN"]) == []  # 大小写归一
+
+    def test_unregistered_still_caught_with_exempt_set_present(self):
+        from sql_parse import find_unqualified_refs
+        # 豁免集存在但不含该字段 → 照拦（豁免≠放松全集）
+        assert find_unqualified_refs("coalesce(rn, del_flag)", {"rn"}) == ["del_flag"]
+
+
+class TestColumnOrderCheck:
+    """6a 列序对账（compare_column_order）：SELECT 实际输出 vs ts 结构源字段序。
+
+    2026-09-11 定调：INSERT 列清单改结构源后，coder 输出多列/少列/乱序由数据库
+    describe 对账拦（按位置对齐的 INSERT 乱序=静默错位数据，最危险）。
+    """
+
+    def test_identical_passes(self):
+        from ut_precheck import compare_column_order
+        ok, parts = compare_column_order(["id", "org_name", "del_flag"],
+                                          ["id", "org_name", "del_flag"])
+        assert ok and parts == []
+
+    def test_extra_column_fails(self):
+        """多列：CTE 体 as rn 被误输出的形态——回 coder"""
+        from ut_precheck import compare_column_order
+        ok, parts = compare_column_order(["id", "org_name"],
+                                          ["id", "org_name", "rn"])
+        assert not ok and any("多列" in p and "rn" in p for p in parts)
+
+    def test_missing_column_fails(self):
+        from ut_precheck import compare_column_order
+        ok, parts = compare_column_order(["id", "org_name", "del_flag"],
+                                          ["id", "org_name"])
+        assert not ok and any("缺列" in p and "del_flag" in p for p in parts)
+
+    def test_reordered_fails(self):
+        """乱序：集合相等但顺序不同——按位置对齐会错位数据，必须拦"""
+        from ut_precheck import compare_column_order
+        ok, parts = compare_column_order(["a", "b", "c"], ["b", "a", "c"])
+        assert not ok and any("顺序漂移" in p for p in parts)
+
+    def test_case_insensitive(self):
+        from ut_precheck import compare_column_order
+        ok, _ = compare_column_order(["ID", "Org_Name"], ["id", "org_name"])
+        assert ok

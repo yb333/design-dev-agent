@@ -1810,6 +1810,212 @@ class TestN30JoinFieldExistence:
         assert "N30" not in _codes(vr, "L4")
 
 
+class TestDerivedFieldChannels:
+    """设计产物字段三形态通道（2026-09-11 定调）。
+
+    开窗取最新等场景的 rs_input 域外字段（row_number 产出的 rn）三条设计路径放行：
+    - 形态1 拆 tmp：field_targets 加列 + tables.{tmp}.fields 声明类型（进 DDL）
+    - 形态2/3 规则内（WITH/内联子查询）：joins.derived_fields 声明（装配透传给 coder）
+    未声明照旧拦（copy 残留的语义真空防线不动）。
+    """
+
+    def _rs(self):
+        """主表 t + org 表（mapping 别名 org 绑物理表——模拟'表写子查询主表、别名是子查询别名'）"""
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_test_f", "source_column": "id", "source_type": "bigint",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "id", "target_column_cn": "ID", "target_type": "bigint",
+             "source_alias": "t", "remark": ""},
+            {"source_table": "ods_org_d", "source_column": "org_name", "source_type": "varchar(200)",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "org_name", "target_column_cn": "机构名", "target_type": "varchar(200)",
+             "source_alias": "org", "remark": "取最新一条"},
+        ], has_audit=True)
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_test_f", "source_table_cn": "主",
+             "source_alias": "t", "join_condition": ""},
+            {"source_schema": "ods", "source_table": "ods_org_d", "source_table_cn": "机构",
+             "source_alias": "org", "join_condition": "t.id = org.org_id and org.rn = 1"},
+        ]
+        return rs
+
+    def _cache(self, tmp_path):
+        cache = {"cached_at": "", "tables": {
+            "ods.ods_test_f": {"id": "bigint"},
+            "ods.ods_org_d": {"org_id": "bigint", "org_name": "varchar(200)", "upd_time": "timestamp"},
+        }}
+        p = tmp_path / "schema_cache.json"
+        p.write_text(json.dumps(cache), encoding="utf-8")
+        return p
+
+    _AUDIT = ["del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"]
+
+    def _validate(self, dd, rs, cache_path):
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        return run_all_validations(dd, rs, field_map, schema_cache_path=cache_path)
+
+    # ---------- 形态1：拆 tmp 物化 ----------
+
+    def test_form1_tmp_selfmade_field_full_chain(self, tmp_path):
+        """拆 tmp：field_targets 加 rn + tables.fields 声明类型 → C8_11 放行、N30② 裸 rn 豁免、
+        装配 DDL 含 rn 列。"""
+        rs = self._rs()
+        dd = make_design_decisions(
+            rules=[
+                {"rule_code": "R0001", "rule_name": "机构取最新", "scenario": "default",
+                 "exec_sequence": 1, "target_table": "dws.dwb_test_tmp1",
+                 "step_type": "full", "target_role": "intermediate",
+                 "produces_for": ["R0002"],
+                 "joins": [{"alias": "org", "type": "LEFT JOIN",
+                            "condition": "t.id = org.org_id"}],
+                 "filter": "rn = 1",
+                 "field_targets": ["id", "org_name", "rn"],
+                 "field_logics": {"rn": "row_number() over(partition by org.org_id order by org.upd_time desc)",
+                                  "org_name": "org.org_name"},
+                 "grain": {"input": "源", "output": "目标", "change": "无"}},
+                {"rule_code": "R0002", "rule_name": "装配", "scenario": "default",
+                 "exec_sequence": 2, "target_table": "dws.dwb_test_f",
+                 "step_type": "full", "target_role": "target",
+                 "reads": [{"table": "dws.dwb_test_tmp1", "alias": "t_org"}],
+                 "field_targets": ["id", "org_name"] + self._AUDIT,
+                 "field_logics": {},
+                 "grain": {"input": "源", "output": "目标", "change": "无"}},
+            ],
+            tables={"dws.dwb_test_tmp1": {"distribution_key": ["id"], "fields": {"rn": "int8"}}},
+        )
+        dd["data_flow"] = {"dependencies": [], "schedule_groups": [
+            {"sequence": 1, "rules": ["R0001"]}, {"sequence": 2, "rules": ["R0002"]}]}
+
+        vr = self._validate(dd, rs, self._cache(tmp_path))
+        assert "C8_11" not in _codes(vr, "L1"), [i["msg"] for i in vr.items if i["code"] == "C8_11"]
+        assert "N30" not in _codes(vr, "L4"), [i["msg"] for i in vr.items if i["code"] == "N30"]
+
+        ts, _, _ = do_assemble(rs, dd)
+        tmp1_fields = {f["target_field"]: f["field_type"] for f in ts["tables"]["dwb_test_tmp1"]["fields"]}
+        assert tmp1_fields.get("rn") == "int8", tmp1_fields  # 自建字段带声明类型进 DDL
+
+    def test_form1_undeclared_selfmade_still_blocked(self, tmp_path):
+        """中间表 field_targets 加 rn 但 tables.fields 未声明类型 → C8_11 仍拦 + 文案指路。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "机构取最新", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_tmp1",
+            "step_type": "full", "target_role": "intermediate",
+            "produces_for": ["R0002"],
+            "joins": [{"alias": "org", "type": "LEFT JOIN", "condition": "t.id = org.org_id"}],
+            "filter": "rn = 1",
+            "field_targets": ["id", "org_name", "rn"],
+            "field_logics": {"rn": "row_number() over(partition by org.org_id order by org.upd_time desc)"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }], tables={"dws.dwb_test_tmp1": {"distribution_key": ["id"]}})  # 无 fields 声明
+        dd["data_flow"] = {"dependencies": [], "schedule_groups": [
+            {"sequence": 1, "rules": ["R0001"]}, {"sequence": 2, "rules": ["R0002"]}]}
+
+        vr = self._validate(dd, rs, self._cache(tmp_path))
+        assert "C8_11" in _codes(vr, "L1")
+        msgs = [i["msg"] for i in vr.items if i["code"] == "C8_11"]
+        assert any("'rn'" in m and "tables." in m for m in msgs), msgs
+
+    def test_form1_target_role_rejects_selfmade(self, tmp_path):
+        """目标表规则放自建字段 → 仍拦（目标表字段域=rs_input 锚，过程列只进中间表）。"""
+        rs = self._rs()
+        dd = make_design_decisions(
+            rules=[{
+                "rule_code": "R0001", "rule_name": "直灌", "scenario": "default",
+                "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+                "joins": [{"alias": "org", "type": "LEFT JOIN",
+                            "condition": "t.id = org.org_id and org.rn = 1"}],
+                "field_targets": ["id", "org_name", "rn"] + self._AUDIT,
+                "field_logics": {},
+                "grain": {"input": "源", "output": "目标", "change": "无"},
+            }],
+            tables={"dws.dwb_test_f": {"fields": {"rn": "int8"}}},
+        )
+        vr = self._validate(dd, rs, self._cache(tmp_path))
+        assert "C8_11" in _codes(vr, "L1")
+        msgs = [i["msg"] for i in vr.items if i["code"] == "C8_11"]
+        assert any("目标表" in m and "'rn'" in m for m in msgs), msgs
+
+    # ---------- 形态2/3：joins.derived_fields（规则内 CTE/内联子查询） ----------
+
+    def test_form23_derived_fields_declared_full_chain(self, tmp_path):
+        """derived_fields 声明 → N30 限定引用放行 + 定义表达式过门禁 + 装配透传 + ts.md 渲染。"""
+        rs = self._rs()
+        rn_expr = "row_number() over(partition by org.org_id order by org.upd_time desc)"
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "直灌", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+            "joins": [{"alias": "org", "type": "LEFT JOIN",
+                        "condition": "t.id = org.org_id and org.rn = 1",
+                        "derived_fields": {"rn": rn_expr}}],
+            "field_targets": ["id", "org_name"] + self._AUDIT,
+            "field_logics": {"org_name": f"case when org.rn = 1 then org.org_name else null end（rn 为关联派生列）"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = self._validate(dd, rs, self._cache(tmp_path))
+        assert "N30" not in _codes(vr, "L4"), [i["msg"] for i in vr.items if i["code"] == "N30"]
+        assert "N36" not in _codes(vr, "LG"), [i["msg"] for i in vr.items if i["code"] == "N36"]
+        assert "N38" not in _codes(vr, "LG"), [i["msg"] for i in vr.items if i["code"] == "N38"]
+
+        ts, _, _ = do_assemble(rs, dd)
+        j = ts["rules"]["R0001"]["joins"][0]  # 装配整段透传（slice 同路径给 coder）
+        assert j.get("derived_fields", {}).get("rn") == rn_expr
+        md = render_md(ts)
+        assert "关联派生字段" in md and "row_number() over" in md  # 闸口①可见开窗口径
+
+    def test_form23_undeclared_org_rn_still_blocked(self, tmp_path):
+        """join 条件用 org.rn=1 但未声明 derived_fields → N30 hard + 文案两分支指引。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "直灌", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+            "joins": [{"alias": "org", "type": "LEFT JOIN",
+                        "condition": "t.id = org.org_id and org.rn = 1"}],
+            "field_targets": ["id", "org_name"] + self._AUDIT,
+            "field_logics": {},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = self._validate(dd, rs, self._cache(tmp_path))
+        assert "N30" in _codes(vr, "L4")
+        msgs = [i["msg"] for i in vr.items if i["code"] == "N30"]
+        assert any("org.rn" in m and "derived_fields" in m for m in msgs), msgs
+
+    def test_form23_derived_expr_bad_ref_blocked(self, tmp_path):
+        """derived_fields 定义表达式里引用拼错（org.org_idx）→ N38 hard（防晚到 UT 才炸）。"""
+        rs = self._rs()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "直灌", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+            "joins": [{"alias": "org", "type": "LEFT JOIN",
+                        "condition": "t.id = org.org_id and org.rn = 1",
+                        "derived_fields": {"rn": "row_number() over(partition by org.org_idx order by org.upd_time desc)"}}],
+            "field_targets": ["id", "org_name"] + self._AUDIT,
+            "field_logics": {},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = self._validate(dd, rs, self._cache(tmp_path))
+        assert "N38" in _codes(vr, "LG")
+        msgs = [i["msg"] for i in vr.items if i["code"] == "N38"]
+        assert any("org_idx" in m and "派生" in m for m in msgs), msgs
+
+    def test_n36_bare_rn_in_logic_exempted(self, tmp_path):
+        """field_logics 口径里裸 rn（开窗输出别名形态）→ 声明 derived_fields 后 N36 豁免。"""
+        rs = self._rs()
+        rn_expr = "row_number() over(partition by org.org_id order by org.upd_time desc)"
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "直灌", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+            "joins": [{"alias": "org", "type": "LEFT JOIN",
+                        "condition": "t.id = org.org_id and org.rn = 1",
+                        "derived_fields": {"rn": rn_expr}}],
+            "field_targets": ["id", "org_name"] + self._AUDIT,
+            "field_logics": {"org_name": f"case when rn = 1 then org.org_name else null end（rn 为关联派生列）"},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        vr = self._validate(dd, rs, self._cache(tmp_path))
+        assert "N36" not in _codes(vr, "LG"), [i["msg"] for i in vr.items if i["code"] == "N36"]
+
+
 class TestAssemblyFieldLineage:
     """装配/merge 规则的无 logic 字段默认=tmp 搬运（不再沿用 step1 源表别名 ht.a）。
 

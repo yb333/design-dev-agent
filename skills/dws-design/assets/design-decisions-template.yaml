@@ -110,6 +110,11 @@ rules:
         cast: ""                        # ★ 关联键类型跨大类且决策=转换时必填：显式转换表达式
                                         # （如 "a.prod_code::numeric"）。来源：紧凑视图 join_type_risk 段
                                         # （precheck 关联键对账检出的跨大类对）。coder 按声明写 SQL，不自己发挥。
+        derived_fields: {}              # ★ 可选：该关联对象上的派生列（rs_input 没有、设计产物——典型开窗取最新）。
+                                        #   {rn: "row_number() over(partition by org.org_id order by org.upd_time desc)"}
+                                        #   声明后 condition 里的 org.rn=1 合法；coder 翻译成 WITH/内联子查询（文法自选）。
+                                        #   未声明的 rn 会被 N30 拦（copy 残留防线）。
+                                        #   拆中间表物化时不用此键（走 field_targets + tables.fields，见 playbook §三）。
 
     # 关联安全分析（JOIN键唯一性 → 对齐策略）
     join_safety:

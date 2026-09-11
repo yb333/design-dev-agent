@@ -25,7 +25,7 @@ except AttributeError:
 
 # 依赖全在 shared 同目录（dws_db/sql_parse），无需跨目录引导
 from dws_db import load_test_params
-from sql_parse import extract_select_aliases, read_sql
+from sql_parse import read_sql
 
 
 # ============================================================
@@ -132,42 +132,36 @@ def _type_fallback(pdecl: dict) -> str:
 
 
 
-def _resolve_insert_columns(select_sql: str, table_fields: list) -> list[str]:
-    """解析 INSERT 字段列表的顺序——按 SELECT 输出列的出现顺序（模拟平台行为）。
+def _resolve_insert_columns(table_fields: list) -> list[str]:
+    """INSERT 字段列表——结构源：ts.tables.{目标表}.fields（DDL 同源，顺序=装配顺序=切片顺序）。
 
-    平台按 SELECT 输出列的顺序拼 INSERT 字段列表（有映射能力）。
-    本函数用 check_sql.extract_select_aliases 从 SELECT 提取 AS 别名（按出现顺序）。
+    2026-09-11 定调（内网实证 CTE 炸批）：列清单不再从 SELECT 文本解析
+    （extract_select_aliases 对 CTE/注释/内联子查询的边界识别脆弱——CTE 体内
+    `row_number() over(...) as rn` 的 as rn 曾被误抓进 INSERT 列清单）。结构源
+    是权威登记处；SELECT 实际输出列与它的一致性由 6a describe 对账守
+    （SELECT * FROM (…) LIMIT 0 拿真实列序比对，权威解释器是数据库）。
 
-    回退策略：SELECT 解析不出字段（无 AS 别名等异常情况）→ 用 table_fields 顺序兜底。
-    coder 已被规范要求"所有字段用 AS 显式命名"，正常情况都能解析。
+    平台等价性：平台按 SELECT 输出顺序拼列（位置对齐）；coder 被要求按切片顺序
+    输出（=结构源顺序）+ 6a 列序对账，INSERT 列序 == SELECT 输出序 == 平台会拼出的序。
 
     Args:
-        select_sql: coder 产的 SELECT。
-        table_fields: 表的全部字段（dict 列表或字符串列表），回退用。
-
-    返回: 字段名列表（按 SELECT 顺序），空列表表示两边都拿不到。
+        table_fields: 表的全部字段（dict 列表取 target_field；或字符串列表）。
+    返回: 字段名列表（结构源顺序）；空清单抛 ValueError（拼不出合法 INSERT，fail-visible）。
     """
-    try:
-        aliases = extract_select_aliases(select_sql)
-        if aliases:
-            # 终检：INSERT 列重复 = 解析异常（CTE 边界错位）或 SELECT 真重复输出——
-            # 两者拼出的 INSERT 都是非法 SQL，明确报错不静默拼（fail-visible）
-            dup = [a for a in set(aliases) if aliases.count(a) > 1]
-            if dup:
-                raise ValueError(
-                    f"INSERT 字段清单解析出重复列 {sorted(dup)}——疑似 CTE 边界识别失败"
-                    f"（检查 SELECT 里的字符串字面量/括号配对）或 SELECT 输出了重复别名")
-            return aliases
-    except ValueError:
-        raise
-    except Exception:
-        pass
-    # 回退：table_fields 顺序
     if table_fields and isinstance(table_fields[0], dict):
-        return [f.get("target_field", "") for f in table_fields]
-    if table_fields and isinstance(table_fields[0], str):
-        return list(table_fields)
-    return []
+        names = [f.get("target_field", "") for f in table_fields]
+    elif table_fields:
+        names = [str(f) for f in table_fields]
+    else:
+        names = []
+    names = [n for n in names if n]
+    dup = sorted({n for n in names if names.count(n) > 1})
+    if dup:
+        raise ValueError(f"INSERT 字段清单含重复列 {dup}——结构源异常（同表字段应被 C9 查重拦）")
+    if not names:
+        raise ValueError(
+            "INSERT 字段清单为空——ts.tables 里目标表无字段声明（检查 ts 装配/表短名匹配）")
+    return names
 
 
 def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
@@ -176,12 +170,11 @@ def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
     平台规则：
     - INSERT INTO 目标表 (字段列表)
     - SELECT 内容不变
-    - ★ 字段列表按 SELECT 输出列的顺序拼（平台有映射能力，解析 SELECT 别名顺序）
+    - 字段列表 = ts 结构源顺序（见 _resolve_insert_columns——不从 SELECT 文本解析）
 
     table_fields: 该表的全部字段（从 tables 段取，已含审计字段）。
-    作为解析失败时的回退（兜底用 table_fields 顺序）。
     """
-    field_names = _resolve_insert_columns(select_sql, table_fields)
+    field_names = _resolve_insert_columns(table_fields)
     columns = ",\n    ".join(field_names)
 
     return f"""INSERT INTO {target_table} (
@@ -213,11 +206,8 @@ def wrap_write(select_sql: str, target_table: str, table_fields: list,
         return wrap_insert(select_sql, target_table, table_fields)
 
     # MERGE / UPDATE：拼 MERGE INTO 语句
-    # ★ 字段列表按 SELECT 输出列顺序（和平台一致），解析失败回退 table_fields
-    field_names = _resolve_insert_columns(select_sql, table_fields)
-    if not field_names:
-        # 没有字段清单，回退 INSERT（无法拼 MERGE 的字段映射）
-        return wrap_insert(select_sql, target_table, table_fields)
+    # ★ 字段列表 = 结构源顺序（见 _resolve_insert_columns；列序一致性由 6a describe 对账守）
+    field_names = _resolve_insert_columns(table_fields)
 
     columns = ", ".join(field_names)
     # UPDATE SET：源字段赋值（T1.col 对应每个目标字段，审计字段不更新由业务定，这里全量 UPDATE）

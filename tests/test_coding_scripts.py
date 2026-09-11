@@ -403,39 +403,46 @@ class TestInsertWrapping:
         assert "t.x AS x" in result
         assert "FROM t" in result
 
-    def test_insert_columns_follow_select_order_not_table_fields(self):
-        """★ INSERT 字段列表按 SELECT 输出顺序，不按 table_fields 顺序（模拟平台行为）"""
+    def test_insert_columns_follow_struct_source_order(self):
+        """★ INSERT 字段列表=结构源（table_fields）顺序，不从 SELECT 文本解析。
+
+        2026-09-11 定调（内网实证 CTE 炸批）：文本解析对 CTE/注释/内联子查询边界
+        脆弱（CTE 体 `row_number()... as rn` 曾被误抓进列清单）。列清单=ts 结构源
+        （DDL 同源）；SELECT 实际输出与结构源的一致性由 6a describe 列序对账守。
+        """
         from run_ut import wrap_insert
-        # table_fields 顺序: a, b, c
+        # table_fields 顺序: a, b, c（= 装配顺序 = 切片给 coder 的顺序）
         table_fields = [{"target_field": "a"}, {"target_field": "b"},
                         {"target_field": "c"}, {"target_field": "del_flag"}]
-        # SELECT 输出顺序: c, a, b（与 table_fields 不一致）
-        select = "SELECT t.c3 AS c, t.c1 AS a, t.c2 AS b, 'N' AS del_flag FROM t"
+        # SELECT 里带 CTE（体内的 as rn 不是输出列，不该进 INSERT 列清单）
+        select = ("WITH org AS (SELECT m.id, row_number() OVER "
+                  "(PARTITION BY m.org_id ORDER BY m.upd_time DESC) AS rn FROM a m)\n"
+                  "SELECT t.c1 AS a, t.c2 AS b, t.c3 AS c, 'N' AS del_flag "
+                  "FROM main_t t JOIN org ON t.org_id = org.id AND org.rn = 1")
         result = wrap_insert(select, "schema.tbl", table_fields)
-        # INSERT 字段列表应该是 c, a, b, del_flag（SELECT 顺序）
-        # 验证：INSERT(...)<到>SELECT 之间的字段列表保持 SELECT 顺序
         insert_cols_section = result.split("INSERT INTO schema.tbl (")[1].split(")")[0]
         cols = [c.strip() for c in insert_cols_section.split(",")]
-        assert cols == ["c", "a", "b", "del_flag"], f"INSERT 字段顺序应跟 SELECT，实际 {cols}"
+        assert cols == ["a", "b", "c", "del_flag"], f"INSERT 字段应跟结构源顺序，实际 {cols}"
+        assert "rn" not in cols  # CTE 体派生列不进列清单——本修复的实证场景
 
     def test_insert_columns_with_string_table_fields(self):
-        """table_fields 是字符串列表时，INSERT 字段顺序仍按 SELECT"""
+        """table_fields 是字符串列表时，同样按结构源顺序"""
         from run_ut import wrap_insert
         table_fields = ["a", "b", "del_flag"]
         select = "SELECT t.b AS b, t.a AS a, 'N' AS del_flag FROM t"
         result = wrap_insert(select, "schema.tbl", table_fields)
         insert_cols_section = result.split("INSERT INTO schema.tbl (")[1].split(")")[0]
         cols = [c.strip() for c in insert_cols_section.split(",")]
-        assert cols == ["b", "a", "del_flag"]
+        assert cols == ["a", "b", "del_flag"]
 
-    def test_insert_fallback_to_table_fields_when_no_aliases(self):
-        """SELECT 无 AS 别名时，回退到 table_fields 顺序兜底"""
-        from run_ut import wrap_insert
-        table_fields = [{"target_field": "a"}, {"target_field": "b"}]
-        # 无 AS 别名（解析不出顺序）
-        select = "SELECT t.a, t.b FROM t"
-        result = wrap_insert(select, "schema.tbl", table_fields)
-        assert "a" in result and "b" in result  # 回退不崩
+    def test_insert_empty_table_fields_raises(self):
+        """结构源为空 → ValueError（拼不出合法 INSERT，fail-visible 不静默）"""
+        from run_ut import wrap_insert, _resolve_insert_columns
+        import pytest
+        with pytest.raises(ValueError):
+            _resolve_insert_columns([])
+        with pytest.raises(ValueError):
+            wrap_insert("SELECT 1 AS x", "schema.tbl", [])
 
 
 # ============================================================
@@ -492,17 +499,17 @@ class TestWrapWrite:
         assert "WHEN MATCHED THEN UPDATE SET" in result
         assert "WHEN NOT MATCHED THEN INSERT" in result
 
-    def test_merge_columns_follow_select_order(self):
-        """★ MERGE 的 INSERT/UPDATE 字段也按 SELECT 顺序（和平台一致）"""
+    def test_merge_columns_follow_struct_source_order(self):
+        """★ MERGE 的 INSERT/UPDATE 字段=结构源顺序（2026-09-11 定调，与 INSERT 同口径）"""
         from run_ut import wrap_write
-        # table_fields 顺序 a,b；SELECT 顺序 b,a
+        # table_fields 顺序 a,b；SELECT 顺序 b,a（乱序由 6a describe 对账拦，这里只管拼装）
         fields = [{"target_field": "a"}, {"target_field": "b"}]
         select = "SELECT t.fb AS b, t.fa AS a FROM t"
         result = wrap_write(select, "sch.tbl", fields, "merge_into", "T.a=T1.a")
-        # INSERT VALUES 的字段顺序应跟 SELECT: b, a
+        # INSERT VALUES 的字段顺序应跟结构源: a, b
         insert_values = result.split("VALUES (")[1].split(")")[0]
         vals = [v.strip() for v in insert_values.split(",")]
-        assert vals == ["T1.b", "T1.a"], f"MERGE INSERT 值顺序应跟 SELECT，实际 {vals}"
+        assert vals == ["T1.a", "T1.b"], f"MERGE INSERT 值顺序应跟结构源，实际 {vals}"
 
     def test_update_produces_merge_statement(self):
         """update → 同 merge（MERGE 语句）"""

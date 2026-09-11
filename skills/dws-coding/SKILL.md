@@ -96,6 +96,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 
 `--alias` 返回的字段行是纯取值表达式（`别名.字段 AS 目标字段`），**不含 COALESCE**——该不该 COALESCE、用什么默认值由你判断（金额 NULL→0 合理，主键 NULL→0 会掩盖关联失败，状态字段 NULL 可能有含义）。
 **SQL 框架（FROM/JOIN/WHERE/CTE/del_flag 过滤/聚合）完全由你决定**——工具不生成这些，因为它们取决于加工字段和关联逻辑。
+切片 `joins` 条目若带 `derived_fields`（如 `{rn: "row_number() over(partition by org.org_id order by org.upd_time desc)"}`）：该别名不是物理表，是**带派生列的子查询**——把它写成 WITH（`WITH org AS (SELECT …, <定义表达式> AS rn FROM …)`)或内联子查询（`JOIN (SELECT …) org`），二选一按可读性自定；定义表达式照搬不改口径，join 条件里的 `org.rn = 1` 照写。**派生列不是目标表字段，不进 SELECT 输出**（输出列=切片字段清单，UT 6a 列序对账会拦多列）。
 
 ### 2.4 pick_fields 场景速查
 

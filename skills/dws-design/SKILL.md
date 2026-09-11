@@ -148,7 +148,11 @@ description: >-
 - **分布键**：按业务主键 / 关联使用频率（减少重分布）/ 离散程度选，与数据量无关。多表 JOIN 时各表分布键必须一致。
   → 详见 `references/design-guide.md` §1.1
 - **关联安全（每个声明的 JOIN：⓪条件可信 + 三维判断，都要有结论）**：
-  - ⓪ **条件语义（先于三维）**：join_condition 里"取一/最新/去重"类过滤（如 rn=1）= 从表按业务键不唯一的强信号——①方向必须有对齐结论（GROUP BY 收敛 / 取最新有效行），开窗口径业务语义源端给，designer 不编。存在性/出处已由 precheck+输入体检把关，此处兜底语义
+  - ⓪ **条件语义（先于三维）**：join_condition 里"取一/最新/去重"类过滤（如 rn=1）= 从表按业务键不唯一的强信号——①方向必须有对齐结论（GROUP BY 收敛 / 取最新有效行），开窗口径业务语义源端给，designer 不编。存在性/出处已由 precheck+输入体检把关，此处兜底语义。
+    **开窗列（rn 等设计产物字段）的合法通道（N30 拦你没声明时照此补）**——三形态按场景选，物化层级是设计自由度：
+    - **拆中间表物化**（多规则复用/开窗重/需独立验证键唯一性）：R1 产 tmp——field_targets 加该列 + `tables.{tmp}.fields` 声明类型（int8）+ field_logics 写开窗口径，下游规则 reads 该 tmp 关联；
+    - **规则内子查询**（单规则消费、开窗简单）：joins 声明 `derived_fields: {rn: "row_number() over(partition by org.org_id order by org.upd_time desc)"}`——coder 翻译成 WITH/内联子查询（文法自选），条件里 `org.rn = 1` 照写；
+    - 声明了才放行；mapping 没给"取最新"语义（疑似 copy 残留）→ 不自行还原开窗定义，闸口①退回问源端
   - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一——不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique）：
     ```
     python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_input.json \

@@ -99,6 +99,28 @@ from explain_check import (  # noqa: F401
     _parse_actual_rows, _analyze_plan,
 )
 
+def compare_column_order(expected: list, actual: list) -> tuple[bool, list]:
+    """列序对账：SELECT 实际输出列 vs ts 结构源字段序（内部统一小写）。
+
+    返回 (是否一致, 差异描述列表)。按位置对齐的 INSERT 遇多/缺列直接报错、
+    遇乱序静默错位数据——三者都算不一致。
+    """
+    expected = [str(c).lower() for c in expected]
+    actual = [str(c).lower() for c in actual]
+    missing = [c for c in expected if c not in actual]
+    extra = [c for c in actual if c not in expected]
+    if missing or extra:
+        parts = []
+        if missing:
+            parts.append(f"缺列 {missing}")
+        if extra:
+            parts.append(f"多列 {extra}")
+        return False, parts
+    if actual != expected:
+        return False, [f"顺序漂移（期望 {expected}，实际 {actual}）"]
+    return True, []
+
+
 def main():
     parser = argparse.ArgumentParser(description="UT 预检（回退+DDL+SELECT，不写数据）")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
@@ -266,6 +288,40 @@ def main():
             else:
                 streams = len(_STREAM_PATTERN.findall(plan_text))
                 print(f"  📋 计划检查: 通过（STREAM {streams}/{STREAM_LIMIT}，无 Data Node Scan）→ {plan_file}")
+
+            # 列序对账（2026-09-11 定调）：SELECT 实际输出列序 vs ts 结构源字段序。
+            # INSERT 列清单已改用结构源（run_ut._resolve_insert_columns），coder 若
+            # 输出多列/少列/乱序，按位置对齐的 INSERT 会错位——权威解释器是数据库
+            # （LIMIT 0 不取数零成本；CTE/内联子查询/注释任何形态天然正确）。
+            target_short = target.rsplit(".", 1)[-1] if "." in target else target
+            _tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
+            expected_cols = [str(f.get("target_field", "")).lower()
+                             for f in _tbl_fields if isinstance(f, dict) and f.get("target_field")]
+            if expected_cols:
+                r_desc = etl_executor.execute(
+                    f"SELECT * FROM ({select_sql.strip().rstrip(';')}) _ut_cols LIMIT 0")
+                if r_desc.success and r_desc.columns:
+                    actual_cols = [str(c).lower() for c in r_desc.columns]
+                    order_ok, detail_parts = compare_column_order(expected_cols, actual_cols)
+                    if order_ok:
+                        r_result["column_check"] = "PASS"
+                        print(f"  ✅ 列序对账: {len(expected_cols)} 列与 ts 字段声明一致")
+                    else:
+                        # 按位置对齐的 INSERT 遇多/缺列直接报错，遇乱序静默错位数据——都拦
+                        r_result["status"] = "FAIL"
+                        r_result["error_type"] = "SQL"
+                        r_result["detail"] = (f"列序对账失败（SQL 输出列 ≠ ts 字段声明）: "
+                                              f"{'; '.join(detail_parts)}——回 coder 修 SELECT 输出列")
+                        r_result["column_check"] = "FAIL"
+                        print(f"  ❌ 列序对账失败: {'; '.join(detail_parts)}")
+                        results.append(r_result)
+                        prev_failed = True
+                        continue
+                else:
+                    # describe 执行失败/无列——宁放过（EXPLAIN ANALYZE 已真实执行过 SELECT
+                    # 本体，主守卫已过；对账是增益守卫），披露跳过原因
+                    r_result["column_check"] = "SKIPPED"
+                    print("  ⏭️ 列序对账跳过（describe 无列返回）")
             results.append(r_result)
 
     # 输出结果

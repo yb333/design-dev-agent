@@ -366,6 +366,14 @@ def validate_decisions(decisions, field_map):
 
     rs_fields = set(field_map.keys())
 
+    # 自建字段类型声明（中间表 designer 自建字段通道；键归一短名与 build_tables 同口径）。
+    # rs_input 外的字段（开窗序号 rn 等过程产物）声明了类型即合法——装配层 build_tables
+    # 与 N_JOIN2 早认这个通道，门禁层同口径跟上（2026-09-11 三形态定调）
+    dec_tbl_fields = {}
+    for tk, tcfg in decisions.get("tables", {}).items():
+        if isinstance(tcfg, dict) and isinstance(tcfg.get("fields"), dict):
+            dec_tbl_fields[_table_short(str(tk))] = {str(k).lower() for k in tcfg["fields"]}
+
     # 按 (table_short, field) 维度查重——同一字段可跨表，但不能在同表重复
     # ★ build_mode 分流：accumulate（累积共建）模式允许同表字段重叠，transform（默认）严格查重
     seen_table_fields = {}  # (table_short, field) -> rule_code
@@ -402,12 +410,27 @@ def validate_decisions(decisions, field_map):
             else:
                 seen_table_fields[key] = code
 
-            # 字段名必须在 rs_input 里找得到
+            # 字段名必须在 rs_input 里找得到（或为已声明类型的中建自建字段）
             if t not in field_map:
-                errors.append(
-                    f"规则 {code} 的 field_targets 里 '{t}' 在 rs_input.json 里找不到"
-                    f"(检查字段名拼写)"
-                )
+                if t.lower() in (dec_tbl_fields.get(tbl_short) or set()):
+                    if is_target:
+                        errors.append(
+                            f"规则 {code} 的 field_targets 里 '{t}' 是 rs_input 外的"
+                            f"自建字段且声明在目标表——目标表字段域=rs_input 映射（完整性锚），"
+                            f"过程字段（开窗序号等）只进中间表规则（target_role=intermediate）"
+                        )
+                    # 中间表自建字段（已声明类型）→ 放行：装配层按 tables.fields 落 DDL 列
+                elif not is_target:
+                    errors.append(
+                        f"规则 {code} 的 field_targets 里 '{t}' 在 rs_input.json 里找不到"
+                        f"(检查字段名拼写；若为设计产物字段如开窗序号 rn，须在 "
+                        f"tables.{tbl_short}.fields 声明类型后才是合法中间表字段)"
+                    )
+                else:
+                    errors.append(
+                        f"规则 {code} 的 field_targets 里 '{t}' 在 rs_input.json 里找不到"
+                        f"(检查字段名拼写)"
+                    )
 
             # 目标表规则覆盖的字段计入完整性检查
             if is_target:
@@ -1420,6 +1443,34 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
         except Exception:
             cache_tables = {}
 
+    # ============================================================
+    # 设计产物字段登记处（2026-09-11 三形态定调——开窗取最新等场景的过程字段通道）：
+    #   自建字段：tables.{tbl}.fields 声明（形态1 拆 tmp 物化；C8_11/N_JOIN2/build_tables 同口径）
+    #   派生字段：joins[].derived_fields 声明（形态2/3 规则内 CTE/内联子查询——别名上派生列，
+    #             如 {rn: row_number() over(...)}，coder 翻译成 WITH/内联子查询，文法自选）
+    # 两者都是 designer 显式声明（有来历），区别仅在物化层级。登记后：
+    # C8_11 放行（validate_decisions）/N36/N30② 裸引用豁免/N30①/N38 限定引用查源表
+    # 查无时再查派生集。未声明照旧拦——copy 残留的语义真空防线不动。
+    # ============================================================
+    self_made_fields = set()  # 自建字段名集（tables.fields 声明键）
+    for _tk, _tcfg in (decisions.get("tables") or {}).items():
+        if isinstance(_tcfg, dict) and isinstance(_tcfg.get("fields"), dict):
+            self_made_fields.update(str(k).lower() for k in _tcfg["fields"])
+    # rule_code → {join别名 → {派生字段: 定义表达式}}
+    derived_by_rule = {}
+    for _r in rules:
+        _d = {}
+        for _j in (_r.get("joins") or []):
+            if isinstance(_j, dict) and isinstance(_j.get("derived_fields"), dict):
+                _al = (_j.get("alias") or "").strip().lower()
+                if _al:
+                    _d[_al] = {str(k).lower(): str(v) for k, v in _j["derived_fields"].items()}
+        if _d:
+            derived_by_rule[_r.get("rule_code", "?")] = _d
+    derived_field_names = {f for _per in derived_by_rule.values()
+                           for _fields in _per.values() for f in _fields}
+    declared_field_names = self_made_fields | derived_field_names  # 豁免集（rs_input 域外已登记）
+
     from sql_parse import extract_logic_refs, diff_logic_refs, find_unqualified_refs, find_three_part_refs
     has_logic_refs = any(extract_logic_refs(str(t), set())[0]
                          for rule in rules for t in (rule.get("field_logics") or {}).values())
@@ -1431,10 +1482,11 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     for rule in rules:
         code = rule.get("rule_code", "?")
         rule_tmp_alias = _rule_tmp_aliases(rule)
+        rule_derived = derived_by_rule.get(code) or {}
         for col, text in (rule.get("field_logics") or {}).items():
             text = str(text)
-            # 【格式】未限定标识符（纯语法）
-            bare_ids = find_unqualified_refs(text)
+            # 【格式】未限定标识符（纯语法；已登记的自建/派生字段裸引用豁免——归属已知非猜测）
+            bare_ids = find_unqualified_refs(text, declared_field_names)
             if bare_ids:
                 vr.add_hard("LG", "N36",
                     f"【引用门禁·格式】规则 {code} 字段 {col} 的 design_logic 有未限定标识符 "
@@ -1448,12 +1500,15 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     f"【引用门禁·格式】规则 {code} 字段 {col} 的 design_logic 有三段式引用 "
                     f"{three}——字段引用一律'别名.字段'（两段）；表引用 schema.table 只出现在"
                     f"coder 的 FROM/JOIN 位置，三段式存在性校验看不见字段本身")
-            # 【存在】限定引用查表（源表 cache / tmp field_targets）
+            # 【存在】限定引用查表（源表 cache ∪ 别名派生集 / tmp field_targets）
             if cache_tables:
                 for al, c in extract_logic_refs(text, set())[0]:
                     if al in alias_map:
                         tbl_key = alias_map[al]
                         fields = cache_tables.get(tbl_key)
+                        _derived = rule_derived.get(al) or {}
+                        if c in _derived:
+                            continue  # 派生字段（joins.derived_fields 声明）→ 归属已知，放行
                         if fields is not None and c not in fields:
                             vr.add_hard("LG", "N38",
                                 f"【引用门禁·存在】规则 {code} 字段 {col} 的口径引用 {al}.{c}，"
@@ -1476,6 +1531,34 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                         f"【引用门禁·完整】规则 {code} 字段 {col}：mapping 原文引用了 {missing}，"
                         f"design_logic 未出现——翻译疑似丢引用（原文提取尽力而为，供参考），"
                         f"对照原文口径补全")
+
+        # derived_fields 定义表达式过门禁（与 field_logics 同口径——防开窗 partition by
+        # 键拼错晚到 UT 才炸；豁免集同样带上，表达式可引用兄弟派生字段）
+        for _al, _fields in rule_derived.items():
+            for _fn, _expr in _fields.items():
+                _txt = str(_expr)
+                _bare = find_unqualified_refs(_txt, declared_field_names)
+                if _bare:
+                    vr.add_hard("LG", "N36",
+                        f"【引用门禁·格式】规则 {code} 派生字段 {_al}.{_fn} 的定义表达式有"
+                        f"未限定标识符 {_bare}——表达式里的字段引用必须'别名.字段'")
+                _three = find_three_part_refs(_txt)
+                if _three:
+                    vr.add_hard("LG", "N36",
+                        f"【引用门禁·格式】规则 {code} 派生字段 {_al}.{_fn} 的定义表达式有"
+                        f"三段式引用 {_three}——字段引用一律'别名.字段'（两段）")
+                if cache_tables:
+                    for _ra, _rc in extract_logic_refs(_txt, set())[0]:
+                        if _ra in alias_map:
+                            _src2 = cache_tables.get(alias_map[_ra])
+                            if _src2 is not None and _rc not in _src2 and \
+                                    _rc not in (rule_derived.get(_ra) or {}):
+                                vr.add_hard("LG", "N38",
+                                    f"【引用门禁·存在】规则 {code} 派生字段 {_al}.{_fn} 的定义"
+                                    f"引用 {_ra}.{_rc}，源表 {alias_map[_ra]} 里没有该字段"
+                                    f"——检查拼写"
+                                    f"\n先查证（下次写前）: python skills/dws-design/scripts/check_field.py "
+                                    f"{_rs_arg} --field {_ra}.{_rc}")
 
     # ============================================================
     # N30（hard/warn）：designer 声明的关联引用（joins 条件/规则 filter/join_safety
@@ -1517,6 +1600,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             code = rule.get("rule_code", "?")
             # 规则级 tmp 别名绑定（reads 对象形式声明；字符串形式默认别名=表短名）
             rule_tmp_alias = _rule_tmp_aliases(rule)
+            rule_derived = derived_by_rule.get(code) or {}
             # 待查文本：join 条件 + 规则级 filter + join_safety.join_filter
             # （design_logic 的口径引用归引用门禁 LG/N38，此处不重复查）
             texts = [((j.get("condition") or "").strip()) for j in rule.get("joins") or []]
@@ -1544,7 +1628,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     tk, _is_tmp = _resolve(a)
                     if tk:
                         alias_tables.add(tk)
-                # ① 别名限定引用 a.x：定位到表后查存在
+                # ① 别名限定引用 a.x：定位到表后查存在（源表字段 ∪ 该别名的派生字段集）
                 for al, col in qualified_refs:
                     tbl_key, is_tmp_ref = _resolve(al)
                     if tbl_key is None:
@@ -1556,29 +1640,39 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                                 f"但中间表 {tbl_key} 的字段里没有 '{col}'——检查拼写或补 field_targets")
                         continue
                     fields = cache_tables.get(tbl_key)
+                    if col in (rule_derived.get(al) or {}):
+                        continue  # 派生字段（joins.derived_fields 声明）→ 归属已知，放行
                     if fields is None:
                         continue  # 表不在缓存 → 跳过（宁放过）
                     if col not in fields:
                         vr.add_hard("L4", "N30",
                             f"规则 {code} 的条件（{cond}）引用 {al}.{col}，"
-                            f"但源表 {tbl_key} 里没有字段 '{col}'——join_condition 可能是"
-                            f"copy 源代码的残留（典型 rn=1 开窗产物，表里无此字段）：不自行还原，"
-                            f"需源端提供开窗定义，闸口①退回（见 SKILL 第4层⓪）"
+                            f"但源表 {tbl_key} 里没有字段 '{col}'——按语义来源分流："
+                            f"①mapping 已给'取最新一条'类语义（开窗口径明确）→ 声明后放行："
+                            f"拆中间表物化（field_targets 加该列 + tables.{{表}}.fields 声明类型 "
+                            f"+ field_logics 写开窗口径）或在 joins 声明 derived_fields"
+                            f"（{{rn: row_number() over(...)}}，coder 翻译成 WITH/内联子查询）；"
+                            f"②mapping 没说过取最新（疑似 copy 源代码残留）→ 不自行还原开窗定义，"
+                            f"闸口①退回问源端（见 SKILL 第4层⓪）"
                             f"\n先查证（下次写前）: python skills/dws-design/scripts/check_field.py "
                             f"{_rs_arg} --field {al}.{col}")
-                # ② 裸字段 = 字面量：在规则涉及的源表/tmp 字段里查，都查无才报
+                # ② 裸字段 = 字面量：在规则涉及的源表/tmp 字段 ∪ 已登记字段里查，都查无才报
                 if not alias_tables:
                     continue  # 条件里没有可解析的别名限定 → 无法圈定范围，跳过不猜
                 for bcol in dict.fromkeys(_bare):
                     if bcol in ("and", "or", "not", "is", "in", "like", "between"):
                         continue
+                    if bcol in declared_field_names:
+                        continue  # 自建/派生字段（designer 已声明归属）→ 豁免
                     found = any(bcol in cache_tables.get(t, set()) for t in alias_tables) \
                         or any(bcol in fs for t, fs in tmp_fields.items() if t in alias_tables)
                     if not found:
                         vr.add_hard("L4", "N30",
                             f"规则 {code} 的条件（{cond}）引用裸字段 '{bcol}'，"
-                            f"在涉及的源表里都不存在——典型是 copy 源代码的开窗残留"
-                            f"（如 rn=1，ROW_NUMBER 取一行的逻辑字段）：真实语义是'从表按业务键不唯一、"
+                            f"在涉及的源表里都不存在——按语义来源分流："
+                            f"①mapping 已给'取最新一条'类语义 → 拆中间表物化（tables.fields "
+                            f"声明类型）或 joins.derived_fields 声明后引用；"
+                            f"②疑似 copy 开窗残留（如 rn=1）→ 真实语义是'从表按业务键不唯一、"
                             f"开窗取一行'，需源端提供开窗定义（按啥分组/排序），闸口①退回，"
                             f"designer 不自行还原（见 SKILL 第4层⓪）"
                             f"\n先查证（下次写前）: python skills/dws-design/scripts/check_field.py "
@@ -1609,11 +1703,12 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             if (d.get("decision") or "").strip() == "接受"
         }
         # tmp 表字段类型：rules 的 field_targets × field_map.target_type，
-        # designer 的 tables.fields 声明优先（自建字段 rs_input 没有）
+        # designer 的 tables.fields 声明优先（自建字段 rs_input 没有；键剥 schema 归一短名，
+        # 与 tmp_types 的 _table_short(target_table) 对齐）
         dec_tbl_types: dict = {}
         for _t, _cfg in (decisions.get("tables") or {}).items():
             if isinstance(_cfg, dict) and isinstance(_cfg.get("fields"), dict):
-                dec_tbl_types[_t.lower()] = {str(k).lower(): str(v) for k, v in _cfg["fields"].items()}
+                dec_tbl_types[_table_short(str(_t)).lower()] = {str(k).lower(): str(v) for k, v in _cfg["fields"].items()}
         tmp_types: dict = {}
         for r in rules:
             tt = _table_short(r.get("target_table", "")).lower()
@@ -2767,6 +2862,17 @@ def render_md(ts):
             lines.append(f"| 设计意图 | {r['design_intent']} |")
         lines.append(f"| 字段数 | {len(r.get('field_targets', []))} |")
         lines.append("")
+
+        # 关联派生字段（joins.derived_fields 声明——闸口①可见开窗口径）
+        derived_joins = [j for j in r.get("joins", [])
+                         if isinstance(j, dict) and j.get("derived_fields")]
+        if derived_joins:
+            lines.append("**关联派生字段**:")
+            lines.append("")
+            for j in derived_joins:
+                for fname, expr in j["derived_fields"].items():
+                    lines.append(f"- `{j.get('alias', '')}.{fname}` = {expr}")
+            lines.append("")
 
         # 关联安全：只有有风险的（join_key_unique=false）才展示
         risky_joins = [js for js in r.get("join_safety", []) if not js.get("join_key_unique")]
