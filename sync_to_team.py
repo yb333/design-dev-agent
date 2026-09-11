@@ -21,6 +21,7 @@
   sync_to_team.sh /path/to/internal/repo         # 指定内部仓路径，本次生效
   sync_to_team.sh --config /path/to/repo         # 保存配置（含其他已生效选项）后退出
   sync_to_team.sh --src-branch 8.12 --team-branch 8.12   # 分支覆盖，本次生效
+  sync_to_team.sh --switch 8.12                  # 内网仓切分支并记住配置（只切换，不同步）
 
 配置 ~/.design-dev-agent-sync.conf（优先级：CLI 参数 > 配置文件 > 默认值）：
   TEAM_REPO=/path/to/internal/repo   # 内部仓本地克隆路径（必填）
@@ -152,14 +153,15 @@ def switch_team_branch(team_repo: Path, branch: str):
 
 
 def run_menu() -> list | None:
-    """交互菜单：返回要执行的参数列表（[] = 直接同步），None = 退出。"""
+    """交互菜单：返回要执行的参数列表（[] = 直接同步），None = 退出。
+    动作由 main 循环执行，完成回菜单重选。"""
     print()
     print("═" * 46)
     print("  sync_to_team — 请选择要做什么")
     print("═" * 46)
     print("  [1] 同步（日常：源头最新能力 → 内网仓提交推送）")
     print("  [2] 只拉别人的提交（对齐远端，不做我们的同步）")
-    print("  [3] 切换内网仓分支")
+    print("  [3] 切换内网仓分支（只切换不同步，切完回菜单）")
     print("  [4] 配置内部仓路径")
     print("  [0] 退出")
     print("─" * 46)
@@ -192,32 +194,29 @@ def run_menu() -> list | None:
     return None
 
 
-def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    sys.dont_write_bytecode = True  # import config_paths 不落 pyc
-
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="同步本仓使用侧内容到内部仓 .opencode/")
     parser.add_argument("team_repo", nargs="?", help="内部仓路径（本次生效）")
     parser.add_argument("--config", metavar="TEAM_REPO", help="保存配置（含其他已生效选项）后退出")
     parser.add_argument("--src-branch", help="源仓分支（默认 main）")
     parser.add_argument("--team-branch", help="内部仓分支校验（空=用当前 checkout 分支）")
     parser.add_argument("--switch", metavar="BRANCH",
-                        help="内部仓切到指定分支并更新配置，然后直接同步")
+                        help="内部仓切到指定分支并更新配置（只切换：不同步不提交，推送回菜单/重跑再选）")
     parser.add_argument("--pull", action="store_true",
                         help="只拉别人的提交：内部仓对齐远端，不 mirror 不提交不推送")
-    parser.add_argument("--menu", action="store_true", help="交互菜单（bat 双击默认入口）")
-    args = parser.parse_args()
+    parser.add_argument("--menu", action="store_true", help="交互菜单（bat 双击默认入口；动作完成回菜单）")
+    return parser
 
-    if args.menu:
-        extra = run_menu()
-        if extra is None:
-            return 0
-        args = parser.parse_args(extra)
 
+def execute_action(args, config_path: Path | None = None) -> int:
+    """执行单个动作（config 保存 / 切分支 / 拉取 / 同步），完成即返回。
+
+    菜单模式每轮调一次，动作做完回菜单重选——切换、拉取都不隐式串同步，
+    推不推送由用户下一步自己选（2026-09-11 定调：切换就切换）。
+    """
     src_repo = Path(__file__).resolve().parent
-    config_path = Path.home() / CONFIG_NAME
+    if config_path is None:
+        config_path = Path.home() / CONFIG_NAME
     cfg = load_config(config_path)
 
     team_repo = args.team_repo or cfg.get("TEAM_REPO", "")
@@ -254,7 +253,8 @@ def main() -> int:
             "SRC_BRANCH": src_branch,
             "TEAM_BRANCH": team_branch,
         })
-        print(f"[OK] 已切换到 {branch} 并更新配置，开始同步...")
+        print(f"[OK] 已切换到 {branch} 并更新配置（只切换：不提交不推送；要同步回菜单选 [1] 或重跑一次）")
+        return 0
 
     if args.pull:
         # 只拉别人的提交：fetch + 本地对齐远端（同款"本地全弃、config 保护"语义），
@@ -308,6 +308,25 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="design-dev-sync-") as tmp:
         return do_sync(src_repo, Path(tmp), team_repo, src_branch, team_branch)
+
+
+def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.dont_write_bytecode = True  # import config_paths 不落 pyc
+
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.menu:
+        # 动作完成回菜单（每轮重读配置，config/切分支的保存即时生效）；
+        # 出错 fail() 直接退出——bat 末尾有 pause，错误仍可见
+        while True:
+            extra = run_menu()
+            if extra is None:
+                return 0
+            execute_action(parser.parse_args(extra))
+    return execute_action(args)
 
 
 def resolve_rules_dir(base: Path) -> str:

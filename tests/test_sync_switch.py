@@ -13,7 +13,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from sync_to_team import switch_team_branch  # noqa: E402
+import sync_to_team  # noqa: E402
+from sync_to_team import build_parser, execute_action, switch_team_branch  # noqa: E402
 
 
 def git(*args, cwd):
@@ -95,3 +96,37 @@ def test_switch_missing_branch_fails_loud(tmp_path):
     team, _ = make_repos(tmp_path, single_branch=False)
     with pytest.raises(SystemExit):
         switch_team_branch(team, "nope")
+
+
+def test_switch_action_is_switch_only(tmp_path):
+    """--switch 动作只切换：不 mirror 不提交不推送（旧版切完直接串同步）。"""
+    team, _ = make_repos(tmp_path, single_branch=True)
+    cfg_file = tmp_path / "sync.conf"
+    args = build_parser().parse_args(["--switch", "topic", str(team)])
+    assert execute_action(args, config_path=cfg_file) == 0
+    assert current_branch(team) == "topic"
+    # 没串同步的证明：零领先提交（HEAD 正好在刚 fetch 的远端尖端）、无 .opencode 镜像
+    assert git("rev-list", "--count", "FETCH_HEAD..HEAD", cwd=team).stdout.strip() == "0"
+    assert not (team / ".opencode").exists()
+    # 配置已记住新分支（后续同步/拉取按它走）
+    conf = cfg_file.read_text(encoding="utf-8")
+    assert "TEAM_BRANCH=topic" in conf
+    assert f"TEAM_REPO={team.resolve()}" in conf
+
+
+def test_menu_loop_switch_then_back_to_menu(tmp_path, monkeypatch):
+    """菜单 [3] 切完回菜单（不自动同步），再选 [0] 才退出。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    repos = tmp_path / "repos"
+    repos.mkdir()
+    team, _ = make_repos(repos, single_branch=True)
+    (home / ".design-dev-agent-sync.conf").write_text(
+        f"TEAM_REPO={team.resolve()}\nSRC_BRANCH=main\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(sys, "argv", ["sync_to_team.py", "--menu"])
+    answers = iter(["3", "topic", "0"])  # 切分支 → 分支名 → 回菜单后退出
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert sync_to_team.main() == 0
+    assert current_branch(team) == "topic"
+    assert not (team / ".opencode").exists()  # 回菜单≠偷偷同步
