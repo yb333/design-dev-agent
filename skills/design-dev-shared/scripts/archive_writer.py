@@ -48,7 +48,7 @@ def adopt(build: Path) -> Path:
         raise ValueError(f"{build} 无产出（ts.json 缺）——不能建档")
     archive.mkdir(parents=True)
     # 复制不移动：build 保留完整交付现场（全量部署内容），档案独立成份（2026-09-07 定调）
-    for name in ("ts.json", "ts.md", "etl", "dq", "ddl", "export"):
+    for name in ("ts.json", "ts.md", "dq.json", "etl", "dq", "ddl", "export"):
         src = build / name
         if src.exists():
             if src.is_dir():

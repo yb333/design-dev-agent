@@ -14,6 +14,7 @@ new-pipe 的 UT 执行走两阶段（ut_precheck 秒级预检 + ut_execute 分�
 
 import sys
 import re
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -249,14 +250,37 @@ def read_select(select_dir: Path, rule_code: str) -> str:
 def dq_filename(idx: int, check_type: str) -> str:
     """DQ 检查 SQL 文件确定名：dq_{NN}_{清洗check_type}.sql。
 
-    唯一键是 dq_rules 数组序号（check_type 是"检查类型"不是规则身份，重复是
+    唯一键是规则数组序号（check_type 是"检查类型"不是规则身份，重复是
     常态——两条空值检查同名文件会互相覆盖静默丢检查）；check_type 清洗后保留
     在文件名里（闸口② 人看文件友好）：去首尾空格，非字母/数字/中文/下划线换 `_`。
-    单点在本函数：UT 侧（run_dq_checks）与 coder 侧（slice_ts --dq 附 _file）
-    同源派生，两侧不自拼。序号两侧按同一 ts.json 的 dq_rules 顺序（闸口①后冻结）。
+    单点在本函数：UT 侧（run_dq_checks）与装配侧（assemble_dq 派生校验/producer SKILL 契约）
+    同源派生，两侧不自拼。序号两侧按同一 dq.json 的 rules 顺序（闸口①后冻结）。
     """
     safe = re.sub(r"[^\w\u4e00-\u9fff]+", "_", (check_type or "").strip())
     return f"dq_{idx:02d}_{safe}.sql"
+
+
+def load_dq_rules(build_dir) -> list:
+    """读 DQ 规则清单（双源，2026-09-14 DQ 拆分）：build/dq.json 优先；无则兜底旧 ts.json 的 dq_rules。
+
+    返回规则列表（条目含 mode/anchored_fields 等 dq.json 新字段；旧 ts 兜底条目无新字段，
+    消费方按缺省处理）。两处都无 → 空列表（DQ 为空的资产合法态）。
+    """
+    build = Path(build_dir)
+    dq_json = build / "dq.json"
+    if dq_json.exists():
+        try:
+            return json.loads(dq_json.read_text(encoding="utf-8")).get("rules") or []
+        except (json.JSONDecodeError, OSError):
+            pass
+    ts_json = build / "ts.json"
+    if ts_json.exists():
+        try:
+            legacy = json.loads(ts_json.read_text(encoding="utf-8")).get("dq_rules") or []
+            return [{**d, "mode": d.get("mode") or "assertion"} for d in legacy]
+        except (json.JSONDecodeError, OSError):
+            pass
+    return []
 
 
 def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
@@ -269,10 +293,10 @@ def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
     切片 _file 契约产出）。
 
     行数用 COUNT 包裹查（不拉全量结果集），告警才追加 LIMIT 采样抓违规行样例。
-    返回 [{rule_name, check_type, file, status, detail, rows, samples}]，status：
+    返回 [{rule_name, check_type, mode, waived, file, status, detail, rows, samples}]，status：
     PASS（0 行）/ ALERT（非 0 行）/ FAIL（执行报错/参数缺测试值）/ MISSING（文件缺失）。
-    分流：FAIL/MISSING 回 coder（SQL 类）；ALERT 归闸口② 人判（SQL 写错 / 阈值口径
-    不合理回 designer / 数据真脏人定）。
+    分流（2026-09-14 DQ 拆分后）：FAIL/MISSING 回 dws-dq-producer（SQL 类）；ALERT 归闸口②
+    人判三选一（回改 / 取消调口径 / 豁免），零自动回路。
     """
     results = []
     for i, rule in enumerate(dq_rules or [], 1):
@@ -280,6 +304,7 @@ def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
         rule_name = rule.get("rule_name") or check_type
         fname = dq_filename(i, check_type)
         entry = {"rule_name": rule_name, "check_type": check_type, "file": fname,
+                 "mode": rule.get("mode") or "assertion", "waived": bool(rule.get("waived")),
                  "status": "PASS", "detail": "", "rows": 0, "samples": []}
         fpath = Path(dq_dir) / fname
         if not check_type or not fpath.exists():

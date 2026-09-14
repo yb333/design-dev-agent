@@ -27,7 +27,7 @@ except AttributeError:
 # dws_db/config_paths/run_ut 在 shared 公共库（上方 bootstrap 已接通）；ut_diagnose 同目录
 from dws_db import create_executor
 from config_paths import db_sources_path
-from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, run_dq_checks
+from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, run_dq_checks, load_dq_rules
 
 
 def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
@@ -325,9 +325,12 @@ def main():
     # ── DQ 检查（数据全部就位后）：契约 0 行=通过，非 0 行=告警 ──
     # DQ 是上生产的制品，UT 里执行验证（SQL 错误/方向反只有执行能暴露）。
     # 数据不完整（有失败/跳过）时 DQ 结果无意义，不执行——修复后重跑 UT 自带。
+    # 规则来源（2026-09-14 DQ 拆分）：build/dq.json 优先（dws-dq-producer 产物，
+    # 装配=assemble_dq）；旧 ts.dq_rules 兜底（存量资产兼容）。FAIL/MISSING 回
+    # dws-dq-producer；ALERT 攒闸口②人判三选一（回改/取消调口径/豁免），零自动回路。
     dq_results = []
     dq_note = ""
-    dq_rules_list = ts.get("dq_rules") or []
+    dq_rules_list = load_dq_rules(ts_path.parent)
     if dq_rules_list:
         if all_results and all(r["status"] == "PASS" for r in all_results):
             print("▶ DQ 检查（0 行=通过，非 0 行=告警）")
@@ -387,11 +390,21 @@ def main():
         if dq_note:
             report_lines.append(f"> ⏭️ {dq_note}")
         if dq_results:
-            report_lines.append("| 规则 | 文件 | 结果 | 违规行数 | 详情 |")
-            report_lines.append("|------|------|------|---------|------|")
+            report_lines.append("| 规则 | 模式 | 文件 | 结果 | 违规行数 | 详情 |")
+            report_lines.append("|------|------|------|------|---------|------|")
             for d in dq_results:
                 symbol = {"PASS": "✅", "ALERT": "🚨", "FAIL": "❌", "MISSING": "❓"}.get(d["status"], "?")
-                report_lines.append(f"| {d['rule_name']} | `{d['file']}` | {symbol} {d['status']} | {d['rows']} | {d['detail']} |")
+                mode = "对比" if d.get("mode") == "compare" else "断言"
+                if d.get("waived"):
+                    mode += "·已豁免"
+                report_lines.append(f"| {d['rule_name']} | {mode} | `{d['file']}` | {symbol} {d['status']} | {d['rows']} | {d['detail']} |")
+            # 对比式 0 行双义提示：0 行=口径一致通过，或 口径写错恒等失效——闸口②人审口径（UT 区分不了）
+            cmp_zero = [d for d in dq_results
+                        if d.get("mode") == "compare" and d["status"] == "PASS" and not d.get("waived")]
+            if cmp_zero:
+                report_lines.append("")
+                report_lines.append("> **⚠️ 对比式 0 行双义**（" + "、".join(d["rule_name"] for d in cmp_zero) + "）："
+                                    "0 行=口径一致通过，**或**重算口径写错恒等失效（检查形同虚设）——闸口②人审该条口径（dq.json 的比对口径摘要）。")
             if dq_alert:
                 report_lines.append("")
                 report_lines.append("**告警样例（违规行）**：")
@@ -401,9 +414,10 @@ def main():
                         for s in d["samples"]:
                             report_lines.append(f"  - {s}")
             report_lines.append("")
-            report_lines.append("> **DQ 分流**：执行报错/文件缺失 → 回 coder（SQL 类）；阈值或口径不合理 → 回 designer"
-                                " 改 rule_desc（或退 RS 源）；数据真脏 → 人定。中间阈值的结果依赖数据分布，"
-                                "人工确认预期后再放行。")
+            report_lines.append("> **DQ 分流（闸口② 人判，零自动回路）**：FAIL/文件缺失 → 回 dws-dq-producer 修 SQL；"
+                                "ALERT → 人三选一——①SQL 写错回 producer 改，②检查不合理人定新口径（producer 照译，"
+                                "不自己想口径）或取消该条，③数据真脏但检查保留 → 豁免（dq.json 标 waived+理由）。"
+                                "中间阈值的结果依赖数据分布，人工确认预期后再放行。")
         report_lines.append("")
 
     if failed:

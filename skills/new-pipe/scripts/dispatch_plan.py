@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """执行计划生成器：读 ts.json 输出编码段的任务清单（给 pipe 统一并行发起）。
 
-pipe 不再手工解析 ts.json 判断"要不要 DQ / 有没有 init / 哪些规则要编码"——
-本工具一次算清，pipe 读计划按清单发起（4a DDL + 4b 规则coder + 4c DQ 同消息并行，
-4d init 等 4b），避免逐个判断把 DQ/init 拖成串行。
+pipe 不再手工解析 ts.json 判断"有没有 init / 哪些规则要编码"——
+本工具一次算清，pipe 读计划按清单发起（4a DDL + 4b 规则coder 同消息并行，
+4d init 等 4b），避免逐个判断把 init 拖成串行。
+DQ 不在计划内（2026-09-14 拆分：DQ 前置到步骤 2.5，由 dws-dq-producer
+在闸口①窗口内完成，dq 字段已删）。
 
 输出字段：
 - ddl: true（assemble_ddl 总要跑）
-- dq: ts.dq_rules 非空（DQ 完全跟随 RS）+ dq_count 条数
 - etl_rules: ts.rules 中非视图步骤的规则（按 exec_sequence 排序；视图由 DDL 覆盖，不调 coder）
 - init_rules: ts.init.rules 的规则清单（derive/explicit 均需 coder 编码）
 - groups: data_flow.schedule_groups（4b 组内并行的依据）
@@ -31,20 +32,16 @@ def build_dispatch_plan(ts: dict) -> dict:
     etl_rules = sorted(rules.keys(),
                        key=lambda c: ((rules[c] or {}).get("exec_sequence") or 0, c))
     init_rules = list(((ts.get("init") or {}).get("rules")) or {})
-    dq_rules = ts.get("dq_rules") or []
     groups = ((ts.get("data_flow") or {}).get("schedule_groups")) or []
 
     plan = {
         "ddl": True,
-        "dq": bool(dq_rules),
-        "dq_count": len(dq_rules),
         "etl_rules": etl_rules,
         "init_rules": init_rules,
         "groups": groups,
     }
     plan["summary"] = (
         f"{len(etl_rules)} 条 ETL 规则 + {len(init_rules)} 条 init"
-        + (f" + DQ {len(dq_rules)} 条" if dq_rules else "，无 DQ")
         + f"，{len(groups)} 个规则组（组内并行、组间串行）"
     )
     return plan

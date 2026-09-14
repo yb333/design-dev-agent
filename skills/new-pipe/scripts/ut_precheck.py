@@ -140,6 +140,21 @@ def main():
     rules = ts.get("rules", {})
     data_flow = ts.get("data_flow", {})
 
+    # DQ 兜底（2026-09-14 DQ 拆分，N_DQ1 的 UT 侧防线）：RS 有 DQ 需求但 dq.json
+    # 缺失（producer 未起调/装配失败）——fail loud，防 DQ 静默漏交付（旧 ts 兜底读 dq_rules）
+    from run_ut import load_dq_rules
+    _rs_probe = ts_path.parent / "_internal" / "rs_input.json"
+    if _rs_probe.exists():
+        try:
+            _dq_req = (json.loads(_rs_probe.read_text(encoding="utf-8")).get("dq_requirements") or [])
+            _dq_have = load_dq_rules(ts_path.parent)
+            if _dq_req and not _dq_have:
+                print(f"错误: RS 有 {len(_dq_req)} 条 DQ 需求但 DQ 规则缺失（dq.json 不存在且 ts 无 dq_rules）——"
+                      f"dws-dq-producer 设计与 assemble_dq 装配必须先完成（闸口①材料不完整）", file=sys.stderr)
+                sys.exit(2)
+        except json.JSONDecodeError:
+            pass
+
     # 连库
     try:
         target_schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")

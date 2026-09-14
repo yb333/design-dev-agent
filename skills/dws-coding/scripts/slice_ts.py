@@ -27,7 +27,6 @@ from pathlib import Path
 # shared 库（ts_compat 等）自洽引用：相对路径推算 design-dev-shared（与 check_sql 同款）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 
-from run_ut import dq_filename
 
 try:
     import yaml
@@ -202,40 +201,8 @@ def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
     return sliced
 
 
-
-def slice_dq(ts: dict) -> dict:
-    """切 DQ 规则段（dws-dq 流程用）——不整读 ts.json。
-
-    内容：契约 + 目标表全名（检查对象）+ business_key（输出业务键列）
-    + source_tables（资产级源表并集，跨表检查用）+ dq_rules 全量。
-    dq_rules 为空时报错（执行计划 dq=true 才发起 DQ 任务，空=上游错位）。
-    """
-    dq_rules = ts.get("dq_rules") or []
-    if not dq_rules:
-        raise ValueError("ts.dq_rules 为空——DQ 切片无内容（执行计划 dq=true 才发起 DQ 任务，空=上游错位）")
-    # 每条附 _file（UT 侧 dq_filename 同源派生的确定文件名）——coder 直接用它落盘，
-    # 不自拼文件名（check_type 是检查类型不是规则身份会重名，自由文本清洗两侧难一致）
-    dq_rules = [{**d, "_file": dq_filename(i, (d.get("check_type") or "").strip())}
-                for i, d in enumerate(dq_rules, 1)]
-    f_table = ts.get("meta", {}).get("target", {}).get("f_table", {}) or {}
-    target = f"{f_table.get('schema', '')}.{f_table.get('table', '')}".strip(".")
-    # 资产级源表并集（全规则 source_tables 按 schema+table+alias 去重）——
-    # 跨表/源表级检查时 coder 要 schema 全名，切片不给就得回头读 ts.json
-    seen: set = set()
-    source_tables = []
-    for r in (ts.get("rules") or {}).values():
-        for st in (r.get("source_tables") or []):
-            key = (st.get("schema", ""), st.get("table", ""), st.get("alias", ""))
-            if key[1] and key not in seen:
-                seen.add(key)
-                source_tables.append({"schema": key[0], "table": key[1], "alias": key[2]})
-    return {
-        "contract": "DQ SELECT = 违规行探测器：0 行=通过，非 0 行=告警",
-        "target_table": target,
-        "business_key": ts.get("design", {}).get("business_key", []),
-        "source_tables": source_tables,
-        "dq_rules": dq_rules,
-    }
+# slice_dq 已退役（2026-09-14 DQ 拆分）：DQ 切片入口= new-pipe/scripts/pick_dq_context.py
+# （dws-dq-producer 的三件套取料：RS 需求+目标结构+mapping 闭包），不再从 ts 切。
 
 
 def main():
@@ -243,19 +210,11 @@ def main():
         description="TS 规则切片: 从 ts.json 切出单个规则的 YAML（给 coder 读）"
     )
     parser.add_argument("--ts", required=True, help="ts.json 路径")
-    parser.add_argument("--rule", default="", help="规则编号，如 R0001（与 --dq 二选一）")
-    parser.add_argument("--dq", action="store_true", help="切 DQ 规则段（dws-dq 流程用）")
+    parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
     parser.add_argument("--output", default="", help="输出 YAML 路径（默认打印到 stdout）")
     parser.add_argument("--baseline-sql", default="",
                         help="优化模式：baseline SQL 文件路径（etl_baseline/{rule}.sql）——给定时切优化模式")
     args = parser.parse_args()
-
-    if args.dq and args.rule:
-        parser.error("--dq 与 --rule 互斥（DQ 任务不带规则号）")
-    if not args.dq and not args.rule.strip():
-        parser.error("--rule 与 --dq 必须给一个（规则编码或 DQ 切片）")
-    if args.dq and args.baseline_sql:
-        parser.error("--dq 与 --baseline-sql 互斥")
 
     # 读 ts.json
     ts_path = Path(args.ts)
@@ -269,9 +228,7 @@ def main():
 
     # 切片
     try:
-        if args.dq:
-            sliced = slice_dq(ts)
-        elif args.baseline_sql:
+        if args.baseline_sql:
             bsql = Path(args.baseline_sql).read_text(encoding="utf-8")
             sliced = slice_rule_opt(ts, args.rule, baseline_sql=bsql)
         else:
@@ -290,11 +247,8 @@ def main():
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(yaml_text, encoding="utf-8")
-        print(f"切片产出: {out}" + (" [DQ]" if args.dq else ""), file=sys.stderr)
-        if args.dq:
-            print(f"DQ 规则数: {len(sliced['dq_rules'])}", file=sys.stderr)
-        else:
-            print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
+        print(f"切片产出: {out}", file=sys.stderr)
+        print(f"规则: {args.rule}, 字段数: {sliced['field_count']}", file=sys.stderr)
     else:
         print(yaml_text)
 

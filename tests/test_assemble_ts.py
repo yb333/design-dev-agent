@@ -416,23 +416,20 @@ class TestBuildMetaTaskPath:
     """build_meta 给每个 task 填 project_name/task_group。"""
 
     def test_tasks_have_project_group(self, monkeypatch):
-        """有 schedule_config + dq_rules 非空时，tasks.f/view/dq 都有 project_name/task_group。"""
+        """有 schedule_config 时，tasks.f/view 有 project_name/task_group（dq 不在 ts.tasks——DQ 拆分后随 dq.json）。"""
         sched_cfg = {
             "default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD",
                         "dq": {"project_name": "SRP_DQ", "task_group": "GROUP_DQ"}},
         }
         monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: sched_cfg)
-        decisions = {"schedule": {"cron": "0 30 3 * * ?"},
-                     "dq_rules": [{"scope": "表级", "check_type": "重复数据检查",
-                                   "rule_name": "主键唯一", "rule_desc": "id 不重复"}]}
+        decisions = {"schedule": {"cron": "0 30 3 * * ?"}}
         meta = build_meta(_rs_input_for_meta(), decisions)
         tasks = meta["schedule"]["tasks"]
         assert tasks["f"]["project_name"] == "SRP_DAILY"
         assert tasks["f"]["task_group"] == "GROUP_SPRD"
         assert tasks["view"]["project_name"] == "SRP_DAILY"
-        # dq 走 default 的 dq 子键（仅 dq_rules 非空时才建）
-        assert tasks["dq"]["project_name"] == "SRP_DQ"
-        assert tasks["dq"]["task_group"] == "GROUP_DQ"
+        # dq 走 dq.json（assemble_dq 建），ts.tasks 不再含 dq
+        assert "dq" not in tasks
 
     def test_no_config_empty_path(self, monkeypatch):
         """无 schedule_config（旧环境）-> project/task_group 为空串，不报错（向后兼容）。"""
@@ -441,24 +438,6 @@ class TestBuildMetaTaskPath:
         tasks = meta["schedule"]["tasks"]
         assert tasks["f"]["project_name"] == ""
         assert tasks["f"]["task_group"] == ""
-
-    def test_designer_override_wins(self, monkeypatch):
-        """designer 的 task_project_override 最优先（如初始化任务组）。"""
-        sched_cfg = {"default": {"project_name": "SRP_DAILY", "task_group": "GROUP_SPRD"}}
-        monkeypatch.setattr("assemble_ts.load_schedule_config", lambda: sched_cfg)
-        decisions = {"schedule": {
-            "cron": "0 30 3 * * ?",
-            "task_project_override": {
-                "dq": {"project_name": "CUSTOM_DQ", "task_group": "CUSTOM_GDQ"},
-            },
-        }, "dq_rules": [{"scope": "表级", "check_type": "重复数据检查",
-                         "rule_name": "主键唯一", "rule_desc": "id 不重复"}]}
-        meta = build_meta(_rs_input_for_meta(), decisions)
-        tasks = meta["schedule"]["tasks"]
-        assert tasks["dq"]["project_name"] == "CUSTOM_DQ"
-        assert tasks["dq"]["task_group"] == "CUSTOM_GDQ"
-        # f 不受影响，仍用默认
-        assert tasks["f"]["project_name"] == "SRP_DAILY"
 
     def test_schema_mapping_applied(self, monkeypatch):
         """target schema 在 schema_mappings 里 -> 用 schema 的配置。"""
@@ -1272,90 +1251,9 @@ class TestErrorGrouping:
         assert "阻断" not in report
 
 
-class TestDQDriven:
-    """DQ 完全跟随 RS（N_DQ1-N_DQ3）。designer 是翻译者，不是搬运工。
-
-    RS 有 DQ 需求 → designer 翻译产 dq_rules；RS 无 → dq_rules 留空。
-    """
-
-    def test_rs_has_dq_but_empty_blocks(self):
-        """N_DQ1 硬阻断：RS 有 DQ 需求但 designer 没翻译产 dq_rules（漏翻译根因）。"""
-        rs = make_dq_rs_input()  # 2 条 DQ 需求
-        dd = make_design_decisions()  # dq_rules 默认空
-        vr = _run(dd, rs)
-        assert "N_DQ1" in _codes(vr, "LD")
-        assert _level_of(vr, "N_DQ1") == "hard"
-
-    def test_rs_has_dq_translated_passes(self):
-        """RS 有 DQ + dq_rules 已翻译（条数 == RS）→ 通过，无 N_DQ1/2/3。"""
-        rs = make_dq_rs_input()  # 2 条
-        dd = make_design_decisions(dq_rules=[
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "订单金额非空",
-             "rule_desc": "检查 dwb_dqtest_f.order_amount IS NOT NULL，空值告警"},
-            {"scope": "表级", "check_type": "重复数据检查", "rule_name": "主键唯一",
-             "rule_desc": "检查 id 重复，GROUP BY id HAVING COUNT(*)>1"},
-        ])
-        vr = _run(dd, rs)
-        for code in ("N_DQ1", "N_DQ2", "N_DQ3"):
-            assert code not in _codes(vr, "LD"), f"{code} 不该触发"
-
-    def test_rs_has_dq_more_translated_passes(self):
-        """翻译后条数可增加（一条拆多条），≥ RS 通过（不触发 N_DQ2）。"""
-        rs = make_dq_rs_input(dq_needs=[
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "x"},
-        ])
-        dd = make_design_decisions(dq_rules=[
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "a"},
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "数量非空", "rule_desc": "b"},
-        ])
-        vr = _run(dd, rs)
-        assert "N_DQ2" not in _codes(vr, "LD")
-
-    def test_rs_has_dq_partial_warns(self):
-        """N_DQ2 warn：RS 有 DQ 但 dq_rules 条数少于 RS（可能漏翻译）。"""
-        rs = make_dq_rs_input()  # 2 条
-        dd = make_design_decisions(dq_rules=[
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "x"},
-        ])  # 只翻译 1 条
-        vr = _run(dd, rs)
-        assert "N_DQ2" in _codes(vr, "LD")
-        assert _level_of(vr, "N_DQ2") == "warn"
-
-    def test_no_rs_dq_empty_passes(self):
-        """RS 无 DQ + dq_rules 空 → 通过（不产 DQ，无 N_DQ1/2/3）。"""
-        rs = make_rs_input()  # 默认无 DQ
-        dd = make_design_decisions()  # dq_rules 空
-        vr = _run(dd, rs)
-        for code in ("N_DQ1", "N_DQ2", "N_DQ3"):
-            assert code not in _codes(vr, "LD")
-
-    def test_no_rs_dq_but_added_warns(self):
-        """N_DQ3 warn：RS 无 DQ 但 designer 自行加了（DQ 是业务决策归 RS）。"""
-        rs = make_rs_input()  # 无 DQ
-        dd = make_design_decisions(dq_rules=[
-            {"scope": "表级", "check_type": "重复数据检查", "rule_name": "主键唯一", "rule_desc": "x"},
-        ])
-        vr = _run(dd, rs)
-        assert "N_DQ3" in _codes(vr, "LD")
-        assert _level_of(vr, "N_DQ3") == "warn"
-
-    def test_dq_task_absent_when_empty(self):
-        """dq_rules 空 → build_meta 不建 tasks["dq"]（RS 无 DQ，无调度任务）。"""
-        rs = make_rs_input()
-        dd = make_design_decisions()  # dq_rules 空
-        meta = build_meta(rs, dd)
-        tasks = meta["schedule"]["tasks"]
-        assert "dq" not in tasks
-
-    def test_dq_task_present_when_nonempty(self):
-        """dq_rules 非空 → build_meta 建 tasks["dq"]（RS 有 DQ，有调度任务）。"""
-        rs = make_rs_input()
-        dd = make_design_decisions(dq_rules=[
-            {"scope": "表级", "check_type": "重复数据检查", "rule_name": "主键唯一", "rule_desc": "x"},
-        ])
-        meta = build_meta(rs, dd)
-        tasks = meta["schedule"]["tasks"]
-        assert "dq" in tasks
+# TestDQDriven 已删（2026-09-14 DQ 拆分）：N_DQ1-N_DQ3/dq 任务语义迁
+# new-pipe/scripts/assemble_dq.py，测试见 tests/test_assemble_dq.py。
+# make_dq_rs_input 工厂保留（新测试与 view 相关测试复用）。
 
 
 # ============================================================
@@ -2662,108 +2560,8 @@ class TestJoinKeyTypesAndDqContract:
         assert any(i["code"] == "N30" and "三段式" in i["msg"] and i["level"] == "hard"
                    for i in vr.items)
 
-    # ---------- N_DQ4 / N_DQ5 ----------
-
-    def test_dq4_missing_violation_condition_warns(self):
-        rs = self._rs()
-        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
-                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
-        dec = self._dec(dq_rules=[{"scope": "字段级", "check_type": "空值检查",
-                                   "rule_name": "产品编码非空",
-                                   "rule_desc": "违规=prod_code 为空（有空值即告警）"}])
-        vr = _run(dec, rs)
-        assert any(i["code"] == "N_DQ4" and i["level"] == "warn" for i in vr.items)
-
-    def test_dq5_unknown_field_hard(self, tmp_path):
-        """有 cache：字段拼错在全域查无 → hard（无 cache 的行为见跨表用例）。"""
-        rs = self._rs()
-        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
-                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
-        dec = self._dec(dq_rules=[{
-            "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
-            "violation_condition": "t.order_amount IS NULL",
-            "rule_desc": "违规=order_amount 为空"}])
-        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
-        vr = run_all_validations(dec, rs, field_map,
-                                 schema_cache_path=self._cache(tmp_path))
-        hits = [i for i in vr.items if i["code"] == "N_DQ5"]
-        assert hits and hits[0]["level"] == "hard" and "order_amount" in hits[0]["msg"]
-
-    def test_dq5_known_field_passes(self, tmp_path):
-        rs = self._rs()
-        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
-                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
-        dec = self._dec(dq_rules=[{
-            "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
-            "violation_condition": "t.prod_code IS NULL",
-            "rule_desc": "违规=prod_code 为空"}])
-        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
-        # 有 cache：干净通过；无 cache：降 warn（存在性未校验的提示）不硬拦
-        vr = run_all_validations(dec, rs, field_map,
-                                 schema_cache_path=self._cache(tmp_path))
-        assert not any(i["code"] in ("N_DQ4", "N_DQ5") for i in vr.items)
-        vr2 = run_all_validations(dec, rs, field_map)
-        assert not any(i["code"] == "N_DQ4" for i in vr2.items)
-        assert any(i["code"] == "N_DQ5" and i["level"] == "warn" for i in vr2.items)
-
-    def test_dq5_three_part_hard_without_cache(self):
-        """violation_condition 三段式纯语法硬拦（不依赖 cache/字段集）——两两配对提取
-        对 dws.t.order_amount 只取到 (dws, t)，字段本身全程不被校验，必须前置拦。"""
-        rs = self._rs()
-        rs["dq_requirements"] = [{"scope": "字段级", "check_type": "空值检查",
-                                  "rule_name": "产品编码非空", "rule_desc": "产品编码不能为空"}]
-        dec = self._dec(dq_rules=[{
-            "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
-            "violation_condition": "dws.dwb_test_f.order_amount IS NULL",
-            "rule_desc": "违规=order_amount 为空"}])
-        vr = _run(dec, rs)
-        hits = [i for i in vr.items if i["code"] == "N_DQ5" and "三段式" in i["msg"]]
-        assert hits and hits[0]["level"] == "hard" and "dws.dwb_test_f.order_amount" in hits[0]["msg"]
-
-    def test_dq5_cross_table_count_compare_passes_with_cache(self, tmp_path):
-        """跨表级 DQ（比对来源表与目标表数据量）：schema.table 子查询 + 源表字段
-        引用都合法——真实案例反馈的误拦场景（表名位被当字段查目标表必炸）。"""
-        rs = self._rs()
-        rs["dq_requirements"] = [{"scope": "跨表级", "check_type": "数据量核对",
-                                  "rule_name": "行数一致", "rule_desc": "两边行数相等"}]
-        dec = self._dec(dq_rules=[{
-            "scope": "跨表级", "check_type": "数据量核对", "rule_name": "行数一致",
-            "violation_condition":
-                "(select count(1) from ods.ods_b s) <> (select count(1) from dws.dwb_test_f t)"
-                " or s.prod_id is null",
-            "rule_desc": "违规=行数不等"}])
-        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
-        vr = run_all_validations(dec, rs, field_map,
-                                 schema_cache_path=self._cache(tmp_path))
-        assert not any(i["code"] == "N_DQ5" and i["level"] == "hard" for i in vr.items)
-
-    def test_dq5_cross_table_without_cache_downgrades_to_warn(self):
-        """无 cache：源表字段查不到，硬拦会误伤跨表引用 → 降 warn 放行（宁放过）。"""
-        rs = self._rs()
-        rs["dq_requirements"] = [{"scope": "跨表级", "check_type": "数据量核对",
-                                  "rule_name": "行数一致", "rule_desc": "两边行数相等"}]
-        dec = self._dec(dq_rules=[{
-            "scope": "跨表级", "check_type": "数据量核对", "rule_name": "行数一致",
-            "violation_condition":
-                "(select count(1) from ods.ods_b s) - (select count(1) from dws.dwb_test_f t) <> 0"
-                " or s.src_cnt is null",
-            "rule_desc": "违规=行数不等"}])
-        vr = _run(dec, rs)
-        assert not any(i["code"] == "N_DQ5" and i["level"] == "hard" for i in vr.items)
-        assert any(i["code"] == "N_DQ5" and i["level"] == "warn" for i in vr.items)
-
-    def test_dq5_unknown_table_hard_even_without_cache(self):
-        """schema.table 形态查表名集合（rs_input 就有）——表名拼错无 cache 也拦。"""
-        rs = self._rs()
-        rs["dq_requirements"] = [{"scope": "跨表级", "check_type": "数据量核对",
-                                  "rule_name": "行数一致", "rule_desc": "两边行数相等"}]
-        dec = self._dec(dq_rules=[{
-            "scope": "跨表级", "check_type": "数据量核对", "rule_name": "行数一致",
-            "violation_condition": "(select count(1) from ods.ods_nosuch_f) <> 100",
-            "rule_desc": "违规=行数不等"}])
-        vr = _run(dec, rs)
-        hits = [i for i in vr.items if i["code"] == "N_DQ5" and i["level"] == "hard"]
-        assert hits and "ods_nosuch_f" in hits[0]["msg"]
+    # ---------- N_DQ4 / N_DQ5 已迁（2026-09-14 DQ 拆分）----------
+    # 校验权威在 new-pipe/scripts/assemble_dq.py，测试见 tests/test_assemble_dq.py。
 
     # ---------- design_logic 单行归一（落盘形态） ----------
 

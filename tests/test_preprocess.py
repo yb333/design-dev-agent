@@ -880,7 +880,7 @@ class TestBuildCompact:
         assert "incremental_tables" not in c
 
     def test_compact_dq_section_with_requirements(self):
-        """RS 有 DQ 需求时 compact.dq 展示需求内容 + 翻译说明（designer 必须翻译产 dq_rules）。"""
+        """view 不含 dq 段（2026-09-14 DQ 拆分）——designer 不做 DQ，producer 走 pick_dq_context。"""
         from preprocess import build_compact
         rs = _rs_input_with([_direct("id", "id")])
         rs["dq_requirements"] = [
@@ -888,19 +888,15 @@ class TestBuildCompact:
              "rule_desc": "订单金额不能为空"},
         ]
         c = build_compact(rs)
-        assert "dq" in c
-        assert c["dq"]["requirements"] == rs["dq_requirements"]
-        assert "翻译" in c["dq"]["说明"], "应告知 designer 翻译职责"
+        assert "dq" not in c
 
     def test_compact_dq_section_empty(self):
-        """RS 无 DQ 需求时 compact.dq 标注留空（designer 不产 DQ）。"""
+        """RS 无 DQ 需求时 view 同样无 dq 段（DQ 为空的资产 designer 输入零 DQ 痕迹）。"""
         from preprocess import build_compact
         rs = _rs_input_with([_direct("id", "id")])
         rs["dq_requirements"] = []
         c = build_compact(rs)
-        assert "dq" in c
-        assert c["dq"]["requirements"] == []
-        assert "留空" in c["dq"]["说明"], "应明确告知 dq_rules 留空"
+        assert "dq" not in c
 
 
 class TestNoRsMode:

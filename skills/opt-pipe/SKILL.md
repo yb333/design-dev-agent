@@ -94,7 +94,6 @@ python SHARED_SCRIPTS/assemble_ddl.py --ts {arc_tmp}/ts.json --outdir {arc_tmp}
 记下 designer 的 task_id（回路用）。验证 `{arc_tmp}/ts.json` + `ts.md` 已产出。
 
 ## 步骤 3：ts 级围栏 → 闸口①'
-
 ```bash
 python PIPE_SCRIPTS/fence_check.py \
   --ts-baseline {arc}/ts.json --ts-v2 {arc_tmp}/ts.json \
@@ -113,6 +112,37 @@ python PIPE_SCRIPTS/gate_summary_opt.py \
   ② 回刷选择（增量基线才有；RS 已预填则确认）③ 建议追加的变更（如有）。
   **分场景模板**：围栏/预检全干净 → 三问标准选项（确认/修改/放弃）；**检出过问题**（围栏越界/类型风险决策/值域披露/新 JOIN 类型）→ 四选项，必含**"源端输入问题→退 BA（修 mapping/源数据后重来）"**一等选项（现实大概率是源端问题；与 new-pipe 闸口①同款）。
   非交互跳过须显式声明（只豁免流程闸口；人工决策项照常阻断上报）。
+
+## 步骤 3.5：DQ 影响分析 + producer 重做（闸口①'窗口内，与 new-pipe 步骤 2.5 对称）
+
+先跑**影响分析**（确定性集合运算，零 AI——重做清单随闸口①'材料一并给人）：
+
+```bash
+python PIPE_SCRIPTS/dq_impact.py --baseline-dq {arc_tmp}/dq.json \
+  --change-request {build}/_internal/change_request.json --output {build}/_internal/dq_impact.md
+```
+
+- baseline 无 DQ（dq.json/dq_rules 均无）→ 空清单，跳过 producer；
+- 清单为空（无受影响条目）→ DQ 全量原样继承，producer 不起调；
+- 清单非空 → 调 **dws-dq-producer 重做受影响条目**（只重做清单内的；未受影响条目在 decisions 里原样抄写保持全量，SQL 文件不重写沿用 {arc_tmp}/dq/）：
+
+```
+Task(subagent_type="dws-dq-producer", description="DQ 影响重做 {资产}",
+  prompt="优化模式：按 dws-dq skill 流程。ts: {arc_tmp}/ts.json（只读结构），baseline DQ 清单:
+          {arc_tmp}/dq.json，重做清单（只重做这些条目，其余原样抄进 decisions 保持全量）:
+          {build}/_internal/dq_impact.md。decisions 落 {build}/_internal/dq_decisions.yaml，
+          重做的 SQL 落 {build}/dq/（文件名与清单同名=该条当前版）。")
+```
+
+交卷后装配校验（opt 参数：SQL 在变更现场 --dq-dir；条目权威=baseline 清单不走 RS 对照）：
+
+```bash
+python ../new-pipe/scripts/assemble_dq.py --ts {arc_tmp}/ts.json \
+  --decisions {build}/_internal/dq_decisions.yaml \
+  --dq-dir {build}/dq --no-rs-contract
+```
+
+装配产出落 {arc_tmp}（dq.json/ts.md DQ 章节——进度态全量自然更新）。围栏全过后新 SQL 入临时档案：`cp {build}/dq/*.sql {arc_tmp}/dq/`（同名覆盖=当前版）。**DQ 变更恰好=重做清单**（影响分析是围栏的 DQ 版本——清单外条目装配时与 baseline 全量比对防私改）。
 
 ## 步骤 4：编码（SQL 围栏闸门在你）
 
@@ -160,7 +190,8 @@ python PIPE_SCRIPTS/ut_opt.py \
 - exit 2 = ALTER 变更单缺失（流程顺序错，回本步骤头部补跑 assemble_ddl_opt）；
 - exit 3 = 环境问题（表不存在/无库）→ 归人；
 - 每规则 EXPLAIN ANALYZE 真实执行一次（计划两门槛 + 0 行信号，计划落盘 diagnose/）+
-  **新列空值检查**（写路径后真实数据；全 NULL = 疑似新 JOIN 关联不上——闸口②'素材）；
+  **新列空值检查**（写路径后真实数据；全 NULL = 疑似新 JOIN 关联不上——闸口②'素材）+
+  **DQ 段**（2026-09-14 补环：{arc_tmp} 有 DQ 规则且对比/INSERT 全过时自动真跑——重做条目上生产前必须执行验证；ALERT 阻断出口归闸口②' 人判三选一，与 new-pipe 同款）；
 - 对比 FAIL（老列不一致）/ 新列全 NULL → **先跑定位工具产证据，再 question 人定根因**：
 
 ```bash

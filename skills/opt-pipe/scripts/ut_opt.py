@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from typing import Dict, List, Optional, Tuple
 
-from run_ut import wrap_insert, read_select
+from run_ut import wrap_insert, read_select, run_dq_checks, load_dq_rules
 from sql_fence import check_sql_fence, rule_declaration
 from explain_check import _analyze_plan, _parse_actual_rows, _STREAM_PATTERN, STREAM_LIMIT
 
@@ -190,7 +190,8 @@ def apply_alters(executor, ddl_dir: Path, tables: List[str], schema: str) -> Lis
 
 
 def render_report(ts_v2: dict, alters: List[str], compare: List[dict],
-                  inserts: List[dict]) -> str:
+                  inserts: List[dict], nulls: List[dict],
+                  dq_results: List[dict] = None) -> str:
     lines = ["# UT 报告（优化模式）", "",
              f"- ALTER 已应用：{', '.join(alters) or '（无）'}",
              f"- 主键检查：豁免（双跑更强，06 §一）；空值检查：只对新列", ""]
@@ -212,6 +213,27 @@ def render_report(ts_v2: dict, alters: List[str], compare: List[dict],
         lines.append(f"- {n['table']}.{n['col']}：{n['nulls']}/{n['total']} NULL"
                      f"（{n['rate']}）{n['note']}")
     lines.append("")
+
+    # DQ 段（2026-09-14 DQ 拆分补环）：重做/全部条目在 opt 场景真跑（上生产的检查，变更后必须验证）
+    dq_results = dq_results or []
+    if dq_results:
+        lines.append("## DQ 检查（0 行=通过，非 0 行=告警）")
+        lines.append("")
+        for d in dq_results:
+            symbol = {"PASS": "✅", "ALERT": "🚨", "FAIL": "❌", "MISSING": "❓"}.get(d["status"], "?")
+            mode = "对比" if d.get("mode") == "compare" else "断言"
+            lines.append(f"- {symbol} {d['rule_name']}（{mode}，`{d['file']}`）：{d['detail']}")
+            for s in (d.get("samples") or [])[:SAMPLE_LIMIT]:
+                lines.append(f"    - 样例: {s}")
+        lines.append("")
+        cmp_zero = [d for d in dq_results
+                    if d.get("mode") == "compare" and d["status"] == "PASS" and not d.get("waived")]
+        if cmp_zero:
+            lines.append("> **⚠️ 对比式 0 行双义**（" + "、".join(d["rule_name"] for d in cmp_zero)
+                         + "）：口径一致通过 / 重算口径写错恒等失效——闸口②' 人审口径。")
+        lines.append("> 分流：FAIL/MISSING 回 dws-dq-producer（限 3 轮）；ALERT 攒闸口②' 人判三选一（回改/人定口径或取消/豁免），零自动回路。")
+        lines.append("")
+
     lines.append("> 闸口②'素材：新列 NULL 率/值分布请看新→老差集样例；"
                  "开发库数据代表性限制如实声明。")
     return "\n".join(lines) + "\n"
@@ -302,16 +324,35 @@ def main(argv: Optional[List[str]] = None) -> int:
             inserts.append({"rule": rule_code, "status": "FAIL", "detail": str(e)})
 
     nulls = check_new_column_nulls(executor, ts_v2, schema)
+
+    # DQ 段（2026-09-14 补环）：重做后的 DQ 在变更现场真跑——上生产的检查，变更后必须执行验证。
+    # 规则来源 load_dq_rules（arc_tmp 的 dq.json 优先[producer 重做装配后] / 旧 ts.dq_rules 兜底）；
+    # 数据不完整（对比/INSERT 有失败）时 DQ 结果无意义，跳过。DQ ALERT 同样阻断出口（闸口②' 人判）。
+    dq_results = []
+    dq_note = ""
+    dq_rules_list = load_dq_rules(Path(args.ts).parent)
+    if dq_rules_list:
+        if all(r["status"] == "PASS" for r in compare + inserts) and (compare or inserts):
+            dq_results = run_dq_checks(executor, Path(args.ts).parent / "dq", dq_rules_list, {})
+        else:
+            dq_note = "对比/INSERT 存在失败——DQ 未执行（修复后重跑自带）"
+            print(f"⏭️ DQ 跳过：{dq_note}", file=sys.stderr)
+
     Path(args.report).write_text(
-        render_report(ts_v2, alters, compare, inserts, nulls), encoding="utf-8")
+        render_report(ts_v2, alters, compare, inserts, nulls, dq_results), encoding="utf-8")
     failed = any(r["status"] in ("FAIL", "ERROR", "FENCE_FAIL") for r in compare + inserts)
+    dq_alert = sum(1 for d in dq_results if d["status"] == "ALERT")
+    dq_bad = sum(1 for d in dq_results if d["status"] in ("FAIL", "MISSING"))
     print(f"ut_report_opt: {args.report}")
     null_notes = [n for n in nulls if n["note"]]
     print(f"compare: {len(compare)} 规则, inserts: {len(inserts)} 规则, "
           f"result: {'FAIL' if failed else 'PASS'}")
+    if dq_results or dq_note:
+        print(f"DQ: ✅{sum(1 for d in dq_results if d['status'] == 'PASS')} 通过  "
+              f"🚨{dq_alert} 告警  ❌{dq_bad} 失败/缺失")
     for n in null_notes:
         print(f"  ⚠️ 新列空值: {n['table']}.{n['col']} {n['note']}")
-    return 1 if failed else 0
+    return 1 if (failed or dq_alert or dq_bad) else 0
 
 
 if __name__ == "__main__":

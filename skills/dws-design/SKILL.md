@@ -200,7 +200,7 @@ description: >-
   - 空值口径禁用裸"空"字（歧义源）：写 NULL 或空串，二选一明确
   - 纯照抄原文不附说明句会被 N29 warn 提示（缺审查证据）
 - **校验行为以 fail-loud 报错为准**：写出 decisions → 跑 assemble_ts → 报错带 `[第X层]` 导航按报错修——这就是预期工作流，**不预防性读 assemble_ts / 工具源码对齐校验行为**（写错会被拦回，代价一轮重跑，远低于读码求证）。
-- **★ 口径里的源字段引用一律 `别名.字段` 两段**（a.del_flag），不能只写列名，也不能写 `schema.table.field` 三段式（表引用 schema.table 只出现在 coder 的 FROM/JOIN 位置，N36/N30/N_DQ5 硬拦）——**未限定字段归属哪个表是你的设计判断，脚本不猜**（view 的 refs 只列未限定词与"多表有此列名"的事实，归属自查：rs_input 源表清单/check_field，多义 question）。产出过**引用门禁**三查：未限定标识符（N36 硬拦）/ 限定引用查表存在（N38 硬拦，未连库降提示）/ 与原文对差疑似丢引用（N37 提示）。**口径引用集就是规则 fields 桶的真来源**（mapping 源字段单元格对加工字段只是提示，脚本按你的引用自动补全）——引用写全 = coder 的字段清单对。ts 两视图：tables=表元数据（DDL），rules.fields 三桶=加工（coder 唯一源；你的 field_logics 装配展开成桶，不落 ts）
+- **★ 口径里的源字段引用一律 `别名.字段` 两段**（a.del_flag），不能只写列名，也不能写 `schema.table.field` 三段式（表引用 schema.table 只出现在 coder 的 FROM/JOIN 位置，N36/N30 硬拦）——**未限定字段归属哪个表是你的设计判断，脚本不猜**（view 的 refs 只列未限定词与"多表有此列名"的事实，归属自查：rs_input 源表清单/check_field，多义 question）。产出过**引用门禁**三查：未限定标识符（N36 硬拦）/ 限定引用查表存在（N38 硬拦，未连库降提示）/ 与原文对差疑似丢引用（N37 提示）。**口径引用集就是规则 fields 桶的真来源**（mapping 源字段单元格对加工字段只是提示，脚本按你的引用自动补全）——引用写全 = coder 的字段清单对。ts 两视图：tables=表元数据（DDL），rules.fields 三桶=加工（coder 唯一源；你的 field_logics 装配展开成桶，不落 ts）
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"
 - **★ 类型转换字段是加工字段**：precheck 类型风险决策通过后，会回写 rs_input 把转换字段改"数据加工"（transform_detail 标注如"类型转换：varchar→date"）。读到这类字段照常写 field_logic（转换口径），coder 翻译成 CAST/TO_DATE。**改 ETL 不改 DDL（目标类型不变）**。守卫式转换防的是个别脏值炸批（非法格式置 NULL，DQ 可抓）；**字符长度收窄的守卫=按目标类型长度语义截取**：目标 varchar/varchar2（字节）→`SUBSTRB(x,1,n)`；nvarchar/nvarchar2（字符）→`SUBSTR(x,1,n)`（DWS 官方口径，单位跟目标类型走；尾部丢失闸口①披露）——**不是数值值域兜底**：目标精度/长度装不下正常源数据是模型问题（precheck 值域探测会拦），不要写"超长置空"类口径，除非 SE 在闸口①显式拍板过该策略（源输入定窄退 BA 改模型，过程决策归 SE 拍板——角色边界见 new-pipe 步骤 1b 值域菜单）
 - **聚合类字段必拆解**（拼接/汇总，"对同一 X 的多个值拼接/合计"类描述），表达式+括号说明至少答四件事：
@@ -232,23 +232,9 @@ description: >-
 
 > 简单全量单表资产：五层很快走完，第2层不拆中间表（走 full 单规则），第3层全量，只读 design-guide.md 就够。
 
-### DQ 规则（RS 驱动，designer 翻译）
+### DQ 已迁出（2026-09-14 拆分）
 
-DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规则。翻译者原则见岗位定义（agents/dws-designer.md），此处只说 DQ 专属：**也不自主决定产不产**——类比 field_logics 写 design_logic：
-
-- **RS 有 DQ 需求**（`rs_input_view.json` 的 `dq.requirements` 非空）→ designer **翻译**成 coder 可执行的 DQ 规格写进 `dq_rules`
-  - `scope`/`check_type`/`rule_name` 跟 RS 保持一致（分类不变）
-  - `violation_condition` 写**违规条件的 SQL 表达式**（检查对象=目标 F 表，别名自定如 `t.order_amount IS NULL`）——DQ 版 design_logic：coder WHERE 直搬不再翻译自然语言；字段引用查目标表（N_DQ5 硬拦拼写错）；引用一律两段（别名.字段，跨表子查询 FROM 位用 schema.table 两段，三段式硬拦）
-  - `rule_desc` 是**口径说明**（阈值来历/告警级/方向备注），不是 RS 原文复制
-  - **必须写明违规方向**（什么情况算违规）——coder 照 violation_condition 定 WHERE，UT 按行数判（0 行通过，非 0 行告警）
-  - 例：RS `rule_desc="订单金额不能为空"` → 翻译 `violation_condition="t.order_amount IS NULL"` + `rule_desc="违规=order_amount 为空（有空值即告警）"`——别写"检查 IS NOT NULL"这种正向描述，方向容易译反
-  - 阈值非 0/100% 极端值（中间阈值）→ violation_condition 写精确条件，rule_desc 标注"结果依赖数据分布"（UT 零结果也证不了绝对合理性，闸口② 人工确认预期）
-  - 翻译后条数可增加（一条模糊需求拆多条），但不应少于 RS（assemble_ts 会 warn；全缺 violation_condition 也 warn N_DQ4）
-- **RS 无 DQ 需求**（`dq.requirements` 为空，标注"无 DQ"）→ `dq_rules` 留空，**不产任何 DQ**（coder 不调、无 DQ 调度任务）
-- designer **不自主决定产不产**（DQ 是业务决策归 RS），RS 有就翻译、没有就不干
-- 无"标准三项系统兜底"（主键唯一/审计非空/记录数不再无条件产）——UT 阶段 `ut_execute` 已查主键重复，上线后要不要持续监控是业务决策
-
-> assemble_ts 硬校验 N_DQ1：RS 有 DQ 但 `dq_rules` 空 → fail-loud（漏翻译根因）；N_DQ2/N_DQ3 是 warn（条数偏少/RS 无但自加）。
+DQ 不在主线 designer 职责内（也从来不在五层里）：由独立岗位 **dws-dq-producer** 在 assemble_ts 通过后并行完成设计实现（读 RS+mapping+待审 ts 结构，不读你的 design_logic——独立理解是歧义探测器），装配=assemble_dq。你只管加工主线；view 里没有 dq 段，design_decisions 模板无 dq_rules。
 
 ---
 
@@ -308,10 +294,6 @@ DQ 不在五层里（五层是加工设计主线），但 DQ 产出有明确规�
 - [ ] schedule.schedule_type 合法（daily/hourly/realtime）
 - [ ] schedule.cron 是 Quartz 6 段表达式
 - [ ] 复杂度/分段决策写进 complexity_analysis.design_approach（进 ts 文档）
-
-**DQ（RS 驱动）**
-- [ ] `rs_input_view.dq.requirements` 有内容 → `dq_rules` 已翻译（条数 ≥ RS，rule_desc 是技术口径给 coder）
-- [ ] `rs_input_view.dq` 标注"无 DQ" → `dq_rules` 为空（不自主补）
 
 **组装**
 - [ ] 调 assemble_ts.py 成功产出 ts.json + ts.md（无校验错误；失败看报错的 `[第X层]` 定位）

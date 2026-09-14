@@ -1316,24 +1316,8 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
                      "处置=接受的是业务豁免，无需 cast。"),
         }
 
-    # DQ 需求（来自 RS L06，告知 designer 该不该产 DQ + 需要翻译的需求内容）
-    # DQ 完全跟随 RS：有需求 designer 翻译产 dq_rules，无需求 dq_rules 留空
-    dq_reqs = rs_input.get("dq_requirements", [])
-    if dq_reqs:
-        compact["dq"] = {
-            "requirements": dq_reqs,
-            "说明": ("RS 有 DQ 需求，designer 必须翻译成 coder 可执行的 DQ 规格写进 dq_rules。"
-                     "scope/check_type/rule_name 跟 RS 保持一致（分类不变），"
-                     "violation_condition 写违规条件的 SQL 表达式（检查对象=目标 F 表，"
-                     "如 t.order_amount IS NULL——coder WHERE 直搬不再翻译），"
-                     "rule_desc 写口径说明（阈值来历/告警级别/方向备注）。"
-                     "翻译后条数可增加（一条模糊需求可拆多条），但不应少于 RS。"),
-        }
-    else:
-        compact["dq"] = {
-            "requirements": [],
-            "说明": "RS 无 DQ 需求（dq_requirements 为空）→ dq_rules 留空，不产 DQ（coder 不调，无 DQ 调度任务）。",
-        }
+    # DQ 段不进 view（2026-09-14 DQ 拆分）：DQ 设计由 dws-dq-producer 独立会话完成，
+    # 输入=RS dq_requirements 原文+mapping 闭包（pick_dq_context 切片）——designer 不做 DQ。
 
     # 调度（RS L07——designer 填 decisions.schedule 的输入；view 唯一入口不缺信息）
     sched = rs_input.get("schedule", {}) or {}

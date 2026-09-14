@@ -50,6 +50,8 @@ TRANSFORM_MAP = {
 
 # 标准审计字段模板沉在 shared（precheck 也要读同一份标准）；此处 import 保持旧引用名不变
 from dws_standards import STANDARD_AUDIT_TEMPLATE, STANDARD_AUDIT_NAMES
+# 调度任务路径解析沉在 shared（assemble_dq 的 dq 任务同款解析）；re-export 保持旧引用名不变
+from lts_task_paths import load_schedule_config, resolve_schedule_path
 
 # 标准参数（所有资产默认都有，脚本自动注入，designer 无需声明）
 # 加标准参数 = 在此列表追加一行（build_exec_params 通用循环处理，不改逻辑）
@@ -497,7 +499,6 @@ class ValidationResult:
         ("L4", "第4层-工程保障"),
         ("LC", "横切"),
         ("LA", "累积共建"),
-        ("LD", "DQ"),
         ("LI", "初始化设计"),
         ("LG", "引用门禁"),
     ]
@@ -1171,126 +1172,10 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             vr.add_warn("LA", "N27", f"累积共建表 '{ts}' 有 {overlap_cnt} 个重叠字段但没声明 dedup_strategy（确认多来源是否有数据重叠需排重）")
 
     # ============================================================
-    # DQ 一致性（N_DQ1-N_DQ3）—— DQ 完全跟随 RS
-    # designer 是翻译者：RS 有 DQ 需求 → 翻译产 dq_rules；RS 无 → dq_rules 留空
+    # DQ 校验（N_DQ1-N_DQ5）已随 DQ 拆分迁出（2026-09-14）：
+    # DQ 设计独立成 dws-dq-producer 产物（dq.json），校验在
+    # new-pipe/scripts/assemble_dq.py（闸口①前装配时跑）。
     # ============================================================
-    rs_dq = rs_input.get("dq_requirements", []) or []
-    dec_dq = decisions.get("dq_rules", []) or []
-    n_rs = len(rs_dq)
-    n_dec = len(dec_dq)
-    if n_rs > 0 and n_dec == 0:
-        # N_DQ1（硬阻断）：RS 有 DQ 需求但 designer 没翻译产 dq_rules（漏翻译，"一次有一次没有"的根因）
-        vr.add_hard("LD", "N_DQ1",
-                    f"RS 有 {n_rs} 条 DQ 需求（dq_requirements），但 dq_rules 为空。"
-                    f"RS 有 DQ 时 designer 必须翻译产 dq_rules（scope/check_type/rule_name 跟 RS 一致，"
-                    f"rule_desc 写技术口径给 coder）")
-    elif 0 < n_dec < n_rs:
-        # N_DQ2（warn）：翻译后条数少于 RS，可能漏翻译
-        vr.add_warn("LD", "N_DQ2",
-                    f"RS 有 {n_rs} 条 DQ 需求，dq_rules 只翻译了 {n_dec} 条，核对是否漏翻译")
-    elif n_rs == 0 and n_dec > 0:
-        # N_DQ3（warn）：RS 无 DQ 需求但 designer 自行加了（DQ 是业务决策归 RS）
-        vr.add_warn("LD", "N_DQ3",
-                    f"RS 未提 DQ 需求（dq_requirements 为空），但 dq_rules 自行补充了 {n_dec} 条。"
-                    f"DQ 是业务决策归 RS，请确认")
-
-    # ============================================================
-    # N_DQ4/N_DQ5：violation_condition（DQ 版 design_logic——违规条件写成 SQL
-    # 表达式，coder WHERE 直搬，消除 rule_desc 自然语言的翻译漂移）。
-    # N_DQ4（warn）：有 dq_rules 但全缺 violation_condition（存量兼容，软引导补）。
-    # N_DQ5：violation_condition 的引用存在性。**跨表级 DQ 合法引用资产内任何表**
-    # （如比对来源表与目标表的数据量——子查询里必有 schema.table），登记处按形态分：
-    #   - `schema.table` 形态（限定符位是已知 schema 名）→ 表名查资产表名集合
-    #     （目标 F 表 + rs_input 源表，rs_input 就有——无 cache 也查）
-    #   - `别名.字段` 形态 → 字段查全域（目标表字段 ∪ schema_cache 全部表字段）；
-    #     无 cache → 源表字段查不到，只降 warn 不硬拦（宁放过：跨表引用可能合法）
-    # ============================================================
-    if dec_dq:
-        no_cond = [d.get("rule_name") or d.get("check_type") or "?" for d in dec_dq
-                   if not (d.get("violation_condition") or "").strip()]
-        if no_cond:
-            vr.add_warn("LD", "N_DQ4",
-                        f"{len(no_cond)} 条 dq_rules 缺 violation_condition（{no_cond[:5]}"
-                        f"{'…' if len(no_cond) > 5 else ''}）——违规条件写成 SQL 表达式"
-                        f"（如 t.order_amount IS NULL），coder WHERE 直搬不再翻译 rule_desc")
-        # 目标 F 表字段集（tables 纯表元数据是 DDL 唯一源，字段必在）；
-        # meta 有 F 表名按名匹配，否则取 target_role=target 的规则（无 meta 的兜底）
-        _ftbl = (rs_input.get("meta", {}).get("target", {}) or {}).get("f_table", {}) or {}
-        _ftbl_short = str(_ftbl.get("table") or "").rsplit(".", 1)[-1].lower()
-        if _ftbl_short:
-            _target_rules = [r for r in rules
-                             if _table_short(r.get("target_table", "")).lower() == _ftbl_short]
-        else:
-            _target_rules = [r for r in rules
-                             if (r.get("target_role") or "target") != "intermediate"]
-        _f_fields = set()
-        for _r in _target_rules:
-            _f_fields.update(str(c).lower() for c in (_r.get("field_targets") or []))
-        # 资产表名 / schema 名（rs_input 就有，无 cache 也可靠）
-        _src_tables = rs_input.get("source_tables") or []
-        _tbl_names = {_table_short(str(st.get("source_table") or "")).lower() for st in _src_tables}
-        _tbl_names.discard("")
-        if _ftbl_short:
-            _tbl_names.add(_ftbl_short)
-        _schemas = {str(st.get("source_schema") or "").strip().lower() for st in _src_tables}
-        if str(_ftbl.get("schema") or "").strip():
-            _schemas.add(str(_ftbl.get("schema")).strip().lower())
-        _schemas.discard("")
-        # cache 源表字段全域（无 cache 为空集 → 降级只查 schema.table 形态）
-        _cache_fields = set()
-        if schema_cache_path is not None:
-            try:
-                _cand = Path(schema_cache_path)
-                if _cand.exists():
-                    for _cols in (json.loads(_cand.read_text(encoding="utf-8"))
-                                  .get("tables") or {}).values():
-                        _cache_fields |= {str(_c).lower() for _c in (_cols or {})}
-            except Exception:
-                _cache_fields = set()
-        _field_all = _f_fields | _cache_fields
-        _has_vc = any((d.get("violation_condition") or "").strip() for d in dec_dq)
-        if _has_vc and _f_fields and not _cache_fields:
-            vr.add_warn("LD", "N_DQ5",
-                        "有 violation_condition 但未连库无 schema_cache——源表字段的引用"
-                        "存在性未校验（跨表 DQ 的源表侧引用无法核对，闸口①人工确认）")
-        _rs_argd = f"--rs {rs_path}" if rs_path else "--rs <rs_input.json路径>"
-        from sql_parse import find_three_part_refs
-        for i, d in enumerate(dec_dq, 1):
-            vc = (d.get("violation_condition") or "").strip()
-            if not vc:
-                continue
-            # 三段式（纯语法硬拦，不依赖字段集/cache）：跨表级子查询里 schema.table
-            # 是 FROM 位置的两段形态（合法）；x.y.z 三段式 coder 直搬后 DWS 不认
-            _three = find_three_part_refs(vc)
-            if _three:
-                vr.add_hard("LD", "N_DQ5",
-                            f"dq_rules[{i}]（{d.get('rule_name', '?')}）的 violation_condition "
-                            f"有三段式引用 {_three}——字段引用一律'别名.字段'（两段）；"
-                            f"子查询引用表用 schema.table 两段（FROM 位置），不写三段式")
-            if not _f_fields:
-                continue
-            from sql_parse import extract_logic_refs
-            _q, _b = extract_logic_refs(vc, _field_all)
-            # bare_hits 只含命中登记处的（extract_logic_refs 语义），要查的是 qualified：
-            # schema.table 形态查表名；别名.字段查字段全域（无 cache 时全域=目标表字段，
-            # 源表侧引用放过——上面已统一 warn）
-            _bad = []
-            for al, c in _q:
-                if al in _schemas:
-                    if c not in _tbl_names:
-                        _bad.append(f"{al}.{c}（表不在资产源表/目标表内）")
-                elif _cache_fields and c not in _field_all:
-                    # 字段全域判存在仅在有 cache 时（无 cache 源表字段查不到，
-                    # 别名引用可能是源表字段——放过，上面已统一 warn）
-                    _bad.append(f"{al}.{c}")
-            if _bad:
-                vr.add_hard("LD", "N_DQ5",
-                            f"dq_rules[{i}]（{d.get('rule_name', '?')}）的 violation_condition "
-                            f"引用不存在：{_bad}——合法域=目标表字段"
-                            f"{' + 资产源表字段/表名（跨表级）' if _cache_fields else ' + 资产表名'}，"
-                            f"对照 rs_input 源表清单/field_targets 改拼写"
-                            f"\n先查证: python skills/dws-design/scripts/check_field.py "
-                            f"{_rs_argd} --field {_bad[0].split('（')[0]}")
 
     # ============================================================
     # 初始化设计（LI 层）—— init 管道（与增量管道 rules 平行）
@@ -2248,61 +2133,8 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
 # ============================================================
 # 调度任务路径配置（lts_config.json 任务路径段）
 # ============================================================
-
-def load_schedule_config(config_path: str = "") -> dict:
-    """读 lts_config.json 的任务路径段（2026-09-10 与 LTS 导出配置合一，schedule_config 退役）。
-
-    设计期只关心路径键；同文件其余段（cluster_local/db_name/group_code/dep_task_ids）
-    归 assemble_export 导出期消费，两消费者键不重叠互不干扰。
-    结构：{default: {project_name, task_group, init/dq 子键（可选，任务种类独立路径）, 导出期键...},
-           schema_mappings: {schema: 同 default 结构},
-           dep_task_ids: {...}}
-    """
-    if not config_path:
-        config_path = str(lts_config_path())
-    p = Path(config_path)
-    if not p.exists():
-        return {}
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    # 过滤掉 _comment / _structure 等说明字段
-    return {k: v for k, v in raw.items() if not k.startswith("_")}
-
-
-def resolve_schedule_path(sched_config: dict, schema: str, task_kind: str) -> dict:
-    """按 schema + 任务种类解析调度任务路径（project_name/task_group）。
-
-    task_kind: 'f' | 'view' | 'dq' | 'init'（f/view=main 路径）
-    查找优先级（两维度嵌套——schema 块内的任务种类子键差异化，修复旧
-    schedule_config 的 override 不分 schema 缺陷）：
-      schema_mappings.{schema}.{kind子键} → schema_mappings.{schema}.平铺
-      → default.{kind子键} → default.平铺
-    init/dq 子键为空或省略 = 同 main。
-
-    返回 {project_name, task_group}（找不到都为空串，不报错）。
-    """
-    if not sched_config:
-        return {"project_name": "", "task_group": ""}
-
-    default_cfg = sched_config.get("default", {}) or {}
-    schema_cfg = (sched_config.get("schema_mappings", {}) or {}).get(schema, {}) or {}
-
-    kind_key = {"init": "init", "dq": "dq"}.get(task_kind, "")  # f/view 走平铺
-
-    def _pick(layer: dict) -> tuple[str, str]:
-        if kind_key and isinstance(layer.get(kind_key), dict):
-            p_ = layer[kind_key].get("project_name") or layer.get("project_name") or ""
-            g_ = layer[kind_key].get("task_group") or layer.get("task_group") or ""
-        else:
-            p_ = layer.get("project_name") or ""
-            g_ = layer.get("task_group") or ""
-        return p_, g_
-
-    s_p, s_g = _pick(schema_cfg)
-    d_p, d_g = _pick(default_cfg)
-    return {"project_name": s_p or d_p, "task_group": s_g or d_g}
+# load_schedule_config / resolve_schedule_path 已沉 shared/lts_task_paths.py
+# （2026-09-14 DQ 拆分：assemble_dq 建 dq 任务同款解析），头部 import 保持旧名。
 
 
 def build_meta(rs_input, decisions):
@@ -2431,18 +2263,8 @@ def build_meta(rs_input, decisions):
             "project_name": view_path["project_name"],
             "task_group": view_path["task_group"],
         }
-        # DQ 调度任务：仅当 dq_rules 非空时才建（DQ 完全跟随 RS，无 DQ 不产调度任务）
-        if decisions.get("dq_rules"):
-            dq_path = _resolve_task_path("dq")
-            tasks["dq"] = {
-                "task_name": f"task_{f_table_short}_dq",
-                "job_name": f"Pjob_{f_table_short}_dq",
-                "cron": cron,
-                "upstream": [{"table": i_view_short, "task": f"task_{i_view_short}", "dep_type": "宽依赖"}],
-                "project_name": dq_path["project_name"],
-                "task_group": dq_path["task_group"],
-            }
-
+    # DQ 调度任务不在此建（2026-09-14 DQ 拆分：DQ 设计在 assemble_ts 之后由
+    # dws-dq-producer 独立完成，dq 任务随 dq.json 产——assemble_dq 建）
     # init 调度任务：仅当 init.group_mode == "separate" 时建（init 独立规则组 + 独立一次性任务）
     # group_mode == "inline" 不建独立任务（init 规则进 f 任务，靠 P_FLAG 运行条件选跑）
     init_dec = decisions.get("init") or {}
@@ -2708,8 +2530,9 @@ def assemble_ts(rs_input, decisions):
         "tables": tables,
         "rules": rules,
         "data_flow": decisions.get("data_flow", {}),
-        "dq_rules": decisions.get("dq_rules", []),
     }
+    # dq_rules 不进 ts（2026-09-14 DQ 拆分）：DQ 设计由 dws-dq-producer 独立完成，
+    # 产物=build/dq.json（assemble_dq 装配），ts 自此冻结不再含 DQ
     if init_section is not None:
         ts["init"] = init_section
     return ts, all_missing_logic, field_map
@@ -2957,24 +2780,17 @@ def render_md(ts):
 
     _render_task_section("F 表调度", tasks_sched.get("f", {}))
     _render_task_section("I 视图调度", tasks_sched.get("view", {}))
-    _render_task_section("DQ 调度", tasks_sched.get("dq", {}))
+    # DQ 调度任务不在 ts.tasks（DQ 拆分后随 dq.json 产），不在此渲染
 
     lines.append("---")
     lines.append("")
 
-    # §7 DQ（RS 驱动：RS L06 有需求 designer 翻译产，没有则不产）
+    # §7 DQ（占位锚点——正文由 assemble_dq 追加渲染）
+    # DQ 设计在 assemble_ts 之后由 dws-dq-producer 独立完成（读 RS+mapping+待审 ts），
+    # 装配时 assemble_dq 定位本标题整段替换为完整章节；RS 无 DQ 需求则替换为无 DQ 说明。
     lines.append("## 7. 数据质量检查(DQ)")
     lines.append("")
-    dq = ts.get("dq_rules", [])
-    if dq:
-        lines.append(f"> DQ 由 RS L06 驱动，designer 翻译成技术口径，coder 按 dq_rules 产出（共 {len(dq)} 条）。")
-        lines.append("")
-        lines.append("| 检查范围 | 检查类型 | 规则名称 | 规则描述（技术口径） |")
-        lines.append("|----------|----------|----------|----------|")
-        for d in dq:
-            lines.append(f"| {d.get('scope', '')} | {d.get('check_type', '')} | {d.get('rule_name', '')} | {d.get('rule_desc', '')} |")
-    else:
-        lines.append("*(RS 未提 DQ 需求，本资产不产 DQ：coder 不产 DQ SQL，无 DQ 调度任务)*")
+    lines.append("*(DQ 章节由 dws-dq-producer 独立设计后经 assemble_dq 追加；RS 无 DQ 需求则本资产无 DQ)*")
     lines.append("")
 
     # §8 增量设计（条件出现：只有有增量规则的资产才显示）

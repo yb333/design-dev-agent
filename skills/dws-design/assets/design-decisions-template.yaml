@@ -272,23 +272,10 @@ data_flow:
     - sequence: 1
       rules: ["R0001"]
 
-# === DQ（RS 驱动：RS L06 有需求就翻译产，没有就留空）===
-# designer 是翻译者（类比 field_logics 写 design_logic），不是搬运工，也不自主决定产不产。
-# RS 有 DQ（rs_input_view.dq.requirements 非空）→ 翻译产 dq_rules；RS 无 DQ → dq_rules 留空。
-# 无"标准三项系统兜底"（主键/审计/记录数不再无条件产）。
-dq_rules: []
-# 翻译规则（不是原样搬运 RS）：
-#   - scope / check_type / rule_name：跟 RS 保持一致（分类不变）
-#   - violation_condition：★ 违规条件的 SQL 表达式（检查对象=目标 F 表，别名自定）——
-#     DQ 版 design_logic，coder WHERE 直搬不再翻译；字段引用查目标表（N_DQ5 硬拦拼写错）
-#   - rule_desc：口径说明（阈值来历/告警级/方向备注），不是 RS 原文
-# 例：RS rule_desc="订单金额不能为空" →
-#   - rule_id: "DQ_001"
-#     scope: "字段级"                          # 跟 RS 一致
-#     check_type: "空值检查"                    # 跟 RS 一致
-#     rule_name: "订单金额非空"                 # 跟 RS 一致
-#     violation_condition: "t.order_amount IS NULL"   # ★ 违规=探测行的 WHERE（coder 直搬）
-#     rule_desc: "违规=order_amount 为空（有空值即告警）"  # 口径说明（别写正向"检查 IS NOT NULL"，方向易译反）
+# === DQ 已迁出（2026-09-14 DQ 拆分）===
+# DQ 设计不在本模板/本角色：由 dws-dq-producer 独立会话完成
+# （输入=RS dq_requirements+mapping 闭包切片，产物=dq_decisions.yaml+dq/*.sql，
+# 装配=new-pipe/scripts/assemble_dq.py 产 build/dq.json）。designer 不做 DQ。
 
 # === 软阻断豁免（可选）===
 # 某些校验是"软阻断"（默认拦，但有合法通道可放行）。

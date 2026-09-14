@@ -29,11 +29,12 @@ python {SKILL_BASE}/scripts/check_env.py
 ```
 10_project_deliver/{appid}/{schema}/{资产名}/    ← appid/schema 层按 schema 查；不存在则你建
 └── ddlc_design_dev/build/                 ← 你建（增量现场=产出范围）
-        ├── ts.json                       ← 设计产出（确认后进档案）
-    ├── ts.md                             ← 设计产出（人读）
+        ├── ts.json                       ← 主线设计产出（无 DQ；闸口①确认后冻结）
+    ├── ts.md                             ← 设计文档（主线章节+DQ 章节追加渲染）
+    ├── dq.json                           ← DQ 元数据唯一源（producer 产出经 assemble_dq 装配；无 DQ 需求则无此文件）
     ├── etl/                              ← 编码产出（coder 产的 SELECT）
     │   └── R0001.sql
-    ├── dq/                               ← DQ 检查 SQL（coder 按 designer 翻译的 dq_rules 产出；RS 无 DQ 则目录为空或不建）
+    ├── dq/                               ← DQ 检查 SQL（dws-dq-producer 独立设计实现；RS 无 DQ 则目录为空或不建）
     ├── ut_report.md                      ← UT 报告（执行验证后生成）
     ├── ddl/                              ← 编码产出（脚本生成的 DDL）
     │   └── create_table_xxx.sql
@@ -208,6 +209,33 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
 
 ---
 
+## 步骤 2.5：DQ producer 并行（assemble_ts 通过即起，塞闸口①等待窗口）
+
+**DQ 已拆出主线 designer（2026-09-14）**：独立岗位 dws-dq-producer 一体完成 DQ 翻译/设计与 SQL 实现（断言式翻译 + 对比式独立重算）。起调条件=**ts.json 组装完成**（DQ 依赖 ts 的结构事实，不需要确认状态）——在闸口①人审等待窗口内并行跑完，闸口①人审**完整设计**（主线+DQ）。
+
+先判断要不要起：`_internal/rs_input.json` 的 `dq_requirements` 非空才起；空则跳过本步骤（不产 dq.json/ts.md 无 DQ 章节，全程零 DQ）。
+
+```
+Task(
+  subagent_type="dws-dq-producer",
+  description="DQ检查设计实现",
+  prompt="DQ 检查的设计与实现（按 dws-dq skill 流程）：rs_input: {deliver}/_internal/rs_input.json，
+          ts: {deliver}/ts.json（待审态，只读结构），产出 dq_decisions.yaml 到 {deliver}/_internal/、
+          检查 SQL 到 {deliver}/dq/。"
+)
+```
+
+producer 交卷后**装配校验**（硬阻断，失败恢复 producer 会话修，限 3 轮）：
+
+```bash
+python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --rs {deliver}/_internal/rs_input.json \
+    --decisions {deliver}/_internal/dq_decisions.yaml
+```
+
+产出三样：`dq.json`（元数据唯一源，含锚定声明与 dq 调度任务）/ ts.md DQ 章节（追加渲染，主线章节字节不动）/ `_internal/dq_gate_summary.md`（闸口① DQ 分级材料）。
+
+---
+
 ## 步骤 3：闸口①（人确认设计方向）
 
 **这是三条红线之一（语义判断不自主）——必须停下问人，不能自己往下走。**
@@ -228,15 +256,16 @@ python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_inter
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --all
 ```
 
-然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**question 模板分场景**：
+然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**DQ 附页**（步骤 2.5 产出的 `_internal/dq_gate_summary.md`）随摘要一并呈现——断言式机器核对打包扫一眼即可，**对比式口径与歧义裁决点是确认重点**（producer 的独立理解与 designer 的口径理解并排，理解差= mapping 歧义，人裁决）。**question 模板分场景**：
 
 **检查全部通过**（三常规选项）：
 
 ```
 question("闸口①设计确认（{资产}）：{gate_summary 摘要——表/规则数/字段数}\\n"
+         "DQ 设计：{dq_gate_summary 摘要——N 断言式/M 对比式/K 歧义待裁决}\\n"
          "关联质量：全部通过。请选择：",
          options=["确认设计，进入编码",
-                  "需要修改设计（说明哪里改→回 designer）",
+                  "需要修改设计（说明哪里改→回 designer；涉 DQ 字段则连带 DQ 重做）",
                   "放弃"])
 ```
 
@@ -253,7 +282,7 @@ question("闸口①设计确认（{资产}）：{gate_summary 摘要}\\n"
 ```
 
 - 用户选"确认设计，进入编码" → 进入步骤 4
-- 用户选"需要修改设计"（说明哪里改）→ 回步骤 2 重新调 designer
+- 用户选"需要修改设计"（说明哪里改）→ 回步骤 2 重新调 designer；**变更字段 ∩ DQ 锚定字段（dq.json 的 anchored_fields）非空 → 恢复 dws-dq-producer 会话联动重做受影响 DQ 条目**（短会话分钟级，与主线返工同窗口，时间不放大），重跑 assemble_dq 刷新材料
 - 用户选"源端输入问题→退 BA" → 人协调 BA 修源端（数据一对多/脏/关联声明），修完**重跑 1a 全流程**（输入变更全流程重来——恢复执行规则同款）
 - 用户选"放弃" → 结束
 
@@ -272,10 +301,10 @@ question("闸口①设计确认（{资产}）：{gate_summary 摘要}\\n"
 python PIPE_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
 ```
 
-输出执行计划 JSON：`ddl` / `dq`（含条数）/ `etl_rules` / `init_rules` / `groups` / `summary`。
-**发起哪些任务一律以计划为准**——`dq=false` 不发 DQ coder，`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起。**
+输出执行计划 JSON：`ddl` / `etl_rules` / `init_rules` / `groups` / `summary`。
+**发起哪些任务一律以计划为准**——`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起。**
 
-闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。
+闸口①确认后，**4a/4b 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。**DQ 不在本段**（步骤 2.5 已随闸口①窗口完成装配，本段不再有 DQ 任务）。
 
 ### 4a：生成 DDL（脚本）
 
@@ -298,20 +327,9 @@ Task(
 
 **task_id 由 Task 调用返回后你自己记录**（规则→会话映射，步骤 6 用），**不写进 coder 的 prompt**。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
-### 4c：DQ coder（计划 dq=true 时，与 4a/4b 同消息并行）
+### 4c：（已退役）DQ 不在编码段
 
-执行计划 `dq=true`（RS 有 DQ 需求，designer 已翻译；**以计划为准，不自己解析 ts.json**）→ 调 coder 产 DQ（与 4a/4b **同消息**并行发起）：
-
-```
-Task(
-  subagent_type="dws-coder",
-  description="生成DQ检查SQL",
-  prompt="DQ 检查 SQL 生成（按 dws-dq skill 流程）：ts.json 路径: {deliver}/ts.json，
-          产出检查 SQL 到 {deliver}/dq/。"
-)
-```
-
-计划 `dq=false` → **跳过**：不调 coder，`dq/` 目录不建。
+DQ 已随 2026-09-14 拆分前置到步骤 2.5（dws-dq-producer 在闸口①窗口内完成设计实现+装配）。本段无 DQ 任务；收到 DQ 生成任务形态 = 时序错位，回步骤 2.5 检查。
 
 ### 4d：init coder（计划 init_rules 非空时，等 4b 完成）
 
@@ -375,7 +393,7 @@ python PIPE_SCRIPTS/ut_execute.py \
 > **超时**：预检/执行都可能跑数分钟，调脚本设 timeout=600000ms（数据库端 statement_timeout 自动兜底）。
 > ★ 6b 无采样闸门：6a 预检已全量真实执行 SELECT，INSERT 侧值域错误由值域探测+溢出路由兜底——直接 TRUNCATE+全量 INSERT。
 > ★ **init 资产的 UT 顺序**：有 `init` 段时，ut_precheck/ut_execute 自动**先跑 init 阶段（truncate+全量插建基线），再跑增量阶段（在基线上 merge）**。无需分开调，脚本内部有序两阶段；init 挂了基线就废，后续增量自动跳过。
-> ★ **DQ 检查内嵌 5b 尾部**（`ts.dq_rules` 非空且数据完整时自动执行）：0 行=通过，非 0 行=告警。告警/报错阻断出口（exit 1），UT 报告有 DQ 段——分流见步骤 6。
+> ★ **DQ 检查内嵌 5b 尾部**（`dq.json` 有规则且数据完整时自动执行；旧资产兼容读 ts.dq_rules）：0 行=通过，非 0 行=告警。告警/报错阻断出口（exit 1），UT 报告有 DQ 段（对比式 0 行带双义提示）——分流见步骤 6。
 
 ---
 
@@ -388,7 +406,7 @@ python PIPE_SCRIPTS/ut_execute.py \
 > ⚠️ **类型转换类报错（含 invalid input syntax / operator does not exist）先看报告的"嫌疑报告"段再分流**：有关联键嫌疑（类型跨大类的 JOIN 对）→ 退 designer/人核对关联逻辑，**★禁止用改字段类型来"修复"**（掩盖根因，同 ROW_NUMBER 反模式）；无关联嫌疑才走 6a/6b。
 > ⚠️ **值域溢出类报错（numeric field overflow / value too long）禁回 coder**——处理按步骤 1b「值域溢出处理菜单」分角色二选一（①BA 改 mapping 目标类型重跑 1a+1b；②SE 拍板置空/截断→designer 写显式口径→coder 实现）。菜单唯一源在 1b，此处不复述。
 
-**6a. SQL 问题 → coder**（INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST，或预检 FAIL；**DQ 段的 FAIL/MISSING 同类**——DQ SQL 执行报错或 dq_{NN}_{检查类型}.sql 文件缺失）。
+**6a. SQL 问题 → coder**（INSERT 报错含 COLUMN/TYPE/SYNTAX/DOES NOT EXIST，或预检 FAIL）。
 恢复该规则 coder 旧会话（task_id 在步骤4b 记的映射里）：
 ```
 Task(subagent_type="dws-coder", task_id="{该规则 task_id}",
@@ -397,7 +415,9 @@ Task(subagent_type="dws-coder", task_id="{该规则 task_id}",
 ```
 改完重跑步骤5。**每规则限 3 轮**。
 
-**6a-DQ. DQ 告警（ALERT，非 0 行）→ 闸口② 人判，不自动改**。UT 报告 DQ 段带违规行样例，人三选一：SQL 方向写反 → 回 coder；阈值/口径不合理 → 回 designer 改 rule_desc（或退 RS 源）；数据真脏 → 人定（接受或退数据侧）。中间阈值的结果依赖数据分布，人工确认预期。
+**6a-DQ. DQ 段 FAIL/MISSING（SQL 执行报错/文件缺失）→ 恢复 dws-dq-producer 会话修**（短会话分钟级；改完只重跑 UT 的 DQ 段，不重跑装载）。**限 3 轮**。
+
+**6a-DQ-ALERT. DQ 告警（ALERT，非 0 行）→ 攒闸口② 人判，零自动回路**（不让 producer 迭代语义问题——它改不出"通过"只会空转）。UT 报告 DQ 段带违规行样例，闸口② 人三选一：①SQL 写错 → 恢复 producer 改该条；②检查不合理 → 人定新口径（producer 照译，不自己想口径）或取消该条；③数据真脏但检查保留 → 豁免（dq.json 标 waived+理由）。**对比式 0 行也进闸口② 材料**（双义提示：口径一致通过 / 口径写错恒等失效，人审口径）。
 
 **6b. 数据质量问题 → 人确认根因 → （要改设计才回 designer）→ coder**。
 INSERT 成功但 UT 检查 FAIL（主键重复/空值/行数异常，报告带样例数据）。
@@ -498,7 +518,7 @@ python PIPE_SCRIPTS/assemble_export.py \
 ```bash
 python SHARED_SCRIPTS/archive_writer.py adopt --build {deliver}
 ```
-  从 build/ **复制**本源件（ts/etl/dq/ddl/export + decisions）生成 `{deliver}/../archive/` + MANIFEST 首建（v1 建造）；
+  从 build/ **复制**本源件（ts/dq.json/etl/dq/ddl/export + decisions）生成 `{deliver}/../archive/` + MANIFEST 首建（v1 建造）；
   build/ 保留完整交付现场（全量部署内容：DDL/SQL/制品包/报告——人拿一个目录即可部署当前版本；下次优化开工清场重建）。此后资产有档、可优化。
 
 > 非交互例外同闸口①（仅显式声明时跳过；人工决策项不豁免，见步骤 3 的非交互条款）。

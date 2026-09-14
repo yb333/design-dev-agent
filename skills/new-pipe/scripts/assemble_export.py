@@ -1125,6 +1125,17 @@ def main():
         sys.exit(1)
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
+    # DQ 调度任务行被动适配（2026-09-14 DQ 拆分）：dq 任务随 dq.json 产（assemble_dq），
+    # ts.tasks 只有 f/view/init——合并 dq.json.tasks 进内存视图，制品形态零变化
+    _dq_json = ts_path.parent / "dq.json"
+    if _dq_json.exists():
+        try:
+            _dq_tasks = (json.loads(_dq_json.read_text(encoding="utf-8")).get("tasks") or {})
+            if _dq_tasks:
+                ts.setdefault("meta", {}).setdefault("schedule", {}).setdefault("tasks", {}).update(_dq_tasks)
+        except (json.JSONDecodeError, OSError):
+            pass
+
     # 读配置（按目标表 schema 映射两套平台配置；appid 从 schema_apps 反查，
     # 注入 shujia 段 → 租户ID 列 + shujia_tenants 租户块解析）
     raw_config = load_shujia_config(args.config)

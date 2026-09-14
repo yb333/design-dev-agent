@@ -367,22 +367,19 @@ class TestDispatchPlan:
                 "R0001": {"exec_sequence": 1},
             },
             "init": {"mode": "derive", "rules": {"INIT_R0001": {}}},
-            "dq_rules": [{"rule_name": "主键唯一"}],
             "data_flow": {"schedule_groups": [{"sequence": 1, "rules": ["R0001", "R0002"]}]},
         }
         plan = build_dispatch_plan(ts)
         assert plan["ddl"] is True
-        assert plan["dq"] is True and plan["dq_count"] == 1
+        assert "dq" not in plan  # dq 字段已删（2026-09-14 DQ 拆分——DQ 前置步骤 2.5，不在编码段）
         assert plan["etl_rules"] == ["R0001", "R0002"]  # 按 exec_sequence 排序
         assert plan["init_rules"] == ["INIT_R0001"]
         assert len(plan["groups"]) == 1
 
-    def test_no_dq_no_init(self):
+    def test_no_init(self):
         from dispatch_plan import build_dispatch_plan
-        plan = build_dispatch_plan({"rules": {"R0001": {}}, "dq_rules": []})
-        assert plan["dq"] is False
+        plan = build_dispatch_plan({"rules": {"R0001": {}}})
         assert plan["init_rules"] == []
-        assert "无 DQ" in plan["summary"]
 
 
 # ============================================================
@@ -662,6 +659,34 @@ class TestRunDqChecks:
         assert all("${" not in s for s in ex.executed) and "20260826" in ex.executed[0]
         results = run_dq_checks(self._Exec(), tmp_path, self._rules(), {})  # 没配测试值
         assert results[0]["status"] == "FAIL" and "P_CYCLE_ID" in results[0]["detail"]
+
+
+class TestLoadDqRules:
+    """load_dq_rules 双源读取（2026-09-14 DQ 拆分）：dq.json 优先，旧 ts.dq_rules 兜底。"""
+
+    def test_dq_json_wins(self, tmp_path):
+        import json as _json
+        (tmp_path / "dq.json").write_text(
+            _json.dumps({"rules": [{"rule_name": "新", "mode": "compare"}]}, ensure_ascii=False),
+            encoding="utf-8")
+        (tmp_path / "ts.json").write_text(
+            _json.dumps({"dq_rules": [{"rule_name": "旧"}]}, ensure_ascii=False), encoding="utf-8")
+        from run_ut import load_dq_rules
+        rules = load_dq_rules(tmp_path)
+        assert len(rules) == 1 and rules[0]["rule_name"] == "新" and rules[0]["mode"] == "compare"
+
+    def test_legacy_ts_fallback(self, tmp_path):
+        """旧资产（DQ 拆分前的 ts.dq_rules）：无 dq.json 时兜底读，条目补 mode=assertion。"""
+        import json as _json
+        (tmp_path / "ts.json").write_text(
+            _json.dumps({"dq_rules": [{"rule_name": "旧规则"}]}, ensure_ascii=False), encoding="utf-8")
+        from run_ut import load_dq_rules
+        rules = load_dq_rules(tmp_path)
+        assert rules[0]["rule_name"] == "旧规则" and rules[0]["mode"] == "assertion"
+
+    def test_both_empty(self, tmp_path):
+        from run_ut import load_dq_rules
+        assert load_dq_rules(tmp_path) == []
 
 
 class TestLogicRefs:

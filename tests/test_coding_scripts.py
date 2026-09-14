@@ -1042,59 +1042,9 @@ class TestCheckSqlFieldRef:
         assert not any("[字段引用]" in i for i in issues), issues
 
 
-class TestSliceDq:
-    """slice_ts --dq：切 DQ 规则段（dws-dq 流程用）——不整读 ts.json。"""
-
-    def test_slice_dq_returns_contract_target_rules(self):
-        from slice_ts import slice_dq
-        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
-              "design": {"business_key": ["order_no"]},
-              "dq_rules": [{"check_type": "空值检查", "rule_name": "金额非空",
-                            "rule_desc": "违规=amt IS NULL"}]}
-        s = slice_dq(ts)
-        assert s["target_table"] == "dws.dwb_x_f"
-        assert s["business_key"] == ["order_no"]
-        assert len(s["dq_rules"]) == 1
-        assert "违规行探测器" in s["contract"]
-
-    def test_slice_dq_attaches_file_names(self):
-        """切片各条附 _file（run_ut.dq_filename 同源派生）——coder 落盘不自拼名。"""
-        from slice_ts import slice_dq
-        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
-              "design": {"business_key": ["order_no"]},
-              "dq_rules": [
-                  {"check_type": "空值检查", "rule_name": "金额非空", "rule_desc": "r1"},
-                  {"check_type": "空值检查", "rule_name": "编号非空", "rule_desc": "r2"},
-                  {"check_type": "值域检查 ", "rule_name": "范围", "rule_desc": "r3"}]}
-        s = slice_dq(ts)
-        assert [d["_file"] for d in s["dq_rules"]] ==             ["dq_01_空值检查.sql", "dq_02_空值检查.sql", "dq_03_值域检查.sql"]
-        assert "_file" not in ts["dq_rules"][0]  # 切片增强不改 ts 原件
-
-    def test_slice_dq_empty_rules_raises(self):
-        from slice_ts import slice_dq
-        with pytest.raises(ValueError, match="为空"):
-            slice_dq({"dq_rules": []})
-
-
-class TestSliceDqSources:
-    """slice_dq 附资产级 source_tables 并集（跨表检查要 schema 全名）。"""
-
-    def test_slice_dq_collects_source_tables_union(self):
-        from slice_ts import slice_dq
-        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
-              "design": {"business_key": ["order_no"]},
-              "rules": {
-                  "R0001": {"source_tables": [
-                      {"schema": "ods", "table": "ods_a", "alias": "a"}]},
-                  "R0002": {"source_tables": [
-                      {"schema": "ods", "table": "ods_a", "alias": "a"},
-                      {"schema": "dwd", "table": "dwd_b", "alias": "b"}]}},
-              "dq_rules": [{"check_type": "空值检查", "rule_name": "金额非空",
-                            "violation_condition": "t.amt IS NULL",
-                            "rule_desc": "违规=amt 为空"}]}
-        s = slice_dq(ts)
-        assert [(st["schema"], st["table"]) for st in s["source_tables"]] == \
-            [("ods", "ods_a"), ("dwd", "dwd_b")]  # 并集去重
+# TestSliceDq / TestSliceDqSources 已删（2026-09-14 DQ 拆分）：
+# slice_ts --dq 退役（DQ 切片入口=new-pipe/scripts/pick_dq_context.py，
+# dws-dq-producer 的三件套取料），测试见 tests/test_pick_dq_context.py。
 
 
 class TestCheckDqSql:
