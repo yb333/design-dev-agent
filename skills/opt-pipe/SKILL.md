@@ -124,25 +124,24 @@ python PIPE_SCRIPTS/dq_impact.py --baseline-dq {arc_tmp}/dq.json \
 
 - baseline 无 DQ（dq.json/dq_rules 均无）→ 空清单，跳过 producer；
 - 清单为空（无受影响条目）→ DQ 全量原样继承，producer 不起调；
-- 清单非空 → 调 **dws-dq-producer 重做受影响条目**（只重做清单内的；未受影响条目在 decisions 里原样抄写保持全量，SQL 文件不重写沿用 {arc_tmp}/dq/）：
+- 清单非空 → 调 **dws-dq-producer 重做受影响条目**（只重做清单内的；未受影响条目在 dq.json 里原样抄写保持全量，SQL 文件不重写沿用 {arc_tmp}/dq/）：
 
 ```
 Task(subagent_type="dws-dq-producer", description="DQ 影响重做 {资产}",
   prompt="优化模式：按 dws-dq skill 流程。ts: {arc_tmp}/ts.json（只读结构），baseline DQ 清单:
-          {arc_tmp}/dq.json，重做清单（只重做这些条目，其余原样抄进 decisions 保持全量）:
-          {build}/_internal/dq_impact.md。decisions 落 {build}/_internal/dq_decisions.yaml，
+          {arc_tmp}/dq.json，重做清单（只重做这些条目，其余原样抄进 rules 保持全量）:
+          {build}/_internal/dq_impact.md。直接产 dq.json 到 {build}/dq.json（producer 交卷形态），
           重做的 SQL 落 {build}/dq/（文件名与清单同名=该条当前版）。")
 ```
 
-交卷后装配校验（opt 参数：SQL 在变更现场 --dq-dir；条目权威=baseline 清单不走 RS 对照）：
+交卷后校验渲染（opt 参数：SQL 在变更现场 --dq-dir；条目权威=baseline 清单不走 RS 对照）：
 
 ```bash
 python ../new-pipe/scripts/assemble_dq.py --ts {arc_tmp}/ts.json \
-  --decisions {build}/_internal/dq_decisions.yaml \
-  --dq-dir {build}/dq --no-rs-contract
+  --dq-src {build}/dq.json --dq-dir {build}/dq --no-rs-contract
 ```
 
-装配产出落 {arc_tmp}（dq.json/ts.md DQ 章节——进度态全量自然更新）。围栏全过后新 SQL 入临时档案：`cp {build}/dq/*.sql {arc_tmp}/dq/`（同名覆盖=当前版）。**DQ 变更恰好=重做清单**（影响分析是围栏的 DQ 版本——清单外条目装配时与 baseline 全量比对防私改）。
+校验补全的 dq.json 落 {build}（校验后由你 cp 到 {arc_tmp}/dq.json——进度态全量更新）+ ts.md DQ 章节渲染进 {arc_tmp}。围栏全过后新 SQL 入临时档案：`cp {build}/dq/*.sql {arc_tmp}/dq/`。
 
 ## 步骤 4：编码（SQL 围栏闸门在你）
 

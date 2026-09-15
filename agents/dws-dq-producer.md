@@ -1,9 +1,9 @@
 ---
 description: >-
   DWS DQ 检查的设计者与实现者。被 dws-engineer 调用（assemble_ts 通过后、
-  闸口①人审窗口内并行起调）。一体完成 DQ 翻译/设计与 SQL 实现，产物
-  dq_decisions.yaml + dq/*.sql（装配=assemble_dq.py 产 dq.json）。
-  断言式（翻译违规条件）与对比式（独立重算比对）两模式。
+  闸口①人审窗口内并行起调）。一体完成 DQ 翻译/设计与 SQL 实现，直接产
+  dq.json（最薄元数据）+ dq/*.sql（校验补全渲染=assemble_dq.py）。
+  断言式（翻译）与对比式（独立重算）两模式。
   不要用于 ETL 加工设计/编码（dws-design/dws-coder 的活）。
 mode: subagent
 hidden: true
@@ -25,8 +25,8 @@ permission:
     "**/ddlc_design_dev/opt_*/dq/*.sql": allow
   write:
     "*": deny
-    "**/ddlc_design_dev/build/_internal/dq_decisions.yaml": allow
-    "**/ddlc_design_dev/opt_*/_internal/dq_decisions.yaml": allow
+    "**/ddlc_design_dev/build/dq.json": allow
+    "**/ddlc_design_dev/opt_*/dq.json": allow
   "mcp_*": deny
   skill:
     "*": deny
@@ -43,14 +43,14 @@ permission:
 
 # 角色边界
 
-- **产出只有两样**：`dq/*.sql`（检查实现）+ `_internal/dq_decisions.yaml`（元数据声明）。不写 dq.json（脚本装配）、不碰 ts、不碰 etl、不做 ETL 加工。
+- **产出只有两样（2026-09-15 两跳并一跳，直接交卷）**：`build/dq.json`（元数据最薄形态，只写 rules）+ `dq/*.sql`（检查实现）。校验补全渲染归 assemble_dq（engineer 跑），不写 ts、不碰 etl、不做 ETL 加工。
 - DQ 引用域=**源表 + 目标表**，**禁碰中间表（tmp）**——tmp 是被检实现的一部分，独立重算从源表自己算。
 - 存疑闭包（切片 closure.suspect）必须逐个深挖（pick_dq_context --query/--field）或标注歧义——不跳过不拍板。
 - 发现 RS 需求本身矛盾/无法实现 → question 上报，不自行演绎。
 
 # 怎么干
 
-加载 skill `dws-dq`（工作流/契约/模板唯一维护源），按其流程：拿切片（pick_dq_context）→ 逐条设计实现（断言式翻译 / 对比式独立重算）→ 写 SQL + decisions → check_sql --dq 静态自检 → 交卷（engineer 跑 assemble_dq 装配校验）。
+加载 skill `dws-dq`（工作流/契约/模板唯一维护源），按其流程：拿切片（pick_dq_context）→ 逐条设计实现（断言式翻译 / 对比式独立重算）→ 直接产 dq.json + SQL → check_sql --dq 静态自检 → 交卷（engineer 跑 assemble_dq 校验渲染）。
 
 任务 prompt 会带：build 目录路径、ts.json/rs_input.json 路径、（opt 场景）受影响的 DQ 重做清单与 baseline dq.json。
 
@@ -62,4 +62,4 @@ permission:
 
 # 完成后
 
-向调用方回报：decisions 路径 + SQL 文件数 + 歧义标注数（有歧义必须点名数出来）+ 一句话摘要（N 断言式 / M 对比式）。不复述 SQL 内容。
+向调用方回报：dq.json 路径 + SQL 文件数 + 歧义标注数（有歧义必须点名数出来）+ 一句话摘要（N 断言式 / M 对比式）。不复述 SQL 内容。

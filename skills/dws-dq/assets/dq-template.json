@@ -1,0 +1,28 @@
+# dws-dq-producer 产出格式模板（格式唯一源——dq.json 落盘前必须先读到本模板，读不到禁止凭理解自编）
+#
+# producer 直接产两样（2026-09-15 两跳并一跳，无 decisions 中间产物）：
+#   1. {build}/dq.json —— 本模板的 rules 数组（最薄形态：只写 rules，其余键由 assemble_dq 校验补全）
+#   2. {build}/dq/dq_{NN}_{检查类型}.sql —— 一条一个文件，NN=数组序号 01 起
+#      （检查类型清洗=非字母/数字/中文/下划线换 `_`，与 run_ut.dq_filename 同一规则）
+#
+# rules 条目（两种 mode 二选一；idx/sql_file/generated_by 等由校验器补，不用写）：
+#
+# ── 断言式（assertion，可缺省）：RS 人话 → 违规表达式，翻译 ──
+# {"rule_id": "DQ_001", "scope": "字段级", "check_type": "空值检查", "rule_name": "订单金额非空",
+#  "mode": "assertion",
+#  "violation_condition": "t.order_amount IS NULL",
+#  "rule_desc": "违规=order_amount 为空（有空值即告警）"}
+#   # rule_desc 方向写"违规="，别写正向"检查 IS NOT NULL"（方向易译反）
+#
+# ── 对比式（compare）：独立重算比对（目标vs来源行一致 / 字段逻辑复核）──
+# {"rule_id": "DQ_002", "scope": "记录级", "check_type": "一致性检查", "rule_name": "订单金额口径复核",
+#  "mode": "compare",
+#  "violation_condition": "t.amount <> s.pay + s.discount（独立重算值与存量不等即违规）",
+#  "rule_desc": "违规=目标表金额与源表 pay+discount 独立重算值不等"}
+#
+# ── 歧义标注（两模式通用；有二义才写，宁标勿猜——闸口①人裁决）──
+# "ambiguities": [{"note": "mapping 的 del_flag 口径二义：'已删除=1' 或 '已删除=Y'",
+#                  "options": ["按 1 删除", "按 Y 删除"]}]
+#
+# ── 豁免（闸口②人判"数据真脏但检查保留"后回写，producer 不主动填）──
+# "waived": false, "waive_reason": ""

@@ -103,10 +103,10 @@ class TestCli:
 
 
 class TestAssembleDqOptParams:
-    """assemble_dq 的 opt 场景参数：--dq-dir（SQL 在变更现场）+ --no-rs-contract（跳过 RS 对照）。"""
+    """assemble_dq 的 opt 场景参数：--dq-dir（SQL 在变更现场）+ --no-rs-contract（跳过 RS 对照）+ --dq-src（producer 直产 dq.json）。"""
 
-    def _setup(self, tmp_path, with_rs=False):
-        from tests.test_assemble_dq import _ts, _dec_rule, _clean
+    def _setup(self, tmp_path):
+        from tests.test_assemble_dq import _ts, _rule
         build = tmp_path / "build"
         arc_tmp = tmp_path / "arc_tmp"
         (build / "_internal").mkdir(parents=True)
@@ -115,24 +115,24 @@ class TestAssembleDqOptParams:
         (arc_tmp / "ts.json").write_text(json.dumps(_ts(), ensure_ascii=False), encoding="utf-8")
         (arc_tmp / "ts.md").write_text(
             "## 7. 数据质量检查(DQ)\n\n*(占位)*\n\n---\n\n## 8. 增量设计\n", encoding="utf-8")
-        if with_rs:
-            (build / "_internal" / "rs_input.json").write_text(
-                json.dumps({"dq_requirements": []}, ensure_ascii=False), encoding="utf-8")
+        (build / "_internal" / "rs_input.json").write_text(
+            json.dumps({"dq_requirements": []}, ensure_ascii=False), encoding="utf-8")
         (build / "dq" / "dq_01_空值检查.sql").write_text(
             "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL", encoding="utf-8")
-        (build / "_internal" / "dq_decisions.yaml").write_text(
-            "rules:\n- {rule_id: DQ_001, scope: 字段级, check_type: 空值检查, rule_name: 产品编码非空,"
-            " mode: assertion, violation_condition: 't.prod_code IS NULL', rule_desc: 违规=空}\n",
-            encoding="utf-8")
+        (build / "dq.json").write_text(json.dumps({"rules": [
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+             "mode": "assertion", "violation_condition": "t.prod_code IS NULL",
+             "rule_desc": "违规=空"}]}, ensure_ascii=False), encoding="utf-8")
         return build, arc_tmp
 
     def test_opt_mode_no_rs_no_contract(self, tmp_path):
-        """opt 场景：不传 --rs（源表从 ts 派生）+ --no-rs-contract（RS 无需求但条目全来自 baseline——不触发 N_DQ3）。"""
+        """opt 场景：不传 --rs（源表从 ts 派生）+ --no-rs-contract（条目全来自 baseline——不触发 N_DQ3）；
+        校验补全写回 build/dq.json，ts.md 渲染进 arc_tmp。"""
         import assemble_dq
         build, arc_tmp = self._setup(tmp_path)
         old_argv = sys.argv
         sys.argv = ["assemble_dq.py", "--ts", str(arc_tmp / "ts.json"),
-                    "--decisions", str(build / "_internal" / "dq_decisions.yaml"),
+                    "--dq-src", str(build / "dq.json"),
                     "--dq-dir", str(build / "dq"), "--no-rs-contract"]
         try:
             with pytest.raises(SystemExit) as ei:
@@ -140,20 +140,19 @@ class TestAssembleDqOptParams:
         finally:
             sys.argv = old_argv
         assert ei.value.code == 0
-        # dq.json/ts.md 落 arc_tmp（进度态），SQL 从 build/dq 校验
-        assert (arc_tmp / "dq.json").exists()
+        dq = json.loads((build / "dq.json").read_text(encoding="utf-8"))
+        assert dq["rules"][0]["sql_file"] == "dq_01_空值检查.sql"  # 补全写回
         assert "t.prod_code IS NULL" in (arc_tmp / "ts.md").read_text(encoding="utf-8")
 
     def test_rs_contract_would_fire_dq3_without_flag(self, tmp_path):
         """对照组：不关 RS 契约时，RS 无需求但有条目 → N_DQ3 warn（new-pipe 场景的护栏仍在）。"""
         from tests.test_assemble_dq import _ts
-        from assemble_dq import validate_and_build, DqResult
-        build, arc_tmp = self._setup(tmp_path, with_rs=True)
-        import yaml
-        decisions = yaml.safe_load((build / "_internal" / "dq_decisions.yaml").read_text(encoding="utf-8"))
+        from assemble_dq import validate_and_build
+        build, arc_tmp = self._setup(tmp_path)
         rs = json.loads((build / "_internal" / "rs_input.json").read_text(encoding="utf-8"))
         ts = json.loads((arc_tmp / "ts.json").read_text(encoding="utf-8"))
-        _, vr = validate_and_build(rs, ts, decisions, build / "dq", rs_contract=True)
+        dq_src = json.loads((build / "dq.json").read_text(encoding="utf-8"))
+        _, vr = validate_and_build(rs, ts, dq_src["rules"], build / "dq", rs_contract=True)
         assert any(i["code"] == "N_DQ3" for i in vr.items)
-        _, vr2 = validate_and_build(rs, ts, decisions, build / "dq", rs_contract=False)
+        _, vr2 = validate_and_build(rs, ts, dq_src["rules"], build / "dq", rs_contract=False)
         assert not any(i["code"] == "N_DQ3" for i in vr2.items)

@@ -220,19 +220,19 @@ Task(
   subagent_type="dws-dq-producer",
   description="DQ检查设计实现",
   prompt="DQ 检查的设计与实现（按 dws-dq skill 流程）：rs_input: {deliver}/_internal/rs_input.json，
-          ts: {deliver}/ts.json（待审态，只读结构），产出 dq_decisions.yaml 到 {deliver}/_internal/、
+          ts: {deliver}/ts.json（待审态，只读结构），直接产 dq.json 到 {deliver}/、
           检查 SQL 到 {deliver}/dq/。"
 )
 ```
 
-producer 交卷后**装配校验**（硬阻断，失败恢复 producer 会话修，限 3 轮）：
+producer 交卷后**校验渲染**（硬阻断，失败恢复 producer 会话修，限 3 轮）：
 
 ```bash
-python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --rs {deliver}/_internal/rs_input.json \
-    --decisions {deliver}/_internal/dq_decisions.yaml
+python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --dq-src {deliver}/dq.json \
+    --rs {deliver}/_internal/rs_input.json
 ```
 
-产出三样：`dq.json`（元数据唯一源，含锚定声明与 dq 调度任务）/ ts.md DQ 章节（追加渲染，主线章节字节不动）/ `_internal/dq_gate_summary.md`（闸口① DQ 分级材料）。
+校验补全 dq.json（idx/文件名/mode 缺省/meta+dq 调度任务）+ 校验（文件在位/引用对账/禁 tmp/幻觉列）+ ts.md 追加 DQ 表格（主线章节字节不动）。**评审就看 ts.md 的 DQ 表格**——歧义标注随表格呈现，无单独材料。
 
 ---
 
@@ -256,13 +256,13 @@ python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_inter
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --all
 ```
 
-然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**DQ 附页**（步骤 2.5 产出的 `_internal/dq_gate_summary.md`）随摘要一并呈现——断言式机器核对打包扫一眼即可，**对比式口径与歧义裁决点是确认重点**（producer 的独立理解与 designer 的口径理解并排，理解差= mapping 歧义，人裁决）。**question 模板分场景**：
+然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**DQ 评审=ts.md 的 DQ 表格**（步骤 2.5 渲染——无单独材料）：断言式扫一眼，**对比式口径与歧义裁决点是确认重点**（producer 的独立理解与 designer 的口径理解并排，理解差= mapping 歧义，人裁决）。**question 模板分场景**：
 
 **检查全部通过**（三常规选项）：
 
 ```
 question("闸口①设计确认（{资产}）：{gate_summary 摘要——表/规则数/字段数}\\n"
-         "DQ 设计：{dq_gate_summary 摘要——N 断言式/M 对比式/K 歧义待裁决}\\n"
+         "DQ 设计：{ts.md DQ 表格摘要——N 断言式/M 对比式/K 歧义待裁决}\\n"
          "关联质量：全部通过。请选择：",
          options=["确认设计，进入编码",
                   "需要修改设计（说明哪里改→回 designer；涉 DQ 字段则连带 DQ 重做）",
@@ -282,7 +282,7 @@ question("闸口①设计确认（{资产}）：{gate_summary 摘要}\\n"
 ```
 
 - 用户选"确认设计，进入编码" → 进入步骤 4
-- 用户选"需要修改设计"（说明哪里改）→ 回步骤 2 重新调 designer；**变更字段 ∩ DQ 锚定字段（dq.json 的 anchored_fields）非空 → 恢复 dws-dq-producer 会话联动重做受影响 DQ 条目**（短会话分钟级，与主线返工同窗口，时间不放大），重跑 assemble_dq 刷新材料
+- 用户选"需要修改设计"（说明哪里改）→ 回步骤 2 重新调 designer；**变更字段涉及 DQ 检查的（对照 ts.md DQ 表格的 violation_condition 引用）→ 恢复 dws-dq-producer 会话联动改受影响条目**（短会话分钟级，与主线返工同窗口，时间不放大），重跑 assemble_dq 刷新
 - 用户选"源端输入问题→退 BA" → 人协调 BA 修源端（数据一对多/脏/关联声明），修完**重跑 1a 全流程**（输入变更全流程重来——恢复执行规则同款）
 - 用户选"放弃" → 结束
 

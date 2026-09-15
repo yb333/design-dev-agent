@@ -274,8 +274,8 @@ data_flow:
 
 # === DQ 已迁出（2026-09-14 DQ 拆分）===
 # DQ 设计不在本模板/本角色：由 dws-dq-producer 独立会话完成
-# （输入=RS dq_requirements+mapping 闭包切片，产物=dq_decisions.yaml+dq/*.sql，
-# 装配=new-pipe/scripts/assemble_dq.py 产 build/dq.json）。designer 不做 DQ。
+# （输入=RS dq_requirements+mapping 闭包切片，直接产 dq.json+dq/*.sql，
+# 校验渲染=new-pipe/scripts/assemble_dq.py）。designer 不做 DQ。
 
 # === 软阻断豁免（可选）===
 # 某些校验是"软阻断"（默认拦，但有合法通道可放行）。

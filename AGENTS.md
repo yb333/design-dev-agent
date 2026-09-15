@@ -29,7 +29,7 @@ skills/
 │   └── assets/          # dq-decisions-template.yaml(decisions 格式唯一源)
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→DQ并行→闸口①→编码→UT→闸口②→制品）
 │   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py(决策填值器已下沉 shared)
-                         #   dispatch_plan.py(dq字段已随DQ拆分删除) assemble_export.py(含LTS制品生成,2026-09重写;跨集群depTaskId直读config dep_task_ids表;dq任务行被动适配读dq.json) assemble_dq.py(★DQ装配器:producer产物→dq.json+N_DQ1-10校验[引用域禁tmp/锚定/幻觉列]+ts.md DQ章节追加渲染+闸口①分级材料+dq调度任务) ut_precheck.py(6a预检:EXPLAIN全量+计划两门槛+describe列序对账+DQ兜底[RS有需求但dq.json缺失fail loud]) ut_execute.py(DQ段读dq.json,旧ts.dq_rules兼容) ut_diagnose.py(类型诊断,ut_execute用)
+                         #   dispatch_plan.py(dq字段已随DQ拆分删除) assemble_export.py(含LTS制品生成,2026-09重写;跨集群depTaskId直读config dep_task_ids表;dq任务行被动适配读dq.json) assemble_dq.py(★DQ校验渲染器:producer直产dq.json——校验[N_DQ1/4/5/9/10:RS对照/引用对账禁tmp/幻觉列]+补全[idx/文件名/mode缺省/meta]+ts.md DQ表格追加渲染,评审只看ts.md;2026-09-15两跳并一跳,decisions中间产物与独立评审材料已砍) ut_precheck.py(6a预检:EXPLAIN全量+计划两门槛+describe列序对账+DQ兜底[RS有需求但dq.json缺失fail loud]) ut_execute.py(DQ段读dq.json,旧ts.dq_rules兼容) ut_diagnose.py(类型诊断,ut_execute用)
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py(含DQ段:重做条目真跑读arc_tmp的dq.json,2026-09-14补环) dq_impact.py(★DQ影响分析:变更字段∩锚定/变更来源∩compare_sources→重做清单,确定性集合运算,步骤3.5)
@@ -69,7 +69,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 |-------|------|-------|----------------------------------|------|
 | **dws-engineer** | 设计开发段**编排+质检**：契约参数→加载剧本→调管线脚本→起 designer/producer/coder→跑确定性验证产事实→按分流表路由问题→守闸口（判断=分流不定罪，定罪归闸口人） | new-pipe / opt-pipe（按模式路由） | check_env（步骤0探针）；管线脚本经 bash python 调（不属 agent 工具） | `ddlc_design_dev/**`（含 opt/ 优化现场与 archive/ 档案） |
 | **dws-designer** | 设计判断（纯主线，无 DQ），产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（JOIN键唯一性）/ check_field（字段查证）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
-| **dws-dq-producer** | ★DQ 翻译者+独立实现者（2026-09-14 拆分）：断言式翻译+对比式独立重算，一体产 SQL+元数据；身份级纪律=输入隔离（不读 design_logic/ETL SQL）/歧义不拍板标注上交/检查成本自约束 | dws-dq | pick_dq_context（三件套取料+--query/--field 深挖）/ check_sql --dq（静态自检） | `dq/*.sql`、`_internal/dq_decisions.yaml` |
+| **dws-dq-producer** | ★DQ 翻译者+独立实现者（2026-09-14 拆分）：断言式翻译+对比式独立重算，**直接产 dq.json+SQL**（两跳并一跳 2026-09-15，无 decisions 中间产物）；身份级纪律=输入隔离（不读 design_logic/ETL SQL）/歧义不拍板标注上交/检查成本自约束 | dws-dq | pick_dq_context（三件套取料+--query/--field 深挖）/ check_sql --dq（静态自检） | `dq/*.sql`、`build/dq.json` |
 | **dws-coder** | 单规则加工 SELECT（DQ 已拆归 producer） | dws-coding / dws-coding-opt（按任务路由） | slice_ts / pick_fields / check_sql | `etl/*.sql` |
 
 > ★ 管线脚本（preprocess / precheck / gate_summary / assemble_* / ut_* / check_db 等）**调用方都是剧本（new-pipe / opt-pipe SKILL 编排）**，不是 agent——**2026-09 按消费者归位定调**：单一消费者的管线脚本住自己 pipe 的 scripts（precheck/ut_*→new-pipe，fence/ut_opt→opt-pipe），多于一个消费者的共用入口+公共库住 `design-dev-shared/scripts`（preprocess/check_db/assemble_ddl + dws_db/run_ut/sql_parse 等）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
@@ -121,8 +121,8 @@ ddlc_design_dev/
    - **多步骤数据流模型**：每个 rule 有 step_type（full/aggregate/incremental_extract/merge）+ target_role（intermediate/target），多步骤间用 produces_for/reads 声明依赖（表名引用 target_table/reads 一律带 schema 如 dws.tmp_x——2026-08-31 定调消形态分叉，N12b warn 抓漏，代码兼容短名）。**中间表≠聚合**（target_role=intermediate 按"产出供谁消费"定义，可以是 aggregate/full/incremental_extract 任意 step_type）。complexity-playbook §四 是 step_type 决策权威，incremental-playbook 是增量设计权威。
    - **增量防臆想**（攻"只做主表"+攻"全量心智装增量"）：assemble_ts 硬校验 N14（标了增量但完全没增量处理；旧版"source 涉驱动表"析取恒为真已删）+ N28（增量资产至少两个规则——增量取数 + 终态增量更新，单规则直灌不被支持）+ N_INIT2（终态规则禁 truncate_table，**锚在 RS 增量声明上**——designer 忘标增量段按全量设计一样被拦）+ N15/N16。累积共建场景（多来源写同一中间表）标 `build_mode: accumulate`，配 dedup_strategy。
    - designer 可调 explore.py 试算 JOIN 键唯一性（第4层关联安全）。
-3. **DQ producer 并行**（★ 2026-09-14 拆分，方案 V）：assemble_ts 通过即调 **dws-dq-producer**（塞闸口①人审等待窗口；RS dq_requirements 空则跳过）——一体产 dq/*.sql + dq_decisions.yaml（断言式翻译/对比式独立重算，输入隔离不读 design_logic/ETL SQL，歧义不拍板标注）→ assemble_dq.py 装配 dq.json + N_DQ 校验 + ts.md DQ 章节追加 + 闸口①分级材料
-4. **闸口①**：gate_summary.py 出摘要 + DQ 附页（dq_gate_summary.md），人确认**完整设计**（主线+DQ+歧义裁决点；返工时变更字段∩DQ 锚定字段→producer 联动重做）
+3. **DQ producer 并行**（★ 2026-09-14 拆分，方案 V）：assemble_ts 通过即调 **dws-dq-producer**（塞闸口①人审等待窗口；RS dq_requirements 空则跳过）——**直接产 dq.json+SQL**（两跳并一跳 2026-09-15）→ assemble_dq.py 校验补全（文件在位/引用对账/禁 tmp/幻觉列）+ ts.md DQ 表格追加渲染——**评审就看 ts.md 的 DQ 表格**（歧义随表格呈现，无单独材料）
+4. **闸口①**：gate_summary.py 出摘要 + ts.md DQ 表格（评审就看这处；歧义随表格呈现），人确认**完整设计**（主线+DQ；返工涉 DQ 引用字段→producer 联动改）
 5. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
 6. **编码**：逐规则调 dws-coder，slice_ts.py 切片单规则上下文，coder 产 SELECT（无 DQ 任务——已前置步骤 3）
 7. **UT**（需数据库）：check_db.py 探活 → 6a ut_precheck（回退+DDL+SELECT预检，秒级；含 DQ 兜底——RS 有需求但 dq.json 缺失 fail loud）→ 6b ut_execute（INSERT+UT检查+DQ 段读 dq.json，分钟级）
@@ -295,10 +295,10 @@ design-guide.md 已从 335 行大杂烩拆分为：design-guide（物理决策�
 
 - **角色**：`dws-dq-producer`（新薄 agent，命名否决史：designer 重名/qc=团队代码检视/缩写）+ dws-dq skill 改造（从 coder 侧迁来）。岗位本质=翻译者+独立实现者，审计独立性灵魂=不信任被检对象自述、独立取证。**四种隔离**支撑独立：干净会话（防自检锚定）/身份聚焦（三纪律身份级：输入隔离·歧义不拍板·检查成本自约束）/输入契约错开（同原料两套理解=mapping 歧义探测器）/回路隔离（FAIL 回短会话分钟级）。
 - **两模式**：断言式（RS 人话→violation_condition 翻译）/ 对比式（独立重算比对，设计开发一体——写 SQL 即设计动作，装配是秒级脚本≠开发段）。**输入隔离铁律：不读 design_logic/ETL SQL**；DQ 引用域=源表+目标表**禁 tmp**（tmp 是被检实现的一部分）；检查成本设计期自约束（聚合比对优先/时间窗——随调度每天跑）。
-- **时序（方案 V）**：assemble_ts 校验通过即起调（塞闸口①人审等待窗口；非交互同触发器），**闸口①人审完整设计**（主线+DQ 分级材料+歧义裁决点——producer 的独立理解与 designer 口径并排，理解差=mapping 歧义人裁决）。闸口①返工→变更字段∩dq.json 锚定字段=重做清单→恢复 producer 改（时间不放大）。DQ 依赖 ts 的**结构事实**不需要确认状态——business_key 直接用待审 ts 的规范化结果。
-- **产物边界（角色=产物域）**：ts.json 无 DQ（闸口①后冻结）/ **dq.json 唯一源**（模式/锚定声明 anchored_fields[断言式装配器自动提取、对比式必须显式——opt 影响分析依赖]/compare_sources/ambiguities/waived+dq 调度任务）/ etl 归 coder / dq/*.sql 归 producer。**ts.md 保留 DQ 章节**（团队无 dq 文档定义、习惯是 ts 里章节——"文档形态守旧、数据所有权革新"），assemble_dq **追加式渲染**（主线章节字节不动）；独立 dq.md 否决；团队硬界面零变化（制品包/调度任务/ts.md 长相全不变，团队无需感知 dq.json）。
+- **时序（方案 V）**：assemble_ts 校验通过即起调（塞闸口①人审等待窗口；非交互同触发器），**闸口①人审完整设计**（主线+ts.md DQ 表格+歧义裁决点——producer 的独立理解与 designer 口径并排，理解差=mapping 歧义人裁决）。闸口①返工涉 DQ 引用字段→恢复 producer 联动改（时间不放大）。DQ 依赖 ts 的**结构事实**不需要确认状态——business_key 直接用待审 ts 的规范化结果。
+- **产物边界（角色=产物域）**：ts.json 无 DQ（闸口①后冻结）/ **dq.json 唯一源**（producer 直接产最薄 rules，assemble_dq 校验补全；mode/ambiguities/waived+dq 调度任务）/ etl 归 coder / dq/*.sql 归 producer。**ts.md 保留 DQ 章节**（团队无 dq 文档定义、习惯是 ts 里章节——"文档形态守旧、数据所有权革新"），assemble_dq **追加式渲染**（主线章节字节不动，**评审就看这张表**——独立评审材料 dq_gate_summary 已砍）；独立 dq.md 否决；团队硬界面零变化（制品包/调度任务/ts.md 长相全不变，团队无需感知 dq.json）。
 - **producer 输入三件套**（pick_dq_context.py）：确定性闭包切片（RS 需求文本→目标字段种子→沿 transform_detail 引用展开传递依赖）+ 存疑显式标记（人话逻辑机器圈不动→标注交付，不静默缺失）+ 按需查询服务（--query/--field 检索 mapping 原文段）——不全量读（漏圈静默+上下文稀释）不纯切片（人话引用尽力而为）。
-- **装配校验**（assemble_dq.py，LD 层从 assemble_ts 迁入改造）：N_DQ1-3（RS 对照）+N_DQ4（violation_condition 必填，新契约升 hard）+N_DQ5（引用存在+三段式+**禁 tmp**）+N_DQ6-8（mode 合法/compare_sources ⊆ 资产源表/锚定 ⊆ 目标表字段）+N_DQ9-10（SQL 文件在位 dq_filename 派生/SQL 文本对账：三段式+**目标别名列 ⊆ 目标表字段拦幻觉列**+FROM ⊆ 源表∪目标表拦 tmp）。
+- **校验渲染**（assemble_dq.py，2026-09-15 两跳并一跳精简：producer 直产 dq.json，无 decisions 中间产物）：N_DQ1-3（RS 对照）+N_DQ4（violation_condition 必填+mode 值合法）+N_DQ5（引用对账+三段式+**禁 tmp**）+N_DQ9-10（SQL 文件在位 dq_filename 派生/SQL 文本对账：三段式+**目标别名列 ⊆ 目标表字段拦幻觉列**+FROM ⊆ 源表∪目标表拦 tmp）+补全（idx/sql_file/mode 缺省/meta）+ts.md 表格渲染。**锚定声明/compare_sources 暂缓**（用户定调：opt DQ 变更低频精简优先——dq_impact 影响分析走 violation_condition/SQL 粗提兜底，opt 实遇再迭代；N_DQ6-8 契约随声明退役）。
 - **验证只两层**（EXPLAIN 预检层被否决——DQ 检查性能无拦停意义，慢也得有；语法错 6b 炸了只重跑 DQ 段分钟级）：L1 静态（check_sql --dq+结构对账，会话内零成本）+6b 真跑（run_dq_checks 换读 load_dq_rules：dq.json 优先/旧 ts.dq_rules 兜底）。
 - **失败回路**：FAIL/MISSING 恢复 producer 修（限 3 轮，只重跑 DQ 段）；**ALERT 零自动回路**（防 LLM 空转迭代语义问题——它改不出"通过"只会空转，方案在人手里），攒齐进闸口②一次人判三选一（回改/人定口径或取消[producer 照译不自己想]/豁免[dq.json 标 waived+理由]）；**对比式 0 行双义提示**（口径一致通过/口径写错恒等失效——UT 区分不了，闸口②人审口径）。DQ 全生命周期人触点=闸口①+②各一次，无新增停等。
 - **范围收敛（用户砍需求防过度设计）**：DQ 制品（xlsx）**不做**——export/LTS 仅数据源被动适配（dq 任务行从 ts.tasks.dq 改读 dq.json.tasks，制品形态零变化）；豁免=dq.json 标记不携带下游；N_DQ1 兜底只挂 6a 一道（RS 有需求但 dq.json 缺失→fail loud）。
