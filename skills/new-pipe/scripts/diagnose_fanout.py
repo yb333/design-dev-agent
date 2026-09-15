@@ -303,6 +303,30 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
         return "skip"
     d_sch, d_tbl = binding[driving]
     where_txt = f" WHERE {rule_filter_text}" if (rule_filter_text or "").strip() else ""
+    # join 侧限定并入（2026-09-15 修复：此前整体试算只并规则级 filter——拉链类限定
+    # [is_current=1] 没进 WHERE，试算行数虚高误报膨胀；与逐表段同口径：
+    # joins[].filter + join_safety.join_filter 全集）。before（驱动单表）不含 join 侧限定。
+    _safety_by_table = {(js.get("table") or "").rsplit(".", 1)[-1].lower(): js
+                        for js in rule.get("join_safety") or [] if isinstance(js, dict)}
+    _join_terms_by_alias: dict[str, list[str]] = {}
+    for j in joins_decl:
+        alias = (j.get("alias") or "").strip().lower()
+        sch, tbl = binding[alias]
+        raw_terms = []
+        for _src in (j.get("filter") or "", (_safety_by_table.get(tbl.rsplit(".", 1)[-1].lower()) or {}).get("join_filter") or ""):
+            if (_src or "").strip():
+                _fixed, _fn = _fix_literal_form_any(_src, binding, coltypes)
+                for n in _fn:
+                    if f"[字面量形态] {n}" not in "\n".join(lines):
+                        lines.append(f"[字面量形态] {n}")
+                raw_terms.append(_fixed)
+        if raw_terms:
+            _join_terms_by_alias[alias] = [t for t in raw_terms if t.strip()]
+    _all_join_terms = [t for ts_ in _join_terms_by_alias.values() for t in ts_]
+    after_where_txt = where_txt
+    if _all_join_terms:
+        _extra = " AND ".join(_all_join_terms)
+        after_where_txt = f" WHERE {' AND '.join(filter(None, [rule_filter_text.strip(), _extra]))}"
     join_parts, jt_by_alias = [], {}
     for j in joins_decl:
         alias = (j.get("alias") or "").strip().lower()
@@ -317,7 +341,7 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
     try:
         before = int(db.one(f"SELECT COUNT(1) AS jc FROM {d_sch}.{d_tbl} {driving}{where_txt}").get("jc") or 0)
         after = int(db.one(f"SELECT COUNT(1) AS jc FROM {d_sch}.{d_tbl} {driving} "
-                           + " ".join(join_parts) + where_txt).get("jc") or 0)
+                           + " ".join(join_parts) + after_where_txt).get("jc") or 0)
     except RuntimeError as e:
         lines.append(f"[声明计数] 查询失败跳过（逐表统计照常）：{_err_brief(e)}{_cast_err_hint(e)}")
         return "skip"
@@ -340,9 +364,13 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
             continue
         sch, tbl = binding[alias]
         cond, _ = _fix_literal_form(j.get("condition") or "", alias, binding, coltypes)
+        # 该 join 的限定并入（同口径：joins[].filter + join_safety.join_filter）
+        _pw = " AND ".join(filter(None, [rule_filter_text.strip()]
+                                  + _join_terms_by_alias.get(alias, [])))
+        _pw_txt = f" WHERE {_pw}" if _pw else ""
         try:
             matched = int(db.one(f"SELECT COUNT(1) AS jc FROM {d_sch}.{d_tbl} {driving} "
-                                 f"{jt_by_alias[alias]} {sch}.{tbl} {alias} ON ({cond}){where_txt}"
+                                 f"{jt_by_alias[alias]} {sch}.{tbl} {alias} ON ({cond}){_pw_txt}"
                                  ).get("jc") or 0)
         except RuntimeError:
             continue

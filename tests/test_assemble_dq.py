@@ -170,7 +170,7 @@ class TestViolationCondition:
 
 
 # ============================================================
-# N_DQ9/N_DQ10：SQL 文件与文本对账
+# N_DQ9/N_DQ10：SQL 文件与文本对账（含 2026-09-15 吸收的 check_sql --dq 检查项）
 # ============================================================
 
 class TestSqlChecks:
@@ -186,6 +186,32 @@ class TestSqlChecks:
             1: "SELECT t.id, t.ordr_amont FROM dws.dwb_test_f t WHERE t.prod_code IS NULL"})
         hits = [i for i in vr.items if i["code"] == "N_DQ10" and "幻觉列" in i["msg"]]
         assert hits and "ordr_amont" in hits[0]["msg"]
+
+    def test_dq10_missing_business_key_output_hard(self, tmp_path):
+        """输出列缺业务键 → hard（违规行要能回溯到业务对象；2026-09-15 自 check_sql 吸收）。"""
+        rules_out, vr = _run(tmp_path, [_rule()], sqls={
+            1: "SELECT t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL"})
+        hits = [i for i in vr.items if i["code"] == "N_DQ10" and "业务键" in i["msg"]]
+        assert hits and "id" in hits[0]["msg"]
+
+    def test_dq10_bare_table_hard(self, tmp_path):
+        """FROM 裸表名（无 schema 前缀）→ hard（2026-09-15 自 check_sql 吸收）。"""
+        rules_out, vr = _run(tmp_path, [_rule()], sqls={
+            1: "SELECT t.id, t.prod_code FROM dwb_test_f t WHERE t.prod_code IS NULL"})
+        assert any(i["code"] == "N_DQ10" and "schema 前缀" in i["msg"] for i in vr.items)
+
+    def test_dq10_select_star_hard(self, tmp_path):
+        rules_out, vr = _run(tmp_path, [_rule()], sqls={
+            1: "SELECT * FROM dws.dwb_test_f t WHERE t.prod_code IS NULL"})
+        assert any(i["code"] == "N_DQ10" and "SELECT *" in i["msg"] for i in vr.items)
+
+    def test_dq10_cross_table_asset_sources_ok(self, tmp_path):
+        """跨表检查：资产内源表合法引用（源表来自 rs_input source_tables）。"""
+        rules_out, vr = _run(tmp_path, [_rule(
+            violation_condition="t.prod_code IS NULL AND s.id IS NULL", mode="compare")], sqls={
+            1: "SELECT t.id, t.prod_code FROM dws.dwb_test_f t "
+               "JOIN ods.ods_test_f s ON s.id = t.id WHERE t.prod_code IS NULL AND s.id IS NULL"})
+        assert not any(i["level"] == "hard" for i in vr.items), vr.report_lines()
 
     def test_dq10_sql_tmp_forbidden_hard(self, tmp_path):
         rules_out, vr = _run(tmp_path, [_rule(
@@ -206,6 +232,40 @@ class TestSqlChecks:
         rules_out, vr = _run(tmp_path, [_rule()], sqls={
             1: "SELECT t.id FROM dws.dwb_test_f t WHERE dws.dwb_test_f.prod_code IS NULL"})
         assert any(i["code"] == "N_DQ10" and "三段式" in i["msg"] for i in vr.items)
+
+
+# ============================================================
+# declined：producer 必要性甄别（结构类 DQ 建议不做——人拍板）
+# ============================================================
+
+class TestDeclined:
+    def test_declined_counts_toward_rs_coverage(self, tmp_path):
+        """declined 计入 RS 覆盖：RS 2 条=1 做+1 declined → 不触发 N_DQ2 漏翻译 warn。"""
+        rules_out, vr = _run(tmp_path, [_rule()], rs=_rs(dq_needs=[
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "a", "rule_desc": "x"},
+            {"scope": "表级", "check_type": "结构检查", "rule_name": "落地类型一致", "rule_desc": "y"},
+        ]))
+        # _run 不传 declined——直接调 validate_and_build 带 declined
+        ts = _ts()
+        rs2 = _rs(dq_needs=[
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "a", "rule_desc": "x"},
+            {"scope": "表级", "check_type": "结构检查", "rule_name": "落地类型一致", "rule_desc": "y"},
+        ])
+        import re as _re
+        dq_dir = tmp_path / "dq2"
+        dq_dir.mkdir()
+        (dq_dir / "dq_01_空值检查.sql").write_text(
+            "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL", encoding="utf-8")
+        rules_out, vr = validate_and_build(
+            rs2, ts, [_rule()], dq_dir,
+            declined=[{"rs_rule_name": "落地类型一致", "reason": "结构类：precheck 已覆盖"}])
+        assert not any(i["code"] == "N_DQ2" for i in vr.items)
+
+    def test_render_declined_section(self):
+        dq = {"rules": [], "declined": [
+            {"rs_rule_name": "落地类型一致性检查", "reason": "类型对齐已被 precheck 覆盖"}]}
+        text = render_dq_section(dq, [])
+        assert "建议不做" in text and "落地类型一致性检查" in text and "precheck" in text
 
 
 # ============================================================

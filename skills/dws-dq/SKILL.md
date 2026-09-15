@@ -29,7 +29,9 @@ python {dws-dq 的 scripts 目录}/pick_dq_context.py --rs {build}/_internal/rs_
 
 **格式唯一源：本 skill `assets/dq-template.json`（落盘前必读，读不到上报不自编）**。
 
-1. **`{build}/dq.json`**——最薄形态只写 `rules` 数组（idx/sql_file 等由 assemble_dq 校验补全）：
+**★ 先做必要性甄别（RS 需求不是每条都该做成 DQ）**：DQ 的域=**数据内容质量**（空值/重复/一致性/值域/逻辑复核）。识别出**结构类检查**——如"落地类型与 mapping 一致""字段是否都创建""表结构对齐"——这类已被流程内建覆盖（precheck 类型对账/assemble 字段闭合/UT 列序对账），做成 DQ 是重复检查。**决策不做 + 写进 dq.json 的 `declined` 数组**（`{rs_rule_name, reason}`，reason 写清被哪个环节覆盖），拍板权在人——闸口①看 ts.md"建议不做"段，不同意会要求你补做。**不静默丢弃**（不写 declined 又不做=漏做）。
+
+1. **`{build}/dq.json`**——最薄形态只写 `rules` 数组（+甄别出的 `declined`；idx/sql_file 等由 assemble_dq 校验补全）：
    - **mode 判定**：声明"什么是违规"（空值/重复/阈值越界）→ 断言式（可缺省）；比对两套计算（目标vs来源一致、字段逻辑复核）→ **对比式（独立重算——你的价值所在：从源表独立实现口径，不抄被检对象）**，mode 写 "compare"。
    - **scope / check_type / rule_name 跟 RS 一致**（分类不变）；条数可拆不可少。
    - **violation_condition**：断言式=SQL 表达式（WHERE 直搬）；对比式=比对口径摘要声明（方向写清"不等/不一致即违规"）。
@@ -66,14 +68,15 @@ JOIN {schema}.{source_table} s ON s.order_id = t.order_id
 WHERE t.amount <> s.pay + s.discount;
 ```
 
-## 3. 写完自检（静态，秒级不连库）
+## 3. 写完即跑校验（唯一校验入口——2026-09-15 合并：check_sql --dq 已并入）
 
 ```bash
-python {dws-coding 的 scripts 目录}/check_sql.py --ts {build}/ts.json --sql {dq文件} --dq
+python {new-pipe 的 scripts 目录}/assemble_dq.py --ts {build}/ts.json --dq-src {build}/dq.json \
+    --rs {build}/_internal/rs_input.json
 ```
 
-不过自己改后重检（限 3 轮）。装配校验（assemble_dq：引用对账/禁 tmp/幻觉列）是最终门禁，归 engineer 跑。
+一步完成校验（引用对账/禁 tmp/幻觉列/schema 前缀/业务键输出列）+补全+ts.md 表格渲染。不过自己改后重跑（限 3 轮）。
 
 ## 4. 交卷
 
-`dq.json` + 全部 SQL 落盘后回报：文件数 / 断言式与对比式条数 / **歧义标注数（有必点名）**。执行验证归 UT 的 DQ 段（0 行=过，非 0 行=告警归闸口② 人判），不要自己连库试跑。
+`dq.json` + 全部 SQL 落盘且 assemble_dq 全绿后回报：文件数 / 断言式与对比式条数 / **歧义标注数（有必点名）** / **建议不做数（declined，有必点名）**。执行验证归 UT 的 DQ 段（0 行=过，非 0 行=告警归闸口② 人判），不要自己连库试跑。

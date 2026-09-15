@@ -1047,53 +1047,77 @@ class TestCheckSqlFieldRef:
 # dws-dq-producer 的三件套取料），测试见 tests/test_pick_dq_context.py。
 
 
-class TestCheckDqSql:
-    """check_sql --dq：DQ 检查 SQL 的资产级静态校验（无 rule_code）。"""
+# TestCheckDqSql 已删（2026-09-15 校验合并）：check_sql --dq 退役，检查项全部并入
+# assemble_dq 的 N_DQ10（DQ 唯一校验入口），语义用例迁 tests/test_assemble_dq.py
+# （TestDqSqlChecks：业务键输出列/资产外表/跨表资产源表/schema 前缀/SELECT *）。
 
-    @staticmethod
-    def _ts():
-        return {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
-                "design": {"business_key": ["order_no"]},
-                "rules": {"R0001": {"source_tables": [
-                    {"schema": "ods", "table": "ods_src", "alias": "a"}]}},
-                "dq_rules": []}
 
-    def test_valid_dq_passes(self):
-        from check_sql import check_dq_sql
-        sql = ("/* DQ-空值检查: 金额非空 */\n"
-               "SELECT t.order_no, t.amt FROM dws.dwb_x_f t WHERE t.amt IS NULL;")
-        assert check_dq_sql(sql, self._ts()) == []
-
-    def test_missing_business_key_reported(self):
-        from check_sql import check_dq_sql
-        sql = "SELECT t.amt FROM dws.dwb_x_f t WHERE t.amt IS NULL;"
-        issues = check_dq_sql(sql, self._ts())
-        assert any("业务键" in i and "order_no" in i for i in issues)
-
-    def test_unknown_table_reported(self):
-        from check_sql import check_dq_sql
-        sql = ("SELECT t.order_no, t.amt FROM dws.dwb_other_f t "
-               "WHERE t.amt IS NULL;")
-        issues = check_dq_sql(sql, self._ts())
-        assert any("表引用" in i and "dwb_other_f" in i for i in issues)
-
-    def test_cross_table_uses_asset_sources_ok(self):
-        """跨表检查：资产内源表（切片 source_tables）合法引用。"""
-        from check_sql import check_dq_sql
-        sql = ("SELECT t.order_no, t.amt FROM dws.dwb_x_f t "
-               "JOIN ods.ods_src a ON t.order_no = a.order_no "
-               "WHERE t.amt IS NULL AND a.order_no IS NULL;")
-        assert check_dq_sql(sql, self._ts()) == []
-
-    def test_bare_table_and_select_star_reported(self):
-        from check_sql import check_dq_sql
-        sql = "SELECT t.order_no, t.amt FROM dwb_x_f t WHERE t.amt IS NULL;"
-        issues = check_dq_sql(sql, self._ts())
-        assert any("[schema]" in i for i in issues)
-        star = "SELECT * FROM dws.dwb_x_f t WHERE t.amt IS NULL;"
-        assert any("SELECT *" in i for i in check_dq_sql(star, self._ts()))
-
+class TestWarnPrefixes:
     def test_warn_prefixes_only_expression(self):
         """分级口径：WARN_PREFIXES 只含表达式口径对账（方言机械转写不阻断）。"""
         from check_sql import WARN_PREFIXES
         assert WARN_PREFIXES == ("[表达式口径]",)
+
+
+class TestTopProjection:
+    """顶层投影列名提取原语（sql_parse.extract_top_projection——列序对账/业务键校验共用）。"""
+
+    def test_plain_and_alias(self):
+        from sql_parse import extract_top_projection as e
+        assert e("SELECT t.id, t.amount FROM dws.t t") == ["id", "amount"]
+        assert e("WITH c AS (SELECT 1 x) SELECT a, b AS x2, s.pay FROM c s") == ["a", "x2", "pay"]
+
+    def test_star_forms(self):
+        from sql_parse import extract_top_projection as e
+        assert e("SELECT * FROM dws.t") == ["*"]
+        assert e("SELECT t.* FROM dws.t t") == ["*"]
+
+    def test_unnamed_expr_none(self):
+        from sql_parse import extract_top_projection as e
+        assert e("SELECT t.id, coalesce(x, 1) FROM dws.t t") is None
+        assert e("SELECT t.id, coalesce(x, 1) AS amt FROM dws.t t") == ["id", "amt"]
+
+
+class TestColumnOrderCheck:
+    """投影列序对账（2026-09-15 前移 6a：INSERT 列清单=结构源序按位对齐，乱序=静默错位数据）。"""
+
+    @staticmethod
+    def _ts_new():
+        """新形态 ts：tables 带结构源字段序（target_field）。"""
+        fields = [{"target_field": n, "field_type": "varchar(10)", "field_comment": n}
+                  for n in ("order_no", "amount", "del_flag")]
+        return {
+            "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
+            "design": {"business_key": ["order_no"], "audit_fields": {}},
+            "tables": {"dwb_x_f": {"fields": fields}},
+            "rules": {"R0001": {
+                "target_table": "dws.dwb_x_f", "source_tables": [
+                    {"schema": "ods", "table": "ods_src", "alias": "t"}],
+                "fields": {"processed": [], "assign": [], "direct": [
+                    "t.order_no AS order_no", "t.amt AS amount", "'N' AS del_flag"]}}},
+        }
+
+    def test_reordered_projection_reported(self):
+        from check_sql import check_sql
+        sql = ("SELECT t.amt AS amount, t.order_no AS order_no, 'N' AS del_flag "
+               "FROM ods.ods_src t")
+        issues = check_sql(sql, self._ts_new(), "R0001")
+        hits = [i for i in issues if "[列序]" in i]
+        assert hits and "amount" in hits[0] and "order_no" in hits[0]
+
+    def test_matching_order_passes(self):
+        from check_sql import check_sql
+        sql = ("SELECT t.order_no AS order_no, t.amt AS amount, 'N' AS del_flag "
+               "FROM ods.ods_src t")
+        issues = check_sql(sql, self._ts_new(), "R0001")
+        assert not any("[列序]" in i for i in issues), issues
+
+    def test_legacy_ts_without_tables_skips(self):
+        """旧形态 ts（tables 空）无结构源序——跳过（宁放过）。"""
+        from check_sql import check_sql
+        ts = self._ts_new()
+        ts["tables"] = {}
+        sql = ("SELECT t.amt AS amount, t.order_no AS order_no, 'N' AS del_flag "
+               "FROM ods.ods_src t")
+        issues = check_sql(sql, ts, "R0001")
+        assert not any("[列序]" in i for i in issues)

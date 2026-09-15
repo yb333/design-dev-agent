@@ -42,7 +42,9 @@ import yaml  # noqa: E402  (design-decisions 读 dq 任务 project 覆盖用)
 from run_ut import dq_filename  # noqa: E402  文件名单点（UT 侧同源派生）
 from sql_parse import (  # noqa: E402
     extract_qualified_refs, extract_logic_refs, find_three_part_refs,
-    extract_from_tables, split_cte_main,
+    extract_from_tables, split_cte_main, extract_top_projection,
+    check_bracket_balance, check_no_select_star, check_no_line_comment,
+    extract_table_refs_raw,
 )
 from lts_task_paths import load_schedule_config, resolve_schedule_path  # noqa: E402
 
@@ -134,24 +136,32 @@ def _target_alias_columns(sql: str, f_short: str, f_schema: str) -> dict:
 # 校验主函数
 # ============================================================
 def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
-                       schema_cache_path: str = "", rs_contract: bool = True):
+                       schema_cache_path: str = "", rs_contract: bool = True,
+                       declined: list = None):
     """校验 producer 的 rules 清单并补全条目。返回 (rules_out, DqResult)。
 
     rs_contract=False（opt 场景）：跳过 N_DQ1-3 的 RS 对照——条目权威=baseline
     dq.json 清单+变更需求（影响分析管重做范围），不走新建的 RS 驱动契约。
+    declined：producer 建议不做的 RS 条目（[{rs_rule_name, reason}]）——结构类
+    检查（类型一致性/字段存在性）已被流程内建覆盖，做 DQ 是重复；计入 RS 覆盖
+    但拍板权在人（ts.md"建议不做"段）。
     """
     vr = DqResult()
 
-    # --- N_DQ1/2/3：与 RS 对照 ---
+    # --- N_DQ1/2/3：与 RS 对照（declined=producer 建议不做的条目——显式决策计入覆盖，
+    # 拍板权在人：ts.md 表格后的"建议不做"段）---
+    declined = declined or []
     if rs_contract:
         rs_dq = rs_input.get("dq_requirements", []) or []
         n_rs, n_dec = len(rs_dq), len(rules_in)
-        if n_rs > 0 and n_dec == 0:
+        n_dec_ok = n_dec + len(declined)
+        if n_rs > 0 and n_dec_ok == 0:
             vr.hard("N_DQ1",
                     f"RS 有 {n_rs} 条 DQ 需求（dq_requirements），但 dq.json 的 rules 为空——"
                     f"dws-dq-producer 未完成 DQ 设计（闸口①材料不完整，不放进 UT）")
-        elif 0 < n_dec < n_rs:
-            vr.warn("N_DQ2", f"RS 有 {n_rs} 条 DQ 需求，DQ 只设计了 {n_dec} 条，核对是否漏")
+        elif 0 < n_dec_ok < n_rs:
+            _note = f"（另有 {len(declined)} 条建议不做——人拍板见 ts.md）" if declined else ""
+            vr.warn("N_DQ2", f"RS 有 {n_rs} 条 DQ 需求，DQ 只设计了 {n_dec} 条{_note}，核对是否漏")
         elif n_rs == 0 and n_dec > 0:
             vr.warn("N_DQ3", f"RS 未提 DQ 需求，但自行设计了 {n_dec} 条——DQ 是业务决策归 RS，请确认")
 
@@ -234,18 +244,38 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
             if not sql:
                 vr.hard("N_DQ9", f"rules[{i}]（{name}）SQL 文件为空：{fname}")
         if sql:
+            # 基础风格三项（原 check_sql --dq 吸收——2026-09-15 校验合并：DQ 唯一校验入口）
+            for _fn, _tag in ((check_bracket_balance, "[语法]"), (check_no_select_star, "[规范]"),
+                              (check_no_line_comment, "[规范]")):
+                ok, msg = _fn(sql)
+                if not ok:
+                    vr.hard("N_DQ10", f"rules[{i}]（{name}）{_tag} {msg}")
             three = find_three_part_refs(sql)
             if three:
                 vr.hard("N_DQ10", f"rules[{i}]（{name}）SQL 有三段式引用 {three}")
+            # schema 前缀（裸表名报错，CTE 名豁免）
+            cte_names, _main = split_cte_main(sql)
+            cte_lower = {c.lower() for c in cte_names}
+            bare_refs = sorted({ref for ref in extract_table_refs_raw(sql)
+                                if "." not in ref and ref.lower() not in cte_lower})
+            if bare_refs:
+                vr.hard("N_DQ10", f"rules[{i}]（{name}）FROM/JOIN 引用必须带 schema 前缀"
+                                   f"（schema.table）: {bare_refs}")
             # 目标别名限定列 ⊆ F 字段集（幻觉列）
             for al, cols in _target_alias_columns(sql, f_short, f_schema).items():
                 bad_cols = [c for c in cols if c not in f_fields]
                 if bad_cols:
                     vr.hard("N_DQ10", f"rules[{i}]（{name}）SQL 里目标表别名 '{al}' 引用了"
                                        f"目标表没有的列 {sorted(set(bad_cols))}——对照 ts.tables 改拼写（幻觉列）")
+            # 输出列含 business_key（违规行要能回溯到业务对象）
+            bk = [str(k).lower() for k in (ts.get("design", {}).get("business_key") or [])]
+            proj = extract_top_projection(sql)
+            if proj is not None and proj != ["*"] and bk:
+                missing_bk = [k for k in bk if k not in proj]
+                if missing_bk:
+                    vr.hard("N_DQ10", f"rules[{i}]（{name}）输出列缺业务键 {missing_bk}——"
+                                       f"违规行要能回溯到业务对象（输出列=业务键+违规字段值）")
             # FROM 表引用 ⊆ 源表∪目标表，tmp 拦截（CTE 名豁免）
-            cte_names, _main = split_cte_main(sql)
-            cte_lower = {c.lower() for c in cte_names}
             for t in extract_from_tables(sql):
                 tl = _short(t)
                 if tl in cte_lower:
@@ -312,12 +342,16 @@ DQ_SECTION_TITLE = "## 7. 数据质量检查(DQ)"
 
 def render_dq_section(dq: dict, rs_dq: list) -> str:
     rules = dq.get("rules") or []
+    declined = dq.get("declined") or []
     mode_cn = {"assertion": "断言式", "compare": "对比式", "": "-"}
     lines = [DQ_SECTION_TITLE, ""]
-    if not rules:
+    if not rules and not declined:
         lines.append("*(RS 未提 DQ 需求，本资产无 DQ)*")
         lines.append("")
         return "\n".join(lines)
+    if not rules:
+        lines.append("> producer 甄别后无实施条目（RS 需求全为建议不做，见下）——闸口①人拍板。")
+        lines.append("")
     lines.append(f"> DQ 由 dws-dq-producer 独立设计实现（读 RS+mapping 独立理解，不读主线实现），共 {len(rules)} 条。"
                  f"断言式=违规行探测器；对比式=独立重算比对。")
     lines.append("")
@@ -338,6 +372,13 @@ def render_dq_section(dq: dict, rs_dq: list) -> str:
         for r, a in amb:
             lines.append(f"- DQ{r['idx']}（{r['rule_name']}）: {a.get('note', '')}"
                          + (f" 取舍：{' / '.join(a.get('options') or [])}" if a.get("options") else ""))
+        lines.append("")
+    declined = dq.get("declined") or []
+    if declined:
+        lines.append("**建议不做（producer 甄别：结构类检查已被流程内建覆盖，做 DQ 是重复——闸口①人拍板，不同意则要求补做）：**")
+        lines.append("")
+        for d in declined:
+            lines.append(f"- RS「{d.get('rs_rule_name', '?')}」: {d.get('reason', '')}")
         lines.append("")
     return "\n".join(lines)
 
@@ -411,11 +452,21 @@ def main():
             design_decisions = {}
 
     rules_in = dq_src.get("rules") or []
+    declined_in = dq_src.get("declined") or []
     dq_dir = Path(args.dq_dir) if args.dq_dir else ts_path.parent / "dq"
     rs_dq = rs_input.get("dq_requirements", []) or []
 
-    rules_out, vr = validate_and_build(rs_input, ts, rules_in, dq_dir, args.schema_cache,
-                                       rs_contract=not args.no_rs_contract)
+    # schema_cache 缺省自动定位（precheck 产的公共信息——ts 同级 _internal/），
+    # 不要求显式传参（2026-09-15 修复：此前缺省空导致每条规则误报"无 schema_cache"warn）
+    cache_arg = args.schema_cache
+    if not cache_arg:
+        _auto = ts_path.parent / "_internal" / "schema_cache.json"
+        if _auto.exists():
+            cache_arg = str(_auto)
+
+    rules_out, vr = validate_and_build(rs_input, ts, rules_in, dq_dir, cache_arg,
+                                       rs_contract=not args.no_rs_contract,
+                                       declined=declined_in)
 
     if vr.n_hard:
         print(f"DQ 校验失败（{vr.n_hard} 项硬阻断）：", file=sys.stderr)
@@ -436,6 +487,8 @@ def main():
         },
         "rules": rules_out,
     }
+    if declined_in:
+        dq["declined"] = declined_in
     dq_task = build_dq_task(ts, design_decisions)
     if dq_task:
         dq["tasks"] = {"dq": dq_task}

@@ -34,55 +34,9 @@ from sql_parse import read_sql, split_cte_main, extract_select_aliases, extract_
 WARN_PREFIXES = ("[表达式口径]",)
 
 
-def check_bracket_balance(sql: str) -> tuple[bool, str]:
-    """检查括号平衡"""
-    depth = 0
-    in_string = False
-    string_char = ''
-    for i, c in enumerate(sql):
-        if in_string:
-            if c == string_char:
-                in_string = False
-        elif c in ("'", '"'):
-            in_string = True
-            string_char = c
-        elif c == '(':
-            depth += 1
-        elif c == ')':
-            depth -= 1
-            if depth < 0:
-                return False, f"位置{i}: 多余的右括号"
-    if depth != 0:
-        return False, f"括号不平衡: 差 {depth} 个"
-    return True, ""
-
-
-def check_no_select_star(sql: str) -> tuple[bool, str]:
-    """检查没有 SELECT *"""
-    # SELECT * 或 SELECT t.*
-    if re.search(r'SELECT\s+\*\s', sql, re.IGNORECASE) or \
-       re.search(r'SELECT\s+\w+\.\*', sql, re.IGNORECASE):
-        return False, "发现 SELECT *（禁止全选，必须列出字段）"
-    return True, ""
-
-
-def check_no_line_comment(sql: str) -> tuple[bool, str]:
-    """检查没有 -- 行注释（规范要求一律用 /* */ 块注释）。
-
-    避免误判：跳过字符串字面量（'...' / "..."）里的 --。
-    日期字面量如 '2025-01-01' 是单破折号不会被匹配（需要两个连续 -）。
-    """
-    # 去掉字符串字面量后再检测，避免字符串里的 -- 被误判
-    stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", sql)
-    stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
-    # 匹配 -- 注释：两个连续 - 后跟非 - 字符（排除 -- 这种，避免 --- 等边界，但 SQL 行注释就是 --）
-    # 标准：-- 后面跟空格或直接是行尾，且不是 - 的一部分（如 ->, --）
-    # 简化：找 "-- " 或行末 "--"，排除 "--" 在块注释里的情况（块注释已被 read_sql 处理，但这里收原始文本）
-    # 先去掉块注释内容，再检测 --
-    no_block = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL)
-    if re.search(r'--[^\-]', no_block) or re.search(r'--$', no_block, re.MULTILINE):
-        return False, "发现 -- 行注释（禁止：注释一律用 /* */ 块注释，详见编码规范 §7）"
-    return True, ""
+# 基础三项沉 shared/sql_parse（2026-09-15：check_sql[ETL] 与 assemble_dq[DQ] 两消费者）；
+# re-export 保持旧引用名不变（测试/潜在外部引用零破坏）
+from sql_parse import check_bracket_balance, check_no_select_star, check_no_line_comment  # noqa: F401
 
 
 def _format_field_list(fields, per_line: int = 5) -> str:
@@ -199,7 +153,28 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
             "（输出列请统一用 `expr AS 别名` 写法，便于静态对比）"
         )
 
-    # 5. FROM 表引用：SELECT 引用的表 vs ts.json 的 source_tables
+    # 5. 投影列序对账（2026-09-15：内网实证列序错位到 6a describe 才发现——前移到
+    # coder 写完即查。INSERT 列清单=结构源 ts.tables.fields 序（run_ut 按位对齐拼接），
+    # SELECT 投影序≠结构源序=静默错位数据。集合相等才比序：集合不等时字段覆盖已报，避免双重噪音）
+    from sql_parse import extract_top_projection
+    proj = extract_top_projection(sql_text)
+    if proj is not None and proj != ["*"]:
+        tshort = str(rule.get("target_table") or "").rsplit(".", 1)[-1].lower()
+        _tbl_fields = (ts.get("tables") or {}).get(tshort) or {}
+        exp = []
+        for col in (_tbl_fields.get("fields") or []):
+            nm = (col.get("target_field") or col.get("name") or col.get("column") or "") \
+                if isinstance(col, dict) else str(col)
+            nm = str(nm).strip().lower()
+            if nm:
+                exp.append(nm)
+        if exp and set(proj) == set(exp) and proj != exp:
+            issues.append(
+                f"[列序] SELECT 投影序与目标表字段序不一致——INSERT 按位对齐（列清单=结构源序），"
+                f"乱序=静默错位数据:\n  SELECT 投影序: {proj}\n  目标表序:   {exp}"
+            )
+
+    # 6. FROM 表引用：SELECT 引用的表 vs ts.json 的 source_tables
     ts_source_tables = set()
     for st in rule.get("source_tables", []):
         t = st.get("table", "")
@@ -224,7 +199,7 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
             f"{sorted(unknown_tables)}（确认是否拼写错误或遗漏了源表声明）"
         )
 
-    # 5.1 schema 前缀：FROM/JOIN 引用一律 schema.table（裸表名 → 报错；CTE 名豁免）
+    # 6.1 schema 前缀：FROM/JOIN 引用一律 schema.table（裸表名 → 报错；CTE 名豁免）
     # 真实教训：coder 忘写 schema，UT 阶段才暴露。切片的 source_tables 都带 schema
     # （rs_input 源表 + tmp 伪源表=目标 schema），照着写就是全的。
     from sql_parse import extract_table_refs_raw
@@ -238,7 +213,7 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
             f"{bare_refs}"
         )
 
-    # 5.2 CTE 投影一致性：引用 cte.x 但该 CTE 定义体的投影里没有 x → 报错
+    # 6.2 CTE 投影一致性：引用 cte.x 但该 CTE 定义体的投影里没有 x → 报错
     # 真实教训：coder 写 CTE 漏投影字段，外层仍引用，字段别名错到 UT 才炸。
     from sql_parse import parse_cte_bodies, cte_projection_names
     cte_bodies = parse_cte_bodies(sql_text)
@@ -253,7 +228,7 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
                     f"（漏写该列或列名拼错——检查 CTE 的 SELECT 投影）"
                 )
 
-    # 5.3 字段存在性核对（写完即查，三层登记处）：
+    # 6.3 字段存在性核对（写完即查，三层登记处）：
     # 源表别名 → schema_cache；tmp 别名 → ts.tables.fields；CTE 别名 → 上面已查不重复；
     # 绑不到的（子查询别名等）→ 跳过不猜（宁放过）。真实教训：designer 错引字段
     # （未连库时 N30 降 warn 漏掉）到 UT 才炸——coder 侧缓存核对接住（防御纵深）。
@@ -295,7 +270,7 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
                 f"[字段引用] {al}.{col}：源表 {schema}.{t_short} 里没有字段 '{col}'"
                 f"（检查拼写；若 ts/design_logic 引用本身有误 → 回报调用方，不自行改设计）")
 
-    # 6. 口径引用对账：design_logic 的限定引用 ⊆ SQL 实际限定引用（漏实现当场抓）。
+    # 7. 口径引用对账：design_logic 的限定引用 ⊆ SQL 实际限定引用（漏实现当场抓）。
     # 真实案例：del_flag 口径引用三字段（a.del_flag/u.delete_flag/u.del_flag），coder
     # 只按 source_refs 单字段实现，丢了两个——写完即查在 coder 手里就拦住，不用等 UT。
     # SQL 引用集含 CTE 内部（design_logic 引用在 SQL 任何位置出现即算覆盖）。
@@ -311,7 +286,7 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
             f"[口径引用] design_logic 引用了 {sorted(missing_refs)} 但 SQL 未引用——"
             f"疑似漏实现（对照切片 source_refs 与口径逐字段核对；确认不用则回报口径可疑）")
 
-    # 7. 表达式口径对账：design_logic 里的 case when 表达式（"表达式+（说明）"形态的
+    # 8. 表达式口径对账：design_logic 里的 case when 表达式（"表达式+（说明）"形态的
     # 表达式部分）应原样出现在 SQL 中——coder 被要求表达式直搬（禁改口径：不加不减
     # 条件、不动 NULL/空串边界）。真实案例：del_flag 口径被 coder 自行演绎成
     # in('N','') or is null，多兜了空串、语义反转。匹配不上不硬拦：可能是保语义
@@ -330,123 +305,14 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
     return issues
 
 
-def _dq_output_columns(sql_text: str) -> set:
-    """主查询 SELECT 输出列名（AS 别名优先；t.col 裸形态取列名）——DQ 业务键校验用。
-
-    extract_select_aliases 只认 AS 形态（规则 SELECT 的统一规范），DQ 输出列是
-    业务键+违规字段的裸形态（t.order_no），这里单独提取：顶层逗号切分（括号深度
-    感知），每段取 AS 别名或裸标识符的列名位；函数表达式列（无名）跳过。
-    """
-    _cte, main = split_cte_main(sql_text)
-    body = main if main else sql_text
-    m = re.search(r'\bSELECT\b(.*?)\bFROM\b', body, re.IGNORECASE | re.DOTALL)
-    if not m:
-        return set()
-    seg = m.group(1)
-    cols, depth, cur = [], 0, ""
-    for ch in seg:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            cols.append(cur)
-            cur = ""
-        else:
-            cur += ch
-    if cur.strip():
-        cols.append(cur)
-    out = set()
-    for c in cols:
-        c = c.strip()
-        am = re.search(r'\bAS\s+([A-Za-z_]\w*)\s*$', c, re.IGNORECASE)
-        if am:
-            out.add(am.group(1).lower())
-        elif re.fullmatch(r'[A-Za-z_]\w*', c):
-            out.add(c.lower())
-        elif re.fullmatch(r'[A-Za-z_]\w*\.[A-Za-z_]\w*', c):
-            out.add(c.rsplit(".", 1)[1].lower())
-    return out
-
-
-def check_dq_sql(sql_text: str, ts: dict, cache_path=None) -> list[str]:
-    """DQ 检查 SQL 的静态校验（dws-dq 流程，--dq 模式；DQ 不是规则，无 rule_code）。
-
-    校验资产级契约（dws-dq SKILL）：
-    - 基础三项：括号平衡 / 无 SELECT * / 无 -- 行注释
-    - FROM 表引用 ⊆ {目标 F 表} ∪ 资产级源表并集（跨表检查也只许碰资产内的表）
-    - schema 前缀（裸表名报错，CTE 名豁免）
-    - 输出列含 business_key（违规行要能回溯到业务对象）
-    """
-    issues = []
-
-    ok, msg = check_bracket_balance(sql_text)
-    if not ok:
-        issues.append(f"[语法] {msg}")
-    ok, msg = check_no_select_star(sql_text)
-    if not ok:
-        issues.append(f"[规范] {msg}")
-    ok, msg = check_no_line_comment(sql_text)
-    if not ok:
-        issues.append(f"[规范] {msg}")
-
-    from ts_compat import normalize_ts
-    ts = normalize_ts(ts)
-
-    f_table = ts.get("meta", {}).get("target", {}).get("f_table", {}) or {}
-    target_short = str(f_table.get("table") or "").rsplit(".", 1)[-1].lower()
-    allowed = {target_short} if target_short else set()
-    for r in (ts.get("rules") or {}).values():
-        for st in (r.get("source_tables") or []):
-            t = (st.get("table") or "").split(".")[-1].lower()
-            if t:
-                allowed.add(t)
-
-    cte_names, _main = split_cte_main(sql_text)
-    cte_lower = {c.lower() for c in cte_names}
-    select_tables = {t.lower() for t in extract_from_tables(sql_text)}
-    unknown = select_tables - allowed - cte_lower
-    if unknown:
-        issues.append(
-            f"[表引用] DQ SELECT 引用了不在检查对象/资产源表里的表: {sorted(unknown)}"
-            f"（检查对象=目标 F 表，跨表检查用切片 source_tables 里的表）"
-        )
-
-    from sql_parse import extract_table_refs_raw
-    bare_refs = sorted({
-        ref for ref in extract_table_refs_raw(sql_text)
-        if "." not in ref and ref.lower() not in cte_lower
-    })
-    if bare_refs:
-        issues.append(
-            f"[schema] FROM/JOIN 引用必须带 schema 前缀（schema.table）: {bare_refs}"
-        )
-
-    bk = [str(k).lower() for k in ts.get("design", {}).get("business_key", [])]
-    aliases = _dq_output_columns(sql_text)
-    missing_bk = [k for k in bk if k not in aliases]
-    if bk and missing_bk:
-        issues.append(
-            f"[输出列] 缺业务键列 {missing_bk}——违规行要能回溯到业务对象"
-            f"（输出列 = 业务键 + 违规字段值，见 dws-dq SKILL）"
-        )
-    return issues
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description="SELECT 静态对比: SELECT vs ts.json 规则切片（--dq 校验 DQ 检查 SQL）"
+        description="SELECT 静态对比: SELECT vs ts.json 规则切片（ETL 规则校验；DQ 校验已并入 assemble_dq）"
     )
     parser.add_argument("--sql", required=True, help="SELECT SQL 文件路径")
     parser.add_argument("--ts", required=True, help="ts.json 路径")
-    parser.add_argument("--rule", default="", help="规则编号，如 R0001（与 --dq 二选一）")
-    parser.add_argument("--dq", action="store_true", help="DQ 检查 SQL 模式（dws-dq 流程用）")
+    parser.add_argument("--rule", required=True, help="规则编号，如 R0001")
     args = parser.parse_args()
-
-    if args.dq and args.rule:
-        parser.error("--dq 与 --rule 互斥（DQ 不带规则号）")
-    if not args.dq and not args.rule.strip():
-        parser.error("--rule 与 --dq 必须给一个")
 
     # 读 SQL
     sql_path = Path(args.sql)
@@ -463,14 +329,9 @@ def main():
     ts = json.loads(ts_path.read_text(encoding="utf-8"))
 
     # 检查（schema_cache 在 ts 同级 _internal/——precheck 连库产出；没有则源表层跳过）
-    if args.dq:
-        issues = check_dq_sql(sql_text, ts,
-                              cache_path=ts_path.parent / "_internal" / "schema_cache.json")
-        label = "DQ"
-    else:
-        issues = check_sql(sql_text, ts, args.rule,
-                           cache_path=ts_path.parent / "_internal" / "schema_cache.json")
-        label = args.rule
+    issues = check_sql(sql_text, ts, args.rule,
+                       cache_path=ts_path.parent / "_internal" / "schema_cache.json")
+    label = args.rule
 
     errors = [i for i in issues if not i.startswith(WARN_PREFIXES)]
     warns = [i for i in issues if i.startswith(WARN_PREFIXES)]

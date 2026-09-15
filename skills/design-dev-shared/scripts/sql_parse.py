@@ -695,3 +695,97 @@ def extract_case_when_exprs(text: str) -> list[str]:
         else:
             i += 4
     return results
+
+
+# ============================================================
+# SQL 文本静态检查原语（2026-09-15 自 check_sql 抽出——check_sql[ETL] 与
+# assemble_dq[DQ] 两消费者归 shared；check_sql re-export 保旧名）
+# ============================================================
+
+def check_bracket_balance(sql: str) -> tuple[bool, str]:
+    """检查括号平衡（引号串感知）。"""
+    depth = 0
+    in_string = False
+    string_char = ''
+    for i, c in enumerate(sql or ""):
+        if in_string:
+            if c == string_char:
+                in_string = False
+        elif c in ("'", '"'):
+            in_string = True
+            string_char = c
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth < 0:
+                return False, f"位置{i}: 多余的右括号"
+    if depth != 0:
+        return False, f"括号不平衡: 差 {depth} 个"
+    return True, ""
+
+
+def check_no_select_star(sql: str) -> tuple[bool, str]:
+    """检查没有 SELECT *（含 t.* 形态）。"""
+    if re.search(r'SELECT\s+\*\s', sql or "", re.IGNORECASE) or \
+       re.search(r'SELECT\s+\w+\.\*', sql or "", re.IGNORECASE):
+        return False, "发现 SELECT *（禁止全选，必须列出字段）"
+    return True, ""
+
+
+def check_no_line_comment(sql: str) -> tuple[bool, str]:
+    """检查没有 -- 行注释（规范要求一律用 /* */ 块注释；跳过引号串/块注释内）。"""
+    stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", sql or "")
+    stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
+    no_block = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL)
+    if re.search(r'--[^\-]', no_block) or re.search(r'--$', no_block, re.MULTILINE):
+        return False, "发现 -- 行注释（禁止：注释一律用 /* */ 块注释）"
+    return True, ""
+
+
+def extract_top_projection(sql: str):
+    """顶层 SELECT 投影列名序列（保序；AS 别名优先，别名.列取列名）。
+
+    返回：list[str] 列名（小写，按出现序）；['*'] 顶层 SELECT *；None 不可比
+    （无 SELECT..FROM 结构 / 某投影项是函数表达式且无 AS——按位对齐的序校验
+    对无名项无法进行，宁跳过不猜）。
+
+    消费者：check_sql 投影列序对账（vs 结构源字段序——按位对齐的 INSERT 乱序
+    =静默错位数据）、DQ 输出列业务键校验（set 化用）。
+    """
+    _cte, main = split_cte_main(sql or "")
+    body = main if main else (sql or "")
+    m = re.search(r'\bSELECT\b(.*?)\bFROM\b', body, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None
+    seg = m.group(1)
+    cols, depth, cur = [], 0, ""
+    for ch in seg:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            cols.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        cols.append(cur)
+    out = []
+    for c in cols:
+        c = c.strip()
+        if c == "*":
+            return ["*"]
+        am = re.search(r'\bAS\s+([A-Za-z_]\w*)\s*$', c, re.IGNORECASE)
+        if am:
+            out.append(am.group(1).lower())
+        elif re.fullmatch(r'[A-Za-z_]\w*', c):
+            out.append(c.lower())
+        elif re.fullmatch(r'[A-Za-z_]\w*\.[A-Za-z_]\w*', c):
+            out.append(c.rsplit(".", 1)[1].lower())
+        elif re.fullmatch(r'[A-Za-z_]\w*\.\*', c):
+            return ["*"]
+        else:
+            return None  # 函数表达式无 AS 等无名项——序校验不可比，整体跳过
+    return out

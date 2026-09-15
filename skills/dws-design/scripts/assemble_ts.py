@@ -1486,9 +1486,15 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             # 规则级 tmp 别名绑定（reads 对象形式声明；字符串形式默认别名=表短名）
             rule_tmp_alias = _rule_tmp_aliases(rule)
             rule_derived = derived_by_rule.get(code) or {}
-            # 待查文本：join 条件 + 规则级 filter + join_safety.join_filter
-            # （design_logic 的口径引用归引用门禁 LG/N38，此处不重复查）
-            texts = [((j.get("condition") or "").strip()) for j in rule.get("joins") or []]
+            # 待查文本：join 条件 + joins[].filter + 规则级 filter + join_safety.join_filter
+            # （限定条件全集四载体之一——与 diagnose_fanout/explore 同口径；
+            # design_logic 的口径引用归引用门禁 LG/N38，此处不重复查）
+            texts = []
+            for j in rule.get("joins") or []:
+                texts.append((j.get("condition") or "").strip())
+                _jf = (j.get("filter") or "").strip()
+                if _jf:
+                    texts.append(_jf)
             _flt = (rule.get("filter") or "").strip()
             if _flt:
                 texts.append(_flt)
@@ -2996,15 +3002,16 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # 从 ts.json 取资产名（f_table 表名）用于 md 文件命名
-    asset_name = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "ts")
     ts_json_path = outdir / "ts.json"
     ts_json_path.write_text(json.dumps(ts, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n产出 ts.json: {ts_json_path}")
 
-    ts_md_path = outdir / f"{asset_name}_ts.md"
+    # ts.md 与 ts.json 同名不带资产前缀（目录已按资产分层，文件名带资产冗余；
+    # 且全链路消费方[assemble_dq 追加渲染/adopt 建档/SKILL 描述]都以 ts.md 寻址——
+    # 2026-09-15 修复：此前 {资产名}_ts.md 导致渲染静默跳过+建档漏件）
+    ts_md_path = outdir / "ts.md"
     ts_md_path.write_text(render_md(ts), encoding="utf-8")
-    print(f"产出 {asset_name}_ts.md: {ts_md_path}")
+    print(f"产出 ts.md: {ts_md_path}")
 
     # 6. 摘要
     rules = ts["rules"]

@@ -23,6 +23,8 @@ permission:
     "*": deny
     "**/ddlc_design_dev/build/dq/*.sql": allow
     "**/ddlc_design_dev/opt_*/dq/*.sql": allow
+    "**/ddlc_design_dev/build/dq.json": allow
+    "**/ddlc_design_dev/opt_*/dq.json": allow
   write:
     "*": deny
     "**/ddlc_design_dev/build/dq.json": allow
@@ -50,7 +52,7 @@ permission:
 
 # 怎么干
 
-加载 skill `dws-dq`（工作流/契约/模板唯一维护源），按其流程：拿切片（pick_dq_context）→ 逐条设计实现（断言式翻译 / 对比式独立重算）→ 直接产 dq.json + SQL → check_sql --dq 静态自检 → 交卷（engineer 跑 assemble_dq 校验渲染）。
+加载 skill `dws-dq`（工作流/契约/模板唯一维护源），按其流程：拿切片（pick_dq_context）→ 必要性甄别（结构类检查 declined 建议不做）→ 逐条设计实现（断言式翻译 / 对比式独立重算）→ 直接产 dq.json + SQL → 跑 assemble_dq 校验（唯一校验入口，不过自己改限 3 轮）→ 全绿交卷。
 
 任务 prompt 会带：build 目录路径、ts.json/rs_input.json 路径、（opt 场景）受影响的 DQ 重做清单与 baseline dq.json。
 

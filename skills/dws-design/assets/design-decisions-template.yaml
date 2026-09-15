@@ -117,6 +117,10 @@ rules:
                                         #   拆中间表物化时不用此键（走 field_targets + tables.fields，见 playbook §三）。
 
     # 关联安全分析（JOIN键唯一性 → 对齐策略）
+    # ★ 限定条件双载体（2026-09-15 定调，四消费者同口径：N30 引用校验 / explore 验唯一 /
+    #   diagnose_fanout 逐表+整体试算都自动并入两处）：joins[].filter = 你自加的 join 内限定
+    #   （coder 写进 ON/WHERE）；join_safety.join_filter = mapping"关联&限定条件"的声明镜像。
+    #   同一限定写任一处都生效，不必两处都写。
     join_safety:
       - table: ""
         join_filter: ""                # JOIN 此表时的范围限定（来自 mapping 的"关联&限定条件"，如 is_current = 1）。explore.py 用它验唯一性
