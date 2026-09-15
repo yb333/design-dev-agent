@@ -77,7 +77,9 @@ def build_context(rs_input: dict, ts: dict) -> dict:
     f_meta = (ts.get("meta", {}).get("target", {}) or {}).get("f_table", {}) or {}
     f_short = _norm_field(f_meta.get("table"))
     for col in ((ts.get("tables", {}).get(f_short) or {}).get("fields") or []):
-        name = _norm_field(col.get("name") if isinstance(col, dict) else col)
+        # 键形态对齐 build_tables 真实产出（target_field；name 为兼容兜底）
+        name = _norm_field((col.get("target_field") or col.get("name"))
+                           if isinstance(col, dict) else col)
         if name and name not in seen:
             seen.add(name)
             target_fields.append(name)

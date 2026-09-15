@@ -415,6 +415,36 @@ def _rs_input_for_meta(schema="dws", f_table="dwb_test_f", i_view="dwb_test_i"):
 class TestBuildMetaTaskPath:
     """build_meta 给每个 task 填 project_name/task_group。"""
 
+    def test_build_rule_alias_case_insensitive(self):
+        """别名匹配大小写归一（真实案例：designer 写大写 S、rs_input 是 s）——
+        漏归一会让查表落空 → ts.json 的 schema/table 变空串（2026-09-15 修复）。"""
+        from assemble_ts import build_rule
+        rs = make_rs_input()
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_test_f", "source_alias": "s"}]
+        dec = make_design_decisions()
+        rule_dec = dec["rules"][0]
+        rule_dec["source_aliases"] = ["S"]  # 大小写与 rs_input 不一致
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        rule, _missing = build_rule(rule_dec, field_map, rs["source_tables"], "dws")
+        st = rule["source_tables"][0]
+        assert st["schema"] == "ods" and st["table"] == "ods_test_f"
+        assert st["alias"] == "S"  # 别名本身不改写
+
+    def test_build_rule_alias_default_keeps_original_case(self):
+        """designer 未声明 source_aliases 时全表带上——原序原大小写（不从归一后的键取）。"""
+        from assemble_ts import build_rule
+        rs = make_rs_input()
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_test_f", "source_alias": "s"},
+            {"source_schema": "ods", "source_table": "ods_pay_f", "source_alias": "P"}]
+        dec = make_design_decisions()
+        rule_dec = dec["rules"][0]
+        rule_dec.pop("source_aliases", None)
+        field_map = {fm["target_column"]: fm for fm in rs["field_mappings"]}
+        rule, _missing = build_rule(rule_dec, field_map, rs["source_tables"], "dws")
+        assert [st["alias"] for st in rule["source_tables"]] == ["s", "P"]
+
     def test_tasks_have_project_group(self, monkeypatch):
         """有 schedule_config 时，tasks.f/view 有 project_name/task_group（dq 不在 ts.tasks——DQ 拆分后随 dq.json）。"""
         sched_cfg = {

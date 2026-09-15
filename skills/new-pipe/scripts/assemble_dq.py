@@ -78,14 +78,20 @@ def _short(name: str) -> str:
 
 
 def _f_table_info(ts: dict):
-    """目标 F 表（schema, 短名, 字段名集合）。字段兼容 list[str] / list[dict]。"""
+    """目标 F 表（schema, 短名, 字段名集合）。
+
+    字段条目取 build_tables 的真实产出键 target_field（build_field 产
+    {target_field, field_type, field_comment, ...}）；name/column/field 为
+    兼容形态兜底。字段名统一 lower（与 N_DQ8 锚定/引用校验同口径）。
+    """
     f = ((ts.get("meta", {}).get("target", {}) or {}).get("f_table", {}) or {})
     schema = str(f.get("schema") or "").strip().lower()
     short = _short(f.get("table"))
     fields = set()
     for col in ((ts.get("tables", {}).get(short) or {}).get("fields") or []):
         if isinstance(col, dict):
-            name = col.get("name") or col.get("column") or col.get("field") or ""
+            name = (col.get("target_field") or col.get("name")
+                    or col.get("column") or col.get("field") or "")
         else:
             name = str(col)
         name = str(name).strip().lower()

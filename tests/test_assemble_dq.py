@@ -20,6 +20,7 @@ F_FIELDS = ["id", "prod_code", "del_flag", "crt_cycle_id", "last_upd_cycle_id", 
 
 
 def _ts(with_view=True, with_tmp=False):
+    """fields 条目对齐 build_tables 真实产出键（target_field——build_field 的产物形态）。"""
     rules = {
         "R0001": {"target_table": "dws.dwb_test_f", "target_role": "target",
                   "source_tables": [{"schema": "ods", "table": "ods_test_f", "alias": "s"}]},
@@ -34,7 +35,9 @@ def _ts(with_view=True, with_tmp=False):
     return {
         "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_test_f", "cn": "测试"}}},
         "design": {"business_key": ["id"]},
-        "tables": {"dwb_test_f": {"fields": [{"name": f} for f in F_FIELDS]}},
+        "tables": {"dwb_test_f": {"fields": [
+            {"target_field": f, "field_type": "varchar(50)", "field_comment": f}
+            for f in F_FIELDS]}},
         "rules": rules,
         "tasks": tasks,
     }
@@ -319,6 +322,39 @@ class TestAssembly:
 
     def test_build_dq_task_no_view_no_task(self):
         assert build_dq_task(_ts(with_view=False), {}) == {}
+
+
+# ============================================================
+# 真实装配链路（do_assemble 产的 ts 喂 DQ 装配——fixture 手写形态与真实产出脱节
+# 曾漏掉 target_field 键不认的 bug，此测试锚定真实链路）
+# ============================================================
+
+class TestRealChain:
+    def test_f_fields_from_real_assemble(self, tmp_path):
+        """do_assemble 产出（fields=target_field 形态）→ _f_table_info 取到字段集，
+        断言式锚定/引用校验全链工作。"""
+        from conftest import make_rs_input, make_design_decisions
+        from assemble_ts import assemble_ts as do_assemble
+        from assemble_dq import _f_table_info
+        rs = make_rs_input()
+        rs["dq_requirements"] = [
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "id 非空", "rule_desc": "x"}]
+        dd = make_design_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        _schema, short, fields = _f_table_info(ts)
+        assert short == "dwb_test_f"
+        assert {"id", "del_flag", "crt_cycle_id"} <= fields  # 真实 target_field 键被识别
+        # 端到端：断言式 DQ 在真实 ts 上装配通过（锚定自动提取含 target_field 形态字段）
+        dq_dir = tmp_path / "dq"
+        dq_dir.mkdir()
+        (dq_dir / "dq_01_空值检查.sql").write_text(
+            "SELECT t.id FROM dws.dwb_test_f t WHERE t.id IS NULL", encoding="utf-8")
+        dec = {"rules": [{
+            "rule_id": "DQ_001", "scope": "字段级", "check_type": "空值检查", "rule_name": "id 非空",
+            "mode": "assertion", "violation_condition": "t.id IS NULL", "rule_desc": "违规=id 空"}]}
+        rules_out, vr = validate_and_build(rs, ts, dec, dq_dir)
+        assert not any(i["level"] == "hard" for i in vr.items), vr.report_lines()
+        assert rules_out[0]["anchored_fields"] == ["id"]
 
 
 # ============================================================

@@ -32,7 +32,7 @@ def _rs(fms, dq_needs=None):
 def _ts():
     return {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_test_f", "cn": "测试"}}},
             "design": {"business_key": ["order_id"]},
-            "tables": {"dwb_test_f": {"fields": [{"name": "order_amount"}]}}}
+            "tables": {"dwb_test_f": {"fields": [{"target_field": "order_amount"}]}}}
 
 
 class TestClosure:

@@ -1855,13 +1855,16 @@ def build_rule(rule_dec, field_map, rs_source_tables, target_schema=""):
             missing_logic.append(t)
 
     # source_tables: 从 rs_input 的 source_tables 按别名补全 schema/table
-    rs_sources = {st.get("source_alias", ""): st for st in rs_source_tables}
+    # 别名匹配大小写归一（designer 写 S / rs_input 是 s 是同一别名——仓内 N30/N32 等
+    # 同款口径；漏归一会让查表落空 → ts.json 的 schema/table 变空串）
+    rs_sources = {(st.get("source_alias") or "").strip().lower(): st for st in rs_source_tables}
     rule_sources = []
     aliases = rule_dec.get("source_aliases") or []
     if not aliases:
-        aliases = list(rs_sources.keys())
+        # 原序原大小写（不取归一键——alias 字段本身不改写）
+        aliases = [st.get("source_alias", "") for st in rs_source_tables]
     for sa in aliases:
-        rs_st = rs_sources.get(sa, {})
+        rs_st = rs_sources.get((sa or "").strip().lower(), {})
         rule_sources.append({
             "schema": rs_st.get("source_schema", ""),
             "table": rs_st.get("source_table", ""),
