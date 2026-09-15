@@ -192,6 +192,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | 问题类型 | 确定性路由（不问人） | 根因/语义时的归宿 |
 |---|---|---|
 | SQL 语法类（COLUMN/TYPE/SYNTAX/DOES NOT EXIST；DQ FAIL/MISSING） | 恢复 coder 旧会话修复 | — |
+| 设计期关联疑点（键不唯一且输入无声明，designer 第4层批量上报带疑似方向） | engineer 先 explore --where 定向验证疑似方向（产事实） | 人三选：源头修 mapping / 采纳条件本次继续 / 退 BA·接受+收敛策略（回 designer）；终局实证=闸口① diagnose_fanout --all |
 | 类型风险（跨大类转换） | — | 1b 问人（转换/不加/返源端） |
 | 关联键类型跨大类 | — | 1b 问人（转换/改关联键/接受） |
 | 值域溢出（numeric overflow/value too long） | — | 按 1b 值域菜单：源输入→**BA** 改模型；过程决策→**SE** 拍板 |
