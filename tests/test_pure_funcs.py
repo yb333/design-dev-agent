@@ -719,9 +719,28 @@ class TestLogicRefs:
         assert find_unqualified_refs("a.del_flag 和 delete_flag 为 N") == ["delete_flag"]
         # 引号串（值）、${参数}、函数调用、SQL 类型词不参与
         assert find_unqualified_refs(
-            "CASE WHEN x=1 THEN 'Y' ELSE 'N' END，cast(amt as int8)，dt<${P}") == ["amt", "dt"]
+            "CASE WHEN x=1 THEN 'Y' ELSE 'N' END，cast(amt as int8)，dt<${P") == ["amt", "dt"]
         assert find_unqualified_refs("返回 n 否则 y") == []  # 单字母豁免
         assert find_unqualified_refs("按 coalesce(x, 0) 与 to_char(a.dt,'yyyymmdd') 处理") == []
+
+    def test_find_unqualified_refs_window_clause_words(self):
+        """开窗排序空值/帧子句的裸结构词豁免（2026-09-15 内网实证：
+        row_number() over (order by x desc nulls last) 的 nulls/last 被拦逼 designer 换写法；
+        帧子句 rows between unbounded preceding and current row 同族）。"""
+        from sql_parse import find_unqualified_refs
+        # 用户实报形态：derived_fields 的 rn 定义
+        assert find_unqualified_refs(
+            "row_number() over (partition by a.id order by a.dt desc nulls last)") == []
+        assert find_unqualified_refs(
+            "row_number() over (partition by a.id order by a.dt asc nulls first)") == []
+        # 帧子句（同族裸结构词：rows/range/unbounded/preceding/following/current/row）
+        assert find_unqualified_refs(
+            "sum(a.amt) over (partition by a.id order by a.dt rows between unbounded preceding and current row)") == []
+        # window 名定义 / offset fetch / escape
+        assert find_unqualified_refs("window w as (order by a.dt), offset 1 fetch first 1 rows only") == []
+        assert find_unqualified_refs("a.code like 'X%' escape '\\'") == []
+        # 防豁免过头：真字段裸引用仍拦（first/last 作字段名极罕见，宁放过不误报——但普通字段不受影响）
+        assert find_unqualified_refs("case when flag = 'Y' then '1' else '0' end") == ["flag"]
 
     def test_nested_fullwidth_notes_stripped(self):
         """嵌套全角说明段（（…））型）剥离——单次 sub 跨内层（剥成残串，说明段英文词

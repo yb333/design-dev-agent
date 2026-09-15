@@ -442,11 +442,20 @@ def extract_qualified_refs(sql: str) -> list:
 
 # 口径引用提取的噪音词（SQL 结构词/函数名/聚合名）：裸出现在口径文本里不是字段引用。
 # N36 是硬拦，排除集从宽（宁放过不误报）。
+# 裸结构词三类（函数不走词表——后跟'(' 的函数形态豁免在 find_unqualified_refs 程序化判定）：
+#   ①开窗排序空值/帧子句：NULLS FIRST LAST ROWS RANGE UNBOUNDED PRECEDING FOLLOWING
+#     CURRENT ROW WINDOW OFFSET FETCH TIES ONLY EXCLUDE（2026-09-15 内网实证：
+#     row_number() over (order by x desc nulls last) 的 nulls/last 被拦逼 designer 换写法）
+#   ②连接/匹配辅助：USING ESCAPE COLLATE
+#   ③基础结构词/函数名（历史存量）
 _LOGIC_NOISE_WORDS = {
     "CASE", "WHEN", "THEN", "ELSE", "END", "NULL", "AND", "OR", "NOT", "IN", "IS",
     "EXISTS", "BETWEEN", "LIKE", "AS", "ON", "BY", "FROM", "WHERE", "JOIN", "LEFT",
     "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "GROUP", "ORDER", "HAVING", "SELECT",
     "DISTINCT", "UNION", "ALL", "OVER", "PARTITION", "LIMIT", "DESC", "ASC",
+    "NULLS", "FIRST", "LAST", "ROWS", "RANGE", "UNBOUNDED", "PRECEDING", "FOLLOWING",
+    "CURRENT", "ROW", "WINDOW", "OFFSET", "FETCH", "TIES", "ONLY", "EXCLUDE",
+    "USING", "ESCAPE", "COLLATE",
     "TRUE", "FALSE", "IF", "COUNT", "SUM", "MAX", "MIN", "AVG", "STRING_AGG",
     "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE", "LAG", "LEAD", "SUBSTR", "SUBSTRING",
     "COALESCE", "NVL", "TO_CHAR", "TO_DATE", "TO_NUMBER", "CAST", "CONCAT",
