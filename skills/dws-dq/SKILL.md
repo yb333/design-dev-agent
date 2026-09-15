@@ -16,7 +16,7 @@ description: >-
 ## 1. 拿输入切片（唯一取料入口，不读 rs_input_view）
 
 ```bash
-python {new-pipe 的 scripts 目录}/pick_dq_context.py --rs {build}/_internal/rs_input.json --ts {build}/ts.json --out {build}/_internal/dq_context.json
+python {dws-dq 的 scripts 目录}/pick_dq_context.py --rs {build}/_internal/rs_input.json --ts {build}/ts.json --out {build}/_internal/dq_context.json
 ```
 
 切片含：`dq_requirements`（RS 原文）/ `target`（F 表+business_key+字段清单含中文名）/ `source_tables` / `closure`（种子字段+确定性闭包行+**存疑行**）。

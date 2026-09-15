@@ -1,4 +1,4 @@
-"""pick_dq_context（dws-dq-producer 输入切片）测试——2026-09-14 DQ 拆分。
+"""pick_dq_context（dws-dq-producer 输入切片）测试——2026-09-14 DQ 拆分；2026-09-15 随归位迁至 dws-dq/scripts。
 
 覆盖三件套：确定性闭包展开（跨字段传递依赖）/ 存疑显式标记（人话逻辑）/
 按需查询服务（--query/--field 深挖）+ 切片结构（RS 原文/目标/业务键）。
@@ -6,7 +6,7 @@
 
 import sys
 
-sys.path.insert(0, "skills/new-pipe/scripts")
+sys.path.insert(0, "skills/dws-dq/scripts")
 
 from pick_dq_context import build_context, query_mapping, query_field  # noqa: E402
 

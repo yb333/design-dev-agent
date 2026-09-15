@@ -5,9 +5,10 @@
   - shared = 公共设施（共用入口 preprocess/check_db/assemble_ddl/resolve_appid +
     公共库 dws_db/run_ut/sql_parse 等）——被多于一个消费者用；
   - new-pipe/scripts、opt-pipe/scripts = 各剧本自己的管线脚本（单一消费者）；
-  - dws-design/scripts、dws-coding/scripts = designer/coder 的工具。
+  - dws-design/scripts、dws-coding/scripts = designer/coder 的工具；
+  - dws-dq/scripts = dws-dq-producer 的工具（2026-09-15 归位 pick_dq_context）。
 
-铁律单向：skill 目录（design/coding/new-pipe/opt-pipe）→ shared 合法；
+铁律单向：skill 目录（design/coding/dq/new-pipe/opt-pipe）→ shared 合法；
   shared → 任何 skill 目录违规；pipe 之间互 import 违规（共用能力该在 shared）。
 """
 
@@ -18,6 +19,7 @@ REPO = Path(__file__).resolve().parent.parent
 SKILL_DIRS = {
     "dws-design": REPO / "skills" / "dws-design" / "scripts",
     "dws-coding": REPO / "skills" / "dws-coding" / "scripts",
+    "dws-dq": REPO / "skills" / "dws-dq" / "scripts",
     "new-pipe": REPO / "skills" / "new-pipe" / "scripts",
     "opt-pipe": REPO / "skills" / "opt-pipe" / "scripts",
     "design-dev-shared": REPO / "skills" / "design-dev-shared" / "scripts",

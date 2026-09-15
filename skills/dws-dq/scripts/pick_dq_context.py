@@ -27,8 +27,6 @@ import json
 import argparse
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
-
 
 def _fm_get(fm: dict, *keys, default=""):
     for k in keys:

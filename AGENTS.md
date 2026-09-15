@@ -25,9 +25,11 @@ skills/
 │   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py（视图=F表配套镜像非规则，is_view_step 概念已清除）
 │   └── assets/          # db-sources.example.json shujia_config.example.json lts_config.example.json etl-templates.md
 ├── dws-dq/              # DQ 检查设计与实现 skill（★dws-dq-producer 专用，2026-09-14 DQ 拆分：一体产 SQL+decisions，断言式翻译/对比式独立重算；工具=pick_dq_context/check_sql --dq）
+│   ├── scripts/         # pick_dq_context.py(producer 自有入口,对齐 check_field/slice_ts 模式:三件套取料——RS需求+目标结构+mapping确定性闭包+存疑显式标记+--query/--field深挖服务)
+│   └── assets/          # dq-decisions-template.yaml(decisions 格式唯一源)
 ├── new-pipe/            # ★ 新建编排剧本 skill（dws-engineer 加载执行：预处理→设计→DQ并行→闸口①→编码→UT→闸口②→制品）
 │   └── scripts/         # check_env.py(步骤0环境探针:指纹/文件/python/依赖对账,两剧本共用/opt跨引用) precheck.py gate_summary.py(决策填值器已下沉 shared)
-                         #   dispatch_plan.py(dq字段已随DQ拆分删除) assemble_export.py(含LTS制品生成,2026-09重写;跨集群depTaskId直读config dep_task_ids表;dq任务行被动适配读dq.json) assemble_dq.py(★DQ装配器:producer产物→dq.json+N_DQ1-10校验[引用域禁tmp/锚定/幻觉列]+ts.md DQ章节追加渲染+闸口①分级材料+dq调度任务) pick_dq_context.py(★producer输入切片三件套:RS需求+目标结构+mapping确定性闭包+存疑显式标记+--query/--field深挖服务) ut_precheck.py(6a预检:EXPLAIN全量+计划两门槛+describe列序对账+DQ兜底[RS有需求但dq.json缺失fail loud]) ut_execute.py(DQ段读dq.json,旧ts.dq_rules兼容) ut_diagnose.py(类型诊断,ut_execute用)
+                         #   dispatch_plan.py(dq字段已随DQ拆分删除) assemble_export.py(含LTS制品生成,2026-09重写;跨集群depTaskId直读config dep_task_ids表;dq任务行被动适配读dq.json) assemble_dq.py(★DQ装配器:producer产物→dq.json+N_DQ1-10校验[引用域禁tmp/锚定/幻觉列]+ts.md DQ章节追加渲染+闸口①分级材料+dq调度任务) ut_precheck.py(6a预检:EXPLAIN全量+计划两门槛+describe列序对账+DQ兜底[RS有需求但dq.json缺失fail loud]) ut_execute.py(DQ段读dq.json,旧ts.dq_rules兼容) ut_diagnose.py(类型诊断,ut_execute用)
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py(含DQ段:重做条目真跑读arc_tmp的dq.json,2026-09-14补环) dq_impact.py(★DQ影响分析:变更字段∩锚定/变更来源∩compare_sources→重做清单,确定性集合运算,步骤3.5)

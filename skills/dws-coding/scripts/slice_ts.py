@@ -201,7 +201,7 @@ def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
     return sliced
 
 
-# slice_dq 已退役（2026-09-14 DQ 拆分）：DQ 切片入口= new-pipe/scripts/pick_dq_context.py
+# slice_dq 已退役（2026-09-14 DQ 拆分）：DQ 切片入口= dws-dq/scripts/pick_dq_context.py
 # （dws-dq-producer 的三件套取料：RS 需求+目标结构+mapping 闭包），不再从 ts 切。
 
 
