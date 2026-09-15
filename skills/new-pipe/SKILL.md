@@ -30,7 +30,7 @@ python {SKILL_BASE}/scripts/check_env.py
 10_project_deliver/{appid}/{schema}/{资产名}/    ← appid/schema 层按 schema 查；不存在则你建
 └── ddlc_design_dev/build/                 ← 你建（增量现场=产出范围）
         ├── ts.json                       ← 主线设计产出（无 DQ；闸口①确认后冻结）
-    ├── ts.md                             ← 设计文档（主线章节+DQ 章节追加渲染）
+    ├── {资产名}_ts.md                     ← 设计文档（主线章节+DQ 章节追加渲染；产出标准带 f_table 短名前缀）
     ├── dq.json                           ← DQ 元数据唯一源（producer 产出经 assemble_dq 装配；无 DQ 需求则无此文件）
     ├── etl/                              ← 编码产出（coder 产的 SELECT）
     │   └── R0001.sql
@@ -189,17 +189,17 @@ python SHARED_SCRIPTS/fill_type_risk_decision.py \
 
 预处理通过后，用 Task 调用 dws-designer。
 
-designer 内部会自行完成"产 design_decisions.yaml → 调 assemble_ts.py 组装 ts.json/ts.md"。
+designer 内部会自行完成"产 design_decisions.yaml → 调 assemble_ts.py 组装 ts.json + {资产名}_ts.md"。
 
 ```
 Task(
   subagent_type="dws-designer",
   description="产出TS制品包",
-  prompt="输入只读 {deliver}/_internal/rs_input_view.json（紧凑视图，唯一人读入口——rs_input.json 是脚本域文件不读），产出 TS 制品包（ts.json + ts.md）到 {deliver}/。视图中 join_type_risk 段与字段『决策』标记是已人工拍板的输入事实，按其口径设计，不重新质疑方向。"
+  prompt="输入只读 {deliver}/_internal/rs_input_view.json（紧凑视图，唯一人读入口——rs_input.json 是脚本域文件不读），产出 TS 制品包（ts.json + {资产名}_ts.md）到 {deliver}/。视图中 join_type_risk 段与字段『决策』标记是已人工拍板的输入事实，按其口径设计，不重新质疑方向。"
 )
 ```
 
-designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json + ts.md。
+designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json 与 `{资产名}_ts.md`（产出命名标准：md 带 f_table 短名前缀）。
 
 **终止型上报处理**：designer 返回"需改输入"类上报（mapping/RS/源端要修，来自问人分流的终止型）→ 调 question 问人**一次**（选项给完整后果），按答案执行：
 - 拟退源端 → 流程终止：输出终止报告（designer 上报的事实 + 人的选择 + 下一步：源端修正后重新启动），本轮结束，不进闸口①

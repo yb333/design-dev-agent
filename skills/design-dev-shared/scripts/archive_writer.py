@@ -48,7 +48,15 @@ def adopt(build: Path) -> Path:
         raise ValueError(f"{build} 无产出（ts.json 缺）——不能建档")
     archive.mkdir(parents=True)
     # 复制不移动：build 保留完整交付现场（全量部署内容），档案独立成份（2026-09-07 定调）
-    for name in ("ts.json", "ts.md", "dq.json", "etl", "dq", "ddl", "export"):
+    # ts.md 按产出标准寻址 {f_table 短名}_ts.md（3322a75 命名标准）> ts.md 旧档兜底
+    ts_json = json.loads((build / "ts.json").read_text(encoding="utf-8"))
+    _f = ((ts_json.get("meta", {}) or {}).get("target", {}) or {}).get("f_table") or {}
+    if not isinstance(_f, dict):
+        _f = {}
+    f_short = str(_f.get("table") or "")
+    std_md = f"{f_short}_ts.md" if f_short else "ts.md"
+    md_name = std_md if (build / std_md).exists() else "ts.md"
+    for name in ("ts.json", md_name, "dq.json", "etl", "dq", "ddl", "export"):
         src = build / name
         if src.exists():
             if src.is_dir():

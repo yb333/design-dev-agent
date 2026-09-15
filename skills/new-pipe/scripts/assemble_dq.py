@@ -402,6 +402,22 @@ def patch_ts_md(md_path: Path, dq: dict, rs_dq: list):
     md_path.write_text(new_text, encoding="utf-8")
 
 
+def _locate_ts_md(ts: dict, build_dir: Path) -> Path:
+    """按产出标准寻址 ts.md：{f_table 短名}_ts.md（3322a75 命名标准，消费方适配）
+    > ts.md（旧档兜底）。都无 → 返回标准名（供追加场景新建）。"""
+    _f = ((ts.get("meta", {}) or {}).get("target", {}) or {}).get("f_table") or {}
+    if not isinstance(_f, dict):
+        _f = {}
+    short = str(_f.get("table") or "ts")
+    std = build_dir / f"{short}_ts.md"
+    if std.exists():
+        return std
+    legacy = build_dir / "ts.md"
+    if legacy.exists():
+        return legacy
+    return std
+
+
 # ============================================================
 # main
 # ============================================================
@@ -494,14 +510,14 @@ def main():
         dq["tasks"] = {"dq": dq_task}
     dq_src_path.write_text(json.dumps(dq, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    md_path = ts_path.parent / "ts.md"
+    md_path = _locate_ts_md(ts, ts_path.parent)
     if md_path.exists():
         patch_ts_md(md_path, dq, rs_dq)
 
     print(f"DQ 校验渲染完成: {dq_src_path}（{len(rules_out)} 条）")
     if dq_task:
         print(f"DQ 调度任务: {dq_task['task_name']} -> {dq_task['project_name']} / {dq_task['task_group']}")
-    print(f"ts.md DQ 章节: 已{'替换' if md_path.exists() else '跳过（ts.md 不存在）'}——评审看 ts.md 的 DQ 表格")
+    print(f"ts.md DQ 章节: 已渲染到 {md_path.name}——评审看 ts.md 的 DQ 表格")
     for ln in vr.report_lines():
         print(ln)
     sys.exit(0)

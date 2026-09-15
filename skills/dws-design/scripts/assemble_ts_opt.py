@@ -244,10 +244,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(v2, ensure_ascii=False, indent=2), encoding="utf-8")
-    # ts.md 同步产出（当前态完整性：档案 ts.json/ts.md 成对）——投影件，渲染失败不阻断组装
+    # ts.md 同步产出（当前态完整性：档案 ts.json/ts.md 成对）——投影件，渲染失败不阻断组装。
+    # 文件名按产出标准 {资产短名}_ts.md（与主线 assemble_ts 同标准，消费方统一寻址）
     try:
         from assemble_ts import render_md
-        md_path = out.with_suffix(".md")
+        _short = str(((v2.get("meta", {}) or {}).get("target", {}) or {})
+                     .get("f_table", {}) or {}).get("table") or "ts"
+        md_path = out.parent / f"{_short}_ts.md"
         md_path.write_text(render_md(v2), encoding="utf-8")
         print(f"ts_md: {md_path}")
     except Exception as e:

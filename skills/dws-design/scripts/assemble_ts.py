@@ -3006,12 +3006,12 @@ def main():
     ts_json_path.write_text(json.dumps(ts, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n产出 ts.json: {ts_json_path}")
 
-    # ts.md 与 ts.json 同名不带资产前缀（目录已按资产分层，文件名带资产冗余；
-    # 且全链路消费方[assemble_dq 追加渲染/adopt 建档/SKILL 描述]都以 ts.md 寻址——
-    # 2026-09-15 修复：此前 {资产名}_ts.md 导致渲染静默跳过+建档漏件）
-    ts_md_path = outdir / "ts.md"
+    # md 带资产前缀（产出文件命名标准，3322a75 定调）——全链路消费方按此寻址：
+    # {ts 同级}/{f_table 短名}_ts.md（2026-09-15 修正方向：标准不动，消费方适配）
+    asset_name = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", "ts")
+    ts_md_path = outdir / f"{asset_name}_ts.md"
     ts_md_path.write_text(render_md(ts), encoding="utf-8")
-    print(f"产出 ts.md: {ts_md_path}")
+    print(f"产出 {asset_name}_ts.md: {ts_md_path}")
 
     # 6. 摘要
     rules = ts["rules"]

@@ -378,16 +378,16 @@ class TestRealChain:
 # ============================================================
 
 class TestMain:
-    def _setup(self, tmp_path):
+    def _setup(self, tmp_path, md_name="dwb_test_f_ts.md"):
         build = tmp_path / "build"
         (build / "_internal").mkdir(parents=True)
         (build / "dq").mkdir()
         (build / "ts.json").write_text(json.dumps(_ts(), ensure_ascii=False), encoding="utf-8")
         (build / "_internal" / "rs_input.json").write_text(
             json.dumps(_rs(), ensure_ascii=False), encoding="utf-8")
-        (build / "ts.md").write_text(
-            "## 7. 数据质量检查(DQ)\n\n*(DQ 章节由 dws-dq-producer 独立设计后经 assemble_dq 追加)*\n\n---\n\n## 8. 增量设计\n",
-            encoding="utf-8")
+        # 产出标准：md 带 f_table 短名前缀（3322a75；_locate_ts_md 按标准寻址>ts.md 兜底）
+        (build / md_name).write_text(
+            "## 7. 数据质量检查(DQ)\n\n*(占位)*\n\n---\n\n## 8. 增量设计\n", encoding="utf-8")
         return build
 
     def test_main_success(self, tmp_path):
@@ -414,8 +414,31 @@ class TestMain:
         assert dq["rules"][0]["mode"] == "assertion"
         assert dq["rules"][0]["idx"] == 1 and dq["rules"][0]["sql_file"] == "dq_01_空值检查.sql"
         assert dq["tasks"]["dq"]["task_name"] == "task_dwb_test_f_dq"
-        md = (build / "ts.md").read_text(encoding="utf-8")
+        md = (build / "dwb_test_f_ts.md").read_text(encoding="utf-8")  # 标准名被渲染
         assert "t.prod_code IS NULL" in md
+
+    def test_main_legacy_ts_md_fallback(self, tmp_path):
+        """旧档兜底：只有 ts.md（无标准名）时渲染进 ts.md。"""
+        build = self._setup(tmp_path, md_name="ts.md")
+        (build / "dq" / "dq_01_空值检查.sql").write_text(
+            "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL", encoding="utf-8")
+        (build / "dq.json").write_text(json.dumps({"rules": [
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+             "mode": "assertion", "violation_condition": "t.prod_code IS NULL",
+             "rule_desc": "违规=空"}]}, ensure_ascii=False), encoding="utf-8")
+        import assemble_dq
+        import sys as _sys
+        old_argv = _sys.argv
+        _sys.argv = ["assemble_dq.py", "--ts", str(build / "ts.json"),
+                     "--dq-src", str(build / "dq.json"),
+                     "--rs", str(build / "_internal" / "rs_input.json")]
+        try:
+            with pytest.raises(SystemExit) as ei:
+                assemble_dq.main()
+        finally:
+            _sys.argv = old_argv
+        assert ei.value.code == 0
+        assert "t.prod_code IS NULL" in (build / "ts.md").read_text(encoding="utf-8")
 
     def test_main_hard_exit_1(self, tmp_path):
         build = self._setup(tmp_path)
