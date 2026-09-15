@@ -122,6 +122,7 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 - 不能 SELECT *、审计字段齐全、命名规范、注释用 `/* */` 禁 `--`
 - NULL 处理按业务语义判断（不是必须 COALESCE，见 §1.3）
 - 方言对照表与 schema 全限定细节见 §0 / §3.2（原则见岗位定义 agents/dws-coder.md）
+- **★ 投影只写本规则产出列，禁 NULL AS x 凑全列**（2026-09-15）：INSERT 列清单=结构源序∩产出列——未产出的列 INSERT 缺省即 NULL（写 NULL 补位纯冗余）；**merge_into/update 场景写 NULL = 每次增量把该列旧值清空**（SET 只 SET 产出列、其余列保留旧值才是正确语义），凑数即写错数据
 
 ### 步骤 5：静态对比
 

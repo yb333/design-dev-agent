@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from typing import Dict, List, Optional, Tuple
 
-from run_ut import wrap_insert, read_select, run_dq_checks, load_dq_rules
+from run_ut import wrap_insert, read_select, run_dq_checks, load_dq_rules, rule_output_fields
 from sql_fence import check_sql_fence, rule_declaration
 from explain_check import _analyze_plan, _parse_actual_rows, _STREAM_PATTERN, STREAM_LIMIT
 
@@ -240,18 +240,19 @@ def render_report(ts_v2: dict, alters: List[str], compare: List[dict],
 
 
 def build_insert_plan(ts_v2: dict, schema: str) -> List[Tuple[str, str, List[str]]]:
-    """INSERT 执行计划 [(rule_code, 目标全名, 字段清单)]。
+    """INSERT 执行计划 [(rule_code, 目标全名, 字段清单, 产出列集)]。
 
     表名容忍两种形态（rsplit 剥 schema，与 ts_compat 的查找容忍同款）：
     json 路径 baseline 产短名 target_table；档案路径 baseline 是 new-pipe 新版 ts
     （target_table 带 schema 如 dws.dwb_x）——统一剥成短名再拼全名/查 tables 键。
+    第四元=规则产出列集（rule_output_fields——列清单交集过滤，2026-09-15）。
     """
-    plan: List[Tuple[str, str, List[str]]] = []
+    plan: List[Tuple[str, str, List[str], set]] = []
     for rule_code, rule in ts_v2.get("rules", {}).items():
         tshort = str(rule.get("target_table") or "").rsplit(".", 1)[-1].lower()
         fields = [f["target_field"] for f in
                   ts_v2.get("tables", {}).get(tshort, {}).get("fields", [])]
-        plan.append((rule_code, f"{schema}.{tshort}", fields))
+        plan.append((rule_code, f"{schema}.{tshort}", fields, rule_output_fields(rule)))
     return plan
 
 
@@ -312,12 +313,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 4. INSERT 全量执行（老列+新列全量写一遍，验证写路径）
     inserts = []
-    for rule_code, target, fields in build_insert_plan(ts_v2, schema):
+    for rule_code, target, fields, produced in build_insert_plan(ts_v2, schema):
         select_sql = read_select(Path(args.etl_dir), rule_code)
         if not select_sql:
             continue
         try:
-            sql = wrap_insert(select_sql, target, fields)
+            sql = wrap_insert(select_sql, target, fields, produced)
             executor.execute(sql)
             inserts.append({"rule": rule_code, "status": "PASS", "detail": f"{target} 全量写入"})
         except Exception as e:

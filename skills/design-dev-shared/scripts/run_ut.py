@@ -133,21 +133,54 @@ def _type_fallback(pdecl: dict) -> str:
 
 
 
-def _resolve_insert_columns(table_fields: list) -> list[str]:
-    """INSERT 字段列表——结构源：ts.tables.{目标表}.fields（DDL 同源，顺序=装配顺序=切片顺序）。
+def rule_output_fields(rule: dict) -> set:
+    """规则产出列集（三桶 target 并集，小写）——INSERT/MERGE 列清单交集过滤用。
 
-    2026-09-11 定调（内网实证 CTE 炸批）：列清单不再从 SELECT 文本解析
-    （extract_select_aliases 对 CTE/注释/内联子查询的边界识别脆弱——CTE 体内
-    `row_number() over(...) as rn` 的 as rn 曾被误抓进 INSERT 列清单）。结构源
-    是权威登记处；SELECT 实际输出列与它的一致性由 6a describe 对账守
-    （SELECT * FROM (…) LIMIT 0 拿真实列序比对，权威解释器是数据库）。
+    2026-09-15 定调"列清单=结构源序 ∩ 规则产出列"：部分来源资产（多规则写同表/
+    accumulate）单规则只产子集，其余列不写——INSERT 缺省 NULL（全新行等价显式
+    NULL 补位），MERGE 的 UPDATE SET 只 SET 产出列（**保留其余列旧值**——全列 SET
+    +NULL 补位会把本规则不负责的列清成 NULL，是 bug 不是惯例）。direct 桶
+    'alias.col AS target' 取 AS 后段（装配产物一律带 AS）。
+    """
+    out = set()
+    f = rule.get("fields") or {}
+    for p in (f.get("processed") or []):
+        if isinstance(p, dict) and p.get("target"):
+            out.add(str(p["target"]).lower())
+    for a in (f.get("assign") or []):
+        if isinstance(a, dict) and a.get("target"):
+            out.add(str(a["target"]).lower())
+    for d in (f.get("direct") or []):
+        s = str(d)
+        t = s.rsplit(" AS ", 1)[-1].strip() if " AS " in s else s.rsplit(".", 1)[-1].strip()
+        if t:
+            out.add(t.lower())
+    if not out:
+        # 兼容旧形态（rule.fields-only 更早的 field_targets 数组；opt baseline 档案）
+        for t in (rule.get("field_targets") or []):
+            if str(t).strip():
+                out.add(str(t).strip().lower())
+    return out
 
-    平台等价性：平台按 SELECT 输出顺序拼列（位置对齐）；coder 被要求按切片顺序
-    输出（=结构源顺序）+ 6a 列序对账，INSERT 列序 == SELECT 输出序 == 平台会拼出的序。
+
+def _resolve_insert_columns(table_fields: list, produced: set = None) -> list[str]:
+    """INSERT 字段列表——结构源序 ∩ 规则产出列（2026-09-15 精确化）。
+
+    权威仍是结构源：ts.tables.{目标表}.fields（DDL 同源，顺序=装配顺序=切片顺序），
+    不从 SELECT 文本解析（2026-09-11 内网实证 CTE 炸批的教训不回退）；produced
+    （规则三桶 target 集，rule_output_fields 产）非空时按结构源序过滤到产出列（空集/
+    None=全列——旧档无产出声明保守全列）——
+    coder 不必为未产出列写 NULL AS x 凑全列（INSERT 缺省 NULL 等价；MERGE SET
+    产出列=保留其余列旧值）。produced=None 全列（单规则全字段/兼容旧调用）。
+
+    SELECT 实际输出列与清单的一致性由 6a describe 对账守（权威解释器是数据库）。
+    平台等价性：平台按 SELECT 输出顺序拼列（位置对齐）——UT 清单=SELECT 实际
+    输出（产出列）与平台形态一致；coder 按切片顺序输出 + 6a 列序对账。
 
     Args:
         table_fields: 表的全部字段（dict 列表取 target_field；或字符串列表）。
-    返回: 字段名列表（结构源顺序）；空清单抛 ValueError（拼不出合法 INSERT，fail-visible）。
+        produced: 规则产出列集（小写；空集/None=不过滤全列）。
+    返回: 字段名列表（结构源顺序过滤后）；空清单抛 ValueError（fail-visible）。
     """
     if table_fields and isinstance(table_fields[0], dict):
         names = [f.get("target_field", "") for f in table_fields]
@@ -162,20 +195,30 @@ def _resolve_insert_columns(table_fields: list) -> list[str]:
     if not names:
         raise ValueError(
             "INSERT 字段清单为空——ts.tables 里目标表无字段声明（检查 ts 装配/表短名匹配）")
+    if produced:
+        _pl = {str(p).lower() for p in produced}
+        _miss = sorted(_pl - {n.lower() for n in names})
+        if _miss:
+            raise ValueError(f"规则产出列不在目标表结构源内: {_miss}——对照 ts.tables 改 field_targets/拼写")
+        names = [n for n in names if n.lower() in _pl]
+        if not names:
+            raise ValueError("产出列过滤后清单为空——规则 fields 三桶无有效 target")
     return names
 
 
-def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
+def wrap_insert(select_sql: str, target_table: str, table_fields: list,
+                produced: set = None) -> str:
     """把 SELECT 包装成 INSERT 语句（模拟平台构建）。
 
     平台规则：
     - INSERT INTO 目标表 (字段列表)
     - SELECT 内容不变
-    - 字段列表 = ts 结构源顺序（见 _resolve_insert_columns——不从 SELECT 文本解析）
+    - 字段列表 = 结构源序 ∩ 规则产出列（见 _resolve_insert_columns——不从 SELECT 文本解析）
 
     table_fields: 该表的全部字段（从 tables 段取，已含审计字段）。
+    produced: 规则产出列集（rule_output_fields；None=全列）。
     """
-    field_names = _resolve_insert_columns(table_fields)
+    field_names = _resolve_insert_columns(table_fields, produced)
     columns = ",\n    ".join(field_names)
 
     return f"""INSERT INTO {target_table} (
@@ -186,7 +229,8 @@ def wrap_insert(select_sql: str, target_table: str, table_fields: list) -> str:
 
 
 def wrap_write(select_sql: str, target_table: str, table_fields: list,
-               load_mode: str = "truncate_table", write_condition: str = "") -> str:
+               load_mode: str = "truncate_table", write_condition: str = "",
+               produced: set = None) -> str:
     """按 load_mode + write_condition 把 SELECT 包装成平台写入语句（模拟平台构建）。
 
     平台规则（用户确认）：目标表别名 T，源（SELECT 结果）别名 T1。
@@ -201,14 +245,16 @@ def wrap_write(select_sql: str, target_table: str, table_fields: list,
         table_fields: 目标表全部字段（dict列表或字符串列表）。
         load_mode: 写入方式。
         write_condition: 写入条件（merge 的 ON、partition 的分区名、delete 的 WHERE）。
+        produced: 规则产出列集（rule_output_fields；None=全列）。MERGE 的 UPDATE SET
+            只 SET 产出列——**保留其余列旧值**（全列 SET 会把本规则不负责的列清成 NULL）。
     """
     # 非 merge/update 的都走 INSERT（partition/delete 的清空动作在 ut_execute 预处理）
     if load_mode not in ("merge_into", "update"):
-        return wrap_insert(select_sql, target_table, table_fields)
+        return wrap_insert(select_sql, target_table, table_fields, produced)
 
     # MERGE / UPDATE：拼 MERGE INTO 语句
-    # ★ 字段列表 = 结构源顺序（见 _resolve_insert_columns；列序一致性由 6a describe 对账守）
-    field_names = _resolve_insert_columns(table_fields)
+    # ★ 字段列表 = 结构源序 ∩ 规则产出列（见 _resolve_insert_columns；列序一致性由 6a describe 对账守）
+    field_names = _resolve_insert_columns(table_fields, produced)
 
     columns = ", ".join(field_names)
     # UPDATE SET：源字段赋值（T1.col 对应每个目标字段，审计字段不更新由业务定，这里全量 UPDATE）

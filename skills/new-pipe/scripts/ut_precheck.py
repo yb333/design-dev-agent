@@ -142,7 +142,7 @@ def main():
 
     # DQ 兜底（2026-09-14 DQ 拆分，N_DQ1 的 UT 侧防线）：RS 有 DQ 需求但 dq.json
     # 缺失（producer 未起调/装配失败）——fail loud，防 DQ 静默漏交付（旧 ts 兜底读 dq_rules）
-    from run_ut import load_dq_rules
+    from run_ut import load_dq_rules, rule_output_fields
     _rs_probe = ts_path.parent / "_internal" / "rs_input.json"
     if _rs_probe.exists():
         try:
@@ -312,6 +312,11 @@ def main():
             _tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
             expected_cols = [str(f.get("target_field", "")).lower()
                              for f in _tbl_fields if isinstance(f, dict) and f.get("target_field")]
+            # 列清单=结构源序 ∩ 规则产出列（2026-09-15）：对账口径与 INSERT 清单一致——
+            # 部分来源规则 SELECT 只出产出列（未产出的列不写 NULL 凑数），比交集序
+            _produced = rule_output_fields(rule)
+            if _produced:
+                expected_cols = [c for c in expected_cols if c in _produced]
             if expected_cols:
                 r_desc = etl_executor.execute(
                     f"SELECT * FROM ({select_sql.strip().rstrip(';')}) _ut_cols LIMIT 0")

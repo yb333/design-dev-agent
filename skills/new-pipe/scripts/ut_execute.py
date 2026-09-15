@@ -27,7 +27,7 @@ except AttributeError:
 # dws_db/config_paths/run_ut 在 shared 公共库（上方 bootstrap 已接通）；ut_diagnose 同目录
 from dws_db import create_executor
 from config_paths import db_sources_path
-from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, run_dq_checks, load_dq_rules
+from run_ut import substitute_params, resolve_all_params, read_select, wrap_insert, wrap_write, run_ut_check, run_dq_checks, load_dq_rules, rule_output_fields
 
 
 def _dump_rule_sql(ts_path: Path, rule_code: str, target_table: str,
@@ -260,7 +260,8 @@ def main():
             if not tbl_fields:
                 tbl_fields = rule.get("fields", [])
             try:
-                _wrap_probe = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition)
+                _produced = rule_output_fields(rule)
+                _wrap_probe = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition, _produced)
             except ValueError as ve:
                 # INSERT 列清单解析异常（重复列=CTE 边界错位/重复别名）——规则级 FAIL，不拖垮整轮
                 rule_result["status"] = "FAIL"
@@ -273,7 +274,7 @@ def main():
                 prev_failed = True
                 continue
 
-            insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition)
+            insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition, rule_output_fields(rule))
 
             print(f"  ⏳ INSERT 执行中...（全量）")
             r = executor.execute(insert_sql)

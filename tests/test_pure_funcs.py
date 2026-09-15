@@ -495,6 +495,52 @@ class TestSqlParseStringAwareness:
             _resolve_insert_columns([{"target_field": "x"}, {"target_field": "x"}])
 
 
+class TestInsertColumnsIntersection:
+    """列清单=结构源序∩规则产出列（2026-09-15：部分来源规则只产子集——未产出列
+    INSERT 缺省 NULL/MERGE SET 产出列保旧值，coder 禁 NULL AS x 凑全列）。"""
+
+    def test_intersection_keeps_structure_order(self):
+        from run_ut import _resolve_insert_columns
+        tbl = [{"target_field": n} for n in ("a", "b", "c", "d")]
+        # 产出 b/d → 按结构源序出 [b, d]（不是规则声明序）
+        assert _resolve_insert_columns(tbl, {"d", "b"}) == ["b", "d"]
+
+    def test_full_production_unchanged(self):
+        """单规则全字段：交集=全序，行为与旧全列完全一致（非破坏）。"""
+        from run_ut import _resolve_insert_columns
+        tbl = [{"target_field": n} for n in ("a", "b")]
+        assert _resolve_insert_columns(tbl, {"a", "b"}) == ["a", "b"]
+        assert _resolve_insert_columns(tbl, None) == ["a", "b"]  # None=全列（兼容）
+        assert _resolve_insert_columns(tbl, set()) == ["a", "b"]  # 空集=旧档无声明保守全列
+
+    def test_produced_not_in_structure_raises(self):
+        import pytest
+        from run_ut import _resolve_insert_columns
+        with pytest.raises(ValueError, match="不在目标表结构源"):
+            _resolve_insert_columns([{"target_field": "a"}], {"a", "ghost_col"})
+
+    def test_merge_set_only_produced(self):
+        """MERGE 的 UPDATE SET 只 SET 产出列——保留其余列旧值（全列 SET 会清 NULL）。"""
+        from run_ut import wrap_write
+        tbl = [{"target_field": n} for n in ("k", "v1", "v2", "v3")]
+        sql = wrap_write("SELECT k, v1 FROM s", "dws.t_f", tbl, "merge_into", "T.k=T1.k", {"k", "v1"})
+        assert "INSERT (\n        k, v1\n    )" in sql
+        assert "T.v1 = T1.v1" in sql and "T.v2 = T1.v2" not in sql and "T.v3 = T1.v3" not in sql
+
+    def test_rule_output_fields_three_buckets_and_legacy(self):
+        from run_ut import rule_output_fields
+        rule = {"fields": {
+            "processed": [{"target": "p1"}],
+            "assign": [{"target": "a1"}],
+            "direct": ["s.x AS d1", "s.y"],
+        }}
+        assert rule_output_fields(rule) == {"p1", "a1", "d1", "y"}
+        # 旧形态兜底：fields 三桶空 → field_targets
+        assert rule_output_fields({"field_targets": ["K", "v"]}) == {"k", "v"}
+        # 无声明 → 空集（保守全列）
+        assert rule_output_fields({}) == set()
+
+
 class TestCastTypeStripping:
     """CAST(x AS <type>) 结构化剥除——类型名是开放集（int8/timestamptz…），枚举白名单必漏。
 

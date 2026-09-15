@@ -154,8 +154,9 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
         )
 
     # 5. 投影列序对账（2026-09-15：内网实证列序错位到 6a describe 才发现——前移到
-    # coder 写完即查。INSERT 列清单=结构源 ts.tables.fields 序（run_ut 按位对齐拼接），
-    # SELECT 投影序≠结构源序=静默错位数据。集合相等才比序：集合不等时字段覆盖已报，避免双重噪音）
+    # coder 写完即查。INSERT 列清单=结构源序 ∩ 规则产出列（run_ut 同口径——部分来源
+    # 规则只产子集，未产出列不写 NULL 凑数），投影序≠交集序=按位对齐静默错位。
+    # 集合相等才比序：集合不等时字段覆盖已报，避免双重噪音）
     from sql_parse import extract_top_projection
     proj = extract_top_projection(sql_text)
     if proj is not None and proj != ["*"]:
@@ -168,9 +169,11 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
             nm = str(nm).strip().lower()
             if nm:
                 exp.append(nm)
+        if ts_fields:
+            exp = [c for c in exp if c in ts_fields]  # 交集序=INSERT 清单序
         if exp and set(proj) == set(exp) and proj != exp:
             issues.append(
-                f"[列序] SELECT 投影序与目标表字段序不一致——INSERT 按位对齐（列清单=结构源序），"
+                f"[列序] SELECT 投影序与目标表字段序不一致——INSERT 按位对齐（列清单=结构源序∩产出列），"
                 f"乱序=静默错位数据:\n  SELECT 投影序: {proj}\n  目标表序:   {exp}"
             )
 

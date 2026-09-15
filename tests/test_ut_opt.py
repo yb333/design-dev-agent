@@ -125,7 +125,8 @@ class TestInsertPlan:
     def test_short_and_prefixed_agree(self, tmp_path):
         short = build_insert_plan(self._ts(False), "dws")
         prefixed = build_insert_plan(self._ts(True), "dws")
-        assert short == prefixed == [("R0002", "dws.dwb_trade_order_d", ["order_id"])]
+        # 第四元=产出列集（本 fixture 规则无产出声明→空集=保守全列，2026-09-15）
+        assert short == prefixed == [("R0002", "dws.dwb_trade_order_d", ["order_id"], set())]
 
 
 class TestNewColumnNulls:
