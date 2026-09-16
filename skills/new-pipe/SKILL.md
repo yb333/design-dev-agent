@@ -211,33 +211,6 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json 与 `{资产
 
 ---
 
-## 步骤 2.5：DQ producer 并行（assemble_ts 通过即起，塞闸口①等待窗口）
-
-**DQ 已拆出主线 designer（2026-09-14）**：独立岗位 dws-dq-producer 一体完成 DQ 翻译/设计与 SQL 实现（断言式翻译 + 对比式独立重算）。起调条件=**ts.json 组装完成**（DQ 依赖 ts 的结构事实，不需要确认状态）——在闸口①人审等待窗口内并行跑完，闸口①人审**完整设计**（主线+DQ）。
-
-先判断要不要起：`_internal/rs_input.json` 的 `dq_requirements` 非空才起；空则跳过本步骤（不产 dq.json/ts.md 无 DQ 章节，全程零 DQ）。
-
-```
-Task(
-  subagent_type="dws-dq-producer",
-  description="DQ检查设计实现",
-  prompt="DQ 检查的设计与实现（按 dws-dq skill 流程）：rs_input: {deliver}/_internal/rs_input.json，
-          ts: {deliver}/ts.json（待审态，只读结构），直接产 dq.json 到 {deliver}/、
-          检查 SQL 到 {deliver}/dq/。"
-)
-```
-
-producer 交卷后**校验渲染**（硬阻断，失败恢复 producer 会话修，限 3 轮）：
-
-```bash
-python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --dq-src {deliver}/dq.json \
-    --rs {deliver}/_internal/rs_input.json
-```
-
-校验补全 dq.json（idx/文件名/mode 缺省/meta+dq 调度任务）+ 校验（文件在位/引用对账/禁 tmp/幻觉列）+ ts.md 追加 DQ 表格（主线章节字节不动）。**评审就看 ts.md 的 DQ 表格**——歧义标注随表格呈现，无单独材料。
-
----
-
 ## 步骤 3：闸口①（人确认设计方向）
 
 **这是三条红线之一（语义判断不自主）——必须停下问人，不能自己往下走。**
@@ -258,13 +231,12 @@ python PIPE_SCRIPTS/gate_summary.py --ts {deliver}/ts.json --rs {deliver}/_inter
 python PIPE_SCRIPTS/diagnose_fanout.py --ts {deliver}/ts.json --all
 ```
 
-然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**DQ 评审=ts.md 的 DQ 表格**（步骤 2.5 渲染——无单独材料）：断言式扫一眼，**对比式口径与歧义裁决点是确认重点**（producer 的独立理解与 designer 的口径理解并排，理解差= mapping 歧义，人裁决）。**question 模板分场景**：
+然后**立即调 question 停下等用户确认**（不允许跑完直接进编码段）。**DQ 不门闸口①**（2026-09-15 复调：方案 V 曾把 DQ 前移塞人审窗口致闸口①被 DQ 完成时间门住[+20min]——DQ 修复成本分钟级不值得最贵的审前位；DQ 设计材料归闸口②与执行结果同屏）。**question 模板分场景**：
 
 **检查全部通过**（三常规选项）：
 
 ```
 question("闸口①设计确认（{资产}）：{gate_summary 摘要——表/规则数/字段数}\\n"
-         "DQ 设计：{ts.md DQ 表格摘要——N 断言式/M 对比式/K 歧义待裁决}\\n"
          "关联质量：全部通过。请选择：",
          options=["确认设计，进入编码",
                   "需要修改设计（说明哪里改→回 designer；涉 DQ 字段则连带 DQ 重做）",
@@ -284,7 +256,7 @@ question("闸口①设计确认（{资产}）：{gate_summary 摘要}\\n"
 ```
 
 - 用户选"确认设计，进入编码" → 进入步骤 4
-- 用户选"需要修改设计"（说明哪里改）→ 回步骤 2 重新调 designer；**变更字段涉及 DQ 检查的（对照 ts.md DQ 表格的 violation_condition 引用）→ 恢复 dws-dq-producer 会话联动改受影响条目**（短会话分钟级，与主线返工同窗口，时间不放大），重跑 assemble_dq 刷新
+- 用户选"需要修改设计"（说明哪里改）→ 回步骤 2 重新调 designer（DQ 尚未起跑——改完结构直接带新 ts 进步骤 4，无联动成本）
 - 用户选"源端输入问题→退 BA" → 人协调 BA 修源端（数据一对多/脏/关联声明），修完**重跑 1a 全流程**（输入变更全流程重来——恢复执行规则同款）
 - 用户选"放弃" → 结束
 
@@ -306,7 +278,7 @@ python PIPE_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
 输出执行计划 JSON：`ddl` / `etl_rules` / `init_rules` / `groups` / `summary`。
 **发起哪些任务一律以计划为准**——`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起。**
 
-闸口①确认后，**4a/4b 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。**DQ 不在本段**（步骤 2.5 已随闸口①窗口完成装配，本段不再有 DQ 任务）。
+闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。DQ 走 4c 与 coder 并行——谁慢等谁，DQ 时间被 coder 链吸收（2026-09-15 复调：此前方案 V 前移 DQ 塞闸口①窗口，人审快于 DQ 时闸口①被完成时间门住，+20min 实测）。
 
 ### 4a：生成 DDL（脚本）
 
@@ -329,9 +301,28 @@ Task(
 
 **task_id 由 Task 调用返回后你自己记录**（规则→会话映射，步骤 6 用），**不写进 coder 的 prompt**。完成后验证 `{deliver}/etl/{rule_code}.sql` 已生成。
 
-### 4c：（已退役）DQ 不在编码段
+### 4c：DQ producer（与 4a/4b 同消息并行；dq_requirements 非空才起）
 
-DQ 已随 2026-09-14 拆分前置到步骤 2.5（dws-dq-producer 在闸口①窗口内完成设计实现+装配）。本段无 DQ 任务；收到 DQ 生成任务形态 = 时序错位，回步骤 2.5 检查。
+**DQ 已拆出主线 designer（2026-09-14）**：独立岗位 dws-dq-producer 一体完成 DQ 翻译/设计与 SQL 实现（断言式翻译 + 对比式独立重算）。`_internal/rs_input.json` 的 `dq_requirements` 非空才起；空则跳过（无 dq.json/ts.md 无 DQ 章节，全程零 DQ）。
+
+```
+Task(
+  subagent_type="dws-dq-producer",
+  description="DQ检查设计实现",
+  prompt="DQ 检查的设计与实现（按 dws-dq skill 流程）：rs_input: {deliver}/_internal/rs_input.json，
+          ts: {deliver}/ts.json（只读结构），直接产 dq.json 到 {deliver}/、
+          检查 SQL 到 {deliver}/dq/。"
+)
+```
+
+producer 交卷后**校验渲染**（硬阻断，失败恢复 producer 会话修，限 3 轮）：
+
+```bash
+python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --dq-src {deliver}/dq.json \
+    --rs {deliver}/_internal/rs_input.json
+```
+
+校验补全 dq.json（idx/文件名/mode 缺省/meta+dq 调度任务）+ 校验（文件在位/引用对账/禁 tmp/幻觉列/SQL 风格项）+ ts.md 追加 DQ 表格（主线章节字节不动，含歧义标注与 declined 建议不做段）。**DQ 设计材料归闸口②**——与执行结果同屏判读（审口径时直接看跑出来的数字）。
 
 ### 4d：init coder（计划 init_rules 非空时，等 4b 完成）
 
@@ -494,7 +485,7 @@ python PIPE_SCRIPTS/assemble_export.py \
 
 ## 步骤 8：闸口②（人确认编码质量）
 
-**必须调 question 展示结果摘要等用户确认**（摘要含 UT 通过/失败数 + **DQ 检查结果（0 行=通过；有告警必须列样例与去向判断）** + 产出文件清单），跑完必须停下，不允许自己结束流程：
+**必须调 question 展示结果摘要等用户确认**（摘要含 UT 通过/失败数 + **DQ 材料：ts.md DQ 表格的设计部分（对比式口径/歧义裁决点/declined 建议不做——producer 独立理解与 designer 口径并排，理解差=mapping 歧义）与执行结果（0 行=通过；有告警必须列样例与去向判断）同屏** + 产出文件清单），跑完必须停下，不允许自己结束流程：
 
 - 用户选「**确认，结束**（第一选项·默认推荐）」→ 制品以占位符形态出厂，**直接建档结束**：
   完整度报告已随步骤7输出（转述即可）；待补项由内网取码脚本回填或导入前人工补——

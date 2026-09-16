@@ -123,10 +123,9 @@ ddlc_design_dev/
    - **多步骤数据流模型**：每个 rule 有 step_type（full/aggregate/incremental_extract/merge）+ target_role（intermediate/target），多步骤间用 produces_for/reads 声明依赖（表名引用 target_table/reads 一律带 schema 如 dws.tmp_x——2026-08-31 定调消形态分叉，N12b warn 抓漏，代码兼容短名）。**中间表≠聚合**（target_role=intermediate 按"产出供谁消费"定义，可以是 aggregate/full/incremental_extract 任意 step_type）。complexity-playbook §四 是 step_type 决策权威，incremental-playbook 是增量设计权威。
    - **增量防臆想**（攻"只做主表"+攻"全量心智装增量"）：assemble_ts 硬校验 N14（标了增量但完全没增量处理；旧版"source 涉驱动表"析取恒为真已删）+ N28（增量资产至少两个规则——增量取数 + 终态增量更新，单规则直灌不被支持）+ N_INIT2（终态规则禁 truncate_table，**锚在 RS 增量声明上**——designer 忘标增量段按全量设计一样被拦）+ N15/N16。累积共建场景（多来源写同一中间表）标 `build_mode: accumulate`，配 dedup_strategy。
    - designer 可调 explore.py 试算 JOIN 键唯一性（第4层关联安全）。
-3. **DQ producer 并行**（★ 2026-09-14 拆分，方案 V）：assemble_ts 通过即调 **dws-dq-producer**（塞闸口①人审等待窗口；RS dq_requirements 空则跳过）——**直接产 dq.json+SQL**（两跳并一跳 2026-09-15）→ assemble_dq.py 校验补全（文件在位/引用对账/禁 tmp/幻觉列）+ ts.md DQ 表格追加渲染——**评审就看 ts.md 的 DQ 表格**（歧义随表格呈现，无单独材料）
-4. **闸口①**：gate_summary.py 出摘要 + ts.md DQ 表格（评审就看这处；歧义随表格呈现），人确认**完整设计**（主线+DQ；返工涉 DQ 引用字段→producer 联动改）
-5. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
-6. **编码**：逐规则调 dws-coder，slice_ts.py 切片单规则上下文，coder 产 SELECT（无 DQ 任务——已前置步骤 3）
+3. **闸口①**：gate_summary.py 出摘要（**只等主线材料**——DQ 不门闸口①，2026-09-15 复调：方案 V 曾前移 DQ 塞人审窗口，人审快于 DQ 时被完成时间门住 +20min 实测），人确认主线设计
+4. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
+5. **编码段三路并行**（闸口①确认后同消息发起）：逐规则调 dws-coder 产 ETL SELECT（slice_ts 切片）+ **dws-dq-producer 直接产 dq.json+SQL**（RS dq_requirements 非空才起；两跳并一跳）→ assemble_dq.py 校验补全（文件在位/引用对账/禁 tmp/幻觉列）+ ts.md DQ 表格追加渲染——DQ 时间被 coder 链吸收
 7. **UT**（需数据库）：check_db.py 探活 → 6a ut_precheck（回退+DDL+SELECT预检，秒级；含 DQ 兜底——RS 有需求但 dq.json 缺失 fail loud）→ 6b ut_execute（INSERT+UT检查+DQ 段读 dq.json，分钟级）
 8. **执行回路**（★ 三类分流，见下）
 9. **闸口②**：人确认编码质量（DQ 结果判读：ALERT 三选一/对比式 0 行双义）
@@ -302,7 +301,7 @@ design-guide.md 已从 335 行大杂烩拆分为：design-guide（物理决策�
 
 - **角色**：`dws-dq-producer`（新薄 agent，命名否决史：designer 重名/qc=团队代码检视/缩写）+ dws-dq skill 改造（从 coder 侧迁来）。岗位本质=翻译者+独立实现者，审计独立性灵魂=不信任被检对象自述、独立取证。**四种隔离**支撑独立：干净会话（防自检锚定）/身份聚焦（三纪律身份级：输入隔离·歧义不拍板·检查成本自约束）/输入契约错开（同原料两套理解=mapping 歧义探测器）/回路隔离（FAIL 回短会话分钟级）。
 - **两模式**：断言式（RS 人话→violation_condition 翻译）/ 对比式（独立重算比对，设计开发一体——写 SQL 即设计动作，装配是秒级脚本≠开发段）。**输入隔离铁律：不读 design_logic/ETL SQL**；DQ 引用域=源表+目标表**禁 tmp**（tmp 是被检实现的一部分）；检查成本设计期自约束（聚合比对优先/时间窗——随调度每天跑）。
-- **时序（方案 V）**：assemble_ts 校验通过即起调（塞闸口①人审等待窗口；非交互同触发器），**闸口①人审完整设计**（主线+ts.md DQ 表格+歧义裁决点——producer 的独立理解与 designer 口径并排，理解差=mapping 歧义人裁决）。闸口①返工涉 DQ 引用字段→恢复 producer 联动改（时间不放大）。DQ 依赖 ts 的**结构事实**不需要确认状态——business_key 直接用待审 ts 的规范化结果。
+- **时序（2026-09-15 复调，替代方案 V）：闸口①后与 coder 同消息并行**——方案 V（塞闸口①人审窗口审完整设计）实测人审快于 DQ 时闸口①被 DQ 完成时间门住（+20min/40min 基线）；DQ 修复成本分钟级（短会话改一条 SQL+只重跑 DQ 段），不值得最贵的审前位。DQ 设计材料（对比式口径/歧义/declined）归闸口②与执行结果同屏——审口径时直接看跑出来的数字，producer 独立理解与 designer 口径并排=歧义探测器的价值保留。producer 起调用确认后的 ts（结构已冻结）。
 - **产物边界（角色=产物域）**：ts.json 无 DQ（闸口①后冻结）/ **dq.json 唯一源**（producer 直接产最薄 rules，assemble_dq 校验补全；mode/ambiguities/waived+dq 调度任务）/ etl 归 coder / dq/*.sql 归 producer。**ts.md 保留 DQ 章节**（团队无 dq 文档定义、习惯是 ts 里章节——"文档形态守旧、数据所有权革新"），assemble_dq **追加式渲染**（主线章节字节不动，**评审就看这张表**——独立评审材料 dq_gate_summary 已砍）；独立 dq.md 否决；团队硬界面零变化（制品包/调度任务/ts.md 长相全不变，团队无需感知 dq.json）。
 - **producer 输入三件套**（pick_dq_context.py）：确定性闭包切片（RS 需求文本→目标字段种子→沿 transform_detail 引用展开传递依赖）+ 存疑显式标记（人话逻辑机器圈不动→标注交付，不静默缺失）+ 按需查询服务（--query/--field 检索 mapping 原文段）——不全量读（漏圈静默+上下文稀释）不纯切片（人话引用尽力而为）。
 - **校验渲染**（assemble_dq.py，2026-09-15 两跳并一跳精简：producer 直产 dq.json，无 decisions 中间产物）：N_DQ1-3（RS 对照）+N_DQ4（violation_condition 必填+mode 值合法）+N_DQ5（引用对账+三段式+**禁 tmp**）+N_DQ9-10（SQL 文件在位 dq_filename 派生/SQL 文本对账：三段式+**目标别名列 ⊆ 目标表字段拦幻觉列**+FROM ⊆ 源表∪目标表拦 tmp）+补全（idx/sql_file/mode 缺省/meta）+ts.md 表格渲染。**锚定声明/compare_sources 暂缓**（用户定调：opt DQ 变更低频精简优先——dq_impact 影响分析走 violation_condition/SQL 粗提兜底，opt 实遇再迭代；N_DQ6-8 契约随声明退役）。
