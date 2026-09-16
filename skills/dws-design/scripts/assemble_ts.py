@@ -1677,6 +1677,34 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                 f"也不在本规则 reads 的 tmp 别名里）——tmp 表别名用 reads 对象形式声明"
                 f"（如 reads: [{{table: tmp1, alias: t1}}]），否则 coder 无法定位该别名指哪张表")
 
+        # ============================================================
+        # N_JOIN3（hard）：join_safety 覆盖率——joins 声明的真源表必须有对应
+        # join_safety 条目（关联安全三维判断都要有结论的结构保证）。
+        # 防误判边界（宁放过不误报，2026-09-15 用户定调）：
+        #   - tmp 表 join 豁免（自产表无输入侧唯一性可言——reads 声明的别名）
+        #   - 无 joins 的规则不要求（单表直灌无关联安全对象）
+        #   - 别名无表绑定的跳过（N32 已 warn，不重复报）
+        #   - 只查条目存在性，不判 join_key_unique 真伪（"实测唯一的表 reason 可空"
+        #     是合法形态，机械判必误伤——依据真伪归闸口① diagnose_fanout 实证）
+        # ============================================================
+        _safety_tables = {_table_short(str(js.get("table") or ""))
+                          for js in (rule.get("join_safety") or []) if isinstance(js, dict)}
+        _missing = []
+        for j in (rule.get("joins") or []):
+            if not isinstance(j, dict):
+                continue
+            _ja = (j.get("alias") or "").strip().lower()
+            if not _ja or _ja in rule_tmp_alias or _ja not in alias_map:
+                continue  # tmp 豁免 / 无绑定（N32 管）
+            _tbl_short = _table_short(str(alias_map.get(_ja) or ""))
+            if _tbl_short and _tbl_short not in _safety_tables:
+                _missing.append(f"{_ja}({_tbl_short})")
+        if _missing:
+            vr.add_hard("L4", "N_JOIN3",
+                f"规则 {code} 的关联表 {_missing} 缺 join_safety 条目——每个声明的 JOIN "
+                f"都要有关联安全结论（键唯一性/类型/内容三维）；先取证（推荐起手批量 "
+                f"explore，或按输入声明填写），缺条目=漏判断不是省事")
+
     return vr
 
 

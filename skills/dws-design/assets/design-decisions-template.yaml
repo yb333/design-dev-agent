@@ -126,7 +126,7 @@ rules:
         join_filter: ""                # JOIN 此表时的范围限定（来自 mapping 的"关联&限定条件"，如 is_current = 1）。explore.py 用它验唯一性
         join_key_unique: true           # JOIN键在 join_filter 限定下是否唯一（不确定时调 explore.py 验证）
         strategy: ""                    # 不唯一时的对齐策略（GROUP BY收敛/取最新有效行）
-        reason: ""
+        reason: ""                      # 判断依据来源：实测（explore 结论）或输入声明（出处）——join_key_unique 必须有据（闸口①独立实证真伪）""
 
     # 排重策略（★ 仅累积共建场景填：build_mode=accumulate 的表，多来源有数据重叠需排重时）
     # 三层分工：RS/mapping 给"需去重"→ designer 细化为可落地策略 → coder 翻译成 SQL

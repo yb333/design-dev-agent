@@ -2473,6 +2473,62 @@ class TestPickTargets:
         assert entry["field_targets"] == ["id", "f1"] and entry["field_logics"] == {}
 
 
+class TestJoinSafetyCoverage:
+    """N_JOIN3：join_safety 覆盖率（2026-09-15 源表画像机制配套）——
+    joins 的真源表缺条目=漏判断拦；防误判边界：tmp 豁免/无 joins 不要求/
+    无绑定跳过（N32 管）/不判真伪（归闸口①实证）。"""
+
+    def test_missing_safety_entry_hard(self):
+        rs = make_rs_input()
+        rs["source_tables"] = [
+            {"source_schema": "ods", "source_table": "ods_test_f", "source_alias": "s"},
+            {"source_schema": "ods", "source_table": "ods_pay_f", "source_alias": "p"}]
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "装配", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f",
+            "step_type": "full", "target_role": "target",
+            "joins": [{"alias": "p", "type": "LEFT JOIN", "condition": "s.id = p.id"}],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+            # join_safety 只有 ods_test_f（驱动表），缺 ods_pay_f
+            "join_safety": [{"table": "ods_test_f", "join_filter": "", "join_key_unique": True}],
+        }])
+        vr = _run(dd, rs)
+        assert "N_JOIN3" in _codes(vr, "L4")
+        assert _level_of(vr, "N_JOIN3") == "hard"
+
+    def test_full_coverage_passes(self):
+        rs = make_rs_input()
+        dd = make_design_decisions()
+        dd["rules"][0]["joins"] = [{"alias": "t", "type": "LEFT JOIN", "condition": "h.id = t.id"}]
+        dd["rules"][0]["join_safety"] = [
+            {"table": "ods_test_f", "join_filter": "", "join_key_unique": True, "reason": "实测 explore"}]
+        vr = _run(dd, rs)
+        assert "N_JOIN3" not in _codes(vr, "L4")
+
+    def test_tmp_join_exempt_and_no_joins_exempt(self):
+        """tmp 别名的 join 豁免（自产表）；无 joins 的规则不要求（两防误判边界）。"""
+        rs = make_rs_input()
+        dd = make_design_decisions()
+        # 无 joins → 不要求 join_safety（默认 decisions 即此形态）
+        vr = _run(dd, rs)
+        assert "N_JOIN3" not in _codes(vr, "L4")
+        # tmp join（reads 对象形式声明别名）→ 豁免
+        dd2 = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f"}])
+        vr2 = _run(dd2, make_incremental_rs_input())
+        assert "N_JOIN3" not in _codes(vr2, "L4")
+
+    def test_table_name_form_tolerance(self):
+        """join_safety 的 table 键带 schema 前缀/短名都认（归一短名比对）。"""
+        rs = make_rs_input()
+        dd = make_design_decisions()
+        dd["rules"][0]["joins"] = [{"alias": "t", "type": "LEFT JOIN", "condition": "h.id = t.id"}]
+        dd["rules"][0]["join_safety"] = [
+            {"table": "ods.ods_test_f", "join_filter": "", "join_key_unique": True}]
+        vr = _run(dd, rs)
+        assert "N_JOIN3" not in _codes(vr, "L4")
+
+
 class TestJoinKeyTypesAndDqContract:
     """N_JOIN2 自设关联键类型比对 / N_DQ4·N_DQ5 violation_condition / design_logic 单行归一。
 
