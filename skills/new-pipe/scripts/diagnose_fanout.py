@@ -35,12 +35,48 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 from sql_parse import parse_join_pairs
 
 
+def _unwrap_parens(t: str) -> str:
+    """剥**配对**的包裹括号（首 ( 的闭合点恰在末位才剥一层）。
+
+    裸 strip("()") 不认配对——`(a.x in ('1','2'))` 会把外层 ) 和 IN 收括号 ) 一起
+    剥掉拼出 `('1','2'` 残缺 SQL（2026-09-15 内网实证：关联条件带 IN 直接炸）。"""
+    t = t.strip()
+    while t.startswith("(") and t.endswith(")"):
+        depth = 0
+        for i, ch in enumerate(t):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i != len(t) - 1:
+                    return t  # 首 ( 中途已闭合——不是包裹括号（如 (a=1) or (b=2)）
+        t = t[1:-1].strip()
+    return t
+
+
 def _split_terms(text: str) -> list[str]:
-    """把 condition/filter 按顶层 AND 拆成项（含中文连词 且/并且——BA 自由文本）。"""
-    if not text:
-        return []
-    parts = re.split(r"\s+and\s+|并且|且", str(text), flags=re.IGNORECASE)
-    return [p.strip().strip("()").strip() for p in parts if p.strip()]
+    """把 condition/filter 按**顶层** AND 拆项（括号深度感知；含中文连词 且/并且）。
+
+    括号内的 and 不拆（包裹括号 `(a=1 and b in (1,2))` 整项保留+剥包裹后内含 and
+    合法；IN 列表内更不拆）——旧版裸 split 在包裹括号内部切开，两半各带残括号；
+    旧版 strip("()") 还会剥掉 IN 收括号。两bug 2026-09-15 修。"""
+    s = str(text or "")
+    # mask 括号内内容后找顶层 and 分割点，按坐标切原串（保内容零失真）
+    masked_chars, depth = [], 0
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        masked_chars.append(ch if depth == 0 else "\x00")
+    masked = "".join(masked_chars)
+    spans = [m.span() for m in re.finditer(r"\s+and\s+|并且|且", masked, flags=re.IGNORECASE)]
+    parts, prev = [], 0
+    for a, b in spans:
+        parts.append(s[prev:a])
+        prev = b
+    parts.append(s[prev:])
+    return [_unwrap_parens(p) for p in parts if p.strip()]
 
 
 def _terms_for_alias(terms: list[str], alias: str) -> list[str]:

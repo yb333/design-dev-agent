@@ -658,3 +658,32 @@ def test_rule_not_found_raises(tmp_path):
     from diagnose_fanout import diagnose
     with pytest.raises(ValueError, match="没有规则"):
         diagnose(tmp_path / "ts.json", "R9999")
+
+
+class TestSplitTermsParenSafety:
+    """_split_terms 括号安全（2026-09-15 内网实证：关联条件带 IN 被拼残直接 SQL 报错）。
+
+    旧版两 bug：裸 strip("()") 把 IN 收括号连同外层包裹括号一起剥
+    （`(a.type in ('X','Y'))` → `a.type in ('X','Y'`）；裸 split 在包裹括号内部
+    的 and 处切开两半各带残括号。新版=深度感知拆分+配对剥包裹。"""
+
+    def test_in_list_parens_not_stripped(self):
+        from diagnose_fanout import _split_terms
+        assert _split_terms("(a.type in ('X','Y')) and b.dt='2024'") == \
+            ["a.type in ('X','Y')", "b.dt='2024'"]
+
+    def test_wrapping_parens_inner_and_not_split(self):
+        from diagnose_fanout import _split_terms
+        assert _split_terms("(a.x=1 and a.type in ('X','Y'))") == \
+            ["a.x=1 and a.type in ('X','Y')"]
+
+    def test_plain_top_level_split_and_single_in(self):
+        from diagnose_fanout import _split_terms
+        assert _split_terms("a.status in ('X','Y') and b.dt >= '2024'") == \
+            ["a.status in ('X','Y')", "b.dt >= '2024'"]
+        assert _split_terms("a.code in (1,2,3)") == ["a.code in (1,2,3)"]
+
+    def test_mid_closed_paren_kept(self):
+        """首括号中途闭合不是包裹括号（or 语义）——不剥，保括号安全。"""
+        from diagnose_fanout import _split_terms
+        assert _split_terms("(a=1) or (b=2)") == ["(a=1) or (b=2)"]
