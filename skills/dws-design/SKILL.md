@@ -6,29 +6,9 @@ description: >-
   再由 assemble_ts.py 组装成 TS 制品包(ts.json + ts.md)。
 ---
 
-## ⚠️ 文件路径规则（必须遵守）
+## ⚠️ 文件路径规则
 
-本 skill 的所有文件（scripts/ 下的脚本、assets/ 下的模板、references/ 下的指导知识）都在 **skill 安装目录** 下，不在你的工作目录下。
-
-**读取兼容**（内网 bug：≥2 层子 agent 丢 read 的目录权限，read 工具可能被拒）：read 工具优先；**被拒即 fallback** bash 标准写法 `Get-Content -Encoding UTF8 '<绝对路径>'`（读无 BOM 问题，引用文件全为仓内 UTF-8）——标准写法失败上报，禁换变体试错。
->
-> **附属文件以本文件的路由为准，不要依赖 skill_files 清单**——skill 加载附带的文件清单是采样的（上限 10 个，本 skill 有 17 个附属文件），清单里没有 ≠ 文件不存在；本文件提到的每个 assets/references 相对路径都真实存在，按 `{location所在目录}` 拼绝对路径直接 Read。
-
-### 怎么拿到 skill 安装目录的真实路径
-
-加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找文件——location 的同级目录下分三类：
-- `scripts/`：脚本（.py）
-- `assets/`：模板（骨架、example 配置，带 template/example 后缀）
-- `references/`：指导知识（规范、方法论、格式说明等文档）
-
-### 读取文件
-
-用注入的 location 路径拼目录，例如：
-- `{location所在目录}/assets/design-decisions-template.yaml`（模板骨架）
-- `{location所在目录}/references/design-guide.md`（规范文档）
-- `{location所在目录}/scripts/assemble_ts.py`（脚本）
-
-**绝对不要**按当前工作目录或 `~` 去拼路径——跨平台会出错。
+所有附属文件（scripts/ .py、assets/ 模板、references/ 指导文档）在 **skill 安装目录**下——用加载注入的 `location`（SKILL.md 绝对路径）拼 `{location所在目录}/...`，不按工作目录或 `~` 猜路径。skill_files 清单是采样（上限 10，本 skill 17 个附属文件），清单没有 ≠ 不存在，以本文件提到的路径为准。read 被拒（内网权限 bug）→ fallback `Get-Content -Encoding UTF8 '<绝对路径>'`；再失败上报，禁换变体试错。
 
 ---
 
@@ -41,15 +21,9 @@ description: >-
 
 ## 1. 设计的核心任务
 
-把需求（rs_input.json）转化为技术规格（TS），本质是：
+> **把一个资产的加工，划分成多个步骤（规则），清晰表达加工逻辑。** 规则是核心实体（一条 INSERT=产出一个表），场景是规则属性。
 
-> **把一个资产的加工，划分成多个步骤（规则），清晰表达加工逻辑。**
-
-规则是核心实体（一条 INSERT = 产出一个表）。场景是规则的属性。
-
-**关键：designer 只产设计判断（design_decisions.yaml），不直接写 ts.json。**
-字段类型/来源/注释等确定性数据由 `assemble_ts.py` 脚本从 rs_input.json 自动搬移。
-这避免了 AI 手写大 JSON 的格式错误和上下文爆炸。
+**designer 只产设计判断（design_decisions.yaml），不写 ts.json**——确定性数据由 assemble_ts.py 从 rs_input 自动搬。
 
 ---
 
@@ -110,7 +84,7 @@ description: >-
 
 **场景是这层的横切属性**（不单列一层）：同一目标表的数据来自不同来源、需不同加工逻辑 → 多场景。判断依据是"来源不同/加工逻辑不同"，天然在分析字段血缘时识别。场景是规则的 `scenario` 属性。
 
-**产出**：每个规则 `field_targets`（它管哪些目标字段）
+**产出**：每个规则 `field_targets`（它管哪些目标字段；mapping 备注标"审计字段"的也要含，审计不用写 field_logics——自动处理）
 **闭合条件**：每个 target_column 归属且仅归属一个规则；目标表规则 field_targets 并集 = rs_input 所有字段（中间表字段不算）
 
 **类型风险字段的安全处理**：视图中 processed 条目带『决策』标记的字段（原始输入='直接复制'，类型风险已人定加处理），译成守卫式转换 design_logic——常规风险（长度超长/精度收窄）按目标长度/精度截取或 CAST，跨大类加转换函数（TO_DATE/TO_CHAR/CAST）。**无标记字段照常直取，绝不加多余处理**（决策内容已回写进视图，不读 `_internal/type_risk_decision.yaml`）。
@@ -121,7 +95,7 @@ description: >-
 
 - **拆分决策**：综合权衡正确性/性能/可维护性/扩展友好/存储，不套默认。倾向扩展友好的设计（不管未来变不变，扩展友好本身合理）。复杂度信号（异质聚合/JOIN>12/聚合后关联/关联链实质加工/CTE依赖链≥3）触发考虑拆。
   → 完整拆分框架 + 案例分析见 `references/complexity-playbook.md` §一/§二/§四
-  → **在 `design_approach` 写清为什么这样拆/不拆**
+  → **在 `complexity_analysis.design_approach` 写清为什么这样拆/不拆（进 ts 文档，闸口①人要看）**
 - **物化 vs CTE 决策**：决定拆了之后——满足任一条件就物化（多次引用 / 估算偏差>10x / 数据量大 / 需要检查点 / 跨步骤传递），否则用 CTE 内联。
   → 完整决策标准见 `references/complexity-playbook.md` §三
 - **中间表产出模式**：单一规则一次性产出（`build_mode: transform`，默认）/ 多规则累积共建（`build_mode: accumulate`，去重或 union）。
@@ -181,13 +155,7 @@ description: >-
     不可比且内容对不上 → 关联键选错了，回 mapping/人确认。紧凑视图 `join_type_risk` 段是 precheck 的
     前置检出（处置=转换的必须声明 cast，N_JOIN1 校验核对）；**precheck 没检出的（自然语言条件等）
     靠这一维判断兜住——不写 cast 就是签了"可比"**。
-  - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'、编码 vs 名称——不报错只静默空关联）。
-    存疑时调 explore.py 重叠率试算取证：
-    ```
-    python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_input.json \
-        --check-overlap --schema-a {sch1} --table-a {t1} --key-a {k1} \
-        --schema-b {sch2} --table-b {t2} --key-b {k2}
-    ```
+  - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'——不报错只静默空关联）。存疑时 explore.py `--check-overlap`（双侧 schema/table/key 各一组）重叠率试算取证。
   结论必答、取证按需（工具按需调，不逐 JOIN 机械跑）。
 - **调度**：schedule_type（从 RS 调度频率推导）、cron（Quartz 6 段标准表达式）、依赖类型（默认宽依赖）
   → 依赖类型选择见 `references/design-guide.md` §二
@@ -203,24 +171,20 @@ description: >-
   `--alias 别名` 拆多步骤时按来源挑字段；`--audit` 附审计4字段（多步骤规则 targets 需含）。
   输出即最终格式，贴入零调整；禁 python/powershell 拼 yaml 写文件（编码坑）。
 - **field_logics 只写加工类字段**（数据加工/赋值/序列）的 design_logic。**design_logic 的产出形态统一为：可执行 SQL 表达式 + 简短口径说明**，说明**一律放全角括号（）里**（表达式只用半角括号——这是形态契约：N36 门禁剥全角括号段后检查，说明里提到的字段名不会被当成未限定引用误拦），例如 `case when nvl(a.del_flag,'N')='N' then 'N' else 'Y' end（三标识均非删除且无 NULL 为 N；空串按 else 走 Y）`：
-  - **mapping 原文是 SQL 表达式**（case when/函数调用等）→ **审查后原样保留**，只在括号里写你的理解句（它同时是审查工具：理解与表达式或业务描述有出入，说明原文有问题——修正表达式并注明，或标"需业务确认"）。**不转述表达式**——人话表达不了 NULL/空串边界，转述必然失真（实证案例：del_flag 口径转述后 coder 加了空串条件，语义反转）。方言不用管（nvl/decode 等 DWS 兼容；真不兼容 UT 会暴露，coder 机械转写）
+  - **mapping 原文是 SQL 表达式**（case when/函数调用等）→ **审查后原样保留**，只在括号里写你的理解句（理解与原文有出入=原文有问题——修正并注明，或标"需业务确认"）。**不转述表达式**——人话表达不了 NULL/空串边界（实证：del_flag 转述后语义反转）。方言不管（nvl/decode DWS 兼容；真不兼容 UT 暴露归 coder 机械转写）
   - **mapping 原文是自然语言** → 翻译成 SQL 表达式（这才是真正的"翻译者职责"）；歧义点当场做决定并写进括号（如"'空'按 NULL 处理"），业务语境也定不了的标"需业务确认"
   - **宁可输出带假设标注的表达式，绝不退回纯人话**——纯人话把不确定性隐式传给 coder 自由发挥（漂移源头）；带标注的表达式把不确定性显式传给闸口①人裁决
   - 空值口径禁用裸"空"字（歧义源）：写 NULL 或空串，二选一明确
   - 纯照抄原文不附说明句会被 N29 warn 提示（缺审查证据）
-- **校验行为以 fail-loud 报错为准**：写出 decisions → 跑 assemble_ts → 报错带 `[第X层]` 导航按报错修——这就是预期工作流，**不预防性读 assemble_ts / 工具源码对齐校验行为**（写错会被拦回，代价一轮重跑，远低于读码求证）。
 - **★ 口径里的源字段引用一律 `别名.字段` 两段**（a.del_flag），不能只写列名，也不能写 `schema.table.field` 三段式（表引用 schema.table 只出现在 coder 的 FROM/JOIN 位置，N36/N30 硬拦）——**未限定字段归属哪个表是你的设计判断，脚本不猜**（view 的 refs 只列未限定词与"多表有此列名"的事实，归属自查：rs_input 源表清单/check_field，多义 question）。产出过**引用门禁**三查：未限定标识符（N36 硬拦）/ 限定引用查表存在（N38 硬拦，未连库降提示）/ 与原文对差疑似丢引用（N37 提示）。**口径引用集就是规则 fields 桶的真来源**（mapping 源字段单元格对加工字段只是提示，脚本按你的引用自动补全）——引用写全 = coder 的字段清单对。ts 两视图：tables=表元数据（DDL），rules.fields 三桶=加工（coder 唯一源；你的 field_logics 装配展开成桶，不落 ts）
 - **直取字段不写**——脚本自动填 "直取 {alias}.{column}"
-- **★ 类型转换字段是加工字段**：precheck 类型风险决策通过后，会回写 rs_input 把转换字段改"数据加工"（transform_detail 标注如"类型转换：varchar→date"）。读到这类字段照常写 field_logic（转换口径），coder 翻译成 CAST/TO_DATE。**改 ETL 不改 DDL（目标类型不变）**。守卫式转换防的是个别脏值炸批（非法格式置 NULL，DQ 可抓）；**字符长度收窄的守卫=按目标类型长度语义截取**：目标 varchar/varchar2（字节）→`SUBSTRB(x,1,n)`；nvarchar/nvarchar2（字符）→`SUBSTR(x,1,n)`（DWS 官方口径，单位跟目标类型走；尾部丢失闸口①披露）——**不是数值值域兜底**：目标精度/长度装不下正常源数据是模型问题（precheck 值域探测会拦），不要写"超长置空"类口径，除非 SE 在闸口①显式拍板过该策略（源输入定窄退 BA 改模型，过程决策归 SE 拍板——角色边界见 new-pipe 步骤 1b 值域菜单）
+- **★ 类型转换字段是加工字段**：precheck 决策回写后 transform_detail 会标"类型转换"——照常写 field_logic（转换口径），**改 ETL 不改 DDL**。字符收窄守卫=按目标类型长度语义截取（varchar/varchar2 字节→`SUBSTRB(x,1,n)`；nvarchar 系字符→`SUBSTR(x,1,n)`；尾部丢失闸口①披露）。守卫防脏值炸批**不兜数值值域**——精度/长度装不下正常源数据是模型问题（precheck 拦），禁写"超长置空"除非 SE 闸口①拍板（源输入定窄退 BA——菜单见 new-pipe 1b）
 - **聚合类字段必拆解**（拼接/汇总，"对同一 X 的多个值拼接/合计"类描述），表达式+括号说明至少答四件事：
   - **收敛时机**：一对多侧**先预聚合收敛、再回连主表**（先 join 再聚合会让其他字段发散→主键重复）；多字段共用同一收敛（只拼接值不同）→ 声明共用同一子查询产出
   - **过滤**：聚合前提条件（如 del_flag='N'）
   - **去重**：组内值是否先 DISTINCT
   - **拼接序**：聚合函数必须带 ORDER BY 保产出确定性——**工程补全，可合理推理**（默认按拼接值排序，写明即可），业务对顺序有真实要求才问源端。（对照：开窗取哪条的分组/排序口径是业务语义，必须源端给——见第4层⓪）
-- **design_logic 引用 mapping 未列的同表字段、不确定是否存在时**，调本 skill 的 `check_field.py`（读 precheck 产的 schema_cache，不连库秒级；抄你正要写的 别名.字段 引用直接查，查无给相似字段建议）：
-  `python skills/dws-design/scripts/check_field.py --rs {deliver}/_internal/rs_input.json --field ht.col2`
-  （只给别名=列全表字段；按需取用不是必经步骤，确定存在就不用查）
-  —— 设计确认过的，coder 信任 design_logic。要引用 rs_input 完全未声明的全新表时不要用工具绕，正路是补 mapping（闸口①确认）
+- **引用 mapping 未列的字段不确定存在时**调 check_field（用法见第4层②；只给别名=列全表，查无给相似建议）——按需不是必经。引用 rs_input 完全未声明的**全新表**不用工具绕，正路=补 mapping（闸口①确认）
 - 加工字段没写 design_logic 会被硬校验拦住（不允许占位继续跑）
 
 ### 产出 + 组装
@@ -238,71 +202,24 @@ description: >-
 | 第2层评估复杂度 / 要拆步骤 / 要建中间表 | `references/complexity-playbook.md` |
 | 累积共建场景（多规则写同一中间表）| `references/incremental-playbook.md` §三/§四 |
 | 分布键/分区/依赖类型 | `references/design-guide.md`（每次都薄，直接读）|
+| 组装目标参照（ts.json/ts.md 结构）| `assets/ts-template.json` / `ts-template.md` |
+| 理解 RS 输入格式 | `references/rs-input-format.md` |
 
 > 简单全量单表资产：五层很快走完，第2层不拆中间表（走 full 单规则），第3层全量，只读 design-guide.md 就够。
 
-### DQ 已迁出（2026-09-14 拆分）
+### DQ 已迁出（2026-09-14）
 
-DQ 不在主线 designer 职责内（也从来不在五层里）：由独立岗位 **dws-dq-producer** 在 assemble_ts 通过后并行完成设计实现（读 RS+mapping+待审 ts 结构，不读你的 design_logic——独立理解是歧义探测器），装配=assemble_dq。你只管加工主线；view 里没有 dq 段，design_decisions 模板无 dq_rules。
+DQ 与你无关：独立岗位 dws-dq-producer 在 assemble_ts 后并行完成（不读你的 design_logic）。view 无 dq 段、模板无 dq_rules——你只管加工主线。
 
 ---
 
 ## 3. 数据流图
 
-- 节点 = 规则（产出表）
-- 场景通过节点属性标记
-- 多场景并行通过 schedule_groups 表达
-- 在 design_decisions 的 data_flow 里定义 dependencies + schedule_groups
+在 design_decisions 的 `data_flow` 定义 dependencies + schedule_groups（节点=规则，多场景并行=schedule_groups）。
 
 ---
 
-## 4. 参考文档
 
-| 文档 | 内容 | 何时读 |
-|------|------|--------|
-| `assets/design-decisions-template.yaml` | **design_decisions 产出骨架**（含填写规则注释） | 写产出时 |
-| `references/design-guide.md` | 物理设计决策（分布键/分区）+ 依赖类型 | 每次都读（薄） |
-| `references/incremental-playbook.md` | 增量设计全集（数据流/累积共建/排重/初始化） | RS 标了增量时 |
-| `references/complexity-playbook.md` | 拆分设计框架 + 复杂度信号 + CTE/物化决策 + step_type + 案例分析 | 拆步骤/复杂场景时 |
-| `references/rs-input-format.md` | RS 输入格式（理解输入） | 需要时查 |
-| `assets/ts-template.json` | TS 制品包 ts.json 结构定义 | 组装目标参照 |
-| `assets/ts-template.md` | ts.md 渲染骨架 | 渲染参照 |
+## 6. 交卷自检
 
----
-
-## 6. 产出检查清单（按五层）
-
-写好 design_decisions.yaml 后自检，再调脚本（校验项对应 assemble_ts 的分层校验）：
-
-**第0层 锚点**
-- [ ] `grain.input/output` 非空（一行 = 什么业务实体）
-- [ ] `business_key` 非空，且字段都在目标表存在
-- [ ] `business_key_design` 论证完整（input_key / adjusted / reason；adjusted=false 时 reason 写"沿用输入主键，产出粒度未变"）
-
-**第1层 字段血缘**
-- [ ] rules 里每个规则有 rule_code / rule_name / field_targets
-- [ ] 每个 target_column 归属且仅归属一个规则（目标表规则并集覆盖 rs_input 全字段）
-- [ ] field_logics 只写加工类业务字段（直取字段不写，脚本自动填）
-- [ ] design_logic = SQL 表达式 + 全角括号（）口径说明（原文是表达式则原样保留+理解句；是人话则翻译+歧义决策记录；拿不准标"需业务确认"）
-- [ ] 如果 mapping 提供了审计字段（备注标"审计字段"），field_targets 要包含它们；审计字段不用写 field_logics（assemble 自动处理）
-
-**第2层 加工路径**
-- [ ] 拆分决策：综合权衡（性能/可维护/扩展/存储），不套默认（见 complexity-playbook §一/§二）
-- [ ] **在 design_approach 写清为什么这样拆/不拆**（闸口①人要看）
-- [ ] 每个规则有 step_type（full / aggregate / incremental_extract / merge，见 complexity-playbook §五）
-- [ ] target_role 与 step_type 不矛盾（见 complexity-playbook）
-- [ ] 多步骤时声明依赖：中间表填 produces_for，装配/merge 填 reads
-- [ ] 累积共建表标了 `build_mode: accumulate`，排重场景填了 dedup_strategy
-
-**第3层 时间属性**
-- [ ] 增量场景：每张驱动表的变化都被增量范围覆盖（见 incremental-playbook 三种模式）
-- [ ] extract 规则的 incremental.key/filter/init_filter 填全
-
-**第4层 工程保障**
-- [ ] distribution_key 选了高基数 JOIN 字段（参考 design-guide.md §1.1）
-- [ ] schedule.schedule_type 合法（daily/hourly/realtime）
-- [ ] schedule.cron 是 Quartz 6 段表达式
-- [ ] 复杂度/分段决策写进 complexity_analysis.design_approach（进 ts 文档）
-
-**组装**
-- [ ] 调 assemble_ts.py 成功产出 ts.json + ts.md（无校验错误；失败看报错的 `[第X层]` 定位）
+各层"产出+闭合条件"就是自检清单（上文已逐层列出，不在此重复）——交卷前按层过一遍，**过了就调 assemble_ts**：报错带 `[第X层]` 导航按报错修（fail-loud 是预期工作流，不预防性读工具源码对齐校验）；warn 不是你的行动项（闸口①人审材料），不为消 warn 改设计。
