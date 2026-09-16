@@ -139,6 +139,7 @@ def main():
     design = ts.get("design", {})
     audit_fields = design.get("audit_fields", {})
     business_key = design.get("business_key", [])
+    tables_meta = ts.get("tables", {}) or {}
     data_flow = ts.get("data_flow", {})
 
     # 读预检结果（确认表已建好）——默认从 _internal/ 读，读不到直接退出避免误灌数据
@@ -300,7 +301,11 @@ def main():
             print(f"  ✅ INSERT: {r.summary()}")
 
             # UT 检查
-            ut_checks = run_ut_check(executor, target, business_key, audit_fields)
+            # 主键唯一性按表取键（2026-09-15 决策 A）：表级 business_key（中间表粒度
+            # 是自己的聚合粒度）> 全局兜底（无声明的旧档——表级键装配已继承全局，此处兜底防御）
+            _tshort = target.rsplit(".", 1)[-1] if "." in target else target
+            tbl_bk = (tables_meta.get(_tshort) or {}).get("business_key") or business_key
+            ut_checks = run_ut_check(executor, target, tbl_bk, audit_fields)
             rule_result["checks"] = ut_checks
 
             ut_fails = [c for c in ut_checks if c["status"] == "FAIL"]

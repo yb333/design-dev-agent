@@ -64,10 +64,14 @@ class TestParseJoinPairs:
         assert parse_join_pairs("关联客户主数据，编码对编码") == []
         assert parse_join_pairs("") == []
 
-    def test_function_wrapped_not_matched(self):
-        """TO_CHAR(a.x)=b.y 函数包装不匹配——只认裸等值（宁放过）"""
+    def test_function_wrapped_matched(self):
+        """函数包裹形态匹配（2026-09-15 新契约：内网实证 upper(a.x)=upper(b.y) 解析不出
+        →逐表键唯一性整段跳过）——顶层 = 两侧提取 别名.列 配对。"""
         from sql_parse import parse_join_pairs
-        assert parse_join_pairs("TO_CHAR(a.dt) = b.dt") == []
+        assert parse_join_pairs("TO_CHAR(a.dt) = b.dt") == [(("a", "dt"), ("b", "dt"))]
+        assert parse_join_pairs("upper(a.code) = upper(b.code)") == [(("a", "code"), ("b", "code"))]
+        assert parse_join_pairs("a.x = b.x and a.y != b.y") == [(("a", "x"), ("b", "x"))]  # != 排除且不越段
+        assert parse_join_pairs("coalesce(a.x,0) = b.y") == [(("a", "x"), ("b", "y"))]
 
 
 # ============================================================

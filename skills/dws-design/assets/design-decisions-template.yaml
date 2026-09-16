@@ -122,7 +122,10 @@ rules:
     #   （coder 写进 ON/WHERE）；join_safety.join_filter = mapping"关联&限定条件"的声明镜像。
     #   同一限定写任一处都生效，不必两处都写。
     join_safety:
-      - table: ""
+      - alias: ""                       # ★ 关联的别名（与 joins 条目一一对应——关联是一等分析单位：同表多关联
+                                        #   [不同键/条件]各自一条声明，勿共用；table 仅人读）。老写法无 alias 时按表名
+                                        #   唯一匹配兜底，同表多条目必须带 alias
+        table: ""
         join_filter: ""                # JOIN 此表时的范围限定（来自 mapping 的"关联&限定条件"，如 is_current = 1）。explore.py 用它验唯一性
         join_key_unique: true           # JOIN键在 join_filter 限定下是否唯一（不确定时调 explore.py 验证）
         strategy: ""                    # 不唯一时的对齐策略（GROUP BY收敛/取最新有效行）
@@ -201,10 +204,16 @@ complexity_analysis:
 # 字段定义由 assemble_ts.py 从 rs_input 自动搬入 tables.{表名}.fields，designer 不碰（除中间表自建字段类型）。
 tables:
   # 键=表名带 schema（统一形态；代码兼容短名）。I 视图不进 tables（物理属性只对 F/中间表生效）。
+  # business_key（★表级，2026-09-15 定调：UT 主键唯一性按每表自己的键查——中间表粒度
+  # 是它自己规则的聚合粒度，≠F 表键）缺省继承全局 design.business_key（大部分场景相同），
+  # **中间表粒度不同时必须显式声明**（声明的字段必须在表字段集内，N_BK_TABLE 拦）。
   # 目标F表:
   # dws.dwb_xxx_f:
   #   distribution_key: [id]
   #   distribute_type: HASH
+  # 中间表粒度不同例:
+  # dws.dwb_xxx_f_tmp1:
+  #   business_key: [user_id]        # 该 tmp 按用户粒度聚合（≠全局订单粒度）
   # 维表（复制分布）:
   # dws.dwb_xxx_d:
   #   distribution_key: []

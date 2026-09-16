@@ -529,13 +529,13 @@ class TestFaultIsolation:
     隐式转换报错识别（声明条件字面量与列类型不匹配——条件独立执行都跑不通，
     真实 ETL 照写同样炸，闸口①提前抓到）。"""
 
-    def test_declared_filter_error_degrades_to_bare(self, monkeypatch, tmp_path):
-        """声明条件查询炸（invalid input 隐式转换）→ 降级裸查给结论+提示，其余表继续。"""
+    def test_declared_filter_error_no_bare_fallback(self, monkeypatch, tmp_path):
+        """声明条件查询炸（invalid input 隐式转换）→ 降级废除（2026-09-15）：条件失败=
+        诊断发现（原文+分类提示+无唯一性结论），**不裸查下结论**（无条件不唯一是预期，
+        join filter 就是防发散的——裸查结论是伪信号）；其余表继续。"""
         def h(sql):
             if "dim_cust" in sql and "WHERE" in sql:
                 return ("ERR", "invalid input for type numeric: 'R42'")
-            if "dim_cust" in sql:
-                return [{"total": 90, "uniq": 87, "nulls": 0}]   # 裸查发散
             return [{"total": 50, "uniq": 50, "nulls": 0}]
 
         lines, concl, _ = _run(monkeypatch, tmp_path, _ts([
@@ -543,12 +543,13 @@ class TestFaultIsolation:
              "filter": "c.status = 1"},
             {"alias": "p", "type": "LEFT JOIN", "condition": "a.pay_id = p.pay_id"}]), h)
         joined = "\n".join(lines)
-        assert "降级为不带条件" in joined and "隐式转换" in joined and "invalid input" in joined
-        assert "重复 3 行" in joined                       # 裸查结论仍给出
-        assert "JOIN 2" in joined                          # 后续表继续诊断
+        assert "唯一性无结论" in joined and "invalid input" in joined
+        assert "类型不匹配" in joined                        # 分类提示给人核方向
+        assert "降级" not in joined and "重复" not in joined  # 不裸查下伪结论
+        assert "JOIN 2" in joined                           # 后续表继续诊断
 
     def test_table_failure_skips_but_rest_continue(self, monkeypatch, tmp_path):
-        """裸查也失败 → 跳过该表，其余表照常出结论，不炸整批。"""
+        """查询失败 → 跳过该表（原文+提示），其余表照常出结论，不炸整批。"""
         def h(sql):
             if "dim_cust" in sql:
                 return ("ERR", "relation does not exist")
@@ -558,7 +559,7 @@ class TestFaultIsolation:
             {"alias": "c", "type": "LEFT JOIN", "condition": "a.cust_code = c.cust_code"},
             {"alias": "p", "type": "LEFT JOIN", "condition": "a.pay_id = p.pay_id"}]), h)
         joined = "\n".join(lines)
-        assert "查询失败跳过（其余表继续）" in joined
+        assert "查询失败" in joined and "其余表继续" in joined
         assert "[JOIN 2] ods.pay" in joined and "在关联条件下唯一" in joined
 
     def test_count_1_not_count_star(self, monkeypatch, tmp_path):
@@ -687,3 +688,49 @@ class TestSplitTermsParenSafety:
         """首括号中途闭合不是包裹括号（or 语义）——不剥，保括号安全。"""
         from diagnose_fanout import _split_terms
         assert _split_terms("(a=1) or (b=2)") == ["(a=1) or (b=2)"]
+
+
+class TestJoinSafetyAliasIndex:
+    """决策 B（2026-09-15）：join_safety 关联级化——同表多关联各自声明不覆盖。"""
+
+    def test_same_table_two_joins_each_gets_own_safety(self, monkeypatch, tmp_path):
+        """同表两别名（不同键）——各自 join_safety（带 alias）各自命中，不互相覆盖。"""
+        sqls = {
+            "dim_cust": [
+                # c1 按 cust_code 唯一
+                {"total": 50, "uniq": 50, "nulls": 0},
+                # c2 按 pay_code 不唯一（带 filter 后唯一）
+                {"total": 80, "uniq": 80, "nulls": 0},
+            ],
+        }
+        seq = list(sqls["dim_cust"])
+        seen_sqls = []
+
+        def h(sql):
+            seen_sqls.append(sql)
+            if "dim_cust" in sql:
+                return [seq.pop(0)] if seq else [{"total": 0, "uniq": 0, "nulls": 0}]
+            return [{"total": 10, "uniq": 10, "nulls": 0}]
+
+        ts = _ts([
+            {"alias": "c1", "type": "LEFT JOIN", "condition": "a.cust_code = c1.cust_code",
+             "filter": ""},
+            {"alias": "c2", "type": "LEFT JOIN", "condition": "a.pay_code = c2.pay_code",
+             "filter": ""},
+        ], extra_rule={
+            "source_tables": [
+                {"schema": "ods", "table": "orders", "alias": "a"},
+                {"schema": "dim", "table": "dim_cust", "alias": "c1"},
+                {"schema": "dim", "table": "dim_cust", "alias": "c2"},
+            ],
+            "join_safety": [
+            {"alias": "c1", "table": "dim_cust", "join_filter": "", "join_key_unique": True},
+            {"alias": "c2", "table": "dim_cust", "join_filter": "c2.status = 1", "join_key_unique": True},
+        ]})
+        lines, concl, _ = _run(monkeypatch, tmp_path, ts, h)
+        joined = "\n".join(lines)
+        # 关联级索引不覆盖：c2 的查询 WHERE 含它自己的 filter（status=1），
+        # 而不是被 c1 的空声明覆盖丢掉（旧表名索引 dict 后者覆盖前者）
+        dim_sqls = [s for s in seen_sqls if "dim_cust" in s and "WHERE" in s]
+        assert any("c2.status = 1" in s for s in dim_sqls), dim_sqls
+        assert "JOIN 2" in joined

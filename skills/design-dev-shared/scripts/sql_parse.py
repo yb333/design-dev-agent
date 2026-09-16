@@ -267,25 +267,87 @@ def extract_from_tables(sql: str) -> list[str]:
     return tables
 
 
+_ALIAS_COL = re.compile(r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
+
+
+def _top_level_equals_spans(s: str) -> list[tuple[int, int]]:
+    """顶层（括号深度 0、引号外）的等值/分隔 token 位置：[(pos, kind)] kind∈{'=','sep'}。
+
+    sep=顶层 and/or（项边界）；'=' 排除 !=/<=/>= 成员。函数包裹场景的 = 在括号内
+    ——深度感知天然不误判（upper(a.x)=upper(b.y) 的 = 两侧深度 0？不——upper( 开括号
+    后深度 1，= 在深度 0？逐字符：'upper' 无括号,'(' depth1,'a.x' 内,')' depth0,'= ' depth0 ✓
+    顶层。函数**参数内**的 = （如 nvl(x,'=')）深度>0 排除 ✓。
+    """
+    out, depth, in_q = [], 0, None
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if in_q:
+            if ch == in_q:
+                in_q = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_q = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0:
+            if ch == "=" and not (i > 0 and s[i-1] in ("!", "<", ">")) \
+                    and not (i + 1 < len(s) and s[i+1] == ">"):
+                out.append((i, "="))
+            elif s[i:i+2].lower() == "--":
+                i += 1  # 行注释粗跳
+            else:
+                m = re.match(r"\s+(?:and|or)\s+", s[i:i+8], re.IGNORECASE)
+                if m:
+                    out.append((i, "sep"))
+                    i += len(m.group(0)) - 1
+        i += 1
+    return out
+
+
 def parse_join_pairs(text: str) -> list[tuple[tuple[str, str], tuple[str, str]]]:
-    """解析关联条件文本里的等值对：a.x = b.y 形态。
+    """解析关联条件等值对：裸 a.x = b.y 与函数包裹 upper(a.x)=upper(b.y)（2026-09-15：
+    内网实证函数形态解析不出→逐表键唯一性整段跳过）。
 
-    返回 [((alias, col), (alias, col)), ...]。大小写归一（alias/col 都 lower）。
-    解析不出的文本（自然语言描述/复杂表达式）直接跳过——宁放过不误报，
-    由调用方决定对未覆盖文本的处理（precheck 会 warn 提示无法自动对账）。
-
-    支持一段文本含多个条件（"a.x=b.x and a.y=b.y"）；
-    不等值（!=/<）和函数包装（TO_CHAR(a.x)=b.y）不匹配——只认裸等值。
+    两级：①裸等值 regex（结构可靠，旧调用方语义不变）；②顶层 =（括号深度感知，
+    排除 !=/<=/>=）两侧各提取 别名.列 引用做配对——函数包裹/类型转换形态。
+    顶层 and/or 是项边界（右侧不越段）。多引用侧（coalesce(a.x,0)=b.y）笛卡尔配对
+    （宁多报对不漏键）。不等值项跳过。
     """
     if not text:
         return []
-    pairs = []
+    s = str(text)
+    pairs, seen = [], set()
     pat = re.compile(
         r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)')
-    for m in pat.finditer(text):
+    for m in pat.finditer(s):
         left = (m.group(1).lower(), m.group(2).lower())
         right = (m.group(3).lower(), m.group(4).lower())
         pairs.append((left, right))
+        seen.add((left, right))
+    tokens = _top_level_equals_spans(s)
+    if not tokens:
+        return pairs
+    # 顶层 = 的两侧边界：左到上一个 token（含 sep），右到下一个 token
+    for k, (pos, kind) in enumerate(tokens):
+        if kind != "=":
+            continue
+        lb = tokens[k-1][0] + 1 if k > 0 else 0
+        rb = tokens[k+1][0] if k + 1 < len(tokens) else len(s)
+        left_txt, right_txt = s[lb:pos], s[pos+1:rb]
+        ls = _ALIAS_COL.findall(left_txt)
+        rs = _ALIAS_COL.findall(right_txt)
+        if not ls or not rs:
+            continue
+        for la, lc in ls:
+            for ra, rc in rs:
+                _l, _r = (la.lower(), lc.lower()), (ra.lower(), rc.lower())
+                if _l != _r and (_l, _r) not in seen:
+                    seen.add((_l, _r))
+                    pairs.append((_l, _r))
     return pairs
 
 

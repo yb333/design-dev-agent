@@ -11,7 +11,7 @@
   遵守声明条件（as-designed）：复合键聚合、joins[].filter / join_safety.join_filter /
   规则 filter / condition 字面量项全部并入；**字面量值形态按列类型开局修正**
   （char 列裸数值 = 声明错误，按 '值' 执行并披露——真实 ETL 照写会炸）。
-  单表故障隔离（降级裸查/跳过续跑）；依赖中间表的规则闸口①不可查（表未建，UT 兜底）。
+  单表故障隔离（条件失败=发现不下伪结论/跳过续跑）+全函数 fail-soft 终层（内部缺陷 exit 0 不阻断）；依赖中间表的规则闸口①不可查（表未建，UT 兜底）。
 
   用法同构（闸口① --all 批量 / 6b --rule 单规则）：驱动自检 → 逐表唯一性+声明对照
   （全量）+join_safety 断言对照 → 整体试算严重性。
@@ -228,6 +228,40 @@ def _fix_literal_form_any(text: str, binding: dict, coltypes: dict) -> tuple[str
     return pat.sub(_sub, text or ""), notes
 
 
+
+def _safety_index(rule: dict, rule_alias_map: dict) -> dict:
+    """join_safety 关联级索引：{别名: 条目}（2026-09-15 决策 B——关联是一等分析单位）。
+
+    alias 键一一对应；老条目无 alias 按表名兜底（同表多条目无 alias 无法区分——
+    每个别名都标"声明歧义"提示人补 alias，宁披露不猜）。"""
+    items = [js for js in (rule.get("join_safety") or []) if isinstance(js, dict)]
+    by_alias, by_table, multi = {}, {}, set()
+    for js in items:
+        sa = (js.get("alias") or "").strip().lower()
+        st = str(js.get("table") or "").rsplit(".", 1)[-1].lower()
+        if sa:
+            by_alias[sa] = js
+        else:
+            if st in by_table:
+                multi.add(st)
+            by_table[st] = js
+    out = {}
+    for j in (rule.get("joins") or []):
+        if not isinstance(j, dict):
+            continue
+        ja = (j.get("alias") or "").strip().lower()
+        if not ja:
+            continue
+        if ja in by_alias:
+            out[ja] = by_alias[ja]
+            continue
+        _ent = rule_alias_map.get(ja) or ("", "")
+        st = (_ent[-1] if isinstance(_ent, (tuple, list)) else str(_ent)).rsplit(".", 1)[-1].lower()
+        if st in by_table:
+            out[ja] = by_table[st] if st not in multi else {
+                **by_table[st], "_ambiguous": True}
+    return out
+
 class _Db:
     """单连接走**目标 schema 的数据源**（部署事实：目标 schema 数据源有全部来源表
     权限，逐源 schema 连库会报"schema 不在 db 配置"——explore.py 同款语义）。
@@ -270,6 +304,24 @@ def _strip_alias(term: str, alias: str) -> str | None:
 def _err_brief(e, limit: int = 120) -> str:
     """报错原文展示：剥掉自带 的 SQL 回显尾巴（截断难读），限长。"""
     return str(e).split("| SQL:")[0].strip()[:limit]
+
+
+def _err_classify(err_text) -> str:
+    """报错分类提示（2026-09-15 内网反馈"报错无提示，分不清脚本问题还是输入问题"）：
+    按报错原文给方向提示——声明条件的问题（人核写法/字面量）vs 环境问题（权限/网络）。
+    只提示不定罪（宁放过）。"""
+    low = str(err_text).lower()
+    if any(k in low for k in ("syntax", "语法", "or near")):
+        return "【提示】语法错——大概率声明条件里的写法 DWS 不认（函数名/括号/全角字符），核条件原文"
+    if any(k in low for k in ("function", "函数", "does not exist", "不存在")):
+        if "column" in low or "字段" in low or "字段" in str(err_text):
+            return "【提示】列不存在——声明条件引用的字段拼写/归属问题，对照 mapping 核字段名"
+        return "【提示】函数不存在——声明条件用的函数 DWS 不支持，核函数名（大小写/方言）"
+    if any(k in low for k in ("type", "类型", "invalid input", "无效")):
+        return "【提示】类型不匹配——字面量形态与列类型不符（如 varchar 列=裸数值），核条件里的值写法"
+    if any(k in low for k in ("permission", "denied", "权限")):
+        return "【提示】权限问题——环境侧（账号/库权限），非输入问题"
+    return ""
 
 
 def _cast_err_hint(err_text) -> str:
@@ -342,14 +394,14 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
     # join 侧限定并入（2026-09-15 修复：此前整体试算只并规则级 filter——拉链类限定
     # [is_current=1] 没进 WHERE，试算行数虚高误报膨胀；与逐表段同口径：
     # joins[].filter + join_safety.join_filter 全集）。before（驱动单表）不含 join 侧限定。
-    _safety_by_table = {(js.get("table") or "").rsplit(".", 1)[-1].lower(): js
-                        for js in rule.get("join_safety") or [] if isinstance(js, dict)}
+    _safety_by_alias = _safety_index(rule, binding)  # 关联级（决策 B）
     _join_terms_by_alias: dict[str, list[str]] = {}
     for j in joins_decl:
         alias = (j.get("alias") or "").strip().lower()
         sch, tbl = binding[alias]
         raw_terms = []
-        for _src in (j.get("filter") or "", (_safety_by_table.get(tbl.rsplit(".", 1)[-1].lower()) or {}).get("join_filter") or ""):
+        _saf = _safety_by_alias.get(alias) or {}
+        for _src in (j.get("filter") or "", _saf.get("join_filter") or ""):
             if (_src or "").strip():
                 _fixed, _fn = _fix_literal_form_any(_src, binding, coltypes)
                 for n in _fn:
@@ -455,8 +507,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
             if st.get("_from_reads"):
                 tmp_aliases.add(al)
     joins = rule.get("join_safety") or []
-    safety_by_table = {(j.get("table") or "").rsplit(".", 1)[-1].lower(): j
-                       for j in joins if isinstance(j, dict)}
+    safety_by_alias = _safety_index(rule, binding)  # 关联级索引（决策 B）
     business_key = (ts.get("design") or {}).get("business_key") or []
     coltypes = _load_coltypes(ts_path)
     mapping_joins = _load_mapping_joins(ts_path)
@@ -533,7 +584,10 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                     continue
                 # 过滤条件（严格遵守声明）：join 自带 filter + join_safety.join_filter + 规则 filter 归属项 + 字面量项
                 terms = _split_terms(j.get("filter") or "")
-                safety = safety_by_table.get(tbl.rsplit(".", 1)[-1].lower()) or {}
+                safety = safety_by_alias.get(alias) or {}
+                if safety.get("_ambiguous"):
+                    lines.append(f"[JOIN {i}] join_safety 同表多条目无 alias 无法区分该关联用哪条"
+                                 f"——人补 alias（关联级声明）")
                 terms += _split_terms(safety.get("join_filter") or "")
                 terms += _terms_for_alias(rule_filter_terms, alias)
                 terms += _literal_terms(cond_f, alias)
@@ -541,29 +595,23 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                 where = " AND ".join(dict.fromkeys(
                     x for x in (_strip_alias(tm, alias) for tm in terms) if x))
                 mapping_decl = mapping_joins.get(tbl.rsplit(".", 1)[-1].lower(), "")
-                # ★ 单表故障隔离（内网实证：一张表报错曾炸停整批致报告缺失）——
-                # 声明条件独立执行失败本身是诊断发现；降级不带条件查继续，也挂才跳过该表
+                # ★ 单表故障隔离 + 降级废除（2026-09-15：join filter 存在的意义就是
+                # "源表主键≠关联键，加条件保唯一"——降级不带条件查出的"不唯一"是伪信号
+                # （无条件不唯一是预期）。条件查询失败本身=诊断发现：报错原文+分类提示
+                # 给人核（写法/字面量/环境），不下任何唯一性结论；其余表继续跑）
                 try:
                     st = _key_stat(db, sch, tbl, own, where)
                 except RuntimeError as e:
-                    hint = _cast_err_hint(e)
-                    try:
-                        bare = _key_stat(db, sch, tbl, own, "")
-                    except RuntimeError as e2:
-                        verdicts.append(f"JOIN {i} {tbl}：查询失败跳过（其余表继续）")
-                        lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）？ 查询失败跳过（其余表继续）。"
-                                     f"报错原文: {_err_brief(e2, 160)}")
-                        continue
-                    dup_b = bare["total"] - bare["nulls"] - bare["uniq"]
-                    if dup_b > 0:
-                        tag = f"✗ 不带条件的键重复 {dup_b} 行（带条件的查询失败——条件本身可能有问题，人核原文）"
-                    else:
-                        tag = "（不带条件时唯一——条件本身可能有问题，人核原文）"
-                    verdicts.append(f"JOIN {i} {tbl}：按条件查询失败{hint}；降级不带条件查：{tag}")
-                    lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）？ 按关联条件查询失败{hint}，"
-                                 f"已降级为不带条件查询——{bare['total']} 行/唯一 {bare['uniq']}：{tag}")
+                    _cls = _err_classify(e)
+                    verdicts.append(f"JOIN {i} {tbl}：按声明条件查询失败——该关联唯一性无结论"
+                                    f"（条件可能有问题，人核）")
+                    lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）？ 按声明条件查询失败——"
+                                 f"唯一性无结论（其余表继续）。")
+                    lines.append(f"  ｜声明条件（含 filter/join_filter 并入）：{where or '（无）'}")
                     lines.append(f"  ｜关联条件（designer 写的）：{cond}")
-                    lines.append(f"  ｜报错原文: {_err_brief(e)}")
+                    lines.append(f"  ｜报错原文: {_err_brief(e, 200)}")
+                    if _cls:
+                        lines.append(f"  ｜{_cls}")
                     continue
                 dup = st["total"] - st["nulls"] - st["uniq"]
                 if dup > 0:
@@ -596,7 +644,7 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                         lines.append(f"  ｜输入未声明此关联（designer 自设）——问题属设计判断")
                     # join_safety 断言对照（maker 断言 vs 实测——闸口①与 designer 检查的闭环）：
                     # 声明 unique=true 实测不唯一=断言证伪（最高优先）；声明 false+reason=已知接受不重复弹
-                    safety = safety_by_table.get(tbl.rsplit(".", 1)[-1].lower()) or {}
+                    safety = safety_by_alias.get(alias) or {}
                     if safety:
                         if safety.get("join_key_unique") is True:
                             lines.append(f"  ｜★ designer 断言 join_key_unique=true——**实测证伪**"
@@ -744,6 +792,15 @@ def main():
     except (ValueError, RuntimeError, json.JSONDecodeError) as e:
         print(f"[错误] {e}", file=sys.stderr)
         sys.exit(1)
+    except Exception as e:  # fail-soft 终层（2026-09-15：辅助工具永不崩盘成卡点）
+        import traceback
+        print(f"[诊断内部错误·fail-soft] {type(e).__name__}: {e}——工具缺陷非输入问题，"
+              f"跳过诊断不阻断主流程；堆栈留盘供修工具", file=sys.stderr)
+        tb = traceback.format_exc()
+        _d = ts_path.parent / "_internal" / "diagnose"
+        _d.mkdir(parents=True, exist_ok=True)
+        (_d / "fanout_crash.log").write_text(tb, encoding="utf-8")
+        sys.exit(0)  # 诊断是辅助提升工具——内部缺陷不阻断（exit 0，主流程继续；崩溃日志留盘修工具）
 
     print("\n".join(lines))
     tag = "all" if args.all else args.rule

@@ -1687,8 +1687,23 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
         #   - 只查条目存在性，不判 join_key_unique 真伪（"实测唯一的表 reason 可空"
         #     是合法形态，机械判必误伤——依据真伪归闸口① diagnose_fanout 实证）
         # ============================================================
-        _safety_tables = {_table_short(str(js.get("table") or ""))
-                          for js in (rule.get("join_safety") or []) if isinstance(js, dict)}
+        # ★ 关联级匹配（2026-09-15 决策 B）：join_safety 以 alias 为主键一一对应
+        # （同表多关联各自一条——不同键不同限定不同唯一性结论）；老写法无 alias
+        # 时按表名兜底（同表多条目无 alias 无法区分=要求补 alias）
+        _safety_by_alias = {}
+        _safety_tables_novarkias = {}
+        _safety_tables_multi = set()
+        for js in (rule.get("join_safety") or []):
+            if not isinstance(js, dict):
+                continue
+            _sa = (js.get("alias") or "").strip().lower()
+            _st = _table_short(str(js.get("table") or ""))
+            if _sa:
+                _safety_by_alias[_sa] = js
+            else:
+                if _st in _safety_tables_novarkias:
+                    _safety_tables_multi.add(_st)
+                _safety_tables_novarkias[_st] = js
         _missing = []
         for j in (rule.get("joins") or []):
             if not isinstance(j, dict):
@@ -1697,13 +1712,20 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             if not _ja or _ja in rule_tmp_alias or _ja not in alias_map:
                 continue  # tmp 豁免 / 无绑定（N32 管）
             _tbl_short = _table_short(str(alias_map.get(_ja) or ""))
-            if _tbl_short and _tbl_short not in _safety_tables:
+            _has = (_ja in _safety_by_alias
+                    or (_tbl_short and _tbl_short in _safety_tables_novarkias
+                        and _tbl_short not in _safety_tables_multi))
+            if not _has:
                 _missing.append(f"{_ja}({_tbl_short})")
         if _missing:
             vr.add_hard("L4", "N_JOIN3",
-                f"规则 {code} 的关联表 {_missing} 缺 join_safety 条目——每个声明的 JOIN "
-                f"都要有关联安全结论（键唯一性/类型/内容三维）；先取证（推荐起手批量 "
-                f"explore，或按输入声明填写），缺条目=漏判断不是省事")
+                f"规则 {code} 的关联 {_missing} 缺 join_safety 条目——关联是一等分析单位"
+                f"（同表多关联各自一条，alias 对应）；每个 JOIN 都要关联安全结论"
+                f"（键唯一性/类型/内容三维），缺条目=漏判断不是省事")
+        if _safety_tables_multi:
+            vr.add_hard("L4", "N_JOIN3",
+                f"规则 {code} 的 join_safety 同表多条目未带 alias（{sorted(_safety_tables_multi)}）"
+                f"——无法区分对应哪个关联，给每条加 alias（与 joins 一一对应）")
 
     return vr
 
@@ -2115,7 +2137,7 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
                     tables[tbl_short]["fields"].append(_slim)
             continue
 
-        # 判断表类型
+# 判断表类型
         is_final = (tbl_short == final_table_short)
         tbl_type = "target" if is_final else "intermediate"
 
@@ -2156,8 +2178,15 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         if not distribute_type:
             distribute_type = "HASH" if dec_dist else "ROUNDROBIN"
 
+        # 表级 business_key（决策 A）：显式声明 > 继承全局（UT 主键唯一性按表查）
+        _bk_dec = dec_tbl.get("business_key")
+        tbl_business_key = ([str(k) for k in _bk_dec if str(k).strip()]
+                            if isinstance(_bk_dec, list) and _bk_dec
+                            else list((design or {}).get("business_key") or []))
+
         tables[tbl_short] = {
             "type": tbl_type,
+            "business_key": tbl_business_key,
             "distribution_key": dec_dist,
             "distribute_type": distribute_type,
             "partition": dec_tbl.get("partition", ""),
@@ -3024,6 +3053,19 @@ def main():
             vr.add_hard("L1", "N_AUDIT_TABLE",
                         f"表 '{tname}' 缺标准审计列 {_miss}——审计=每张产出表的强制标准列"
                         f"（build_tables 应自动补齐，缺=装配逻辑异常勿手删）")
+
+    # N_BK_TABLE（hard）：表级 business_key 的字段必须在表字段集内（2026-09-15 决策 A：
+    # 中间表粒度不同时 designer 显式声明——声明的键查无字段=设计错误当场拦）
+    for tname, tcfg in (ts.get("tables") or {}).items():
+        if not isinstance(tcfg, dict):
+            continue
+        _flds = {str(f.get("target_field", "")).lower()
+                 for f in (tcfg.get("fields") or []) if isinstance(f, dict)}
+        _bad = [k for k in (tcfg.get("business_key") or []) if str(k).lower() not in _flds]
+        if _bad:
+            vr.add_hard("L0", "N_BK_TABLE",
+                        f"表 '{tname}' 的 business_key 含该表没有的字段 {_bad}——"
+                        f"对照 tables.fields 改声明（表级键=该表自己的粒度主键）")
     for code, fields in missing_logic:
         vr.add_hard("L1", "N5",
                     f"规则 {code} 的加工字段未写 design_logic: {fields}。"
