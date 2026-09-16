@@ -1286,7 +1286,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
         vr.add_hard("L1", "N35",
             f"字段 {col} 标'赋值'但映射表达式不是标准字面量/参数（原文：'{detail}'）——"
             f"需翻译：在产出规则的 field_logics 写标准口径；无法确定口径（如'传参'未指明参数）"
-            f"→ question 弹源端确认。标准审计字段的值按模板约定处理，无需动作")
+            f"→ 上报调用方（engineer 路由：无法确定口径=终止型退源端）。标准审计字段的值按模板约定处理，无需动作")
 
     # ============================================================
     # 引用门禁（LG）：加工字段的引用来源字段——格式/存在/完整三查一道门。
@@ -1377,7 +1377,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
                     f"【引用门禁·格式】规则 {code} 字段 {col} 的 design_logic 有未限定标识符 "
                     f"{bare_ids}——口径里的字段引用必须'别名.字段'（未限定字段归属哪个表是"
                     f"设计判断，脚本不猜；查 rs_input 源表清单或 check_field，多表同名"
-                    f" question 弹确认）")
+                    f" 归属存疑=上报调用方确认）")
             # 【格式】三段式引用（纯语法——两两配对提取恰好漏掉真正的字段，必须前置拦）
             three = find_three_part_refs(text)
             if three:
