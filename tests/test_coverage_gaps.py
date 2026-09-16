@@ -85,8 +85,8 @@ class TestGenerateCreateTable:
         assert "CREATE TABLE IF NOT EXISTS ods.dwb_test_f" in ddl
         # 业务字段都在
         assert "id" in ddl and "amt" in ddl
-        # 审计字段追加（去重）
-        assert "del_flag" in ddl and "crt_cycle_id" in ddl
+        # DDL 纯投影（2026-09-15）：审计列来自 tables——fixture fields 无审计则 DDL 无审计
+        assert "del_flag" not in ddl and "crt_cycle_id" not in ddl
         # 分布键
         assert "DISTRIBUTE BY HASH" in ddl and "id" in ddl
 
@@ -107,7 +107,7 @@ class TestGenerateCreateTable:
         assert "dws.dwb_test_f" in ddl
 
     def test_audit_not_duplicated_when_already_in_fields(self):
-        """审计字段已在业务字段里 → 不重复追加。"""
+        """审计字段已在 tables fields → DDL 零追加（纯投影），列声明唯一。"""
         from assemble_ddl import generate_create_table
         tables = self._tables()
         # 把 del_flag 放进业务字段
@@ -115,5 +115,7 @@ class TestGenerateCreateTable:
             {"target_field": "del_flag", "field_type": "nvarchar2(1)", "field_comment": ""})
         ddl = generate_create_table("R0001", self._rule(), self._design(),
                                     self._meta(), tables)
-        # del_flag 只应出现一次（字段名行）
-        assert ddl.count("del_flag") == 1
+        # 列声明行唯一（2026-09-15 新契约：无注释的审计列由标准注释兜底，
+        # 名字出现 2 次=列行 1 + COMMENT 行 1，合法；列声明形态只 1 次）
+        assert ddl.count("del_flag nvarchar2(1)") == 1
+        assert "删除标识" in ddl  # 标准注释兜底

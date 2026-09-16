@@ -64,16 +64,40 @@ class TestAudit:
         assert audit_full_ddl(b, v2) == []
 
     def test_smuggled_column_detected(self, pair):
-        b, v2 = pair
+        import copy
+        b, v2 = copy.deepcopy(pair)  # 不原地改 module fixture（残留污染后续用例）
         v2["tables"]["dwb_trade_order_d"]["fields"].append(
             {"target_field": "smuggler", "field_type": "INT", "field_comment": ""})
         problems = audit_full_ddl(b, v2)
         assert any("smuggler" in p for p in problems)
 
     def test_removed_column_detected(self, pair):
-        b, v2 = pair
+        import copy
+        b, v2 = copy.deepcopy(pair)  # 不原地改 module fixture（残留污染后续用例）
         v2["tables"]["dwb_trade_order_d"]["fields"] = [
             f for f in v2["tables"]["dwb_trade_order_d"]["fields"]
             if f["target_field"] != "cust_id"]
         problems = audit_full_ddl(b, v2)
         assert any("cust_id" in p and "不许删列" in p for p in problems)
+
+
+class TestAuditBackfill:
+    """opt 存量审计补齐（2026-09-15 定调：底层标准化非资产变更）。"""
+
+    def test_audit_gap_goes_into_alter(self, pair, tmp_path):
+        """原始 baseline 物理缺审计列 → 变更单自动 ADD COLUMN（不占 change 声明）。"""
+        import copy
+        b, v2 = copy.deepcopy(pair)  # module fixture 被先跑用例原地改过（smuggler 残留）——深拷贝隔离
+        # 构造物理缺口：baseline tables 去掉全部审计列（旧档形态）
+        from dws_standards import STANDARD_AUDIT_NAMES
+        for tcfg in b.get("tables", {}).values():
+            tcfg["fields"] = [f for f in tcfg.get("fields", [])
+                              if str(f.get("target_field", "")).lower() not in STANDARD_AUDIT_NAMES]
+        bp = tmp_path / "b.json"; vp = tmp_path / "v2.json"
+        bp.write_text(json.dumps(b, ensure_ascii=False), encoding="utf-8")
+        vp.write_text(json.dumps(v2, ensure_ascii=False), encoding="utf-8")
+        from assemble_ddl_opt import main
+        rc = main(["--ts-v2", str(vp), "--ts-baseline", str(bp), "--outdir", str(tmp_path)])
+        assert rc == 0, "审计补齐是底层标准——对称 normalize 后围栏式校验不该拦"
+        alter = (tmp_path / "ddl/alter_table_dwb_trade_order_d.sql").read_text(encoding="utf-8")
+        assert "del_flag" in alter and "ADD COLUMN del_flag" in alter

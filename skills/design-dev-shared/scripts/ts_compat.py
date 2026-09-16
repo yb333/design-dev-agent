@@ -150,4 +150,22 @@ def normalize_ts(ts: dict) -> dict:
     init = ts.get("init")
     if isinstance(init, dict) and isinstance(init.get("rules"), dict):
         ts["init"] = dict(init, rules={c: _norm_rule(r) for c, r in init["rules"].items()})
+
+    # tables 每表补齐审计标准列（2026-09-15 定调：每张产出表的强制标准列；
+    # 幂等——已含的跳过。旧档读入即标准态：DDL 纯投影后两侧对称，围栏零 diff；
+    # opt 的物理列补齐以 archive 原始 tables 为基准算缺口进变更单，与此不冲突）
+    if isinstance(ts.get("tables"), dict):
+        for tname, tcfg in ts["tables"].items():
+            if not isinstance(tcfg, dict) or not isinstance(tcfg.get("fields"), list):
+                continue
+            have = {str(f.get("target_field", "")).lower()
+                    for f in tcfg["fields"] if isinstance(f, dict)}
+            for aname in STANDARD_AUDIT_NAMES:
+                if aname not in have:
+                    spec = STANDARD_AUDIT_TEMPLATE.get(aname, {})
+                    tcfg["fields"].append({
+                        "target_field": aname,
+                        "field_type": spec.get("type", ""),
+                        "field_comment": spec.get("comment", ""),
+                    })
     return ts

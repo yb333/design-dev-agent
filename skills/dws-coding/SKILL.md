@@ -163,7 +163,7 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 
 ## 4. 审计字段（标准4个，从切片 _global 取，所有规则必带）
 
-> **审计赋值在切片 fields 的 assign 桶里（每规则自动补齐 3 条标准 + del_flag 按归属）——照桶写即可，包括中间表/临时表(tmp)规则**（DDL 会给每张产出表追加审计列，SELECT 漏带会列不匹配）。
+> **审计赋值在切片 fields 的 assign 桶里（每规则自动补齐——照桶写即可，包括中间表/tmp 规则）**。审计=每张产出表的强制标准列（tables/DDL/桶三处装配处统一补齐）——SELECT 漏带=UT 列序对账必拦。
 
 | 字段 | 赋值 |
 |---|---|

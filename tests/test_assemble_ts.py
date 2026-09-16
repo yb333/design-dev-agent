@@ -2678,3 +2678,58 @@ class TestJoinKeyTypesAndDqContract:
         logic = [p["logic"] for p in ts["rules"]["R0001"]["fields"]["processed"]
                  if p.get("target") == "flag"][0]
         assert "\n" not in logic
+
+
+class TestAuditEveryTable:
+    """审计=每张产出表的强制标准列（2026-09-15 定调）。
+
+    内网实证根因：build_tables 仅目标表补审计（is_final 门）+ assemble_ddl 自带
+    追加 + assign 桶每规则补 → 中间表三处列数分裂（ts 7/DDL 12/SELECT 11），
+    UT 列序对账才暴露。新契约：build_tables 每表补齐（唯一补全点）、DDL 纯投影、
+    normalize 读入即标准态、N_AUDIT_TABLE 门禁。"""
+
+    def test_intermediate_table_gets_audit_columns(self):
+        """中间表 tables.fields 含标准审计 4 列（此前仅目标表补——分裂之源）。"""
+        from assemble_ts import assemble_ts as do_assemble
+        from dws_standards import STANDARD_AUDIT_NAMES
+        rs = make_rs_input()
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "取数", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f_tmp1",
+            "step_type": "incremental_extract", "target_role": "intermediate",
+            "field_targets": ["id"], "field_logics": {},
+            "grain": {"input": "源", "output": "目标", "change": "无"},
+            "produces_for": ["R0002"],
+        }] + [{
+            "rule_code": "R0002", "rule_name": "终态", "scenario": "default",
+            "exec_sequence": 2, "target_table": "dws.dwb_test_f",
+            "step_type": "merge", "target_role": "target",
+            "reads": ["dws.dwb_test_f_tmp1"],
+            "field_targets": ["id", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {}, "grain": {"input": "源", "output": "目标", "change": "无"},
+        }])
+        dd["data_flow"] = {"dependencies": [
+            {"from": "R0001", "to": "R0002", "type": "data_flow", "intermediate_table": "dws.dwb_test_f_tmp1"}]}
+        ts, _, _ = do_assemble(rs, dd)
+        tmp_fields = {str(f["target_field"]).lower()
+                      for f in ts["tables"]["dwb_test_f_tmp1"]["fields"]}
+        assert STANDARD_AUDIT_NAMES <= tmp_fields, "中间表也必须含标准审计 4 列"
+        # assign 桶同款（SELECT 输出面一致 → 三处列数一致）
+        buckets = ts["rules"]["R0001"]["fields"]
+        bucket_targets = {e["target"].lower() for e in buckets["assign"]}
+        assert STANDARD_AUDIT_NAMES <= bucket_targets
+
+    def test_ddl_pure_projection_counts_match(self):
+        """DDL 列数=tables 列数（纯投影零追加——回归本次 7/12/11 分裂数字）。"""
+        from assemble_ts import assemble_ts as do_assemble
+        from assemble_ddl import generate_ddl
+        rs = make_rs_input()
+        dd = make_design_decisions()
+        ts, _, _ = do_assemble(rs, dd)
+        ddls, _ = generate_ddl(ts)
+        content = ddls["create_table_dwb_test_f.sql"]
+        tbl_fields = ts["tables"]["dwb_test_f"]["fields"]
+        for f in tbl_fields:
+            assert f["target_field"] in content, f"DDL 缺 tables 列 {f['target_field']}"
+        # 纯投影：tables 无第 5 个审计外字段时 DDL 不多列（旧版会 +design.audit_fields 差集）
+        assert "etl_time" not in content  # 非标准名不进审计也不进 DDL

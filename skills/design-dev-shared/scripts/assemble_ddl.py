@@ -8,7 +8,7 @@ DDL 生成器: ts.json → DDL SQL 文件
 生成内容：
 - 每个规则产出一张表（中间表 / 目标F表）→ 一个 DDL 文件
 - 视图只有一种：I 视图（F 表配套镜像），由 meta.target.i_view 配套生成
-- 审计字段自动加（从 design.audit_fields）
+- 审计列纯来自 tables（装配处每表补齐，DDL 零补全）
 - 分布键（design.distribution_key）
 - 存储配置（列存 + LOW 压缩，固定标准）
 - TO GROUP（schema 含 drt → gtoup_version1，否则 LC_DW1）
@@ -25,6 +25,9 @@ import re
 import argparse
 from pathlib import Path
 from datetime import datetime
+
+from dws_standards import STANDARD_AUDIT_NAMES, STANDARD_AUDIT_TEMPLATE
+from ts_compat import normalize_ts
 
 
 def infer_logical_group(schema: str) -> str:
@@ -66,14 +69,12 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
         logical_group = tbl_info.get("logical_group", "") or infer_logical_group(schema)
         storage = tbl_info.get("storage", "column")
     else:
-        # 旧格式兼容
-        fields = rule.get("fields", [])
+        # 旧格式兼容（normalize 后三桶形态：从桶条目提取字段元数据；远古 dict 列表原样）
+        fields = _flatten_rule_fields(rule.get("fields", []))
         dist_key = ", ".join(design.get("distribution_key", []))
         distribute_type = "HASH" if dist_key else "ROUNDROBIN"
         logical_group = infer_logical_group(schema)
         storage = "column"
-
-    audit_fields = design.get("audit_fields", {})
 
     lines = []
 
@@ -101,21 +102,11 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
         max_field_len = max(max_field_len, len(fname))
         field_lines.append((fname, ftype, fcomment))
 
-    # 审计字段：去重追加（fields 里已有的审计字段不重复，没有的补上）
-    business_field_names = {fname for fname, _, _ in field_lines}
-    audit_lines = []
-    for aname, aspec in audit_fields.items():
-        if aname in business_field_names:
-            continue
-        atype = aspec.get("type", "") if isinstance(aspec, dict) else str(aspec)
-        audit_lines.append((aname, atype, ""))
-
-    # 输出字段（不在行内写注释，字段注释用下方 COMMENT ON COLUMN 统一定义）
-    all_fields = field_lines + audit_lines
-    for i, (fname, ftype, fcomment) in enumerate(all_fields):
-        comma = "," if i < len(all_fields) - 1 else ""
-        if i == len(field_lines):
-            lines.append(f"    /* 审计字段 */")
+    # 列集纯来自 tables（DDL 唯一源——2026-09-15 定调：审计补齐只在装配处
+    # build_tables 每表补齐，此处零补全逻辑；旧版自带"从 design.audit_fields
+    # 去重追加"曾致中间表 DDL 12 列 vs ts 7 列/SELECT 11 列的三处分裂）
+    for i, (fname, ftype, fcomment) in enumerate(field_lines):
+        comma = "," if i < len(field_lines) - 1 else ""
         lines.append(f"    {fname:<{max_field_len}} {type_or_empty(ftype)}{comma}")
 
     lines.append(")")
@@ -147,17 +138,12 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
         if fcomment:
             lines.append(f"COMMENT ON COLUMN {schema}.{table}.{fname} IS '{fcomment}';")
 
-    # 审计字段注释
-    audit_comments = {
-        "del_flag": "删除标识: Y-已删除, N-正常",
-        "crt_cycle_id": "创建批次ID",
-        "last_upd_cycle_id": "最后更新批次ID",
-        "dw_last_update_date": "数仓最后更新时间",
-    }
-    for aname, _, _ in audit_lines:
-        cmt = audit_comments.get(aname, "")
-        if cmt:
-            lines.append(f"COMMENT ON COLUMN {schema}.{table}.{aname} IS '{cmt}';")
+    # 审计字段注释：标准名匹配 field_lines（tables 补全已带 comment，无注释的按标准补）
+    for fname, _, fcomment in field_lines:
+        if fname.lower() in STANDARD_AUDIT_NAMES and not fcomment:
+            cmt = STANDARD_AUDIT_TEMPLATE.get(fname, {}).get("comment", "")
+            if cmt:
+                lines.append(f"COMMENT ON COLUMN {schema}.{table}.{fname} IS '{cmt}';")
 
     lines.append("")
     return "\n".join(lines)
@@ -210,11 +196,28 @@ def generate_rollback(schema: str, table: str, is_view: bool = False) -> str:
     return "\n".join(lines)
 
 
-def generate_i_view(schema: str, f_table: str, cn: str, fields: list, audit_fields: dict) -> str:
+def _flatten_rule_fields(fields) -> list:
+    """rule.fields 三桶形态 → 字段元数据列表（远古 dict 列表原样；DDL/i_view fallback 用）。"""
+    if isinstance(fields, dict):
+        _flat = []
+        for _kind in ("processed", "assign", "direct"):
+            for _e in (fields.get(_kind) or []):
+                if isinstance(_e, dict):
+                    _flat.append({"target_field": _e.get("target") or _e.get("target_field") or str(_e),
+                                  "field_type": _e.get("type", "") or _e.get("field_type", ""),
+                                  "field_comment": _e.get("comment", "")})
+                else:
+                    _flat.append({"target_field": str(_e), "field_type": "", "field_comment": ""})
+        return _flat
+    return fields or []
+
+
+def generate_i_view(schema: str, f_table: str, cn: str, fields: list) -> str:
     """生成 I视图 DDL（F表镜像，列出全部字段 + 注释，不用 SELECT *）"""
     i_table = f_table[:-2] + "_i" if f_table.endswith("_f") else f_table + "_i"
 
-    # rule.fields 已包含审计字段（assemble_ts 组装时已加入），直接用
+    # rule.fields 已包含审计字段（assemble_ts 组装时已加入），直接用（三桶形态先摊平）
+    fields = _flatten_rule_fields(fields)
     all_fields = [(f.get("target_field", ""), f.get("field_comment", "")) for f in fields]
 
     lines = []
@@ -251,10 +254,12 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
 
     返回 (ddl_dict, rollback_dict)。
     """
+    # 读入即标准态（2026-09-15 审计定调）：旧档 tables 缺审计列 → normalize 补齐，
+    # DDL 纯投影零补全（新档 build_tables 已每表补齐，normalize 幂等无变化）
+    ts = normalize_ts(ts)
     rules = ts.get("rules", {})
     design = ts.get("design", {})
     tables = ts.get("tables", {})
-    audit_fields = design.get("audit_fields", {})
     meta = ts.get("meta", {})
     target_meta = meta.get("target", {})
     f_table_meta = target_meta.get("f_table", {})
@@ -301,7 +306,7 @@ def generate_ddl(ts: dict) -> tuple[dict[str, str], dict[str, str]]:
             view_fields = tables.get(view_fields_table_key, {}).get("fields", rule.get("fields", []))
             ddl_result[i_filename] = generate_i_view(schema, view_fields_table_key,
                                                      f_cn or rule.get("rule_name", ""),
-                                                     view_fields, audit_fields)
+                                                     view_fields)
             rollback_result[f"rollback_create_view_{i_view_short}.sql"] = generate_rollback(schema, i_view_short, is_view=True)
 
     return ddl_result, rollback_result

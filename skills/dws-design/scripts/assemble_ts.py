@@ -2121,17 +2121,19 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
 
         fields = list(slim_objs)  # tables 只留三键（名/类型/注释）——纯表元数据，DDL 唯一源
 
-        # 目标表补充审计字段（表级：DDL 需要 4 列；加工语义在各规则的桶里）
-        if is_final:
-            for aname in supplemented_names:
-                spec = STANDARD_AUDIT_TEMPLATE.get(aname, {})
-                existing_names = {f["target_field"].lower() for f in fields}
-                if aname.lower() not in existing_names:
-                    fields.append({
-                        "target_field": aname,
-                        "field_type": spec.get("type", ""),
-                        "field_comment": "审计字段（自动补充）",
-                    })
+        # 审计补齐=每张产出表的强制标准列（2026-09-15 定调：底层标准非资产变更——
+        # 输入缺就补齐到标准格式，"有没有"不容商量；此前仅目标表补，中间表
+        # tables 无审计而 DDL 自补/桶已补 → 三处列数分裂[ts 7/DDL 12/SELECT 11]内网实证）
+        # tables 是 DDL 唯一源——补齐只在此处，assemble_ddl 纯投影不再自带追加
+        for aname in STANDARD_AUDIT_NAMES:
+            spec = STANDARD_AUDIT_TEMPLATE.get(aname, {})
+            existing_names = {f["target_field"].lower() for f in fields}
+            if aname.lower() not in existing_names:
+                fields.append({
+                    "target_field": aname,
+                    "field_type": spec.get("type", ""),
+                    "field_comment": spec.get("comment", ""),
+                })
 
         # 物理属性
         dec_tbl = dec_tables.get(tbl_short, {})
@@ -3007,6 +3009,21 @@ def main():
     # 先组装拿到 missing_logic（不落盘），再注入校验结果
     # 注意：assemble_ts 内部会 build_rule 收集 missing_logic，这里先跑一次拿结果
     ts, missing_logic, _ = assemble_ts(rs_input, decisions)
+
+    # N_AUDIT_TABLE（hard）：每张产出表的 tables.fields ⊇ 标准审计 4 列
+    # （2026-09-15 定调：审计=每表强制标准列，补齐在 build_tables 一处——此门禁
+    # 防未来补全逻辑改动漏一类表；内网实证三处列数分裂[ts/DDL/SELECT 7/12/11]
+    # 到 UT 列序对账才暴露，提前到装配拦）
+    for tname, tcfg in (ts.get("tables") or {}).items():
+        if not isinstance(tcfg, dict):
+            continue
+        _have = {str(f.get("target_field", "")).lower()
+                 for f in (tcfg.get("fields") or []) if isinstance(f, dict)}
+        _miss = sorted(STANDARD_AUDIT_NAMES - _have)
+        if _miss:
+            vr.add_hard("L1", "N_AUDIT_TABLE",
+                        f"表 '{tname}' 缺标准审计列 {_miss}——审计=每张产出表的强制标准列"
+                        f"（build_tables 应自动补齐，缺=装配逻辑异常勿手删）")
     for code, fields in missing_logic:
         vr.add_hard("L1", "N5",
                     f"规则 {code} 的加工字段未写 design_logic: {fields}。"

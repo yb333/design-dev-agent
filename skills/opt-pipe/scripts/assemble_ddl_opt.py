@@ -33,6 +33,29 @@ def build_alter_ddl(schema: str, table: str, additions: List[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def audit_additions_by_table(raw_baseline: dict, ts_v2: dict) -> Dict[str, List[dict]]:
+    """物理审计缺口：原始 baseline（不 normalize——物理事实）tables 缺的标准审计列。
+
+    2026-09-15 审计定调：存量表物理上补齐审计列=底层标准化不是资产变更——
+    自动进 ALTER 变更单（不占 change 声明、不算围栏越界）。幂等：物理已有则零缺口。
+    """
+    from dws_standards import STANDARD_AUDIT_TEMPLATE
+    out: Dict[str, List[dict]] = {}
+    for t, tcfg in (raw_baseline.get("tables") or {}).items():
+        if not isinstance(tcfg, dict):
+            continue
+        have = {str(x.get("target_field", "")).lower()
+                for x in (tcfg.get("fields") or []) if isinstance(x, dict)}
+        for aname, spec in STANDARD_AUDIT_TEMPLATE.items():
+            if aname not in have and t in (ts_v2.get("tables") or {}):
+                out.setdefault(t, []).append({
+                    "field": aname,
+                    "field_type": spec.get("type", ""),
+                    "field_comment": spec.get("comment", ""),
+                })
+    return out
+
+
 def declared_additions_by_table(ts_v2: dict) -> Dict[str, List[dict]]:
     """change 段 → {表: 新增列清单}（目标表 + 中间表）。字段定义取 ts_v2 的 tables。"""
     out: Dict[str, List[dict]] = {}
@@ -51,7 +74,14 @@ def declared_additions_by_table(ts_v2: dict) -> Dict[str, List[dict]]:
 
 
 def audit_full_ddl(ts_baseline: dict, ts_v2: dict) -> List[str]:
-    """差异校验：ts_v2 相对 ts_baseline 的字段增量必须恰好等于 change 声明。"""
+    """差异校验：ts_v2 相对 ts_baseline 的字段增量必须恰好等于 change 声明。
+
+    两侧先 normalize（2026-09-15 审计定调）：审计补齐=每表强制标准列（底层标准
+    非资产变更）——对称补齐后审计差为零，diff 只剩业务增量；物理列的审计补齐
+    由 audit_additions 单独进变更单（以原始 baseline 为物理基准）。"""
+    from ts_compat import normalize_ts
+    ts_baseline = normalize_ts(ts_baseline)
+    ts_v2 = normalize_ts(ts_v2)
     problems = []
     declared = {t: {a["field"] for a in adds}
                 for t, adds in declared_additions_by_table(ts_v2).items()}
@@ -93,7 +123,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     #    全量建表 DDL 是 ts 的可再生投影不入交付不入档案，2026-09-04 裁决）
     schema = v2["meta"]["target"]["f_table"]["schema"]
     n_alters = 0
-    for t, adds in sorted(declared_additions_by_table(v2).items()):
+    # 变更单 = change 声明增量 ∪ 物理审计缺口（存量表补齐标准审计列——底层标准）
+    _adds_by_table = declared_additions_by_table(v2)
+    for t, audit_adds in audit_additions_by_table(baseline, v2).items():
+        _adds_by_table.setdefault(t, []).extend(audit_adds)
+    for t, adds in sorted(_adds_by_table.items()):
         (out / "ddl" / f"alter_table_{t}.sql").write_text(
             build_alter_ddl(schema, t, adds), encoding="utf-8")
         n_alters += len(adds)
@@ -107,7 +141,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         from assemble_ddl import generate_i_view
         f_short = f_table["table"]
         view_sql = generate_i_view(f_table["schema"], f_short, f_table.get("cn", ""),
-                                   v2["tables"][f_short]["fields"], {})
+                                   v2["tables"][f_short]["fields"])
         (out / "ddl" / f"create_or_replace_view_{i_view['table']}.sql").write_text(
             view_sql, encoding="utf-8")
         n_view = 1

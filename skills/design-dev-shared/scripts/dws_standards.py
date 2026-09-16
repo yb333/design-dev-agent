@@ -10,9 +10,13 @@
 # 标准审计字段模板（4个固定字段，用于补充缺失的审计字段）
 # 源端标准写法，DDL 原样透传（normalize_type 只归一带精度 int 家族，不改字符类型）
 STANDARD_AUDIT_TEMPLATE = {
-    "del_flag":            {"type": "nvarchar2(1)",                   "default": "'N'"},
-    "crt_cycle_id":        {"type": "bigint",                         "default": "'${P_CYCLE_ID}'"},
-    "last_upd_cycle_id":   {"type": "bigint",                         "default": "'${P_CYCLE_ID}'"},
-    "dw_last_update_date": {"type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP"},
+    "del_flag":            {"type": "nvarchar2(1)",                   "default": "'N'",
+                           "comment": "删除标识: Y-已删除, N-正常"},
+    "crt_cycle_id":        {"type": "bigint",                         "default": "'${P_CYCLE_ID}'",
+                           "comment": "创建批次ID"},
+    "last_upd_cycle_id":   {"type": "bigint",                         "default": "'${P_CYCLE_ID}'",
+                           "comment": "最后更新批次ID"},
+    "dw_last_update_date": {"type": "timestamp(0) without time zone", "default": "CURRENT_TIMESTAMP",
+                           "comment": "数仓最后更新时间"},
 }
 STANDARD_AUDIT_NAMES = set(STANDARD_AUDIT_TEMPLATE.keys())
