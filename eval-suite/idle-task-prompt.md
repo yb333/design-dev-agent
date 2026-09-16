@@ -24,7 +24,7 @@
 
 红了先定位：能确定性修的修掉（带测试）；修不了的如实报告并**停止后续任务**（基线不稳不做巡检）。绿了才继续。
 
-### 任务二：文档-代码一致性审计
+### 任务二：文档-代码一致性审计 + SKILL 休整
 
 对照实际文件修文档漂移（文档对齐事实，**只改活跃文档**：AGENTS.md / commands/new-pipe.md / docs/tool-registry.md / skills/*/SKILL.md / agents/*.md。已知滞后文档 CLAUDE.md / README.md / architecture.md / eval-suite 历史**不动**——项目约定它们不同步）：
 
@@ -33,6 +33,10 @@
 3. `commands/new-pipe.md` 的 SHARED/DESIGN/CODING_SCRIPTS 清单 ↔ 实际；脚本调用路径 ↔ 实际
 4. SKILL.md / agents/*.md 提到的脚本名与路径 ↔ 实际
 5. 文档中的量化断言抽查（如校验条数、缓存时长）↔ 代码常量
+
+**SKILL 休整**（2026-09-15 定调：迭代熵增必然，定期清冗余——参考基线：dws-dq 82 行/dws-coding ~200 行/dws-design ~225 行是健康带，new-pipe 剧本另论）：
+6. 逐份 SKILL.md 找**结构性重复**（两处讲同一指令的合一；检查清单/参考表与正文重复的删——独有信息回填正文后删块）；解释性文字/机制说明/实证案例长句缩半。**每处删减过"删掉这句 agent 会做错吗"检验**——行为指令（路由/边界/契约/纪律/工具用法）一条不删；删完 grep 关键行为词自检保全（如 dws-design：五层/join_safety/疑似方向/SUBSTRB/全角括号…各 skill 抽 15-20 个）
+7. agent.md 与 SKILL.md 的双写检查：同一指令两边都全文出现的，agent.md 留指针 SKILL 留正文（岗位定义薄原则）
 
 ### 任务三：零引用死代码扫描
 

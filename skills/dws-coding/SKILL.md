@@ -6,24 +6,9 @@ description: >-
   DDL/INSERT/UT 由脚本处理，不在本 skill 范围。
 ---
 
-## ⚠️ 文件路径规则（必须遵守）
+## ⚠️ 文件路径规则
 
-本 skill 的所有文件（scripts/ 下的脚本、assets/ 下的模板、references/ 下的指导知识）都在 **skill 安装目录** 下，不在你的工作目录下。
-
-### 怎么拿到 skill 安装目录的真实路径
-
-加载 skill 后，opencode 会注入 skill 的 `location`（SKILL.md 的绝对路径）和 `<skill_files>` 文件列表。**用这些注入的路径**找文件——location 的同级目录下分三类：
-- `scripts/`：脚本（.py）
-- `assets/`：模板（带 template/example 后缀，如 etl-templates.md、配置 example）
-- `references/`：指导知识（编码规范等文档）
-
-### 读取文件
-
-用注入的 location 路径拼目录，例如：
-- `{location所在目录}/assets/etl-templates.md`（模板）
-- `{location所在目录}/references/dws-coding-standards.md`（编码规范）
-
-**绝对不要**按当前工作目录或 `~` 去拼路径——跨平台会出错。
+所有附属文件（scripts/ .py、assets/ 模板、references/ 规范）在 **skill 安装目录**下——用加载注入的 `location`（SKILL.md 绝对路径）拼 `{location所在目录}/...`，不按工作目录或 `~` 猜路径。skill_files 清单是采样（上限 10），清单没有 ≠ 不存在，以本文件提到的路径为准。
 
 ---
 
@@ -172,11 +157,7 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 > 在 SELECT 里加转换函数（CAST/TO_DATE/LEFT/ROUND），**改 ETL 不改 DDL（目标类型不变）**。
 > 转大类（varchar→date）用 CAST/TO_DATE；长度超长用 LEFT；精度收窄用 ROUND。
 
-**实现原则**：
-- 表达式口径：**搬，不译**——design_logic 已是可执行表达式（designer 审查过的），直接进 SELECT；括号说明不参与演绎
-- 简述口径（直取/类型转换/固定值等短形态）：按上表等价实现
-- NULL 处理：**表达式里有什么用什么**——表达式含 nvl/COALESCE 就带上，不含就保留 NULL（数仓 NULL/0 各有业务意义，不无脑 COALESCE）；括号说明明确"空值补 0"才加 COALESCE
-- 不改变业务口径：不加不减条件、不动 NULL/空串边界；方言函数不兼容做保语义机械转写（映射唯一）
+实现原则同步骤 2 的翻译纪律（搬不译/不改口径/机械转写唯一映射）；NULL 处理：**表达式里有什么用什么**——含 nvl/COALESCE 就带，不含保留 NULL（不无脑 COALESCE），括号说明明确"空值补 0"才加。
 
 ---
 
@@ -193,15 +174,9 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 
 在 SELECT 里直接带上这 4 个字段的赋值。
 
-### 4.1 业务主键 / 分组键也必须出现在字段列表里
+### 4.1 分组键必须 SELECT 输出
 
-聚合类规则（`grain.change == 多行聚合`）的**分组键/业务主键**（见 `_global.business_key` /
-`_global.distribution_key`，如 `user_id`、`product_id`）必须作为 SELECT 的一个字段输出
-（`dof.user_id AS user_id`），原因：
-- 它是目标表的 `DISTRIBUTE BY` 键和下游规则 `JOIN` 回来的关联键；
-- 若只放进 `GROUP BY` 而不 SELECT，DDL 会生成一个表里没有的列名做分布键，且下游无法关联。
-
-即：**GROUP BY 的键，必须同时 SELECT 出来。**
+聚合规则的分组键/业务主键（`_global.business_key`/`distribution_key`）不能只进 GROUP BY——它同时是 DISTRIBUTE BY 键和下游 JOIN 回来的关联键，必须 SELECT 输出。
 
 ---
 
@@ -212,7 +187,7 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 | `assets/etl-templates.md` | SELECT 标准模板（各种加工模式） |
 | `references/dws-coding-standards.md` | 编码规范（强制，含命名规范） |
 
-> coder 工具脚本（slice_ts.py / **pick_fields.py** / check_sql.py）在本 skill 的 `scripts/` 下，agent 通过 bash 调用。其余全部在 design-dev-shared（分层铁律：skill 只向下 import shared）：公共库（dws_db / config_paths / run_ut(UT函数库) / ut_diagnose(类型诊断CLI，回退分析可复跑) / sql_parse / type_compat）+ DDL/制品/UT 执行等 pipe 脚本（assemble_ddl/assemble_export/ut_precheck/ut_execute，pipe 调，coder 不直接调）。
+
 
 ---
 
@@ -220,15 +195,6 @@ python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路
 
 task_id / 会话管理归编排者（pipe 记录并按需恢复你的会话）——你不在 SQL 产物或回报里记录任何会话标识。
 
-## 6. 产出检查清单
+## 6. 交卷自检
 
-产出 SELECT 前自检：
-- [ ] SELECT 覆盖切片里所有目标字段（不漏字段）
-- [ ] 每个 aggregate/计算字段实现了完整逻辑（禁止硬编码 0）
-- [ ] 审计字段 4 个带上（del_flag/crt_cycle_id/last_upd_cycle_id/dw_last_update_date）——**中间表/tmp 规则也要带**
-- [ ] direct 字段的 COALESCE 处理正确（按业务语义判断：金额→0、主键/外键不 COALESCE、可选字段保留 NULL，见 coding-standards §1.3）
-- [ ] JOIN 条件和切片的 joins 一致
-- [ ] 不能 SELECT *
-- [ ] 字段名符合命名规范
-- [ ] **注释一律 `/* */` 块注释，无 `--` 行注释**（check_sql 会报错）
-- [ ] check_sql.py 静态对比通过
+产出 SELECT 后**必跑 check_sql**（步骤 5）——字段覆盖/SELECT */注释规范/引用一致性它全查，不过自己改限 3 轮（fail 工作流，不预防性逐条自查）；上表翻译对照与 §4 审计要求在写时对照即可。
