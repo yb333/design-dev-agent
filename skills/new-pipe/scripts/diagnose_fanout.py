@@ -444,7 +444,30 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
         lines.append(f"[整体试算] 按声明条件把全部关联拼起来数行数：驱动 {before} 行 → 关联后 {after} 行"
                      f"（⚠ 丢行 {loss} 行——INNER 未命中，或规则 filter 引用了 join 表列使 LEFT 退化）")
     else:
-        lines.append(f"[整体试算] 按声明条件把全部关联拼起来数行数：驱动 {before} 行 → 关联后 {after} 行（无膨胀无丢行）")
+        _note = ""
+        if loss == 0:
+            # 未膨胀但逐表曾检出键不唯一=数据未命中发散键（未来命中即发散）——风险披露
+            # （2026-09-15 内网案例：主表编码当前固定未命中，designer 曾以此推断压掉疑点漏报）
+            _nu_tables = []
+            for _i, _j in enumerate(joins_decl, 1):
+                _al = (_j.get("alias") or "").strip().lower()
+                _st = binding.get(_al)
+                if not _st:
+                    continue
+                _tbl_short = (_st[-1] if isinstance(_st, (tuple, list)) else str(_st)).rsplit(".", 1)[-1].lower()
+                _saf = _safety_by_alias.get(_al) or {}
+                _lim = " AND ".join(filter(None, [rule_filter_text.strip()]
+                                            + [t_ for t_ in [j.get("filter") or "" for j in joins_decl
+                                                             if isinstance(j, dict) and (j.get("alias") or "").strip().lower() == _al]
+                                            + [_saf.get("join_filter") or ""]]))
+                # 逐表唯一性速查（重用键统计）——只对曾报不唯一的表做（本函数上下文拿不到逐表结论，
+                # 简化：查 join_safety 标 join_key_unique=false 的表）
+                if _saf.get("join_key_unique") is False:
+                    _nu_tables.append(f"JOIN {_i}（{_tbl_short}，声明不唯一）")
+            if _nu_tables:
+                _note = (f"；⚠ 驱动数据当前未命中发散键（{'、'.join(_nu_tables)}）——"
+                         f"现在不发散≠未来不发散，命中即膨胀，闸口①人判是否加限定/收敛")
+        lines.append(f"[整体试算] 按声明条件把全部关联拼起来数行数：驱动 {before} 行 → 关联后 {after} 行（无膨胀无丢行{_note}）")
     # 空关联率（LEFT join 逐个——值域/内容不一致维度的系统性检查）
     for i, j in enumerate(joins_decl, 1):
         alias = (j.get("alias") or "").strip().lower()
