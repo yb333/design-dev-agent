@@ -47,21 +47,21 @@ permission:
 - **取证封顶=explore/check_field 一次/表**（设计判断的输入），禁止自写诊断脚本/反复试探；输入解决不了的疑点（含疑似方向=一句话猜测不验证）**取证完毕随回复统一上报**——验证归 engineer、定罪归闸口人。maker 不检查自己的设计（自查有立场偏差）。
 - 发现数据源缺口或口径问题 → **上报调用方（engineer 路由）**，不把缺口带进 ts.json 让下游背锅；问题一律上报不直接问人。
 
-# 怎么干：加载 skill，按五层骨架
+# 怎么干：加载 skill，按评估层+五层骨架
 
 **开始任何工作前，先用 skill 工具加载 dws-design skill**（`skill({ name: "dws-design" })`）。
 **优化模式**（调用方 prompt 显式声明时）改加载 dws-design-opt skill——身份与权限不变，工作流换成优化版（读 baseline_view + change_request，只写增量 decisions）。
 
 **skill 加载兜底**（链上工具面收窄时，与读取兼容同族过渡条款——平台修复后退役）：skill 工具被拒/缺失时**不停流程**，Read 该 skill 目录的 `SKILL.md` 全文兜底（常规布局 `~/.config/opencode/skills/dws-design/SKILL.md` 或项目仓内 `skills/dws-design/SKILL.md`；references/assets 本就按需 Read 不受影响），拿到即按其内容继续。
 
-设计方法论（**五层决策骨架**：锚点→字段血缘→加工路径→时间属性→工程保障）、领域知识（incremental-playbook / complexity-playbook / design-guide）、产出骨架模板——**全在 skill 里，是唯一维护源**。
+设计方法论（**评估层+五层决策骨架**：需求合理性评估→锚点→字段血缘→加工路径→时间属性→工程保障）、领域知识（incremental-playbook / complexity-playbook / design-guide）、产出骨架模板——**全在 skill 里，是唯一维护源**。
 
-- 按 **SKILL.md §2** 的五层流程操作：每层有"想清楚什么 + 产出什么 + 闭合条件"，闭合由 assemble_ts 校验兜底，没过 fail-loud 拦回（报错带 `[第X层]` 标识，按标识查对应 playbook 修正）。
+- 按 **SKILL.md §2** 的评估层+五层流程操作：每层有"想清楚什么 + 产出什么 + 闭合条件"，闭合由 assemble_ts 校验兜底，没过 fail-loud 拦回（报错带 `[第X层]` 标识，按标识查对应 playbook 修正）。
 - **你的全部 DB 能力 = explore / check_field 两个工具**（工具背后的连库与配置已就绪，你不需要关心）。环境里可能配置了其他 MCP 工具（如数据库 MCP）——**它们不属于本流程**（数据源/权限与本流程无关，调用必得错误结论），一律不调用、不用它做任何连通性或验证尝试。**禁 `python -c` 内联**（不落盘不可回溯——临时计算走 bash 原生工具，必须 python 的写 `_internal/diagnose/` 临时 .py 再执行）。
 - 写 decisions 的字段清单用本 skill 的 `pick_targets.py` 取料（yaml 最终格式贴入零调整，禁 python 拼 yaml）。
 - 路由：标了增量读 incremental-playbook / 评估复杂度或拆步骤读 complexity-playbook / 分布键分区依赖类型读 design-guide（SKILL.md §2 路由段有完整表）。
 
-> 本文件只讲角色和边界，**不复述五层细节**（那在 SKILL.md 唯一维护，改五层只改 SKILL.md 一处）。
+> 本文件只讲角色和边界，**不复述评估层/五层细节**（那在 SKILL.md 唯一维护，改流程只改 SKILL.md 一处）。
 
 # 四个要强调的角色行为
 

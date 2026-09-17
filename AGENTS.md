@@ -117,12 +117,12 @@ ddlc_design_dev/
 
 1. **预处理**：preprocess.py 转 rs_input.json（完整，给脚本读；含 schedule.incremental_tables 解析自 RS 增量表段）+ rs_input_view.json（compact 紧凑视图，给 designer 读，省 70%）→ precheck.py 校验输入完整性 + **连库校验字段类型**（pg_catalog UNION ALL 批量查，24h schema 缓存）
    - **`--rs` 可选（无RS模式）**：无 RS 时 mapping 独立驱动核心链路，schedule 用默认值兜底（全量调度/T+1/无增量/无DQ），rs_input 加 `_no_rs_mode` 标记。precheck 给 warn 不阻断。90% 场景建议有 RS（调度/增量/DQ 信息更完整）。
-2. **设计**：调 dws-designer 按**五层决策骨架**（SKILL.md §2）思考 → 产 design_decisions.yaml → assemble_ts.py 组装 ts.json + ts.md（主线无 DQ）
-   - **五层骨架**：第0层锚点（粒度+主键强制闭合）→ 第1层字段血缘（场景横切）→ 第2层加工路径（step_type/target_role）→ 第3层时间属性（增量逐表对账）→ 第4层工程保障（分布键/调度）。每层有闭合条件，assemble_ts 校验兜底（没过 fail-loud，报错带 `[第X层]` 导航标识）。
+2. **设计**：调 dws-designer 按**评估层+五层决策骨架**（SKILL.md §2）思考 → 产 design_decisions.yaml → assemble_ts.py 组装 ts.json + ts.md（主线无 DQ）
+   - **评估层+五层骨架**（2026-09-17 画像矛盾消解定稿：强制的是"问题有结论"不是"工具跑几遍"——矛盾根源=6992f04 工具药方[推荐起手]与"工具是服务"打架，评估层把强制点从工具挪到问题）：评估层（第0层之前，需求合理性三问强制闭合——源表粒度/每条 join_condition 键唯一性有据/输入存疑处置；产出=事实底座落 join_safety.reason+疑点清单统一上报；**实测不唯一=疑点，含"与主表关联后当前不发散、设计不受影响"情形**——不影响设计≠无风险）→ 第0层锚点（粒度+主键强制闭合）→ 第1层字段血缘（场景横切）→ 第2层加工路径（step_type/target_role）→ 第3层时间属性（增量逐表对账）→ 第4层工程保障（分布键/调度；①键唯一性=消费评估层事实底座做设计结论）。每层有闭合条件，assemble_ts 校验兜底（没过 fail-loud，报错带 `[第X层]` 导航标识）。
    - **TS 校验契约**（assemble_ts.py `run_all_validations`，~38 条）：存量 C7-C13 保留 + 新增 N1-N27。分级：硬阻断（结构不可能对，exit 1）/ 软阻断+豁免（默认拦，填 exemptions 放行，闸口①可见）/ warn。报错按五层分组。
    - **多步骤数据流模型**：每个 rule 有 step_type（full/aggregate/incremental_extract/merge）+ target_role（intermediate/target），多步骤间用 produces_for/reads 声明依赖（表名引用 target_table/reads 一律带 schema 如 dws.tmp_x——2026-08-31 定调消形态分叉，N12b warn 抓漏，代码兼容短名）。**中间表≠聚合**（target_role=intermediate 按"产出供谁消费"定义，可以是 aggregate/full/incremental_extract 任意 step_type）。complexity-playbook §四 是 step_type 决策权威，incremental-playbook 是增量设计权威。
    - **增量防臆想**（攻"只做主表"+攻"全量心智装增量"）：assemble_ts 硬校验 N14（标了增量但完全没增量处理；旧版"source 涉驱动表"析取恒为真已删）+ N28（增量资产至少两个规则——增量取数 + 终态增量更新，单规则直灌不被支持）+ N_INIT2（终态规则禁 truncate_table，**锚在 RS 增量声明上**——designer 忘标增量段按全量设计一样被拦）+ N15/N16。累积共建场景（多来源写同一中间表）标 `build_mode: accumulate`，配 dedup_strategy。
-   - designer 可调 explore.py 试算 JOIN 键唯一性（第4层关联安全）。
+   - designer 可调 explore.py 试算 JOIN 键唯一性（评估层取证，--batch 批量默认形态）。
 3. **闸口①**：gate_summary.py 出摘要（**只等主线材料**——DQ 不门闸口①，2026-09-15 复调：方案 V 曾前移 DQ 塞人审窗口，人审快于 DQ 时被完成时间门住 +20min 实测），人确认主线设计
 4. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
 5. **编码段三路并行**（闸口①确认后同消息发起）：逐规则调 dws-coder 产 ETL SELECT（slice_ts 切片）+ **dws-dq-producer 直接产 dq.json+SQL**（RS dq_requirements 非空才起；两跳并一跳）→ assemble_dq.py 校验补全（文件在位/引用对账/禁 tmp/幻觉列）+ ts.md DQ 表格追加渲染——DQ 时间被 coder 链吸收
@@ -182,7 +182,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | 输入→流程 | 完整性/类型/值域/关联键类型 | precheck | 1b | 人决策（exit 2 决策类阻断） |
 | designer→ts | 设计结构闭合 ~40 条 | assemble_ts | 组装时 | 脚本定罪，硬阻断 |
 | designer→闸口① | 任务目标对照 | gate_summary | 闸口①前 | 人判材料 |
-| designer→闸口① | **关联质量**：逐表键唯一性（主判据——通过一句话，不唯一才展开：条件原文+输入声明对照[宁缺勿错]+**join_safety 断言对照**[证伪最高优先/已知接受不重复弹]+重复组差异列+命中）+ 整体试算严重性（膨胀/丢行/空关联率；全通过却膨胀=矛盾信号贴条件原文）——只反馈事实不猜收敛。与 designer 第4层自查构成断言-实证闭环（maker 断言 join_key_unique，闸口①实测） | diagnose_fanout --all | 闸口①前 | 披露不阻断（人判归属与收敛） |
+| designer→闸口① | **关联质量**：逐表键唯一性（主判据——通过一句话，不唯一才展开：条件原文+输入声明对照[宁缺勿错]+**join_safety 断言对照**[证伪最高优先/已知接受不重复弹]+重复组差异列+命中）+ 整体试算严重性（膨胀/丢行/空关联率；全通过却膨胀=矛盾信号贴条件原文）——只反馈事实不猜收敛。与 designer 评估层自查构成断言-实证闭环（maker 断言 join_key_unique，闸口①实测） | diagnose_fanout --all | 闸口①前 | 披露不阻断（人判归属与收敛） |
 | coder→SQL | 静态（字段覆盖/引用/口径对账） | check_sql | 每规则写完 | error 硬阻断 / 提示级 |
 | coder→UT | 执行可跑性（EXPLAIN ANALYZE 全量真实执行一次[替代采样 SELECT]+顶层实际行数 0 行告警）+ **执行计划两门槛**（不下推=官方判据 Data Node Scan/_REMOTE_TABLE_QUERY_ / STREAM 算子数≤50——同一计划文本，含 actual 值落盘可回溯；字段级 NULL 归 6b 空值检查）+ **列序对账**（`SELECT * FROM (…) LIMIT 0` describe 实际输出列 vs ts 结构源字段序，多/缺列/乱序都拦——按位置对齐的 INSERT 乱序=静默错位数据最危险；权威解释器是数据库，2026-09-11 列清单改结构源后 coder 输出漂移的唯一守卫；describe 无列返回跳过披露） | ut_precheck 6a | INSERT 前 | 跑通/列序对账=硬阻断（列序 FAIL 归 coder）；计划门槛=披露不阻断（性能人判） |
 | UT 装载后 | 数据质量实锤+DQ+发散深查 | ut_execute 6b + diagnose_fanout --rule + ut_diagnose | 6b | 实败按分流表路由 |
@@ -193,7 +193,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | 问题类型 | 确定性路由（不问人） | 根因/语义时的归宿 |
 |---|---|---|
 | SQL 语法类（COLUMN/TYPE/SYNTAX/DOES NOT EXIST；DQ FAIL/MISSING） | 恢复 coder 旧会话修复 | — |
-| 设计期关联疑点（键不唯一且输入无声明，designer 第4层批量上报带疑似方向） | engineer 先 explore --where 定向验证疑似方向（产事实） | 人三选：源头修 mapping / 采纳条件本次继续 / 退 BA·接受+收敛策略（回 designer）；终局实证=闸口① diagnose_fanout --all |
+| 设计期关联疑点（键不唯一且输入无声明，designer 评估层批量上报带疑似方向） | engineer 先 explore --where 定向验证疑似方向（产事实） | 人三选：源头修 mapping / 采纳条件本次继续 / 退 BA·接受+收敛策略（回 designer）；终局实证=闸口① diagnose_fanout --all |
 | 类型风险（跨大类转换） | — | 1b 问人（转换/不加/返源端） |
 | 关联键类型跨大类 | — | 1b 问人（转换/改关联键/接受） |
 | 值域溢出（numeric overflow/value too long） | — | 按 1b 值域菜单：源输入→**BA** 改模型；过程决策→**SE** 拍板 |
@@ -267,7 +267,7 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 - `skills/new-pipe/SKILL.md`——★ 新建编排剧本唯一源（改流程先读这个；`commands/new-pipe.md` 是薄壳入口）
 - `agents/dws-engineer.md`——★ 编排 agent 岗位定义（身份/权限/契约参数/铁律）
 - `docs/integration-contract.md`——★ 总控对接契约（调用方式/参数/部署前提）
-- `skills/dws-design/SKILL.md`——★ **五层决策骨架**（designer 思考主线，改设计流程先读这个）
+- `skills/dws-design/SKILL.md`——★ **评估层+五层决策骨架**（designer 思考主线，改设计流程先读这个）
 - `skills/dws-design/references/incremental-playbook.md`——增量设计全集（数据流/累积共建/排重/初始化/豁免）
 - `skills/dws-design/references/complexity-playbook.md`——复杂度评估 + CTE/物化决策 + step_type 决策树
 - `skills/dws-design/references/design-guide.md`——物理设计决策（分布键/分区）+ 依赖类型（精简版）

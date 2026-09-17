@@ -677,9 +677,9 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                             lines.append(f"  ｜designer 已声明不唯一（strategy={safety.get('strategy') or '—'}"
                                          f"/reason={safety.get('reason') or '—'}）——已知接受，闸口①确认口径即可")
                         else:
-                            lines.append(f"  ｜join_safety 未填 join_key_unique——第4层要求补声明")
+                            lines.append(f"  ｜join_safety 未填 join_key_unique——评估层要求补声明")
                     else:
-                        lines.append(f"  ｜join_safety 未声明此关联——第4层要求补")
+                        lines.append(f"  ｜join_safety 未声明此关联——评估层要求补")
                     try:
                         samples = _dup_samples(db, sch, tbl, own, where, top)
                     except RuntimeError as e:
