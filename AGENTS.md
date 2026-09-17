@@ -68,7 +68,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 | agent | 职责 | skill | 能调的工具（详见 tool-registry.md） | 能写 |
 |-------|------|-------|----------------------------------|------|
 | **dws-engineer** | 设计开发段**编排+质检**：契约参数→加载剧本→调管线脚本→起 designer/producer/coder→跑确定性验证产事实→按分流表路由问题→守闸口（判断=分流不定罪，定罪归闸口人） | new-pipe / opt-pipe（按模式路由） | check_env（步骤0探针）；管线脚本经 bash python 调（不属 agent 工具） | `ddlc_design_dev/**`（含 opt/ 优化现场与 archive/ 档案） |
-| **dws-designer** | 设计判断（纯主线，无 DQ），产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（JOIN键唯一性）/ check_field（字段查证）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
+| **dws-designer** | 设计判断（纯主线，无 DQ），产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（评估层作业台两步：--plan+--batch-stdin 存在性+唯一性流水线）/ check_field（引用确认器）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
 | **dws-dq-producer** | ★DQ 翻译者+独立实现者（2026-09-14 拆分）：断言式翻译+对比式独立重算，**直接产 dq.json+SQL**（两跳并一跳 2026-09-15，无 decisions 中间产物）；身份级纪律=输入隔离（不读 design_logic/ETL SQL）/歧义不拍板标注上交/检查成本自约束 | dws-dq | pick_dq_context（三件套取料+--query/--field 深挖）/ assemble_dq（唯一校验入口——写完即跑，2026-09-15 合并 check_sql --dq） | `dq/*.sql`、`build/dq.json` |
 | **dws-coder** | 单规则加工 SELECT（DQ 已拆归 producer） | dws-coding / dws-coding-opt（按任务路由） | slice_ts / pick_fields / check_sql | `etl/*.sql` |
 
@@ -122,7 +122,7 @@ ddlc_design_dev/
    - **TS 校验契约**（assemble_ts.py `run_all_validations`，~38 条）：存量 C7-C13 保留 + 新增 N1-N27。分级：硬阻断（结构不可能对，exit 1）/ 软阻断+豁免（默认拦，填 exemptions 放行，闸口①可见）/ warn。报错按五层分组。
    - **多步骤数据流模型**：每个 rule 有 step_type（full/aggregate/incremental_extract/merge）+ target_role（intermediate/target），多步骤间用 produces_for/reads 声明依赖（表名引用 target_table/reads 一律带 schema 如 dws.tmp_x——2026-08-31 定调消形态分叉，N12b warn 抓漏，代码兼容短名）。**中间表≠聚合**（target_role=intermediate 按"产出供谁消费"定义，可以是 aggregate/full/incremental_extract 任意 step_type）。complexity-playbook §四 是 step_type 决策权威，incremental-playbook 是增量设计权威。
    - **增量防臆想**（攻"只做主表"+攻"全量心智装增量"）：assemble_ts 硬校验 N14（标了增量但完全没增量处理；旧版"source 涉驱动表"析取恒为真已删）+ N28（增量资产至少两个规则——增量取数 + 终态增量更新，单规则直灌不被支持）+ N_INIT2（终态规则禁 truncate_table，**锚在 RS 增量声明上**——designer 忘标增量段按全量设计一样被拦）+ N15/N16。累积共建场景（多来源写同一中间表）标 `build_mode: accumulate`，配 dedup_strategy。
-   - designer 可调 explore.py 试算 JOIN 键唯一性（评估层取证，--batch 批量默认形态）。
+   - designer 评估取证=explore 作业台两步（--plan 拉草稿→补语义空位→--batch-stdin 回灌行协议；argv 内联 JSON 已退役——PS 剥双引号+'N' 字面量与定界符同形，stdin 逐字透传引号免疫）；check_field 收窄为引用确认器（写口径确认引用字段+类型兜底）。
 3. **闸口①**：gate_summary.py 出摘要（**只等主线材料**——DQ 不门闸口①，2026-09-15 复调：方案 V 曾前移 DQ 塞人审窗口，人审快于 DQ 时被完成时间门住 +20min 实测），人确认主线设计
 4. **DDL**：assemble_ddl.py 从 ts.json 生成建表/视图 DDL
 5. **编码段三路并行**（闸口①确认后同消息发起）：逐规则调 dws-coder 产 ETL SELECT（slice_ts 切片）+ **dws-dq-producer 直接产 dq.json+SQL**（RS dq_requirements 非空才起；两跳并一跳）→ assemble_dq.py 校验补全（文件在位/引用对账/禁 tmp/幻觉列）+ ts.md DQ 表格追加渲染——DQ 时间被 coder 链吸收
