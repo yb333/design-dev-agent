@@ -335,6 +335,89 @@ def read_target_schema(ts_path: str) -> str:
 # 主入口
 # ============================================================
 
+def run_batch_check(target_schema: str, batch_file: str) -> str:
+    """批量关联唯一性校验（2026-09-15 决策 B 补环：关联是一等分析单位——同表多关联
+    各自带限定逐条校验，一个命令跑完；同表同键同限定自动去重只跑一次）。
+
+    批量清单 YAML/JSON：[{tag, schema, table, key, where}]——tag=关联标识（如
+    别名 c1/c2，输出对账用）；where 可空（无限定）。输出汇总表+重复组样例。
+    """
+    import yaml
+    try:
+        items = yaml.safe_load(Path(batch_file).read_text(encoding="utf-8")) or []
+    except Exception as e:
+        return f"[批量清单读取失败] {batch_file}: {e}"
+    if not isinstance(items, list) or not items:
+        return "[批量清单为空] 应为列表: [{tag, schema, table, key, where}]"
+
+    try:
+        from dws_db import create_executor_for_schema
+        executor = create_executor_for_schema(target_schema, role="etl")
+    except Exception as e:
+        return format_skip(f"无法创建执行器: {e}")
+    out = []
+    seen = {}  # (schema,table,key,where_lower) -> tag（去重：同表同键同限定只跑一次）
+    dup_notes = []
+    try:
+        if not executor.test_connection():
+            return format_skip("数据库连接失败")
+        for i, it in enumerate(items, 1):
+            if not isinstance(it, dict):
+                out.append(f"[{i}] 条目格式错（应为 dict）: {it}")
+                continue
+            tag = str(it.get("tag") or f"#{i}")
+            sch = str(it.get("schema") or "").strip()
+            tbl = str(it.get("table") or "").strip()
+            key = str(it.get("key") or "").strip()
+            where = str(it.get("where") or "").strip()
+            if not (tbl and key):
+                out.append(f"[{tag}] 缺 table/key——跳过")
+                continue
+            dedup = (sch.lower(), tbl.lower(), key.lower(), where.lower())
+            if dedup in seen:
+                dup_notes.append(f"[{tag}] 与 [{seen[dedup]}] 同表同键同限定——去重（结果同）")
+                continue
+            seen[dedup] = tag
+            try:
+                sql = build_join_key_sql(sch, tbl, key, where)
+                r = executor.execute(sql)
+                if not r.success:
+                    out.append(f"[{tag}] {sch}.{tbl} key=({key}) where=({where or '无'}) → 执行失败: "
+                               f"{str(r.error)[:120]}【自检：字段名/条件写法】")
+                    continue
+                row = (r.rows or [{}])[0]
+                total, uniq = int(row.get("total", 0)), int(row.get("distinct_cnt", 0))
+                if total == uniq:
+                    out.append(f"[{tag}] {sch}.{tbl} key=({key}) where=({where or '无'}) → ✓ 唯一"
+                               f"（{total} 行）——join_key_unique=true 可声明")
+                else:
+                    _sample = ""
+                    try:
+                        keys = [k.strip() for k in key.split(",") if k.strip()]
+                        ke = ", ".join(keys)
+                        s2 = (f"SELECT {ke}, COUNT(1) AS dup_cnt FROM {sch}.{tbl}"
+                              + (f" WHERE {where}" if where else "")
+                              + f" GROUP BY {ke} HAVING COUNT(1)>1 ORDER BY dup_cnt DESC LIMIT 2")
+                        r2 = executor.execute(s2)
+                        if r2.success and r2.rows:
+                            _sample = " | 重复组: " + "; ".join(
+                                ",".join(f"{k}={v}" for k, v in rr.items()) for rr in r2.rows)
+                    except Exception:
+                        pass
+                    out.append(f"[{tag}] {sch}.{tbl} key=({key}) where=({where or '无'}) → ✗ 不唯一"
+                               f"（{total} 行/唯一 {uniq}，重复 {total-uniq}）{_sample}"
+                               f"——记疑点清单（疑似方向一句话，验证归 engineer）")
+            except Exception as e:
+                out.append(f"[{tag}] 查询异常: {e}")
+    finally:
+        try:
+            executor.close()
+        except Exception:
+            pass
+    header = [f"批量关联唯一性校验（{len(seen)} 项执行/{len(dup_notes)} 项去重）——按关联逐条带限定："]
+    return "\n".join(header + out + dup_notes)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="设计探索：JOIN 键唯一性试算 + 键值重叠率试算"
@@ -350,6 +433,9 @@ def main():
                         default="")
     parser.add_argument("--check-join-key", action="store_true",
                         help="执行 JOIN 键唯一性检查")
+    parser.add_argument("--batch", default="",
+                        help="批量关联唯一性：YAML 清单 [{tag, schema, table, key, where}]——"
+                             "同表多关联各自带限定逐条校验+自动去重（决策 B：关联是一等分析单位）")
     parser.add_argument("--check-overlap", action="store_true",
                         help="执行键值重叠率检查（双侧采样算交集，探测内容语义是否吻合）")
     parser.add_argument("--schema-a", default="", help="重叠率：左表 schema")
@@ -394,8 +480,28 @@ def main():
         ))
         return
 
+    if args.batch:
+        # 批量模式：target schema 锚点同单查（--rs/--ts 任一）
+        ts_anchor = args.ts or args.rs
+        if not ts_anchor:
+            print(format_skip("批量模式需要 --rs 或 --ts 锚点（选数据源）"))
+            return
+        target_schema = ""
+        for anchor, reader in ((args.ts, read_target_schema), (args.rs, read_target_schema_from_rs)):
+            if anchor:
+                try:
+                    target_schema = reader(anchor)
+                except Exception:
+                    pass
+                if target_schema:
+                    break
+        if not target_schema:
+            target_schema = args.schema
+        print(run_batch_check(target_schema, args.batch))
+        return
+
     if not args.check_join_key:
-        parser.error("请指定模式：--check-join-key（唯一性）或 --check-overlap（键值重叠率）")
+        parser.error("请指定模式：--check-join-key（唯一性）/ --check-overlap（重叠率）/ --batch 清单（批量）")
 
     # target schema：从 ts.json 取（选数据源用）；--schema 是要查的表的 schema
     target_schema = ""

@@ -83,14 +83,50 @@ def check_field(rs_path: Path, ref: str, like: str = "") -> str:
             f"是逻辑字段 → design_logic 写清产生逻辑")
 
 
+def check_field_batch(rs_path: Path, refs: str) -> str:
+    """多字段批量校验（2026-09-15）：一次确认多个引用——逐项结论清单（✓ 类型 /
+    ✗ 带相近建议 / ? 环境态），不让全表清单+自己对比。支持混合别名 ht.a,cx.dt。"""
+    items = [x.strip() for x in refs.split(",") if x.strip()]
+    if not items:
+        return "[空清单]"
+    results = []
+    for ref in items:
+        txt = check_field(rs_path, ref)
+        first = txt.splitlines()[0] if txt else ""
+        if txt.startswith("✓"):
+            typ = ""
+            if "类型 " in txt:
+                typ = txt.split("类型 ", 1)[1].split("）")[0].split("——")[0].strip()
+            results.append(f"✓ {ref}: {typ}" if typ else f"✓ {ref}")
+        elif txt.startswith("✗"):
+            sim = ""
+            for ln in txt.splitlines():
+                if "相似字段" in ln:
+                    sim = " | " + ln.strip()
+                    break
+            results.append(f"✗ {ref}{sim}")
+        else:
+            results.append(f"? {ref}: {first[:80]}")
+    n_ok = sum(1 for r in results if r.startswith("✓"))
+    n_bad = sum(1 for r in results if r.startswith("✗"))
+    summary = (f"批量校验 {len(items)} 项：✓ {n_ok} / ✗ {n_bad}"
+               + ("" if n_bad == 0 else "（✗ 项改引用或补 mapping——别绕）"))
+    return summary + "\n" + "\n".join(results)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="designer 字段查证：抄正要写的 别名.字段 引用直接查 schema_cache")
     parser.add_argument("--rs", required=True, help="rs_input.json 路径（定位 schema_cache）")
     parser.add_argument("--field", required=True,
                         help='要查证的引用："别名.字段"（如 ht.start_date）或只 "别名"（列全表）')
+    parser.add_argument("--like", default="",
+                        help='模糊找：只列含关键词的字段（如 --like date / --like id，宽表浏览利器）')
     args = parser.parse_args()
-    print(check_field(Path(args.rs), args.field))
+    if "," in args.field and "." in args.field:
+        print(check_field_batch(Path(args.rs), args.field))
+    else:
+        print(check_field(Path(args.rs), args.field, like=args.like))
 
 
 if __name__ == "__main__":
