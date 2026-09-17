@@ -1211,8 +1211,19 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
                         and not is_trivial_assign_detail(str(_val))):
                     row["⚠"] = "非标准字面量——需翻译成标准口径（field_logics）或 question 源端确认"
             rows.append(row)
-        direct_section.append({"schema": sch, "table": tbl, "alias": alias,
-                               "rule": rule, "fields": rows})
+        # C-4 折叠（2026-09-15：内网实测 view 1462 行/96 直取平铺，300+ 更糟）：每表只留
+        # 3 行抽样 + 总数锚点；完整清单 pick_targets --alias 取。总数锚点=漏取防线——
+        # designer 交卷时 field_targets 并集=全字段（闭合校验硬拦），数量对不上必被拦
+        _SAMPLE = 3
+        _folded = len(rows) > _SAMPLE
+        _rows_out = rows[:_SAMPLE] if _folded else rows
+        _entry = {"schema": sch, "table": tbl, "alias": alias, "rule": rule,
+                  "count": len(rows), "fields": _rows_out}
+        if _folded:
+            _entry["折叠"] = (f"本表共 {len(rows)} 个直取/赋值字段，仅列前 {_SAMPLE} 行——"
+                              f"完整清单：python {{skill目录}}/scripts/pick_targets.py "
+                              f"--rs {{rs_input路径}} --alias {alias}")
+        direct_section.append(_entry)
 
     # ③ 加工字段：按 target_column 聚合（多表来源合并成一段）
     target_groups: dict = {}
@@ -1241,7 +1252,7 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             # 标记已人定并披露原始性质（原是'直接复制'，加工是人决策不是业务定义）——
             # designer 按此译守卫式转换表达式，不重新质疑方向
             if str(detail).startswith(("类型安全处理：", "类型转换：")):
-                entry["决策"] = "原始输入='直接复制'，类型风险已人定加处理（勿推翻方向）——译成守卫式转换 design_logic（版本无关写法，见 dws-coding-standards §0）"
+                entry["决策"] = "原始输入='直接复制'，类型风险已人定加处理（勿推翻方向）——译成守卫式转换 design_logic（非法格式置 NULL 被 DQ 抓；字符收窄按目标类型长度语义截取：varchar 系[字节]SUBSTRB / nvarchar 系[字符]SUBSTR）"
             # 引用提示（只陈述事实，不猜归属）：限定引用原样 + 未限定词中性列示
             # （多表同名是可判事实→标注；单表归属不猜——那是 designer 的判断）
             _q, _b = extract_logic_refs(detail, _reg_cols)

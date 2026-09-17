@@ -195,7 +195,7 @@ designer 内部会自行完成"产 design_decisions.yaml → 调 assemble_ts.py 
 Task(
   subagent_type="dws-designer",
   description="产出TS制品包",
-  prompt="输入只读 {deliver}/_internal/rs_input_view.json（紧凑视图，唯一人读入口——rs_input.json 是脚本域文件不读），产出 TS 制品包（ts.json + {资产名}_ts.md）到 {deliver}/。视图中 join_type_risk 段与字段『决策』标记是已人工拍板的输入事实，按其口径设计，不重新质疑方向。"
+  prompt="输入只读 {deliver}/_internal/rs_input_view.json（紧凑视图，唯一人读入口——rs_input.json 是脚本域文件不读），产出 TS 制品包（ts.json + {资产名}_ts.md）到 {deliver}/。视图**若含** join_type_risk 段或字段『决策』标记（1b 有人工决策时才有——没有则忽略本句），它是已拍板的输入事实，按其口径设计不重新质疑方向。"
 )
 ```
 

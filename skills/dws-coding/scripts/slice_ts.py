@@ -68,6 +68,24 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
     target_tbl = rule.get("target_table", "")
     target_short = target_tbl.rsplit(".", 1)[-1] if "." in target_tbl else target_tbl
 
+    # ★ 桶序对齐结构源（2026-09-15 B4：INSERT 列清单=tables.fields 序=装配序=目标序——
+    # 切片各桶按结构源序重排，coder 照贴即对（此前桶序=designer 写 targets 的序，
+    # coder 得自己翻源调序，列序校验才拦）。目标序锚点：本表在 tables.fields 的顺序
+    _struct_order = [str(_f.get("target_field", "")).lower()
+                     for _f in (tables.get(target_short) or {}).get("fields", [])
+                     if isinstance(_f, dict)]
+
+    def _by_struct(items, key_fn):
+        if not _struct_order:
+            return items
+        _rank = {c: i for i, c in enumerate(_struct_order)}
+        return sorted(items, key=lambda it: _rank.get(key_fn(it), len(_rank)))
+
+    fields = dict(fields)
+    fields["direct"] = _by_struct(fields.get("direct") or [], lambda s: str(s).rsplit(" AS ", 1)[-1].strip().lower())
+    fields["assign"] = _by_struct(fields.get("assign") or [], lambda e: str(e.get("target", "")).lower())
+    fields["processed"] = _by_struct(fields.get("processed") or [], lambda e: str(e.get("target", "")).lower())
+
     # 分布键从 tables 取，fallback design.distribution_key
     tbl_dist = tables.get(target_short, {}).get("distribution_key", [])
     dist_key = tbl_dist if tbl_dist else design.get("distribution_key", [])
@@ -76,6 +94,9 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
     sliced = {
         # 规则基本信息
         "rule_code": rule_code,
+        # 规则级派生列（C-1：自表开窗/CTE——对象=驱动表自身；coder 翻译成 WITH/内联子查询，
+        # 定义表达式照搬不改口径，filter 里 rn=1 照写；派生列不是目标表字段不进 SELECT 输出）
+        "derived_fields": rule.get("derived_fields") or {},
         "rule_name": rule.get("rule_name", ""),
         "target_table": rule.get("target_table", ""),
         "scenario": rule.get("scenario", ""),

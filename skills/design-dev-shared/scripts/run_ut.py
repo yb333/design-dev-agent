@@ -329,6 +329,23 @@ def load_dq_rules(build_dir) -> list:
     return []
 
 
+def _dq_err_hint(err_text) -> str:
+    """DQ SQL 执行报错的分类提示（2026-09-15 内网反馈：报错无提示，producer 得自己推测）：
+    给修复方向——语法/聚合结构/列/类型/权限，分清 SQL 写法问题还是环境问题。"""
+    low = str(err_text or "").lower()
+    if any(k in low for k in ("syntax", "语法", "or near")):
+        return "【提示】语法错——核函数名/括号/方言（DWS 不认的写法查替换）"
+    if any(k in low for k in ("must appear in the group by", "group by")):
+        return "【提示】聚合结构错——非聚合列须进 GROUP BY 或包聚合函数"
+    if any(k in low for k in ("column", "字段", "does not exist", "不存在")):
+        return "【提示】列不存在——核字段拼写/别名归属（对照目标表/源表字段）"
+    if any(k in low for k in ("invalid input", "无效", "type", "类型")):
+        return "【提示】类型/字面量形态——核 WHERE 值写法与列类型匹配"
+    if any(k in low for k in ("permission", "denied", "权限")):
+        return "【提示】权限/环境问题——非 SQL 写法问题"
+    return ""
+
+
 def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
                   sample_limit: int = 5) -> list[dict]:
     """执行 DQ 检查 SQL（对 UT 已灌数的目标表）——DQ 是上生产的制品，交付前必须执行验证。
@@ -370,14 +387,15 @@ def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
         r = executor.execute(count_sql)
         if not r.success:
             entry["status"] = "FAIL"
-            entry["detail"] = f"执行失败: {(r.error or '')[:200]}"
+            _hint = _dq_err_hint(r.error)
+            entry["detail"] = f"执行失败: {(r.error or '')[:200]}" + (f" | {_hint}" if _hint else "")
             results.append(entry)
             continue
         cnt = ((r.rows or [{}])[0].get("cnt", 0)) or 0
         entry["rows"] = cnt
         if cnt:
             entry["status"] = "ALERT"
-            entry["detail"] = f"{cnt} 行违规（0 行=通过，非 0 行=告警）"
+            entry["detail"] = f"{cnt} 行违规（0 行=通过，非 0 行=告警——方向反/阈值不合理/数据真脏三岔，闸口②人判）"
             sample_sql = f"SELECT * FROM ({sql}) _dq_check LIMIT {sample_limit}"
             rs = executor.execute(sample_sql)
             entry["samples"] = [" | ".join(f"{k}={v}" for k, v in row.items())

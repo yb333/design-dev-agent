@@ -55,6 +55,11 @@ FROM {schema}.{target_table} t
 WHERE t.order_amount IS NULL;
 ```
 
+**聚合对比范式**（聚合口径复核——如"各状态金额合计与源表一致"）：
+- 聚合列在 SELECT 输出、分组键也输出、**聚合条件收 HAVING**（聚合后才可判的条件写 WHERE 会语法错或语义错）
+- 形态：`SELECT t.status, SUM(t.amount) FROM ... GROUP BY t.status HAVING SUM(t.amount) <> s.total`——两侧聚合口径独立实现后比对，违规行=分组键+两侧聚合值
+- **聚合列无 GROUP BY = 语法错**（assemble_dq 拦）；结果全 NULL 先查 HAVING/GROUP BY 是否缺失（口径没错时最常见根因）
+
 模板（对比式——独立重算）：
 
 ```sql

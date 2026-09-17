@@ -275,6 +275,15 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
                 if missing_bk:
                     vr.hard("N_DQ10", f"rules[{i}]（{name}）输出列缺业务键 {missing_bk}——"
                                        f"违规行要能回溯到业务对象（输出列=业务键+违规字段值）")
+            # 聚合语法（2026-09-15 内网实证：聚合对比缺 GROUP BY——返回全 NULL，
+            # producer 自己推测根因）：顶层 SELECT 含聚合函数但无 GROUP BY → 语法/语义错
+            import re as _re
+            _body_main = (split_cte_main(sql)[1] or sql)
+            _has_agg = bool(_re.search(r'\b(sum|count|avg|max|min|string_agg)\s*\(', _body_main, _re.IGNORECASE))
+            _has_gb = bool(_re.search(r'\bgroup\s+by\b', _body_main, _re.IGNORECASE))
+            if _has_agg and not _has_gb:
+                vr.hard("N_DQ10", f"rules[{i}]（{name}）SQL 有聚合列但无 GROUP BY——"
+                                   f"聚合对比必须分组（分组键也输出）；聚合后才判的条件收 HAVING")
             # FROM 表引用 ⊆ 源表∪目标表，tmp 拦截（CTE 名豁免）
             for t in extract_from_tables(sql):
                 tl = _short(t)

@@ -129,6 +129,8 @@ def main():
     parser.add_argument("--ddl-dir", required=True, help="DDL 目录（ddl/）")
     parser.add_argument("--db-config", default="", help="db-sources.json 路径")
     parser.add_argument("--source", default="", help="数据源名")
+    parser.add_argument("--dq-only", action="store_true",
+                        help="只跑 DQ 段（数据已在目标表——改一条 DQ 后独立重跑，不重跑装载/UT 检查）")
     parser.add_argument("--report", default="", help="UT 报告输出路径（ut_report.md）")
     parser.add_argument("--precheck-result", default="", help="预检结果 JSON（默认 ts 同级 ut_precheck_result.json）")
     args = parser.parse_args()
@@ -195,8 +197,13 @@ def main():
 
     all_results = []
     prev_failed = False
+    # ── 装载循环（--dq-only 跳过：数据已在目标表，直落 DQ 段——2026-09-15 内网反馈
+    #    改一条 DQ 曾要跑全链路 UT，装载 INSERT 分钟级全白跑）──
+    _skip_load = bool(getattr(args, "dq_only", False))
+    if _skip_load:
+        print("▶ --dq-only：跳过装载与 UT 检查，只跑 DQ 段（数据已在目标表）")
 
-    for group in (init_groups + inc_groups):
+    for group in ([] if _skip_load else (init_groups + inc_groups)):
         for rule_code in group.get("rules", []):
             rule = all_rules.get(rule_code)
             if not rule:

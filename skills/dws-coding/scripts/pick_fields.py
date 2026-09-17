@@ -184,6 +184,21 @@ def query_field(sliced: dict, field_name: str) -> str:
 # CLI
 # ============================================================
 
+def query_table_fields(sliced: dict, alias: str, ts_path) -> str:
+    """别名的源表全字段清单（design_logic 引用确认用——读 schema_cache 不连库）。
+
+    2026-09-15 修复：本函数此前在 main 被调用但从未定义（调用即 NameError 崩，
+    内网实证 coder 按说明使用直接炸，崩后自造能力绕路）。能力经 schema_query 查缓存。
+    """
+    for st in (sliced.get("source_tables") or []):
+        if isinstance(st, dict) and (st.get("alias") or "").strip().lower() == alias.strip().lower():
+            from schema_query import query_fields
+            return query_fields(ts_path, st.get("schema", ""), st.get("table", ""))
+    known = ", ".join(sorted({(st.get("alias") or "?") for st in (sliced.get("source_tables") or [])
+                               if isinstance(st, dict)}))
+    return f"[table_fields] 别名 '{alias}' 不在切片 source_tables（合法别名：{known}）"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="字段查询器: coder 写 SQL 时随取随用（--list/--alias/--field/--table-fields/--all-direct）"

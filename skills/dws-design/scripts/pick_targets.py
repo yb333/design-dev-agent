@@ -27,15 +27,15 @@ def load_fms(rs_path):
     return rs.get("field_mappings", [])
 
 
-def pick(fms, scenario=None, alias=None, audit=False, exclude_audit=True):
+def pick(fms, scenario=None, alias=None, audit=False, exclude_audit=False):
     """确定性过滤：场景（scene_group 精确匹配）/ 来源别名 / 审计附否。"""
     out = []
     for fm in fms:
         tc = fm.get("target_column") or ""
         if not tc:
             continue
-        if exclude_audit and _is_audit(fm) and not audit:
-            continue
+        if exclude_audit and _is_audit(fm):
+            continue  # --no-audit 显式排除；默认审计随输入（2026-09-15：装配每表强制标准列，漏带闭合校验拦）
         if scenario and str(fm.get("scene_group") or "").strip() != scenario:
             continue
         if alias and (fm.get("source_alias") or "").strip().lower() != alias.lower():

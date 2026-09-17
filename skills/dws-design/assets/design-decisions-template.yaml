@@ -101,6 +101,11 @@ rules:
       output: ""                        # 如 "一行=一个合同"
       change: ""                        # "无变化" / "多行聚合" / "展开"
 
+    # ★ 规则级派生列（2026-09-15 C-1：自表开窗/CTE 承载——对象=驱动表自身，与 joins 级同机制）。
+    # 典型：本表开窗排序取第一条（先 CTE 开窗再过滤 rn=1）——mapping 无"取最新"语义时勿自创，
+    # 输入声明有才用；filter/joins 条件里的裸 rn 引此声明合法（N30 放行）。
+    # derived_fields:
+    #   rn: "row_number() over(partition by 驱动表别名.id order by 驱动表别名.upd_time desc)"
     # 关联策略
     joins:
       - alias: ""

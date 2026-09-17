@@ -1189,7 +1189,8 @@ class TestLayer4Engineering:
         assert n21 and "不在该表字段中" in n21[0] and "不带 schema 前缀" in n21[0]
 
     def test_audit_type_forced_to_standard(self):
-        """mapping 审计字段类型偏离标准（如 numeric）→ ts 强制标准类型 + N_AUDIT_TYPE warn。"""
+        """mapping 审计字段类型偏离标准（如 numeric）→ ts 强制标准类型 + stdout 透明提示
+        （2026-09-15：N_AUDIT_TYPE warn 退役——designer 无行动项，不进校验输出）。"""
         from conftest import make_rs_input
         fields = [
             {"source_table": "ods_test_f", "source_column": "id", "source_type": "bigint",
@@ -1209,7 +1210,7 @@ class TestLayer4Engineering:
         dd = make_design_decisions()
         # 校验 warn（覆盖透明）
         vr = _run(dd, rs)
-        assert "N_AUDIT_TYPE" in _codes(vr, "LC")
+        assert not any(i["code"] == "N_AUDIT_TYPE" for i in vr.items)  # warn 退役不进校验输出
         # 组装强制标准类型（numeric → bigint）
         ts, _, _ = do_assemble(rs, dd)
         all_fields = []
@@ -2465,7 +2466,8 @@ class TestPickTargets:
                {"target_column": "f1", "scene_group": "default", "source_alias": "ht"},
                {"target_column": "f2", "scene_group": "vip", "source_alias": "cx"},
                {"target_column": "del_flag"}]
-        assert pick(fms) == ["id", "f1", "f2"]          # 审计默认排除
+        assert pick(fms) == ["id", "f1", "f2", "del_flag"]  # 审计随输入（2026-09-15：del_flag 标准名命中 _is_audit 随输入带；--no-audit 排除）
+        assert pick(fms, exclude_audit=True) == ["id", "f1", "f2"]
         assert pick(fms, alias="ht") == ["id", "f1"]
         assert fmt_targets(["id", "f1"]) == "field_targets: [id, f1]"
         entry = _yaml.safe_load(RULE_SKELETON.format(

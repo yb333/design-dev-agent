@@ -1057,16 +1057,17 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     # ============================================================
     # 横切（N22-N25）
     # ============================================================
-    # N_AUDIT_TYPE 审计字段类型与标准不一致 → warn（组装时已强制标准类型，此为透明提示）
+    # N_AUDIT_TYPE（2026-09-15 改造：warn 不进 designer 校验输出——类型已强制标准，
+    # designer 无行动项，纯提示徒增思考层；挪 stdout 汇总给闸口①材料/维护者参考）
     for fm in (rs_input.get("field_mappings") or []):
         col = (fm.get("target_column") or "").lower()
         if col in STANDARD_AUDIT_TEMPLATE:
             mt = (STANDARD_AUDIT_TEMPLATE[col]["type"] or "").lower().replace(" ", "")
             it = (fm.get("target_type") or "").lower().replace(" ", "")
             if it and it != mt:
-                vr.add_warn("LC", "N_AUDIT_TYPE",
-                            f"审计字段 {col} 的 mapping 类型 '{fm.get('target_type')}' 与标准 "
-                            f"'{STANDARD_AUDIT_TEMPLATE[col]['type']}' 不一致，已按标准覆盖（建议修正 mapping）")
+                print(f"[审计类型标准化] {col}: mapping '{fm.get('target_type')}' → 按标准 "
+                      f"'{STANDARD_AUDIT_TEMPLATE[col]['type']}' 覆盖（源头修 mapping 更佳）",
+                      file=sys.stderr)
 
     # 参数校验：业务参数 default_value 必填 + 不重复声明标准参数
     standard_names = {sp["name"].upper() for sp in STANDARD_PARAMS}
@@ -1145,7 +1146,9 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
             v = ds.get(f)
             if f == "key":
                 if not v:
-                    vr.add_hard("LA", "N26", f"规则 {code} 的 dedup_strategy.key 为空（排重键必填）")
+                    vr.add_hard("LA", "N26", f"规则 {code} 的 dedup_strategy.key 为空（排重键必填；"
+                                    f"非累积共建场景（build_mode≠accumulate）删除整段 dedup_strategy，"
+                                    f"抄了空框架也要删——排重策略仅累积共建表声明）")
             elif not (v or "").strip():
                 vr.add_hard("LA", "N26", f"规则 {code} 的 dedup_strategy.{f} 为空")
 
@@ -1797,8 +1800,15 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
         #   不许每个规则重复赋值。真实案例：merge 规则的赋值字段被 assign 分支拦下烘焙成
         #   "固定赋值"（或错标输入的加工原文），没走 tmp 搬运，coder 直接从来源 copy。
         #   designer 真要在本规则赋值（如场景 NULL）→ 写 field_logics 显式声明（logic 优先）。
-        if transform_type == "direct" and alias and rule_aliases and alias in rule_aliases:
-            # 字段来源 = 本规则 join 进来的真源表（如 step2 关联 cx 补取的字段）
+        if tmp_source:
+            # ★ 血缘命中优先（2026-09-15：上游规则加工产物——如开窗序号，主表无此裸列，
+            # 即使 mapping 原始来源别名在本规则集合，也必须从 tmp 搬；内网实证 rn_col
+            # 被判"直取 m.rn"主表无此列必炸）。designer 显式写了 logic 则不进此分支（重新加工）
+            transform_type = "direct"
+            _src = tmp_alias or tmp_source
+            design_logic = f"直取 {_src}.{target_column}"
+        elif transform_type == "direct" and alias and rule_aliases and alias in rule_aliases:
+            # 字段来源 = 本规则 join/主表的真源表直取（如 step2 关联 cx 补取、混合来源的主表字段）
             design_logic = f"直取 {alias}.{source_column}"
         else:
             # 来源属于前序规则（step1 的 ht 等，含赋值/加工产物）→ 本步从 tmp 搬运
@@ -1915,9 +1925,12 @@ def build_rule(rule_dec, field_map, rs_source_tables, target_schema=""):
     # 同款口径；漏归一会让查表落空 → ts.json 的 schema/table 变空串）
     rs_sources = {(st.get("source_alias") or "").strip().lower(): st for st in rs_source_tables}
     rule_sources = []
-    aliases = rule_dec.get("source_aliases") or []
+    _declared_aliases = list(rule_dec.get("source_aliases") or [])
+    aliases = _declared_aliases
     if not aliases:
-        # 原序原大小写（不取归一键——alias 字段本身不改写）
+        # 原序原大小写。默认展开只用于 source_tables 构建；产物保留显式声明值
+        # （空=未声明）——build_tables 判"真源表直取 vs tmp 搬运"用显式声明
+        # （2026-09-15：默认全表会让未声明的装配规则误判主表直取）
         aliases = [st.get("source_alias", "") for st in rs_source_tables]
     for sa in aliases:
         rs_st = rs_sources.get((sa or "").strip().lower(), {})
@@ -1968,6 +1981,8 @@ def build_rule(rule_dec, field_map, rs_source_tables, target_schema=""):
         "incremental": rule_dec.get("incremental", {}),  # 增量设计（key/filter/init_time_range/init_strategy）
         "filter": (rule_dec.get("filter") or "").strip(),  # 规则级行过滤（WHERE，如 del_flag='N'；join 级限定在 joins.filter）
         "source_tables": rule_sources,
+        "source_aliases": _declared_aliases,  # designer 显式声明（空=未声明；不默认展开——真源表直取判定用）,
+        "derived_fields": rule_dec.get("derived_fields") or {},  # 规则级派生列（C-1：自表开窗/CTE——对象=驱动表自身）,
         "grain": rule_dec.get("grain", {}),
         "joins": rule_dec.get("joins", []),
         "join_safety": rule_dec.get("join_safety", []),
@@ -2041,13 +2056,17 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         # reads 的表短名（用于装配规则字段的"直取 tmp.xxx"默认 logic）
         reads_short = [_table_short(r) if ("." in str(r)) else r for r in rule_reads]
         is_asm = bool(rule_reads)  # 装配/merge 规则
-        # 本规则实际读的别名集合 = source_aliases ∪ joins 别名（装配规则判断"真源表直取 vs tmp 搬运"：
-        # 字段来源别名在集合里 = join 进来的真源表；不在 = 前序规则血缘，搬运）
-        rule_alias_set = set(rule.get("source_aliases") or [])
+        # 本规则实际读的别名集合（装配规则判断"真源表直取 vs tmp 搬运"：字段来源别名
+        # 在集合里=join/主表直取；不在=前序规则血缘搬运）。
+        # ★ 2026-09-15 修复：显式声明的 source_aliases ∪ joins 别名——此前读已消失的键
+        # 得空集，混合来源规则[读主表+读tmp]的主表直取字段全被错判 tmp 搬运（内网实证
+        # "切片全从 tmp1 来"）；不能用 source_tables（未声明时默认全表，会让纯搬运的
+        # 装配规则误判主表直取——ht.a 直接照写必炸）
+        rule_alias_set = {(a or "").strip().lower() for a in (rule.get("source_aliases") or [])}
         for _j in rule.get("joins") or []:
             _ja = (_j.get("alias") or "").strip() if isinstance(_j, dict) else ""
             if _ja:
-                rule_alias_set.add(_ja)
+                rule_alias_set.add(_ja.lower())
         # tmp 表短名 → 别名（build_rule 已把 reads 别名放进伪源表；design_logic/切片引用用别名）
         tmp_alias_map = {str(st.get("table", "")).lower(): (st.get("alias") or "")
                          for st in (rule.get("source_tables") or []) if st.get("_from_reads")}
@@ -3054,6 +3073,36 @@ def main():
                         f"表 '{tname}' 缺标准审计列 {_miss}——审计=每张产出表的强制标准列"
                         f"（build_tables 应自动补齐，缺=装配逻辑异常勿手删）")
 
+    # N_TMP_TYPE（hard，2026-09-15 内网反馈：中间表类型全靠 designer 手写无校验）：
+    # tables.fields 声明的类型格式合法性——字母开头+含类型词（int/numeric/varchar/
+    # timestamp/date/text/char），空或乱串=DDL 生成垃圾类型
+    _TYPE_WORDS = ("int", "numeric", "decimal", "number", "float", "varchar", "char",
+                   "nvarchar", "text", "timestamp", "date", "time", "boolean", "bool")
+    for tname, tcfg in (ts.get("tables") or {}).items():
+        for f in (tcfg.get("fields") or []):
+            _ft = str((f.get("field_type") or "") if isinstance(f, dict) else "").strip()
+            _fn = str((f.get("target_field") or "") if isinstance(f, dict) else "")
+            if not _fn:
+                continue
+            _ft_low = _ft.lower()
+            if not _ft_low or not re.match(r"^[a-z]", _ft_low) or not any(w in _ft_low for w in _TYPE_WORDS):
+                vr.add_hard("L1", "N_TMP_TYPE",
+                            f"表 '{tname}' 字段 '{_fn}' 的类型 '{_ft or '（空）'}' 不合法——"
+                            f"类型=字母开头且含类型词（int/numeric/varchar/timestamp 等），对照源类型或标准声明")
+
+    # N_DEAD_FIELD（warn）：designer 声明的自建字段（dec_tables.fields）无任何规则消费
+    # （field_targets 并集不含）——疑似死字段（写错名/漏进 targets）
+    _consumed = set()
+    for r in (ts.get("rules") or {}).values():
+        for _c in (r.get("field_targets") or []):
+            _consumed.add(str(_c).lower())
+    for tbl_short, cfg in (dec_tables or {}).items():
+        for _fn in ((cfg.get("fields") or {}) if isinstance(cfg.get("fields"), dict) else {}):
+            if str(_fn).lower() not in _consumed:
+                vr.add_warn("L1", "N_DEAD_FIELD",
+                            f"表 '{tbl_short}' 声明的自建字段 '{_fn}' 无任何规则 field_targets 消费——"
+                            f"确认是否漏进 targets（或删声明，防死字段）")
+
     # N_BK_TABLE（hard）：表级 business_key 的字段必须在表字段集内（2026-09-15 决策 A：
     # 中间表粒度不同时 designer 显式声明——声明的键查无字段=设计错误当场拦）
     for tname, tcfg in (ts.get("tables") or {}).items():
@@ -3066,7 +3115,15 @@ def main():
             vr.add_hard("L0", "N_BK_TABLE",
                         f"表 '{tname}' 的 business_key 含该表没有的字段 {_bad}——"
                         f"对照 tables.fields 改声明（表级键=该表自己的粒度主键）")
+    # ★ 中间规则豁免（2026-09-15 内网案例：mapping 的 transform_rule 是**字段全程语义**
+    # 不是每规则语义——开窗+截取拆两步：R1 往 tmp 直取搬运[全程标"加工"]、R2 截取，
+    # R1 的"加工字段"在本规则就是直取，不该强制写 logic。终态规则（target）仍强制
+    # ——最终产出必须有人负责口径，防口径缺口；reads 搬运此前已豁免）
+    _inter_codes = {c for c, r in (ts.get("rules") or {}).items()
+                    if (r.get("target_role") or "target") == "intermediate"}
     for code, fields in missing_logic:
+        if code in _inter_codes:
+            continue
         vr.add_hard("L1", "N5",
                     f"规则 {code} 的加工字段未写 design_logic: {fields}。"
                     f"修正：在该规则的 field_logics 里给每个字段写自然语言口径，"

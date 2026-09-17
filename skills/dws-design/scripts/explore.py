@@ -258,13 +258,40 @@ def run_join_key_check(target_schema: str, schema: str, table: str, key: str,
         sql = build_join_key_sql(schema, table, key, where_clause)
         r = executor.execute(sql)
         if not r.success:
-            return format_skip(f"SQL 执行失败: {r.error}")
+            # 报错分类提示（2026-09-15 内网反馈：designer 不知道失败是不是自己参数写错）
+            low = str(r.error or "").lower()
+            if any(k in low for k in ("column", "字段", "does not exist", "不存在")):
+                hint = "\n  【自检】键/条件里的字段名在该表不存在——核 --key 拼写与 --where 引用的列名（这就是参数写错）"
+            elif any(k in low for k in ("invalid input", "无效", "type", "类型")):
+                hint = "\n  【自检】--where 里字面量与列类型不符（如 varchar 列=裸数值）——核条件值写法"
+            else:
+                hint = "\n  【自检】语法错先核 --where 写法；确认无误=环境问题上报"
+            return format_skip(f"SQL 执行失败: {r.error}{hint}")
         if not r.rows:
             return format_skip("SQL 无返回行")
         row = r.rows[0]
         total = int(row.get("total", 0))
         distinct_cnt = int(row.get("distinct_cnt", 0))
-        return format_join_key_result(schema, table, key, total, distinct_cnt, where_clause)
+        base = format_join_key_result(schema, table, key, total, distinct_cnt, where_clause)
+        # 不唯一时抓重复组样例（2026-09-15：designer 此前只看到数字不知道下一步——
+        # 给 3 组重复键+组内行数，差异列线索自己看组内其他列或窄范围再试）
+        if total > distinct_cnt:
+            try:
+                keys = [k.strip() for k in key.split(",") if k.strip()]
+                key_expr = ", ".join(keys) if keys else key
+                sample_sql = (f"SELECT {key_expr}, COUNT(1) AS dup_cnt "
+                              f"FROM {schema}.{table}"
+                              + (f" WHERE {where_clause}" if where_clause else "")
+                              + f" GROUP BY {key_expr} HAVING COUNT(1) > 1 ORDER BY dup_cnt DESC LIMIT 3")
+                rs2 = executor.execute(sample_sql)
+                if rs2.success and rs2.rows:
+                    _samples = [" | ".join(f"{k}={v}" for k, v in row2.items()) for row2 in rs2.rows]
+                    base += ("\n  重复组样例（键→组内行数，看差异列线索）：\n    "
+                             + "\n    ".join(_samples)
+                             + "\n  下一步：疑点照第4层疑点清单上报（疑似方向=一句话猜测），勿自行多轮试探")
+            except Exception:
+                pass  # 样例失败不影响主结论（fail-soft）
+        return base
     except Exception as e:
         return format_skip(f"试算异常: {e}")
     finally:

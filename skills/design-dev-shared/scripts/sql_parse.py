@@ -253,6 +253,8 @@ def extract_from_tables(sql: str) -> list[str]:
     """
     tables = []
     sql = _strip_sql_noise(sql)
+    # IS DISTINCT FROM 的 FROM 不是表位置（同 extract_table_refs_raw——2026-09-15）
+    sql = re.sub(r'(?i)\bIS\s+DISTINCT\s+FROM\b', ' IS_DISTINCT_FROM ', sql)
 
     # FROM schema.table 或 FROM table
     # JOIN schema.table 或 JOIN table
@@ -359,6 +361,9 @@ def extract_table_refs_raw(sql: str) -> list[str]:
     """
     refs = []
     sql = _strip_sql_noise(sql)
+    # IS DISTINCT FROM 的 FROM 不是表位置（2026-09-15 内网实证：s.pay 被当表名，
+    # N_DQ10 误报"资产外表"）——整体占位消歧后再提取
+    sql = re.sub(r'(?i)\bIS\s+DISTINCT\s+FROM\b', ' IS_DISTINCT_FROM ', sql)
     for pattern in [r'\bFROM\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)',
                     r'\bJOIN\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)']:
         for m in re.finditer(pattern, sql, re.IGNORECASE):

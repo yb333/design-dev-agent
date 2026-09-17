@@ -44,8 +44,15 @@ def classify_field(f: dict, logic_override: str = None):
                 refs.append(r)
         return slim_field(f), "processed", {"target": target, "logic": str(logic_override), "refs": refs}
     logic = f.get("design_logic", "")
-    if tt == "direct" and sfs:
-        s0 = sfs[0]
+    if tt == "direct":
+        # ★ design_logic 的"直取 X.Y"形态优先（2026-09-15：装配血缘——build_field 已把
+        # tmp 搬运/真源表直取判好写进 design_logic，此前无条件用 mapping 的 source_fields
+        # 重建串，把"直取 tmp1.rn_col"覆盖回"m.rn"（主表无此裸列，内网实证切片血缘错乱）
+        import re as _re
+        _m = _re.match(r"^直取\s+([A-Za-z_]\w*\.[A-Za-z_]\w*)", str(f.get("design_logic") or ""))
+        if _m:
+            return slim_field(f), "direct", f"{_m.group(1)} AS {target}"
+        s0 = sfs[0] if sfs else {}
         alias = (s0.get("alias") or s0.get("table") or "").strip()
         col = (s0.get("field") or "").strip()
         if col:
