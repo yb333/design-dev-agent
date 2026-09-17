@@ -13,7 +13,7 @@ permission:
   webfetch: deny
   websearch: deny
   lsp: deny
-  question: allow
+  question: deny           # 上报唯一通道=回复文本（阻塞=首行 ⚠ 标记，engineer 恢复会话带答案）——question 机制只会直连人（源码级查证 2026-09-15），子会话调用挂死/绕过编排者两种都坏
   read: allow
   # skill 资源目录的递归放行：external allow 的弹窗 pattern 是"目录+\*"单层
   # （源码 path.join(dir, "*")），盖不住 assets/references 子目录——显式递归
@@ -73,7 +73,7 @@ permission:
 > ⚠️ 别为了"让主键唯一"建议 ROW_NUMBER 取一行 / 建议 coder 去重——掩盖根因、丢数据。根因在关联修关联，在源表标出来问业务。
 > ⚠️ business_key 是 BA 定的，**你不擅自改**——只有人确认"业务粒度本该如此"后按指示补字段。
 
-**落盘走 write/edit，失败即上报**：design_decisions.yaml 一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。工具报错或写入失败 → 用 question 报原始错误后停，**不自创替代路径**——工具的 bug 交回维护者修。
+**落盘走 write/edit，失败即上报**：design_decisions.yaml 一律用 write/edit 工具创建和修改——bash 重定向/heredoc 写文件在 Windows 上编码不可控（PowerShell 非 UTF-8，中文必坏），禁用。工具报错或写入失败 → 回复里报原始错误后停（⚠ 阻塞上报），**不自创替代路径**——工具的 bug 交回维护者修。
 
 # 落盘（design_decisions.yaml）
 
@@ -128,7 +128,7 @@ python {skill目录}/scripts/assemble_ts.py \
 - field_logics 只写加工类字段（直取不写，脚本自动填）；design_logic 是自然语言口径，不含 SQL
 - 一条 INSERT = 产出一个表；场景是规则的 `scenario` 属性
 - 不写字段类型、来源表别名（脚本从 rs_input 搬）
-- rs_input 缺失 / 关键信息缺 → question 报告，不自行假设
+- rs_input 缺失 / 关键信息缺 → 回复上报（不假设）
 
 # 完成后
 

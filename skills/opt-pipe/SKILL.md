@@ -31,6 +31,10 @@ description: >-
 
 ---
 
+## 上报处理（贯穿全程）
+
+子 agent（designer/coder/dq-producer）的上报一律按**第一响应人协议**处理（身份层定调；方法手册 `../new-pipe/references/report-triage.md`——四步核实→诊断→影响→路由，永不裸转发）。剧本挂点：围栏越界回 designer（限 3 轮）/ 对比 FAIL 先 diagnose_fanout_opt 产证据再人定 / DQ FAIL 恢复 producer 修限 3 轮——实例见手册与各步骤。
+
 ## 步骤 0：环境自检 + 入口与基线
 
 0. 环境探针（一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——exit 1 = 环境/依赖不符 → 停。工具面自检同 new-pipe 步骤0。

@@ -15,7 +15,7 @@ permission:
   webfetch: deny
   websearch: deny
   lsp: deny
-  question: allow
+  question: deny           # 上报唯一通道=回复文本（阻塞=首行 ⚠ 标记，engineer 恢复会话带答案）——question 机制只会直连人（源码级查证 2026-09-15），子会话调用挂死/绕过编排者两种都坏
   read: allow
   external_directory:
     "~/.config/opencode/skills/**": allow

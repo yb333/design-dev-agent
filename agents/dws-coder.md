@@ -13,7 +13,7 @@ permission:
   webfetch: deny
   websearch: deny
   lsp: deny
-  question: allow
+  question: deny           # 上报唯一通道=回复文本（阻塞=首行 ⚠ 标记，engineer 恢复会话带答案）——question 机制只会直连人（源码级查证 2026-09-15），子会话调用挂死/绕过编排者两种都坏
   read: allow
   # skill 资源目录的递归放行：external allow 的弹窗 pattern 是"目录+\*"单层
   # （源码 path.join(dir, "*")），盖不住 assets/references 子目录——显式递归
@@ -100,7 +100,7 @@ python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
 - **design_logic 是自然语言口径，你只做技术翻译**，不改变业务口径
 - 遵守编码规范（`references/dws-coding-standards.md`）：不能 SELECT *、审计字段齐全、**注释一律 `/* */` 禁 `--`**（check_sql 检测）、NULL 处理按业务语义（不是必须 COALESCE，见 §1.3）
 - **不写 INSERT/DDL**——只写 SELECT
-- 切片拿不到或规则不存在 → question 报告调用方
+- 切片拿不到或规则不存在 → 回复上报调用方（⚠ 标记）
 
 # 完成后
 

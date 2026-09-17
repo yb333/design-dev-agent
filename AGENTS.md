@@ -72,7 +72,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 | **dws-dq-producer** | ★DQ 翻译者+独立实现者（2026-09-14 拆分）：断言式翻译+对比式独立重算，**直接产 dq.json+SQL**（两跳并一跳 2026-09-15，无 decisions 中间产物）；身份级纪律=输入隔离（不读 design_logic/ETL SQL）/歧义不拍板标注上交/检查成本自约束 | dws-dq | pick_dq_context（三件套取料+--query/--field 深挖）/ assemble_dq（唯一校验入口——写完即跑，2026-09-15 合并 check_sql --dq） | `dq/*.sql`、`build/dq.json` |
 | **dws-coder** | 单规则加工 SELECT（DQ 已拆归 producer） | dws-coding / dws-coding-opt（按任务路由） | slice_ts / pick_fields / check_sql | `etl/*.sql` |
 
-> ★ **上报路由统一（2026-09-15 定调）**：子 agent（designer/coder/producer）的问题一律**上报调用方 engineer**——三通道：回复内结构化上报（常态）/结构化产物字段（歧义/declined 随材料上交）/会话中阻塞时 question（语义同样是上报编排者，不是直连人）。engineer 按分流表路由：表内确定性技术回路直接恢复会话修（不问人），语义/表外必给人，人答案经 engineer 回子 agent。engineer 不代答语义决策（红线 L3 归闸口人）。
+> ★ **上报路由统一（2026-09-15 定调+复调）**：子 agent（designer/coder/producer）的问题一律**上报调用方 engineer**——两通道：回复内结构化上报（常态；阻塞=首行 ⚠ 标记后结束会话，question 已 deny：源码级查证其机制只会直连人/子会话调用挂死，两种都坏）/结构化产物字段（歧义/declined 随材料上交）。engineer=**第一响应人**（上报处理协议四步：核实→诊断方向→影响评估→路由，永不裸转发——身份层定调+方法手册 new-pipe/references/report-triage.md，opt 跨引）：表内确定性技术回路直接恢复会话修（不问人），语义/表外带四件套（实测事实+根因方向+影响+选项）给人，人答案经 engineer 回子 agent。engineer 不代答语义决策（红线 L3 归闸口人）。
 
 > ★ 管线脚本（preprocess / precheck / gate_summary / assemble_* / ut_* / check_db 等）**调用方都是剧本（new-pipe / opt-pipe SKILL 编排）**，不是 agent——**2026-09 按消费者归位定调**：单一消费者的管线脚本住自己 pipe 的 scripts（precheck/ut_*→new-pipe，fence/ut_opt→opt-pipe），多于一个消费者的共用入口+公共库住 `design-dev-shared/scripts`（preprocess/check_db/assemble_ddl + dws_db/run_ut/sql_parse 等）。权限层两个 agent 都是 `python *` 全放行 + skill 白名单，真正约束 agent 行为的是 **SKILL.md 工作指引**，不是权限。
 
