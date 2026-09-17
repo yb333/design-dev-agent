@@ -2735,3 +2735,45 @@ class TestAuditEveryTable:
             assert f["target_field"] in content, f"DDL 缺 tables 列 {f['target_field']}"
         # 纯投影：tables 无第 5 个审计外字段时 DDL 不多列（旧版会 +design.audit_fields 差集）
         assert "etl_time" not in content  # 非标准名不进审计也不进 DDL
+
+
+class TestCliMainInlineChecks:
+    """main() 内联校验段（N_AUDIT_TABLE/N_TMP_TYPE/N_DEAD_FIELD/N_BK_TABLE/N5 注入）的 CLI 级回归。
+
+    回归背景（2026-09-17 内网实测）：N_DEAD_FIELD 段引用未定义变量 dec_tables（该变量
+    只在 build_tables 等函数内有定义）——CLI 每跑必炸 NameError。函数级测试全绕过
+    main()（直接调 run_all_validations/assemble_ts），1333 绿也拦不住。此类用例经
+    subprocess 走真实 main() 全程，守整个内联校验段（未来在该段引入未定义名当场炸）。
+    """
+
+    def _run_cli(self, tmp_path, rs, dec):
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path as _Path
+        import yaml as _yaml
+        (tmp_path / "rs_input.json").write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+        (tmp_path / "dec.yaml").write_text(_yaml.safe_dump(dec, allow_unicode=True), encoding="utf-8")
+        script = _Path(__file__).resolve().parent.parent / "skills" / "dws-design" / "scripts" / "assemble_ts.py"
+        return _sp.run([_sys.executable, str(script),
+                        "--rs", str(tmp_path / "rs_input.json"),
+                        "--decisions", str(tmp_path / "dec.yaml"),
+                        "--outdir", str(tmp_path / "out")],
+                       capture_output=True, text=True, timeout=120)
+
+    def test_cli_main_end_to_end_passes(self, tmp_path):
+        """工厂合法输入走真实 main() 全程——内联校验段任何崩溃（NameError 等）当场暴露。"""
+        from conftest import make_rs_input, make_design_decisions
+        r = self._run_cli(tmp_path, make_rs_input(), make_design_decisions())
+        assert r.returncode == 0, r.stderr + r.stdout
+        assert (tmp_path / "out" / "ts.json").exists()
+
+    def test_cli_dead_field_warns_not_crashes(self, tmp_path):
+        """N_DEAD_FIELD：声明自建字段但无规则 field_targets 消费 → warn 触发且不崩
+        （dec_tables NameError 回归锚——崩溃时本用例在 returncode 上就挂）。"""
+        from conftest import make_rs_input, make_design_decisions
+        dec = make_design_decisions()
+        dec["tables"] = {"dws.dwb_test_f": {"fields": {"orphan_helper_col": "varchar(10)"}}}
+        r = self._run_cli(tmp_path, make_rs_input(), dec)
+        assert r.returncode == 0, r.stderr + r.stdout
+        out = r.stdout + r.stderr
+        assert "N_DEAD_FIELD" in out and "orphan_helper_col" in out

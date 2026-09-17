@@ -3092,6 +3092,7 @@ def main():
 
     # N_DEAD_FIELD（warn）：designer 声明的自建字段（dec_tables.fields）无任何规则消费
     # （field_targets 并集不含）——疑似死字段（写错名/漏进 targets）
+    dec_tables = {_table_short(str(k)): v for k, v in (decisions.get("tables") or {}).items()}
     _consumed = set()
     for r in (ts.get("rules") or {}).values():
         for _c in (r.get("field_targets") or []):
