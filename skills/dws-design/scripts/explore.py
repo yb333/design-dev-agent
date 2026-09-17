@@ -335,18 +335,24 @@ def read_target_schema(ts_path: str) -> str:
 # 主入口
 # ============================================================
 
-def run_batch_check(target_schema: str, batch_file: str) -> str:
+def run_batch_check(target_schema: str, batch_src: str) -> str:
     """批量关联唯一性校验（2026-09-15 决策 B 补环：关联是一等分析单位——同表多关联
     各自带限定逐条校验，一个命令跑完；同表同键同限定自动去重只跑一次）。
 
     批量清单 YAML/JSON：[{tag, schema, table, key, where}]——tag=关联标识（如
     别名 c1/c2，输出对账用）；where 可空（无限定）。输出汇总表+重复组样例。
     """
+    # 输入双形态（2026-09-15 权限面修正：designer 的 write 白名单只有 decisions——
+    # 文件形态它创建不了，功能空转；内联 JSON=命令行单参数，bash python 权限即匹配）：
+    # 以 [ 开头=内联 JSON（designer 常用）；否则=文件路径（engineer 全权侧/复杂场景）
     import yaml
     try:
-        items = yaml.safe_load(Path(batch_file).read_text(encoding="utf-8")) or []
+        if batch_src.lstrip().startswith("["):
+            items = json.loads(batch_src)
+        else:
+            items = yaml.safe_load(Path(batch_src).read_text(encoding="utf-8")) or []
     except Exception as e:
-        return f"[批量清单读取失败] {batch_file}: {e}"
+        return f"[批量清单解析失败（内联 JSON 或文件路径）]: {e}"
     if not isinstance(items, list) or not items:
         return "[批量清单为空] 应为列表: [{tag, schema, table, key, where}]"
 
@@ -434,8 +440,9 @@ def main():
     parser.add_argument("--check-join-key", action="store_true",
                         help="执行 JOIN 键唯一性检查")
     parser.add_argument("--batch", default="",
-                        help="批量关联唯一性：YAML 清单 [{tag, schema, table, key, where}]——"
-                             "同表多关联各自带限定逐条校验+自动去重（决策 B：关联是一等分析单位）")
+                        help="批量关联唯一性：内联 JSON 数组（designer 用——单参数无文件，"
+                             "如 [{tag:c1,schema:ods,table:t,key:id,where:x=1}] 形态）"
+                             "或 YAML 文件路径（engineer 用）——同表多关联各自带限定逐条校验+自动去重")
     parser.add_argument("--check-overlap", action="store_true",
                         help="执行键值重叠率检查（双侧采样算交集，探测内容语义是否吻合）")
     parser.add_argument("--schema-a", default="", help="重叠率：左表 schema")
