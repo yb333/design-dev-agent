@@ -335,6 +335,59 @@ def read_target_schema(ts_path: str) -> str:
 # 主入口
 # ============================================================
 
+def _requote_bare_json(src: str) -> str:
+    """双引号被 shell 剥掉的裸形态修复：[{k:v,...}] → [{"k":"v",...}]。
+
+    键 token 止于 ':'，值 token 止于 ',' '}' ']'——值内含逗号（复合键/多条件）
+    在裸形态下与分隔符同形，不可修复，由调用方报错指路。
+    """
+    res: list[str] = []
+    i, n = 0, len(src)
+    expect_key = True
+    while i < n:
+        c = src[i]
+        if c in "{[}],:":
+            if c in "{,":
+                expect_key = True
+            elif c == ":":
+                expect_key = False
+            res.append(c)
+            i += 1
+            continue
+        j = i
+        while j < n and src[j] not in ",}]" and not (expect_key and src[j] == ":"):
+            j += 1
+        res.append(f'"{src[i:j].strip()}"')
+        i = j
+    return "".join(res)
+
+
+def _loads_batch_inline(src: str):
+    """内联批量清单解析（容错 shell 引号形态，2026-09-17 内网实测：PowerShell
+    外单引号包裹时内层双引号被剥，json.loads 必炸）。
+
+    三级尝试：标准 JSON（bash/zsh 外单内双）→ 单引号 JSON（PowerShell 外双内单
+    ——内双引号被 PS 剥、单引号存活，本工具认）→ 裸形态修复（键值重加引号）。
+    """
+    try:
+        return json.loads(src)
+    except Exception:
+        pass
+    if "'" in src:
+        try:
+            return json.loads(src.replace("'", '"'))
+        except Exception:
+            pass
+    try:
+        return json.loads(_requote_bare_json(src))
+    except Exception:
+        raise ValueError(
+            "JSON 解析失败（已尝试单引号/裸形态容错）——常见原因：shell 把双引号剥掉了。"
+            "可靠写法两选一：bash/zsh 外单内双 '[{\"k\":\"v\"}]'；PowerShell 外双内单 "
+            "\"[{'k':'v'}]\"（本工具认单引号）。含逗号的值（复合键 key:a,b / 多条件 where）"
+            "裸形态不可修复——引号写对，或改单查 --key col1,col2")
+
+
 def run_batch_check(target_schema: str, batch_src: str) -> str:
     """批量关联唯一性校验（2026-09-15 决策 B 补环：关联是一等分析单位——同表多关联
     各自带限定逐条校验，一个命令跑完；同表同键同限定自动去重只跑一次）。
@@ -348,7 +401,7 @@ def run_batch_check(target_schema: str, batch_src: str) -> str:
     import yaml
     try:
         if batch_src.lstrip().startswith("["):
-            items = json.loads(batch_src)
+            items = _loads_batch_inline(batch_src)
         else:
             items = yaml.safe_load(Path(batch_src).read_text(encoding="utf-8")) or []
     except Exception as e:

@@ -1579,3 +1579,67 @@ class TestCaseInsensitiveIdentifiers:
         result = precheck(rs)
         alias_errs = [e for e in result.errors if "来源别名" in e or "未定义" in e]
         assert not alias_errs, alias_errs
+
+
+class TestDbVerifiedMarker:
+    """_db_verified 已核结论携带（2026-09-17 用户定调：precheck 过的不叫 designer
+    重做——DB 校验全过的表标进 rs_input，view tables 段渲染 precheck已核）。"""
+
+    def _cache(self, tmp_path, tables):
+        import json
+        cache_path = tmp_path / "schema_cache.json"
+        cache_path.write_text(json.dumps({
+            "cached_at": "2099-01-01T00:00:00",  # 未过期
+            "tables": tables,
+        }), encoding="utf-8")
+        return cache_path
+
+    def test_all_pass_sets_marker(self, tmp_path):
+        cache = self._cache(tmp_path, {"ods.ods_test_f": ["id"]})
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, cache)
+        assert not result.errors
+        assert rs["_db_verified"]["tables"] == ["ods.ods_test_f"]
+        assert rs["_db_verified"]["via"] == "cache"
+
+    def test_field_missing_table_not_verified(self, tmp_path):
+        """字段不存在的表不进已核清单；唯一表有问题→空清单不标标记。"""
+        cache = self._cache(tmp_path, {"ods.ods_test_f": ["name"]})  # id 不在
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs, cache)
+        assert any("字段不存在" in e for e in result.errors)
+        assert "_db_verified" not in rs
+
+    def test_db_unreachable_no_marker(self, monkeypatch):
+        """连不上库（早退）不标——没核过不装核过。"""
+        from dws_db import ConnectionStatus
+        executor = _make_mock_executor(
+            {}, conn_status=ConnectionStatus(ok=False, category="server_unreachable",
+                                             reason="could not connect"))
+        monkeypatch.setattr("dws_db.create_executor_for_schema",
+                            lambda schema, config_path="": executor)
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        result = precheck(rs)  # 无缓存路径 → 走连库分支
+        assert any("DB校验跳过" in w for w in result.warnings)
+        assert "_db_verified" not in rs
+
+    def test_marker_persisted_to_disk_and_view(self, tmp_path):
+        """rs_input_path 给了 → 标记落盘 + view tables 段渲染 precheck已核。"""
+        import json
+        from preprocess import build_compact
+        cache = self._cache(tmp_path, {"ods.ods_test_f": ["id"]})
+        rs_path = tmp_path / "rs_input.json"
+        rs = _make_rs_input([_biz_field(source_column="id")])
+        rs_path.write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+        precheck(rs, cache, rs_input_path=rs_path)
+        on_disk = json.loads(rs_path.read_text(encoding="utf-8"))
+        assert on_disk["_db_verified"]["tables"] == ["ods.ods_test_f"]
+        view = json.loads((tmp_path / "rs_input_view.json").read_text(encoding="utf-8"))
+        entry = next(t for t in view["tables"] if t["table"] == "ods_test_f")
+        assert "存在性+来源类型" in entry.get("precheck已核", "")
+
+    def test_view_no_marker_without_dbv(self):
+        """无 _db_verified（未连库跑过）→ view 无标记（designer 走未核路径）。"""
+        from preprocess import build_compact
+        view = build_compact(_make_rs_input([_biz_field(source_column="id")]))
+        assert all("precheck已核" not in t for t in view["tables"])

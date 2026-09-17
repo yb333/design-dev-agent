@@ -1134,7 +1134,10 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     # 不猜归属——未限定字段归属哪个表是 designer 的判断）
     _reg_cols, _col_alias = _registry_context(fms, source_tables)
 
-    # ① 表级清单
+    # ① 表级清单（precheck DB 已核标记——2026-09-17 定调：已核过的 designer 不重查）
+    _dbv = rs_input.get("_db_verified") or {}
+    _verified_tbls = {str(t).lower() for t in (_dbv.get("tables") or [])}
+    _dbv_via = "缓存" if _dbv.get("via") == "cache" else "连库"
     table_list = []
     for st in source_tables:
         sch = st.get("source_schema", "")
@@ -1143,10 +1146,13 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
         cnt = sum(1 for fm in fms
                   if fm.get("source_table") == tbl
                   and fm.get("source_alias", "") == alias)
-        table_list.append({
+        entry = {
             "schema": sch, "table": tbl, "alias": alias,
             "fields": cnt, "join": st.get("join_condition", ""),
-        })
+        }
+        if f"{sch}.{tbl}".lower() in _verified_tbls:
+            entry["precheck已核"] = f"存在性+来源类型（{_dbv_via}）"
+        table_list.append(entry)
 
     # precheck 入口闸检出（designer 第一眼要处理：无出处条件字段 / 逻辑字段落地提示）
     cond_issues = rs_input.get("_condition_issues") or []

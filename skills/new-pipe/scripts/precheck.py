@@ -338,6 +338,7 @@ def precheck(
     # 缓存命中时不需要连库，不受"连库白费"影响，但仍遵守短路（静态错了先解决静态）
     if not result.errors:
         _check_db_schema(rs_input, result, cache_path, refresh_schema)
+        _persist_db_verified(rs_input, rs_input_path)
 
     # 9.5 入口闸：join_condition 引用字段存在性 + 逻辑字段出处（泛化 rn 案例族；
     # 表结构已知无出处=error 退源端 / 未知=warn）。检出入 view 的 tables 块 ⚠ 标记
@@ -438,6 +439,15 @@ def _sync_compact_view(rs_input: dict, rs_input_path: Path):
             json.dumps(build_compact(rs_input), ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass  # view 同步失败不阻断（designer 还可读完整 rs_input）
+
+
+def _persist_db_verified(rs_input: dict, rs_input_path: Path | None):
+    """_db_verified 标记落盘（DB 校验真实跑完才有——designer 见 view 标记不重查）。"""
+    if not rs_input.get("_db_verified") or not rs_input_path:
+        return
+    import json
+    rs_input_path.write_text(json.dumps(rs_input, ensure_ascii=False, indent=2), encoding="utf-8")
+    _sync_compact_view(rs_input, rs_input_path)
 
 def _check_type_risk(rs_input: dict, result: PrecheckResult, decision_path: Path,
                      rs_input_path: Path | None = None):
@@ -1060,9 +1070,11 @@ def _check_db_schema(
 
     # 表级存在性（连库/缓存两路统一拦）：found 里结构为空 = 表不存在或账号无权限——
     # 这类表后续 ETL 必然失败（至少权限报错），设计前明确拦下，不静默降级成字段级误报
+    bad_tables: set[tuple[str, str]] = set()
     for (sch, tbl) in all_tables:
         if not found.get((sch, tbl)):
             has_fields = bool(needed[(sch, tbl)])
+            bad_tables.add((sch, tbl))
             result.add_error(
                 f"[表不存在] 来源表 '{sch}.{tbl}' 在库中查无结构（表不存在或账号无权限）"
                 + ("——纯关联表，ETL 必然失败，先确认表名/权限" if not has_fields
@@ -1078,6 +1090,7 @@ def _check_db_schema(
 
             if col_lower not in found_cols:
                 # 字段不存在 = mapping 写错了表名/列名，或源表结构变了
+                bad_tables.add((sch, tbl))
                 result.add_error(
                     f"[字段不存在] 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
                     f"在库中不存在——检查 mapping 的表名/列名拼写，或源表结构是否已变更"
@@ -1091,11 +1104,26 @@ def _check_db_schema(
                 if expected_norm != actual_norm:
                     # 类型不符 = mapping 标的 source_type 和库里的对不上（mapping 可能标错，或库改了类型）
                     # 与 type_risk（source→target 转换风险）不同：这是 source 本身标错
+                    bad_tables.add((sch, tbl))
                     result.add_error(
                         f"[类型不符] 来源字段 '{orig_col}'（{sch}.{tbl}，→{targets_str}）"
                         f"mapping 标的 source_type='{source_type}' 与库里的实际类型 '{actual_type}' 不一致"
                         f"——以库为准修正 mapping，或确认库结构是否已变更"
                     )
+
+    # ★ 已核结论携带（2026-09-17 用户定调：precheck 过的不叫 designer 重做）：
+    # 字段存在性+来源类型全过的表标进 rs_input._db_verified → view tables 段渲染
+    # "precheck已核"——designer 见标记直接当结论，只补预检没做的（键唯一性实测/
+    # 语义合理性）。仅在检查真实跑完时标记（驱动缺失/连不上/无 needed 的早退不标
+    # ——没核过不装核过）；有问题表次日修复重跑后自然进清单。
+    verified = [f"{sch}.{tbl}" for (sch, tbl) in needed
+                if found.get((sch, tbl)) and (sch, tbl) not in bad_tables]
+    if verified:
+        rs_input["_db_verified"] = {
+            "tables": verified,
+            "fields": total_fields,
+            "via": "cache" if cache_used else "db",
+        }
 
 
 

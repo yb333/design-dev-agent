@@ -58,6 +58,8 @@ description: >-
 - **② 每条 join_condition 的键唯一性有依据吗**（实测 / 输入声明 / 存疑上报）？——第4层①消费。条件带"取一/最新/去重"意味（如 rn=1）= 键不唯一强信号，直接按疑点口径处理。
 - **③ precheck 的 ⚠ 输入存疑标记**各是什么、怎么处置？——无出处字段=终止型上报退源端（见问题上报分流），有出处的逻辑字段记下产生逻辑（第2层落地）。未连库时条件字段对 mapping 字段集人工判，不确定调 check_field。
 
+**precheck 已核项不重查**（带着结论来，只补预检没做的）：view tables 段带 `precheck已核` 标记的表=字段存在性+来源类型已连库/缓存核对，`join_type_risk` 段=关联键类型对账——**直接当结论，不要再用 check_field 重查**。你补的是预检没做的：键唯一性实测、粒度/语义合理性。check_field 只用于没核到的（表无 `precheck已核` 标记[未连库]时的条件字段、你新引用的 mapping 未列字段）。
+
 **取证手段**（多条关联都要验，`--batch` 一次跑完是默认高效形态）：
 
 ```
@@ -65,7 +67,7 @@ python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_inp
     --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
 ```
 
-- 批量：`--batch '[{"tag":"c1","schema":"ods","table":"dim_cust","key":"cust_code","where":"status=1"},{...}]'`——内联 JSON 单参数（你无文件写权限，别造清单文件），tag=别名；同表多关联逐关联各带限定，自动去重；复合键 key 逗号分隔（"key":"tenant_id,order_no"）与单查 --key col1,col2 同语义；单表单关联用上方单查形态。
+- 批量：`--batch '[{"tag":"c1","schema":"ods","table":"dim_cust","key":"cust_code","where":"status=1"},{...}]'`——内联 JSON 单参数（你无文件写权限，别造清单文件），tag=别名；同表多关联逐关联各带限定，自动去重；复合键 key 逗号分隔（"key":"tenant_id,order_no"）与单查 --key col1,col2 同语义；单表单关联用上方单查形态。**PowerShell 环境改外双内单**：`--batch "[{'tag':'c1',...}]"`（内双引号会被 PS 剥掉——工具认单引号，被剥成裸形态也能自动修复，但含逗号的值[复合键/多条件]必须引号成对）。
 - check_field 查字段存在/类型（只给别名=紧凑全表；`--like 关键词` 模糊找；查无给相近建议）。
 
 **取证纪律**：

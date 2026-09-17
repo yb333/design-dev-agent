@@ -239,3 +239,68 @@ class TestReadTargetSchema:
         p.write_text(json.dumps(ts), encoding="utf-8")
         with pytest.raises(ValueError):
             read_target_schema(str(p))
+
+
+# ============================================================
+# --batch 内联 JSON 引号容错（2026-09-17 内网实测回归）
+# ============================================================
+
+class TestBatchInlineParsing:
+    """PowerShell 外单引号包裹时内层双引号被剥（用户报'工具把输入 json 里面的
+    双引号给干掉了'）——三级容错：标准 JSON → 单引号 JSON → 裸形态修复。"""
+
+    def test_proper_json(self):
+        from explore import _loads_batch_inline
+        items = _loads_batch_inline('[{"tag":"c1","key":"a,b"}]')
+        assert items == [{"tag": "c1", "key": "a,b"}]
+
+    def test_single_quoted_json_powershell_form(self):
+        from explore import _loads_batch_inline
+        items = _loads_batch_inline("[{'tag':'c2','where':'x=1 and y=2'}]")
+        assert items == [{"tag": "c2", "where": "x=1 and y=2"}]
+
+    def test_stripped_bare_repaired(self):
+        from explore import _loads_batch_inline
+        items = _loads_batch_inline("[{tag:c3,schema:ods,table:t,key:id,where:status=1}]")
+        assert items == [{"tag": "c3", "schema": "ods", "table": "t",
+                          "key": "id", "where": "status=1"}]
+
+    def test_stripped_bare_with_spaces_in_where(self):
+        from explore import _loads_batch_inline
+        items = _loads_batch_inline("[{tag:c4,where:del_flag = N and status = 1}]")
+        assert items == [{"tag": "c4", "where": "del_flag = N and status = 1"}]
+
+    def test_stripped_comma_in_value_not_repairable(self):
+        """裸形态含逗号的值（复合键）与分隔符同形不可修复——报错必须指路。"""
+        from explore import _loads_batch_inline
+        with pytest.raises(ValueError) as ei:
+            _loads_batch_inline("[{tag:c5,key:id,code}]")
+        assert "PowerShell" in str(ei.value) and "单引号" in str(ei.value)
+
+
+class TestBatchCliQuoteForms:
+    """CLI 级回归：三种引号形态的实际 argv 到达（解析先于连库，离线可判）。"""
+
+    def _run(self, batch_argv):
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path as _Path
+        script = _Path(__file__).resolve().parent.parent / "skills" / "dws-design" / "scripts" / "explore.py"
+        return _sp.run([_sys.executable, str(script), "--rs", "/nonexistent.json",
+                        "--batch", batch_argv],
+                       capture_output=True, text=True, timeout=60)
+
+    def test_stripped_quotes_parse_passes(self):
+        """双引号被剥的裸形态（PS 5.1 实际到达形态）——解析必须过（本 bug 回归锚）。"""
+        r = self._run('[{tag:c3,schema:ods,table:t,key:id,where:status=1}]')
+        assert "批量清单解析失败" not in (r.stdout + r.stderr)
+
+    def test_single_quoted_form_parse_passes(self):
+        r = self._run("[{'tag':'c2','schema':'ods','table':'t','key':'id'}]")
+        assert "批量清单解析失败" not in (r.stdout + r.stderr)
+
+    def test_comma_broken_reports_with_guidance(self):
+        """不可修复形态——报错文案带两种可靠写法指路。"""
+        r = self._run('[{tag:c5,schema:ods,table:t,key:id,code}]')
+        combined = r.stdout + r.stderr
+        assert "批量清单解析失败" in combined and "PowerShell" in combined
