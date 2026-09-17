@@ -21,15 +21,41 @@ import argparse
 from pathlib import Path
 
 
-def query_fields(ts_path, schema: str, table: str, column: str = "") -> str:
-    """查 schema_cache 里某表的字段（列全部，或确认某字段存在性）。
+def _compact_cols(cols: dict, per_line: int = 6) -> str:
+    """全表字段清单紧凑化（2026-09-15 内网实证：一列一行 300 字段=300 行，bash 输出
+    截断看不全，designer 被迫绕路自想办法——一行 6 个逗号分隔，300 字段≈50 行内）。"""
+    items = [f"{c}:{t}" for c, t in cols.items()]
+    return "\n".join("  " + ", ".join(items[i:i + per_line])
+                     for i in range(0, len(items), per_line))
+
+
+def _similar_names(name: str, cols: dict, top: int = 5) -> list:
+    """相近字段建议（不存在时帮定位拼写差）：前缀/包含优先，其次最长公共前缀长度。"""
+    n = name.lower()
+    hits = [c for c in cols if n in c or c in n]
+    if not hits:
+        hits = sorted(cols, key=lambda c: -len(_common_prefix(n, c)))[:top]
+    return sorted(hits, key=lambda c: (0 if c.startswith(n) else 1, len(c)))[:top]
+
+
+def _common_prefix(a: str, b: str) -> str:
+    i = 0
+    while i < len(a) and i < len(b) and a[i] == b[i]:
+        i += 1
+    return a[:i]
+
+
+def query_fields(ts_path, schema: str, table: str, column: str = "",
+                 like: str = "") -> str:
+    """查 schema_cache 里某表的字段（列全部/模糊找/确认存在性）。
 
     返回提示文本（不抛异常不阻断，各分支都给下一步指引）：
     - cache 不存在 → [未连库]（凭设计写，标注待连库确认）
     - 表不在缓存 → [未缓存] + 已缓存表清单（未声明的表正路是补 mapping，不是绕过）
+    - like 给了 → 含关键词的字段（模糊找："日期类"→like date）
     - column 给了 + 存在 → ✓ + 类型
-    - column 给了 + 不存在 → ✗ + 全表字段帮对照
-    - column 没给 → 全表字段清单（名 + 类型）
+    - column 给了 + 不存在 → ✗ + 相近字段建议（拼写差定位）+ 紧凑全表
+    - column 没给 → 全表紧凑清单（一行 6 个，防 bash 截断）
     """
     ts_path = Path(ts_path)
     # cache 两个候选位置：锚点在 deliver 根（ts.json / rs_input 在根的形态）→ 同级 _internal/；
@@ -54,20 +80,26 @@ def query_fields(ts_path, schema: str, table: str, column: str = "") -> str:
                 f"可能是 rs_input 未声明的来源——正路是补 mapping，不是绕过校验）。\n"
                 f"已缓存的表: {', '.join(sorted(tables_map.keys())[:10])}")
 
+    if like:
+        lk = like.lower()
+        hits = {c: ty for c, ty in cols.items() if lk in c}
+        if not hits:
+            return (f"[无匹配] {full} 里没有含 '{like}' 的字段（全 {len(cols)} 个——"
+                    f"换个关键词，或去掉 --like 看紧凑全表清单）")
+        return (f"/* {full} 含 '{like}' 的字段（{len(hits)}/{len(cols)}）*/\n"
+                + _compact_cols(hits))
+
     if column:
         hit = cols.get(column.lower()) or cols.get(column)
         if hit:
             return f"✓ {full}.{column} 存在，类型 {hit}"
-        fld_preview = "\n".join(f"  {c:30s} {t}" for c, t in list(cols.items())[:20])
-        return (f"✗ {full}.{column} 不存在。该表字段（帮对照）:\n{fld_preview}"
-                + ("\n  ..." if len(cols) > 20 else ""))
+        sims = _similar_names(column, cols)
+        sim_note = f"相近字段: {', '.join(sims)}" if sims else ""
+        return (f"✗ {full}.{column} 不存在。{sim_note}\n"
+                f"该表全部字段（{len(cols)} 个，紧凑）:\n" + _compact_cols(cols))
 
-    lines = [f"/* {full} 字段清单（来自 schema_cache，连库时间: {cached_at}）*/"]
-    for col, ctype in cols.items():
-        lines.append(f"  {col:30s} {ctype}")
-    lines.append("")
-    lines.append(f"/* 共 {len(cols)} 个字段 */")
-    return "\n".join(lines)
+    return (f"/* {full} 字段清单（{len(cols)} 个，来自 schema_cache {cached_at}；"
+            f"模糊查找加 --like 关键词）*/\n" + _compact_cols(cols))
 
 
 def main():

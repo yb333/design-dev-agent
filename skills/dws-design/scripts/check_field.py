@@ -35,8 +35,8 @@ def _similar_fields(name: str, cols: dict, limit: int = 5) -> list[str]:
     return sorted(scored)[:limit]
 
 
-def check_field(rs_path: Path, ref: str) -> str:
-    """查证 别名.字段 引用（或 别名=列全表）。返回提示文本。"""
+def check_field(rs_path: Path, ref: str, like: str = "") -> str:
+    """查证 别名.字段 引用（或 别名=列全表 / 别名+--like 模糊找）。返回提示文本。"""
     try:
         rs = json.loads(Path(rs_path).read_text(encoding="utf-8"))
     except Exception as e:
@@ -60,9 +60,19 @@ def check_field(rs_path: Path, ref: str) -> str:
     if status == "not_cached":
         return (f"[未缓存] {full} 不在 schema_cache（连库时没查到这张表——检查表名/权限）")
     if not col.strip():
-        lines = [f"  {c:32s} {t}" for c, t in list(cols.items())[:30]]
-        return f"{full}（别名 {alias}）共 {len(cols)} 字段:\n" + "\n".join(lines) + \
-               ("\n  ..." if len(cols) > 30 else "")
+        if like:
+            lk = like.lower()
+            hits = {c: ty for c, ty in cols.items() if lk in c}
+            if not hits:
+                return (f"[无匹配] {full} 里没有含 '{like}' 的字段（全 {len(cols)} 个——"
+                        f"换关键词，或去掉 --like 看紧凑全表）")
+            items = [f"{c}:{ty}" for c, ty in hits.items()]
+            compact = "\n".join("  " + ", ".join(items[i:i+6]) for i in range(0, len(items), 6))
+            return f"{full}（别名 {alias}）含 '{like}' 的字段（{len(hits)}/{len(cols)}）:\n{compact}"
+        # 紧凑全表（2026-09-15：一列一行 300 字段被 bash 截断看不全，designer 被迫绕路）
+        items = [f"{c}:{ty}" for c, ty in cols.items()]
+        compact = "\n".join("  " + ", ".join(items[i:i+6]) for i in range(0, len(items), 6))
+        return f"{full}（别名 {alias}）共 {len(cols)} 字段（模糊找加 --like 关键词）:\n{compact}"
     hit = cols.get(col.strip().lower()) or cols.get(col.strip())
     if hit:
         return f"✓ {alias}.{col} 存在（{full}.{col}，类型 {hit}）——放心引用"
