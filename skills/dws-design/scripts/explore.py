@@ -358,10 +358,11 @@ from eval_workbench import build_eval_plan_data, render_eval_draft
 
 
 def parse_eval_lines(stdin_text: str) -> list[dict]:
-    """行协议解析：别名|键|限定（兼容显式 别名|schema.table|键|限定；#注释/空行跳过）。"""
+    """行协议解析：别名|键|限定（兼容显式 别名|schema.table|键|限定；#注释/空行跳过；
+    首行 BOM 防御性剥除——PS 5.1 管道 UTF8 带 BOM 前导，\\ufeff 不被 strip 当空白）。"""
     items = []
     for raw in str(stdin_text or "").splitlines():
-        line = raw.strip()
+        line = raw.strip().lstrip("\ufeff")
         if not line or line.startswith("#"):
             continue
         parts = [p.strip() for p in line.split("|")]
@@ -720,7 +721,15 @@ def main():
         except Exception as e:
             print(format_skip(f"读取锚点失败（{args.rs}）: {e}"))
             return
-        stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
+        # BOM 安全读取（PS 5.1 管道 UTF8 带 BOM 前导——utf-8-sig 有则剥无则不动；
+        # errors=replace 让坏编码以可读替换符进解析报错，不整命令崩溃）
+        if sys.stdin.isatty():
+            stdin_text = ""
+        else:
+            try:
+                stdin_text = sys.stdin.buffer.read().decode("utf-8-sig", errors="replace")
+            except AttributeError:
+                stdin_text = sys.stdin.read().lstrip("\ufeff")
         if not stdin_text.strip():
             try:
                 rs = json.loads(Path(args.rs).read_text(encoding="utf-8"))

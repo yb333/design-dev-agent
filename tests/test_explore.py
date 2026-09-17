@@ -343,6 +343,13 @@ class TestParseEvalLines:
         from explore import parse_eval_lines
         assert parse_eval_lines("c1|")[0]["err"]
 
+    def test_bom_first_line_stripped(self):
+        """首行 BOM（PS 5.1 管道 UTF8 带前导——\\ufeff 不被 strip 当空白）——剥掉后正常解析。"""
+        from explore import parse_eval_lines
+        items = parse_eval_lines("\ufeffc1|code|status='1'\nc2|k|")
+        assert items[0]["alias"] == "c1" and items[0]["err"] == ""
+        assert items[1]["alias"] == "c2"
+
 
 class TestRunEval:
     """--eval 合并语义：预填行自动跑 / ? 答案按别名合并 / 未答自动疑点 /
@@ -476,6 +483,20 @@ class TestEvalCli:
         combined = r.stdout + r.stderr
         assert "del_flag = 'N'" in combined, combined  # 引号完整回显=stdin 逐字到达
         assert "唯一性未实测" in combined  # zz_nodb 无数据源 → 未实测（确定性离线）
+
+    def test_stdin_bom_stripped(self, tmp_path):
+        """首行 BOM（PS 5.1 管道 UTF8 前导，内网实报）——utf-8-sig 剥除后行正常解析。"""
+        import subprocess as _sp
+        import sys as _sys
+        rs = self._fixture(tmp_path, [
+            {"source_schema": "ods", "source_table": "t1", "source_alias": "c1",
+             "join_condition": "客户编码关联，状态有效"}])
+        cmd = (f"printf '\\xef\\xbb\\xbfc1|k|\\n' | {_sys.executable} {self._script()} "
+               f"--rs {rs} --eval")
+        r = _sp.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=60)
+        combined = r.stdout + r.stderr
+        assert "不在 rs_input" not in combined, combined  # BOM 没污染别名解析
+        assert "唯一性未实测" in combined                   # 行进入了流水线
 
     def test_no_stdin_draft_fallback(self, tmp_path):
         """无 stdin=兜底出草稿（正常流程草稿随 view 预置；此处验能力）。"""
