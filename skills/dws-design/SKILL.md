@@ -57,12 +57,12 @@ description: >-
 - 条件带"取一/最新/去重"意味（如 rn=1）→ 记下：键不唯一信号，第4层 join_safety 必须有对齐结论
 - 有不过的 → 上报退源端（终止型，见问题上报分流），不进五层
 
-### 源表画像（五层之前——推荐起手，时机与方式不限）
+### 源表画像（取证指引——按需，非必经）
 
-**推荐**进入五层前先拿一轮事实底座：**批量关联唯一性**（`explore --rs ... --batch '[{"tag":"c1","schema":"ods","table":"dim_cust","key":"cust_code","where":"status=1"},{...}]'`——**内联 JSON 单参数**（你无文件写权限，别造清单文件），tag=别名；同表多关联逐关联各带限定，一次跑完自动去重；**复合键写法**：key 里逗号分隔（"key":"tenant_id,order_no"）与单查 --key col1,col2 同语义；单表单关联用单查形态）——第0层粒度锚点（源表明细还是汇总）和第4层关联安全（①方向）都消费它，事后才取=锚点拍脑袋+返工重想。
+事实**按消费点取，不整轮先拿**：输入已声明的（view tables 段规模、RS 数据探索量级/空值率、mapping 关联&限定条件）直接当依据；拿不准才取证，只查拿不准的那张表/那条关联（典型消费点：第0层源表粒度[明细还是汇总]、第4层①关联键唯一性）。逐表先跑一遍画像=机械执行丢判断。
 
-- **授权**：时机与获取方式不限——输入已声明的（RS 数据探索段的量级/空值率、mapping 的关联&限定条件）同样算依据，不必重复跑；强直觉+简单场景可边想边查。
-- **硬要求在产物上**：`join_safety` 条目必须有据（join_key_unique 的判断源于实测或输入声明，reason 写明来源）——装配校验 N_JOIN3 拦漏条目（joins 的真源表缺 join_safety=漏判断），闸口① diagnose_fanout --all 独立实证声明真伪。
+- **批量形态**（多条关联都要验时一次跑完，不是"先跑一轮"的理由）：`explore --rs ... --batch '[{"tag":"c1","schema":"ods","table":"dim_cust","key":"cust_code","where":"status=1"},{...}]'`——**内联 JSON 单参数**（你无文件写权限，别造清单文件），tag=别名；同表多关联逐关联各带限定，自动去重；**复合键写法**：key 逗号分隔（"key":"tenant_id,order_no"）与单查 --key col1,col2 同语义；单表单关联用单查形态。
+- **硬要求在产物上（不受按需影响）**：`join_safety` 条目必须有据（join_key_unique 的判断源于实测或输入声明，reason 写明来源）——装配校验 N_JOIN3 拦漏条目（joins 的真源表缺 join_safety=漏判断），闸口① diagnose_fanout --all 独立实证声明真伪。
 - 画像显示不唯一的表 → 按第4层疑点清单流程（疑似方向=猜测不验证，统一上报）。
 
 ### 第0层 锚点（强制闭合）— 产出表粒度 + 业务主键
@@ -137,7 +137,7 @@ description: >-
     - **拆中间表物化**（多规则复用/开窗重/需独立验证键唯一性）：R1 产 tmp——field_targets 加该列 + `tables.{tmp}.fields` 声明类型（int8）+ field_logics 写开窗口径，下游规则 reads 该 tmp 关联；
     - **规则内子查询**（单规则消费、开窗简单）：joins 声明 `derived_fields: {rn: "row_number() over(partition by org.org_id order by org.upd_time desc)"}`——coder 翻译成 WITH/内联子查询（文法自选），条件里 `org.rn = 1` 照写；
     - 声明了才放行；mapping 没给"取最新"语义（疑似 copy 残留）→ 不自行还原开窗定义，闸口①退回问源端
-  - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一——不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique）：
+  - ① **方向（键唯一性）**：JOIN 键在限定条件下是否唯一——不确定时调 explore.py 验证（只读单表，不 JOIN，不会发散；填 join_key_unique；多条关联都要验用 --batch 一次跑完，写法见「源表画像」节）：
     ```
     python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_input.json \
         --check-join-key --schema {sch} --table {tbl} --key {col} --where "{join_filter}"
