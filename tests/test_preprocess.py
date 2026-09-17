@@ -1500,3 +1500,38 @@ class TestLoadErrorSurfaced:
         from preprocess import parse_mapping
         with pytest.raises(RuntimeError, match=r"原因.*No such file|加载失败"):
             parse_mapping(str(tmp_path / "not_exist.xlsx"))
+
+
+class TestEvalChecklistInView:
+    """view「评估清单」段（2026-09-17 整体化：草稿随输入预置——预填表单模式；
+    生成器 shared/eval_workbench，与 explore --eval 内部重拉同源必然一致）。"""
+
+    def test_view_renders_eval_checklist(self):
+        from preprocess import build_compact
+        rs = {
+            "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
+            "source_tables": [
+                {"source_schema": "ods", "source_table": "ods_f", "source_alias": "f",
+                 "join_condition": ""},
+                {"source_schema": "ods", "source_table": "dim_cust", "source_alias": "c1",
+                 "join_condition": "f.cust_code=c1.code and c1.status='1'"},
+                {"source_schema": "ods", "source_table": "dim_cust", "source_alias": "c2",
+                 "join_condition": "客户编码关联，取最新一条"},
+            ],
+            "field_mappings": [],
+            "_condition_issues": [{"table": "ods.ods_f", "field": "xx", "issue": "引用无出处"}],
+        }
+        view = build_compact(rs)
+        sec = view["评估清单"]
+        rows = {e["行"]: e for e in sec["需实测"]}
+        assert "c1|code|status='1'" in rows                    # 结构化预填直出
+        assert any(r.startswith("f|?") for r in rows)           # 主表 ? 行
+        assert sec["已声明处理"][0]["行"] == "c2|ods.dim_cust"   # 取一→免实测区
+        assert sec["输入存疑"] == ["f/xx: 引用无出处"]
+        assert "--eval" in sec["用法"]
+
+    def test_view_no_checklist_without_sources(self):
+        from preprocess import build_compact
+        view = build_compact({"meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}}},
+                              "source_tables": [], "field_mappings": []})
+        assert "评估清单" not in view

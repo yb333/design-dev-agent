@@ -16,14 +16,14 @@ Python 算，重叠率是启发证据不是证明。
 - 连不上库静默跳过（和 precheck 一致），退出码 0 不阻断设计
 - 不需要采样（单表 count 不会发散；重叠率模式用 DISTINCT LIMIT 500 受控采样）
 
-用法（评估层作业台两步——2026-09-17 定调：枚举/誊写/执行/格式化归工具，designer 只填语义空位）：
-  # 步骤①：拉草稿（结构化条件预填、自然语言留 ? 并排原文、取一/最新免实测分流）
-  python explore.py --rs {deliver}/_internal/rs_input.json --plan
-
-  # 步骤②：补完 ? 后整体回灌（stdin 逐字透传——引号免疫，where 带 'N' 安全）
-  python explore.py --rs {deliver}/_internal/rs_input.json --batch-stdin <<'EOF'
+用法（评估层唯一动作——2026-09-17 整体化：草稿随 view 预置[预填表单模式]，designer
+只补 ? 答案后一次调用，结果单=上报正文）：
+  # view 的「评估清单」段预置草稿；填空只读 view（mapping 中文名对物理名，对不出留空）。
+  # 唯一一次工具调用（stdin 只给 ? 行答案 别名|键|限定；预填行自动跑不用抄）：
+  python explore.py --rs {deliver}/_internal/rs_input.json --eval <<'EOF'
   c1|cust_code|status=1 and del_flag='N'
   EOF
+  # 无 stdin=兜底出草稿（全预填[零 ? 行]时当场连跑直接出结果单）
 
 单查形态（engineer 定向验证用）：
   python explore.py --rs {deliver}/_internal/rs_input.json \\
@@ -345,173 +345,16 @@ def read_target_schema(ts_path: str) -> str:
 # ============================================================
 
 # ============================================================
-# 评估层作业台（2026-09-17 定调：designer 只做语义判断——枚举/誊写/执行/格式化归工具）
-# 两步：--plan 拉草稿（机械预填+原文并排+免实测分流）→ designer 补 ? 空位 →
-#       --batch-stdin 回灌行协议（别名|键|限定），一次跑存在性+唯一性，出三段结果单。
+# 评估层作业台（2026-09-17 整体化：草稿随 view 预置[预填表单/slot-filling 模式]，
+# designer 唯一动作=--eval——stdin 只给 ? 行答案，内部重拉草稿[与 view 同源必然一致]
+# 合并后跑流水线出三段结果单=上报正文。预填行零誊写；填对→事实行/填错→存在性闸拦
+# [疑点]/未答→自动进疑点/免实测行→事实行自动生成——每条路必然落到结果单，无路可飘。
 # 通道=stdin：bash <<'EOF' / PowerShell @'...'@ 管道逐字透传——argv 内联 JSON 已退役
 # （PS 5.1 剥内层双引号 + where 里 SQL 字面量 'N' 与 JSON 定界符同形，argv 通道无解）。
+# 草稿生成器住 design-dev-shared/eval_workbench.py（双消费者：preprocess view 段+此处）。
 # ============================================================
 
-# 取一/最新类处理语义信号（⓪同族、收紧防误触——"最新"单字不触发）
-_TREAT_KEYWORDS = ("取最新", "取一条", "取第一条", "最新一条", "取有效", "去重", "开窗", "row_number")
-_RN_EQ_RE = re.compile(r"\b(?:[a-z_]\w*\.)?rn\s*=\s*1\b", re.IGNORECASE)
-_PARTITION_RE = re.compile(
-    r"partition\s+by\s+((?:[a-z_]\w*\s*\.\s*)?[a-z_]\w*(?:\s*,\s*(?:[a-z_]\w*\s*\.\s*)?[a-z_]\w*)*)",
-    re.IGNORECASE)
-
-
-def _split_terms_local(text: str) -> list[str]:
-    """顶层 and/or 切分（括号深度感知；与 diagnose_fanout._split_terms 同族——
-    跨 pipe 不 import，本地实现）。"""
-    s = str(text or "")
-    out, depth, start, i = [], 0, 0, 0
-    n = len(s)
-    while i < n:
-        c = s[i]
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-        elif depth == 0:
-            edge_l = i == 0 or s[i - 1].isspace()
-            if edge_l and s[i:i + 3].lower() == "and" and (i + 3 >= n or s[i + 3].isspace()):
-                out.append(s[start:i]); i += 3; start = i; continue
-            if edge_l and s[i:i + 2].lower() == "or" and (i + 2 >= n or s[i + 2].isspace()):
-                out.append(s[start:i]); i += 2; start = i; continue
-        i += 1
-    out.append(s[start:])
-    return [t.strip() for t in out if t.strip()]
-
-
-def _strip_alias_prefix(term: str, alias: str) -> str:
-    """剥该别名的 `别名.` 前缀（单表实测 SQL 无别名——限定条件落裸列名）。"""
-    return re.sub(rf"\b{re.escape(alias)}\s*\.", "", term, flags=re.IGNORECASE).strip()
-
-
-def extract_join_facts(condition: str, alias: str) -> dict:
-    """从 join_condition 提取该别名的关联事实——零猜测：机械提不动的留空。
-
-    返回 {structured, key, where, treat_hit, treat_signal, partition_cols}：
-    - structured: 跨别名等值对解析成功（结构化 SQL）；False=自然语言
-    - key: 该别名侧等值对列（复合键逗号序；rn=1 处理项不进键）
-    - where: 该别名侧非等值限定（剥别名前缀的裸条件，and 连接）
-    - treat_hit/treat_signal: 取一/最新类处理声明（跑原始表必不唯一=伪信号，免实测）
-    - partition_cols: SQL 开窗 partition by 列（有则可与关联键机械核对）
-    """
-    cond = str(condition or "").strip()
-    facts = {"structured": False, "key": "", "where": "", "treat_hit": False,
-             "treat_signal": "", "partition_cols": []}
-    if not cond:
-        return facts
-    m = _RN_EQ_RE.search(cond)
-    if m:
-        facts["treat_hit"] = True
-        facts["treat_signal"] = m.group(0).strip()
-    kw = next((k for k in _TREAT_KEYWORDS if k in cond), "")
-    if kw:
-        facts["treat_hit"] = True
-        facts["treat_signal"] = (facts["treat_signal"] + "+" if facts["treat_signal"] else "") + f"关键词:{kw}"
-    pm = _PARTITION_RE.search(cond)
-    if pm:
-        facts["partition_cols"] = [re.sub(r"^[a-z_]\w*\.", "", c.strip(), flags=re.IGNORECASE)
-                                   for c in pm.group(1).split(",")]
-    from sql_parse import parse_join_pairs
-    al = (alias or "").strip().lower()
-    my_cols, cross_pair = [], False
-    for left, right in parse_join_pairs(cond):
-        la = (left[0] or "").strip().lower()
-        ra = (right[0] or "").strip().lower()
-        if la == al and ra and ra != al:
-            my_cols.append(left[1]); cross_pair = True
-        elif ra == al and la and la != al:
-            my_cols.append(right[1]); cross_pair = True
-    if my_cols and cross_pair:
-        facts["structured"] = True
-        seen, kk = set(), []
-        for c in my_cols:
-            if c.lower() not in seen:
-                seen.add(c.lower()); kk.append(c)
-        facts["key"] = ",".join(kk)
-    # 限定：引用本别名、非跨别名等值对、非 rn=1 的项
-    quals = []
-    for term in _split_terms_local(cond):
-        if _RN_EQ_RE.search(term):
-            continue
-        tp = parse_join_pairs(term)
-        is_key_term = any(
-            (((l[0] or "").strip().lower() == al and (r[0] or "").strip().lower() not in ("", al))
-             or ((r[0] or "").strip().lower() == al and (l[0] or "").strip().lower() not in ("", al)))
-            for l, r in tp)
-        if is_key_term:
-            continue
-        if re.search(rf"\b{re.escape(alias)}\s*\.", term, re.IGNORECASE):
-            quals.append(_strip_alias_prefix(term, alias))
-    facts["where"] = " and ".join(q for q in quals if q)
-    return facts
-
-
-def build_eval_plan(rs_path: str) -> str:
-    """评估层步骤①：从 rs_input 拉清单草稿（每张源表一行，需实测/已声明处理两区）。
-
-    机械的全预填（结构化等值对→键/限定；取一/最新→免实测+partition 机械核对；
-    precheck 已核/存疑标记带出）；语义空位显式 ? + 原文并排——designer 只填空不枚举。
-    """
-    rs = json.loads(Path(rs_path).read_text(encoding="utf-8"))
-    sts = rs.get("source_tables") or []
-    if not sts:
-        return "[评估清单为空] rs_input 无 source_tables"
-    dbv = {str(t).lower() for t in ((rs.get("_db_verified") or {}).get("tables") or [])}
-    issues = rs.get("_condition_issues") or []
-    run_lines, treat_lines, warn_lines = [], [], []
-    for st in sts:
-        alias = str(st.get("source_alias") or "?")
-        sch = str(st.get("source_schema") or "?")
-        tbl = str(st.get("source_table") or "?")
-        cond = str(st.get("join_condition") or "")
-        full_l = f"{sch}.{tbl}".lower()
-        verified = "〔precheck已核〕" if full_l in dbv else ""
-        f = extract_join_facts(cond, alias)
-        for i in issues:
-            if (i.get("table") or "").lower() == full_l:
-                warn_lines.append(f"⚠ {alias}/{i.get('field')}: {i.get('issue')}")
-        src_note = f"原文:「{cond}」" if cond else "（无条件——主表/粒度证据线：键=业务主键）"
-        if f["treat_hit"]:
-            part = f["partition_cols"]
-            key_part = f"关联键 {f['key']}；" if f["key"] else "关联键待你定；"
-            if part and f["key"]:
-                if {c.lower() for c in part} == {c.lower() for c in f["key"].split(",")}:
-                    chk = f"开窗 partition by {','.join(part)} ↔ 关联键 {f['key']} → 机械核对一致 ✓"
-                else:
-                    chk = (f"开窗 partition by {','.join(part)} ≠ 关联键 {f['key']} → "
-                           f"⚠ 处理后仍不唯一——进疑点清单")
-            elif part:
-                chk = f"{key_part}开窗 partition by {','.join(part)}——核对两者一致"
-            else:
-                chk = (f"{key_part}原文未含开窗分组/排序口径——口径不全=疑点上报"
-                       "（开窗口径业务语义源端给，不是你编）")
-            treat_lines.append(f"{alias}|{sch}.{tbl}  命中:{f['treat_signal']}  {chk}\n    {src_note}")
-        elif not cond:
-            run_lines.append(f"{alias}|?|?   ← 主表/粒度证据线：键=业务主键（RS/mapping 声明的键）{verified}")
-        elif f["structured"]:
-            run_lines.append(f"{alias}|{f['key']}|{f['where']}   ← 预填自结构化条件（核一眼）"
-                             f"{verified}  {src_note}")
-        else:
-            run_lines.append(f"{alias}|?|?   ← 自然语言——你翻译键/限定（精确对 mapping："
-                             f"物理名或中文名精确匹配，名对不上=疑点）{verified}  {src_note}")
-    out = ["── 评估清单草稿（两步：补完 ? 空位 → 需实测各行原样回灌 --batch-stdin）──"]
-    if run_lines:
-        out.append("\n需实测（行格式=别名|键[,复合]|限定）：")
-        out.extend(run_lines)
-    if treat_lines:
-        out.append("\n已声明处理（免实测——原始表必不唯一=伪信号；核对开窗分组键=关联键）：")
-        out.extend(treat_lines)
-    if warn_lines:
-        out.append("\n⚠ 输入存疑（precheck 检出——直接进疑点清单上报）：")
-        out.extend(warn_lines)
-    out.append(
-        "\n回灌：python explore.py --rs {rs路径} --batch-stdin <<'EOF'\n别名|键|限定\nEOF\n"
-        "PowerShell：$OutputEncoding=[Text.Encoding]::UTF8 然后 @'…'@ | python …")
-    return "\n".join(out)
+from eval_workbench import build_eval_plan_data, render_eval_draft
 
 
 def parse_eval_lines(stdin_text: str) -> list[dict]:
@@ -571,29 +414,74 @@ def _resolve_aliases(rs: dict, items: list[dict]) -> list[dict]:
     return items
 
 
-def run_eval_batch(rs_path: str, target_schema: str, stdin_text: str) -> str:
-    """评估层步骤②：回灌行协议，一次跑存在性闸+唯一性实测，出三段结果单。
+def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
+    """评估层唯一动作：内部重拉草稿（与 view 同源必然一致）+ stdin 答案合并 →
+    流水线（存在性闸+唯一性实测）→ 三段结果单（=上报正文）。
 
-    流水线（每行按序，任何一步不过出该步结论不再往下）：
-      别名反解 → 键字段物理存在（schema_cache；相近名=给调用方核实的线索，不是替换依据）
-               → 限定唯一性实测（COUNT/COUNT DISTINCT + 重复组样例）
-    三段输出：结果单 / join_safety 事实行（实测数字直接可贴 decisions，不过 model 的手）/
-    疑点草稿（疑似方向一句话留空）。连不上库→存在性照出，唯一性标未实测（不阻断）。
+    原子性（预填表单/slot-filling，2026-09-17 整体化）：stdin 只需给 ? 行答案
+    （别名|键|限定，按别名合并覆盖）；预填行自动跑零誊写；额外别名行=自设关联纳入。
+    每条路必然落到结果单：填对→事实行；填错→存在性闸拦（疑点）；未答→自动进
+    疑点草稿；免实测行→事实行自动生成（依据=输入声明+机械核对）或疑点（核对
+    不一致/口径不全）。连不上库→存在性照出，唯一性标未实测（不阻断）。
     """
     rs = json.loads(Path(rs_path).read_text(encoding="utf-8"))
-    items = _resolve_aliases(rs, parse_eval_lines(stdin_text))
-    if not items:
-        return "[回灌为空] 行格式=别名|键|限定（# 注释行跳过）；先 --plan 拉草稿"
+    plan = build_eval_plan_data(rs)
+    answers = _resolve_aliases(rs, parse_eval_lines(stdin_text))
+    ans_by_alias: dict = {}
+    for it in answers:
+        ans_by_alias.setdefault(it["alias"].strip().lower(), []).append(it)
+    treat_aliases = {t["alias"].strip().lower() for t in plan["treat"]}
+    results, to_run, doubts, facts = [], [], [], []
+
+    # 免实测行：事实行/疑点自动生成（不进实测）
+    for t in plan["treat"]:
+        if t["check_ok"] is True:
+            results.append(f"[{t['alias']}] {t['schema']}.{t['table']} 免实测——{t['check']}")
+            facts.append(f"- alias: {t['alias']}\n  join_key_unique: true\n"
+                         f"  reason: \"输入声明取一处理（{t['signal']}；{t['check']}）\"")
+        else:
+            results.append(f"[{t['alias']}] {t['schema']}.{t['table']} 免实测但 {t['check']}")
+            doubts.append(f"{t['alias']}/{t['table']}: {t['check']}——疑似方向: ")
+
+    # 合并：plan run 行 + stdin 答案（按别名覆盖/补空；额外别名=自设关联）
+    merged = []  # (tag, sch, tbl, key, where)
+    answered = set()
+    for r in plan["run"]:
+        al = r["alias"].strip().lower()
+        got = ans_by_alias.get(al)
+        if got:
+            answered.add(al)
+            for it in got:
+                if it["err"]:
+                    results.append(f"[{it['alias']}] ✗ {it['err']}")
+                    continue
+                merged.append((it["alias"], it["schema"], it["table"], it["key"], it["where"]))
+        else:
+            merged.append((r["alias"], r["schema"], r["table"], r["key"], r["where"]))
+    for al, items in ans_by_alias.items():
+        if al in answered:
+            continue
+        for it in items:
+            if al in treat_aliases:
+                results.append(f"[{it['alias']}] 免实测行忽略（声明依据已定；认为声明有误=疑点上报）")
+            elif it["err"]:
+                results.append(f"[{it['alias']}] ✗ {it['err']}")
+            else:
+                results.append(f"[{it['alias']}] 额外行（自设关联）——纳入实测")
+                merged.append((it["alias"], it["schema"], it["table"], it["key"], it["where"]))
+
+    # 未答 ? 行 → 自动疑点（留空=合法答案）
+    for tag, sch, tbl, key, where in merged:
+        if not key:
+            results.append(f"[{tag}] {sch}.{tbl} ? 未答——自动进疑点（原文见 view 评估清单）")
+            doubts.append(f"{tag}/{tbl}: 键未确定（自然语言条件对不出物理名）——疑似方向: ")
+
     from schema_query import lookup_table, _similar_names
-    results, to_run, doubts = [], [], []
     seen = {}
     cache_map: dict = {}
-    for it in items:
-        tag = it["alias"] or "?"
-        if it["err"]:
-            results.append(f"[{tag}] ✗ {it['err']}")
+    for tag, sch, tbl, key, where in merged:
+        if not key:
             continue
-        sch, tbl, key, where = it["schema"], it["table"], it["key"], it["where"]
         dedup = (sch.lower(), tbl.lower(), key.lower(), where.lower())
         if dedup in seen:
             results.append(f"[{tag}] 与 [{seen[dedup]}] 同表同键同限定——去重（结果同）")
@@ -673,7 +561,6 @@ def run_eval_batch(rs_path: str, target_schema: str, stdin_text: str) -> str:
                     executor.close()
                 except Exception:
                     pass
-    facts = []
     for tag, sch, tbl, key, where, gate_note in to_run:
         got = meas.get((tag, sch, tbl, key, where))
         q = f"限定({where})" if where else "无限定"
@@ -691,10 +578,10 @@ def run_eval_batch(rs_path: str, target_schema: str, stdin_text: str) -> str:
                 facts.append(f"- alias: {tag}\n  join_key_unique: false\n"
                              f"  reason: \"实测: {key} {q}，{total} 行重复 {total - uniq}\"\n"
                              f"  strategy:   # ← 你填（GROUP BY 收敛/取最新有效行，口径源端给）")
-    parts = [f"── 结果单（{len(seen)} 项执行）──"] + results
+    parts = [f"── 结果单（评估层闭合产物=上报正文；实测 {len(seen)} 项）──"] + results
     parts.append("\n── join_safety 事实行（直接贴进 decisions，实测数字不过你的手）──")
-    parts.extend(facts if facts else ["（无可实测行）"])
-    parts.append("\n── 疑点草稿（各补一句疑似方向；评估层闭合即上报即停——上报是合格交卷的一部分）──")
+    parts.extend(facts if facts else ["（无）"])
+    parts.append("\n── 疑点草稿（各补一句疑似方向；上报即停——上报是合格交卷的一部分）──")
     if doubts:
         parts.extend(f"{i}) {d}" for i, d in enumerate(doubts, 1))
     else:
@@ -809,13 +696,12 @@ def main():
                         help="执行 JOIN 键唯一性检查")
     parser.add_argument("--batch", default="",
                         help="批量关联唯一性（YAML/JSON 文件路径，engineer 侧）——同表多关联"
-                             "各自带限定逐条校验+自动去重。designer 用 --plan + --batch-stdin")
-    parser.add_argument("--plan", action="store_true",
-                        help="评估层步骤①：从 rs_input 拉清单草稿（结构化预填/自然语言留?/"
-                             "取一免实测分流/precheck 标记带出），需 --rs")
-    parser.add_argument("--batch-stdin", action="store_true",
-                        help="评估层步骤②：stdin 读行协议 别名|键|限定（heredoc/管道逐字"
-                             "透传引号免疫），跑存在性+唯一性出三段结果单，需 --rs")
+                             "各自带限定逐条校验+自动去重。designer 用 --eval")
+    parser.add_argument("--eval", action="store_true",
+                        help="评估层唯一动作：草稿随 view 预置（预填表单），stdin 只给 ? 行答案"
+                             "（别名|键|限定，heredoc/管道逐字透传引号免疫）——内部重拉草稿合并后"
+                             "跑存在性+唯一性，出三段结果单=上报正文；无 stdin=兜底出草稿"
+                             "（全预填时当场连跑），需 --rs")
     parser.add_argument("--check-overlap", action="store_true",
                         help="执行键值重叠率检查（双侧采样算交集，探测内容语义是否吻合）")
     parser.add_argument("--schema-a", default="", help="重叠率：左表 schema")
@@ -828,26 +714,28 @@ def main():
     parser.add_argument("--where-b", default="", help="重叠率：右表 WHERE 限定（可选）")
     args = parser.parse_args()
 
-    if args.plan:
+    if args.eval:
         if not args.rs:
-            print(format_skip("--plan 需要 --rs rs_input.json"))
-            return
-        try:
-            print(build_eval_plan(args.rs))
-        except Exception as e:
-            print(f"[plan 失败] {e}")
-        return
-
-    if args.batch_stdin:
-        if not args.rs:
-            print(format_skip("--batch-stdin 需要 --rs rs_input.json（别名反解+选源锚点）"))
+            print(format_skip("--eval 需要 --rs rs_input.json（草稿派生+别名反解+选源锚点）"))
             return
         try:
             target_schema = read_target_schema_from_rs(args.rs) or args.schema
         except Exception as e:
             print(format_skip(f"读取锚点失败（{args.rs}）: {e}"))
             return
-        print(run_eval_batch(args.rs, target_schema, sys.stdin.read()))
+        stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
+        if not stdin_text.strip():
+            try:
+                rs = json.loads(Path(args.rs).read_text(encoding="utf-8"))
+                plan = build_eval_plan_data(rs)
+                if plan["run"] and all(r["key"] for r in plan["run"]):
+                    print(run_eval(args.rs, target_schema, ""))  # 全预填：无 ? 行，当场连跑
+                else:
+                    print(render_eval_draft(rs))  # 兜底草稿（正常流程草稿随 view 预置）
+            except Exception as e:
+                print(f"[eval 失败] {e}")
+            return
+        print(run_eval(args.rs, target_schema, stdin_text))
         return
 
     if args.check_overlap:
@@ -903,7 +791,7 @@ def main():
         return
 
     if not args.check_join_key:
-        parser.error("请指定模式：--plan + --batch-stdin（评估层作业台两步）/ "
+        parser.error("请指定模式：--eval（评估层唯一动作，需 --rs）/ "
                      "--check-join-key（单查唯一性，engineer 定向验证）/ "
                      "--check-overlap（重叠率）/ --batch 文件（批量，engineer）")
 

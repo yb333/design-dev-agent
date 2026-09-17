@@ -1318,6 +1318,27 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
     if null_fields:
         compact["null_in_scene"] = sorted(set(null_fields))
 
+    # 评估清单（2026-09-17 整体化：草稿随 view 预置——预填表单/slot-filling 模式。
+    # 生成器=shared/eval_workbench（与 explore --eval 内部重拉同源，必然一致）；
+    # designer 只补 ? 答案后一次 --eval，结果单=上报正文）
+    from eval_workbench import build_eval_plan_data
+    _plan = build_eval_plan_data(rs_input)
+    if _plan["run"] or _plan["treat"] or _plan["warn"]:
+        compact["评估清单"] = {
+            "需实测": [
+                {"行": f"{r['alias']}|{r['key'] or '?'}|{r['where']}", "说明": r["note"]}
+                for r in _plan["run"]],
+            "已声明处理": [
+                {"行": f"{t['alias']}|{t['schema']}.{t['table']}", "命中": t["signal"],
+                 "核对": t["check"], "原文": t["src"]}
+                for t in _plan["treat"]],
+            "输入存疑": [f"{w['alias']}/{w['field']}: {w['issue']}" for w in _plan["warn"]],
+            "用法": ("填空只读本 view（mapping 中文名对物理名；对不出留空=自动进疑点）。"
+                     "唯一一次工具调用：explore --eval，stdin 只给 ? 行答案（别名|键|限定；"
+                     "预填行自动跑不用抄）——heredoc/管道透传引号免疫，PowerShell 先 "
+                     "$OutputEncoding=[Text.Encoding]::UTF8。结果单=评估层闭合产物=上报正文"),
+        }
+
     # 关联键类型对账（precheck 检出+决策后写进 rs_input，designer 必须看到：
     # 转换对要在 joins 声明 cast，接受对是业务豁免）
     join_risks = rs_input.get("_join_type_risks") or []
