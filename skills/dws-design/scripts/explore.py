@@ -416,13 +416,13 @@ def _resolve_aliases(rs: dict, items: list[dict]) -> list[dict]:
 
 def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
     """评估层唯一动作：内部重拉草稿（与 view 同源必然一致）+ stdin 答案合并 →
-    流水线（存在性闸+唯一性实测）→ 三段结果单（=上报正文）。
+    流水线（存在性闸+唯一性实测）→ 结果单。
 
-    原子性（预填表单/slot-filling，2026-09-17 整体化）：stdin 只需给 ? 行答案
-    （别名|键|限定，按别名合并覆盖）；预填行自动跑零誊写；额外别名行=自设关联纳入。
-    每条路必然落到结果单：填对→事实行；填错→存在性闸拦（疑点）；未答→自动进
-    疑点草稿；免实测行→事实行自动生成（依据=输入声明+机械核对）或疑点（核对
-    不一致/口径不全）。连不上库→存在性照出，唯一性标未实测（不阻断）。
+    产出按判读者视角砍常态噪声：✓ 常态折叠一行汇总；仅异常行（疑点/未答/未实测/
+    失败）逐条列；join_safety 事实行=交付物（单行 yaml 直贴 decisions）；疑点只列
+    事实——疑似方向由 designer 上报时补，不产出空占位。填对→事实行/填错→存在性
+    闸拦[疑点]/未答→自动疑点/免实测→事实行，每条路必然落单。连不上库→存在性
+    照出，唯一性标未实测（不阻断）。
     """
     rs = json.loads(Path(rs_path).read_text(encoding="utf-8"))
     plan = build_eval_plan_data(rs)
@@ -431,17 +431,16 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
     for it in answers:
         ans_by_alias.setdefault(it["alias"].strip().lower(), []).append(it)
     treat_aliases = {t["alias"].strip().lower() for t in plan["treat"]}
-    results, to_run, doubts, facts = [], [], [], []
+    ok_tags, exc, facts, doubts = [], [], [], []
 
-    # 免实测行：事实行/疑点自动生成（不进实测）
+    # 免实测行：✓ 核对一致折叠进汇总（事实行自动生成）；不一致/口径不全→疑点
     for t in plan["treat"]:
         if t["check_ok"] is True:
-            results.append(f"[{t['alias']}] {t['schema']}.{t['table']} 免实测——{t['check']}")
-            facts.append(f"- alias: {t['alias']}\n  join_key_unique: true\n"
-                         f"  reason: \"输入声明取一处理（{t['signal']}；{t['check']}）\"")
+            ok_tags.append(t["alias"])
+            facts.append(f"- {{alias: {t['alias']}, join_key_unique: true, "
+                         f"reason: \"输入声明取一处理（{t['signal']}；开窗键=关联键一致）\"}}")
         else:
-            results.append(f"[{t['alias']}] {t['schema']}.{t['table']} 免实测但 {t['check']}")
-            doubts.append(f"{t['alias']}/{t['table']}: {t['check']}——疑似方向: ")
+            doubts.append(f"{t['alias']}/{t['table']}: {t['check']}")
 
     # 合并：plan run 行 + stdin 答案（按别名覆盖/补空；额外别名=自设关联）
     merged = []  # (tag, sch, tbl, key, where)
@@ -453,7 +452,7 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
             answered.add(al)
             for it in got:
                 if it["err"]:
-                    results.append(f"[{it['alias']}] ✗ {it['err']}")
+                    exc.append(f"[{it['alias']}] ✗ {it['err']}")
                     continue
                 merged.append((it["alias"], it["schema"], it["table"], it["key"], it["where"]))
         else:
@@ -463,30 +462,30 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
             continue
         for it in items:
             if al in treat_aliases:
-                results.append(f"[{it['alias']}] 免实测行忽略（声明依据已定；认为声明有误=疑点上报）")
+                exc.append(f"[{it['alias']}] 免实测行忽略（声明依据已定；认为声明有误=疑点上报）")
             elif it["err"]:
-                results.append(f"[{it['alias']}] ✗ {it['err']}")
+                exc.append(f"[{it['alias']}] ✗ {it['err']}")
             else:
-                results.append(f"[{it['alias']}] 额外行（自设关联）——纳入实测")
                 merged.append((it["alias"], it["schema"], it["table"], it["key"], it["where"]))
 
     # 未答 ? 行 → 自动疑点（留空=合法答案）
     for tag, sch, tbl, key, where in merged:
         if not key:
-            results.append(f"[{tag}] {sch}.{tbl} ? 未答——自动进疑点（原文见 view 评估清单）")
-            doubts.append(f"{tag}/{tbl}: 键未确定（自然语言条件对不出物理名）——疑似方向: ")
+            exc.append(f"[{tag}] {tbl} ？未答")
+            doubts.append(f"{tag}/{tbl}: 键未确定（自然语言条件对不出物理名，原文见 view 评估清单）")
 
     from schema_query import lookup_table, _similar_names
-    seen = {}
+    to_run = []  # (tag, sch, tbl, key, where, gate_note)
+    seen = set()
     cache_map: dict = {}
     for tag, sch, tbl, key, where in merged:
         if not key:
             continue
         dedup = (sch.lower(), tbl.lower(), key.lower(), where.lower())
         if dedup in seen:
-            results.append(f"[{tag}] 与 [{seen[dedup]}] 同表同键同限定——去重（结果同）")
+            exc.append(f"[{tag}] 同表同键同限定与前行重复——去重")
             continue
-        seen[dedup] = tag
+        seen.add(dedup)
         ck = (sch.lower(), tbl.lower())
         if ck not in cache_map:
             cache_map[ck] = lookup_table(rs_path, sch, tbl)
@@ -501,10 +500,11 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                 s = _similar_names(k, cols or {})
                 if s:
                     sim.append(f"{k}→相近 {','.join(s)}")
-            results.append(f"[{tag}] {sch}.{tbl} key=({key}) → ✗ 键字段不存在: {', '.join(missing)}"
-                           + (f"（{'；'.join(sim)}）" if sim else "") + "——不跑唯一性")
+            exc.append(f"[{tag}] {tbl} key=({key}) ✗ 键字段不存在: {', '.join(missing)}"
+                       + (f"（{'；'.join(sim)}）" if sim else ""))
             doubts.append(f"{tag}/{tbl}: 键字段 {', '.join(missing)} 物理不存在"
-                          "（相近名是给调用方核实的线索，不是替换依据）——疑似方向: ")
+                          + (f"（相近名: {'；'.join(s.split('→相近 ')[-1] for s in sim)}"
+                             "——给调用方核实的线索）" if sim else ""))
             continue
         gate_note = "" if st == "ok" else (
             f"（键存在性未核: {'无 schema_cache' if st == 'no_cache' else f'{sch}.{tbl} 不在 cache'}）")
@@ -528,16 +528,13 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                         sql = build_join_key_sql(sch, tbl, key, where)
                         r = executor.execute(sql)
                         if not r.success:
-                            results.append(f"[{tag}] {sch}.{tbl} key=({key}) where=({where or '无'}){gate_note}"
-                                           f" → 执行失败: {str(r.error)[:120]}【自检：字段名/条件写法】")
+                            exc.append(f"[{tag}] {tbl} key=({key}) 执行失败: "
+                                       f"{str(r.error)[:120]}【自检：字段名/条件写法】")
                             continue
                         row = (r.rows or [{}])[0]
                         total, uniq = int(row.get("total", 0)), int(row.get("distinct_cnt", 0))
                         meas[(tag, sch, tbl, key, where)] = (total, uniq)
-                        if total == uniq:
-                            results.append(f"[{tag}] {sch}.{tbl} key=({key}) where=({where or '无'}){gate_note}"
-                                           f" → ✓ 唯一（{total} 行）")
-                        else:
+                        if total != uniq:
                             sample = ""
                             try:
                                 ke = ", ".join(split_key(key))
@@ -546,16 +543,15 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                                       + f" GROUP BY {ke} HAVING COUNT(1)>1 ORDER BY dup_cnt DESC LIMIT 2")
                                 r2 = executor.execute(s2)
                                 if r2.success and r2.rows:
-                                    sample = " | 重复组: " + "; ".join(
-                                        ",".join(f"{k}={v}" for k, v in rr.items()) for rr in r2.rows)
+                                    sample = "（重复组: " + "; ".join(
+                                        ",".join(f"{k}={v}" for k, v in rr.items()) for rr in r2.rows) + "）"
                             except Exception:
                                 pass
-                            results.append(f"[{tag}] {sch}.{tbl} key=({key}) where=({where or '无'}){gate_note}"
-                                           f" → ✗ 不唯一（{total} 行/唯一 {uniq}，重复 {total - uniq}）{sample}")
+                            exc.append(f"[{tag}] {tbl} key=({key}) ✗ 不唯一（重复 {total - uniq}）{sample}")
                             doubts.append(f"{tag}/{tbl}: {key} 限定({where or '无'})下不唯一"
-                                          f"（{total} 行重复 {total - uniq}）——疑似方向: ")
+                                          f"（{total} 行重复 {total - uniq}）")
                     except Exception as e:
-                        results.append(f"[{tag}] 查询异常: {e}")
+                        exc.append(f"[{tag}] 查询异常: {e}")
             finally:
                 try:
                     executor.close()
@@ -565,23 +561,24 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
         got = meas.get((tag, sch, tbl, key, where))
         q = f"限定({where})" if where else "无限定"
         if got is None:
-            results.append(f"[{tag}] {sch}.{tbl} key=({key}) where=({where or '无'}){gate_note}"
-                           f" → 唯一性未实测（连不上库）——join_key_unique 标\"未验证\"")
-            facts.append(f"- alias: {tag}\n  join_key_unique: \"未验证\"\n"
-                         f"  reason: \"连不上库未实测 {key} {q}\"")
+            exc.append(f"[{tag}] {tbl} key=({key}) 唯一性未实测（连不上库）{gate_note}")
+            facts.append(f"- {{alias: {tag}, join_key_unique: \"未验证\", "
+                         f"reason: \"连不上库未实测 {key} {q}\"}}")
         else:
             total, uniq = got
             if total == uniq:
-                facts.append(f"- alias: {tag}\n  join_key_unique: true\n"
-                             f"  reason: \"实测: {key} {q}，{total} 行零重复\"")
+                ok_tags.append(tag)
+                facts.append(f"- {{alias: {tag}, join_key_unique: true, "
+                             f"reason: \"实测: {key} {q}，{total} 行零重复\"}}")
             else:
-                facts.append(f"- alias: {tag}\n  join_key_unique: false\n"
-                             f"  reason: \"实测: {key} {q}，{total} 行重复 {total - uniq}\"\n"
-                             f"  strategy:   # ← 你填（GROUP BY 收敛/取最新有效行，口径源端给）")
-    parts = [f"── 结果单（评估层闭合产物=上报正文；实测 {len(seen)} 项）──"] + results
-    parts.append("\n── join_safety 事实行（直接贴进 decisions，实测数字不过你的手）──")
+                facts.append(f"- {{alias: {tag}, join_key_unique: false, "
+                             f"reason: \"实测: {key} {q}，{total} 行重复 {total - uniq}\", strategy: \"\"}}")
+    parts = [f"── 评估结果（实测 {len(seen)} 项；✓ 唯一 {len(ok_tags)}："
+             f"{'、'.join(ok_tags) if ok_tags else '无'}）──"]
+    parts.extend(exc)
+    parts.append("\n── join_safety 事实行（直贴 decisions；join_key_unique=false 的行 strategy 必填）──")
     parts.extend(facts if facts else ["（无）"])
-    parts.append("\n── 疑点草稿（各补一句疑似方向；上报即停——上报是合格交卷的一部分）──")
+    parts.append("\n── 疑点（各补一句疑似方向后随回复上报；上报疑点是合格交卷的一部分）──")
     if doubts:
         parts.extend(f"{i}) {d}" for i, d in enumerate(doubts, 1))
     else:

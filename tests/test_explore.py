@@ -404,11 +404,11 @@ class TestRunEval:
             ("GROUP BY", [{"cust_code": "c_001", "dup_cnt": 3}]),
         ])
         out = run_eval(p, "zz", "f|order_id|\nc2|cust_code|\n")  # 只答 ? 行，预填行自动跑
-        # 免实测行 → 事实行自动生成（机械核对一致）
-        assert "免实测" in out and "机械核对一致" in out
-        assert "- alias: org" in out and "输入声明取一处理" in out
-        # 预填行 c1 自动跑：cod_cf 形态闸拦（code 不存在→疑点，不跑唯一性）
-        assert "键字段不存在: code" in out and "不跑唯一性" in out and "相近" in out
+        # 免实测行核对一致 → 折叠进 ✓ 汇总 + 事实行自动生成（单行）
+        assert "✓ 唯一" in out and "org" in out
+        assert "- {alias: org" in out and "输入声明取一处理" in out and "开窗键=关联键一致" in out
+        # 预填行 c1 自动跑：cod_cf 形态闸拦（code 不存在→疑点）
+        assert "键字段不存在: code" in out and "相近" in out
         # ? 行答案合并：c2 实测不唯一 → 事实行+疑点
         assert "join_key_unique: false" in out and "重复 50" in out and "strategy:" in out
         # 主表答案：实测唯一 → 事实行
@@ -497,7 +497,7 @@ class TestEvalCli:
              "join_condition": "f.kid=c2.kid and c2.status=1"}])
         r = _sp.run([_sys.executable, str(self._script()), "--rs", str(rs), "--eval"],
                     input="", capture_output=True, text=True, timeout=60)
-        assert "结果单" in r.stdout            # 直接跑出结果单
+        assert "结果单" in r.stdout or "评估结果" in r.stdout   # 直接跑出结果（非草稿）
         assert "唯一性未实测" in r.stdout      # zz_nodb → 未验证事实行
         assert "回灌" not in r.stdout          # 不是草稿
 

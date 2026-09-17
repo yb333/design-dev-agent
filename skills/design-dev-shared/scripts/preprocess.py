@@ -1336,7 +1336,8 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "用法": ("填空只读本 view（mapping 中文名对物理名；对不出留空=自动进疑点）。"
                      "唯一一次工具调用：explore --eval，stdin 只给 ? 行答案（别名|键|限定；"
                      "预填行自动跑不用抄）——heredoc/管道透传引号免疫，PowerShell 先 "
-                     "$OutputEncoding=[Text.Encoding]::UTF8。结果单=评估层闭合产物=上报正文"),
+                     "$OutputEncoding=[Text.Encoding]::UTF8。评估结果（✓ 折叠只报异常/"
+                     "事实行+疑点清单）随回复上报"),
         }
 
     # 关联键类型对账（precheck 检出+决策后写进 rs_input，designer 必须看到：
