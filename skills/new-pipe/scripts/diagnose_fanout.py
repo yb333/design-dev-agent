@@ -783,15 +783,188 @@ def diagnose_all(ts_path: Path, top: int = 5) -> list[tuple[str, str, list[str]]
     return out
 
 
+# ============================================================
+# 疑点边交集式试算（pre-ts，评估层上报增值——engineer 面）
+# ============================================================
+
+_EDGE_DUP_CAP = 200  # 重复键组拉取上限（交集判面够用；超限披露截断）
+
+
+def _target_schema_from_rs(rs_path: Path) -> str:
+    """评估层锚点：rs_input 的 meta.target.f_table.schema（选源用——ts 还没产）。"""
+    data = json.loads(Path(rs_path).read_text(encoding="utf-8"))
+    return str((((data.get("meta") or {}).get("target") or {}).get("f_table") or {}).get("schema") or "").strip()
+
+
+def _edge_ident(*names: str) -> None:
+    for n in names:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(n or "")):
+            raise ValueError(f"非法标识符（只允许字母数字下划线）: {n!r}")
+
+
+def _edge_keys(key: str) -> list[str]:
+    ks = [k.strip() for k in (key or "").split(",") if k.strip()]
+    if not ks:
+        raise ValueError("键不能为空")
+    return ks
+
+
+def _pair_cond(keys: list[str], row: dict) -> str:
+    """复合键等值对：(k1=v1 AND k2=v2)——值来自查询结果，用 _fmt_val 安全格式化。"""
+    return "(" + " AND ".join(f"{k} = {_fmt_val(row.get(k))}" for k in keys) + ")"
+
+
+def run_edge_impact(rs_path: Path, side_a: dict, side_b: dict, top: int = 5) -> tuple[list[str], Path]:
+    """疑点边交集式试算（pre-ts）：designer 评估层上报"从表键不唯一"疑点后，
+    engineer 做实**当前影响**给人做材料——回答三问：B 重复多少组（+样例）/
+    A 是否也重复（多对多=此边必膨胀）/ B 的重复键命中 A 多少（当前膨胀面）。
+
+    交集式**无 JOIN**（重复键集 ∩ 对侧 distinct——查询本身不可能发散）；
+    只测**这条边**不构造链（链级精确膨胀=设计后闸口① --all 的活，不替 designer
+    做设计）。产物落 _internal/diagnose/（engineer 材料），**永不回写 view**
+    （designer 输入面零结论级内容——角色面隔离）。side_b=疑点侧（键重复的表，
+    带限定），side_a=对侧。"""
+    ak, bk = _edge_keys(side_a["key"]), _edge_keys(side_b["key"])
+    for s, ks in ((side_a, ak), (side_b, bk)):
+        _edge_ident(s["schema"], s["table"], *ks)
+    connect = _target_schema_from_rs(rs_path)
+    if not connect:
+        raise ValueError("rs_input 里取不到 meta.target.f_table.schema（选源锚点）")
+
+    def _stat(side: dict, keys: list[str]) -> dict:
+        ke = ", ".join(keys) if len(keys) > 1 else keys[0]
+        sql = (f"SELECT COUNT(1) AS total, COUNT(DISTINCT {ke}) AS d FROM {side['schema']}.{side['table']}")
+        if side.get("where"):
+            sql += f" WHERE {side['where']}"
+        row = db.one(sql)
+        return {"total": int(row.get("total", 0)), "d": int(row.get("d", 0))}
+
+    def _dup_keys(side: dict, keys: list[str]) -> list[dict]:
+        ke = ", ".join(keys)
+        sql = (f"SELECT {ke}, COUNT(1) AS dup FROM {side['schema']}.{side['table']}")
+        if side.get("where"):
+            sql += f" WHERE {side['where']}"
+        sql += (f" GROUP BY {ke} HAVING COUNT(1) > 1 ORDER BY dup DESC LIMIT {_EDGE_DUP_CAP + 1}")
+        return [r for r in db.rows(sql)
+                if not any(r.get(k) is None for k in keys)]  # NULL 键关联不上，不入命中面
+
+    lines: list[str] = []
+    db = _Db(connect)
+    try:
+        bs, as_ = _stat(side_b, bk), _stat(side_a, ak)
+        b_dup = bs["total"] - bs["d"]
+        lines.append(f"── 疑点边试算（交集式·无 JOIN·pre-ts）──")
+        lines.append(f"B 疑点侧 {side_b['schema']}.{side_b['table']} key=({side_b['key']})"
+                     + (f" 限定({side_b['where']})" if side_b.get("where") else "")
+                     + f"：{bs['total']} 行/唯一 {bs['d']}"
+                     + (f"——重复 {b_dup} 组" if b_dup else "——唯一（疑点侧已唯一，无需本试算）"))
+        dups = _dup_keys(side_b, bk) if b_dup else []
+        truncated = len(dups) > _EDGE_DUP_CAP
+        if truncated:
+            dups = dups[:_EDGE_DUP_CAP]
+        if dups:
+            sample = "；".join(
+                (_pair_cond(bk, r).strip("()") + f" ×{int(r.get('dup', 0))}") for r in dups[:top])
+            lines.append(f"  重复组样例: {sample}" + ("（超上限截断）" if truncated else ""))
+        a_dup = as_["total"] - as_["d"]
+        if a_dup:
+            lines.append(f"A 对侧 {side_a['schema']}.{side_a['table']} key=({side_a['key']})："
+                         f"{as_['total']} 行/唯一 {as_['d']}——重复 {a_dup}"
+                         f"｜多对多：此边必膨胀，收敛必选")
+        else:
+            lines.append(f"A 对侧 {side_a['schema']}.{side_a['table']} key=({side_a['key']})：唯一"
+                         f"（{as_['total']} 行零重复）")
+        if dups:
+            conds = " OR ".join(_pair_cond(ak, {k: r.get(bk[i]) for i, k in enumerate(ak)})
+                                for r in dups)
+            hit_sql = (f"SELECT DISTINCT {', '.join(ak)} FROM {side_a['schema']}.{side_a['table']}")
+            if side_a.get("where"):
+                hit_sql += f" WHERE {side_a['where']} AND ({conds})"
+            else:
+                hit_sql += f" WHERE {conds}"
+            hits = db.rows(hit_sql)
+            k = len(hits)
+            if k == 0:
+                lines.append(f"命中：{len(dups)} 组重复键中 0 组存在于 A——当前零命中=未膨胀；"
+                             f"风险=未来命中即膨胀（发散键进入主表即放大）")
+            else:
+                hs = "；".join(_pair_cond(ak, h).strip("()") for h in hits[:top])
+                lines.append(f"命中：{len(dups)} 组重复键中 {k} 组的键值存在于 A——"
+                             f"当前膨胀面 {k} 组（例: {hs}）")
+    finally:
+        db.close()
+    base = rs_path.parent / "diagnose" if rs_path.parent.name == "_internal" \
+        else rs_path.parent / "_internal" / "diagnose"
+    base.mkdir(parents=True, exist_ok=True)
+    out = base / f"edge_{side_b['table']}.md"
+    out.write_text("# 疑点边试算 " + f"{side_b['table']}.{side_b['key']} ↔ {side_a['table']}.{side_a['key']}\n\n```\n"
+                   + "\n".join(lines) + "\n```\n", encoding="utf-8")
+    return lines, out
+
+
 def main():
-    ap = argparse.ArgumentParser(description="UT 回路关联发散定位器（逐表按声明条件查键唯一性+实锤+驱动表自检）")
-    ap.add_argument("--ts", required=True, help="ts.json 路径")
+    ap = argparse.ArgumentParser(
+        description="UT 回路关联发散定位器（逐表按声明条件查键唯一性+实锤+驱动表自检；"
+                    "--edge=pre-ts 疑点边交集式试算[评估层上报增值，engineer 面]")
+    ap.add_argument("--ts", default="", help="ts.json 路径（--rule/--all 模式必填；--edge 模式不用）")
+    ap.add_argument("--rs", default="", help="rs_input.json 路径（--edge 模式锚点：选源+报告落盘位）")
+    ap.add_argument("--edge", action="store_true",
+                    help="疑点边交集式试算（pre-ts：designer 评估层上报的键不唯一疑点，"
+                         "做实当前命中面给人做材料——无 JOIN 不发散；需 --rs 与 A/B 两侧参数）")
+    ap.add_argument("--schema-a", default="", help="edge：对侧表 schema")
+    ap.add_argument("--table-a", default="", help="edge：对侧表名")
+    ap.add_argument("--key-a", default="", help="edge：对侧键（复合键逗号分隔）")
+    ap.add_argument("--where-a", default="", help="edge：对侧限定（可选）")
+    ap.add_argument("--schema-b", default="", help="edge：疑点侧表 schema（键重复的那张表）")
+    ap.add_argument("--table-b", default="", help="edge：疑点侧表名")
+    ap.add_argument("--key-b", default="", help="edge：疑点侧键（复合键逗号分隔）")
+    ap.add_argument("--where-b", default="", help="edge：疑点侧限定（可选，designer 译文里的限定）")
     ap.add_argument("--rule", default="", help="规则编码（R0001 / INIT_R0001；与 --all 二选一）")
     ap.add_argument("--all", action="store_true",
                     help="全规则批量（闸口①前用：rules+init.rules 逐规则共享单连接，单规则异常跳过）")
     ap.add_argument("--top", type=int, default=5, help="重复键样例数（默认 5）")
     args = ap.parse_args()
 
+    if args.edge:
+        missing = [n for n, v in (("--rs", args.rs), ("--schema-a", args.schema_a),
+                                  ("--table-a", args.table_a), ("--key-a", args.key_a),
+                                  ("--schema-b", args.schema_b), ("--table-b", args.table_b),
+                                  ("--key-b", args.key_b)) if not v]
+        if missing:
+            ap.error(f"--edge 需要 {' '.join(missing)}")
+        rs_path = Path(args.rs)
+        if not rs_path.exists():
+            print(f"[错误] rs_input.json 不存在: {rs_path}", file=sys.stderr)
+            sys.exit(2)
+        try:
+            lines, out = run_edge_impact(
+                rs_path,
+                side_a={"schema": args.schema_a, "table": args.table_a,
+                        "key": args.key_a, "where": args.where_a},
+                side_b={"schema": args.schema_b, "table": args.table_b,
+                        "key": args.key_b, "where": args.where_b},
+                top=args.top)
+        except ConnectionError as e:
+            print(f"[环境] 无库/连不上: {e}——环境问题归人", file=sys.stderr)
+            sys.exit(2)
+        except (ValueError, RuntimeError, json.JSONDecodeError) as e:
+            print(f"[错误] {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:  # fail-soft 终层（辅助工具永不崩盘成卡点）
+            import traceback
+            print(f"[试算内部错误·fail-soft] {type(e).__name__}: {e}——工具缺陷非输入问题；"
+                  f"堆栈留盘", file=sys.stderr)
+            _d = rs_path.parent / "diagnose" if rs_path.parent.name == "_internal" \
+                else rs_path.parent / "_internal" / "diagnose"
+            _d.mkdir(parents=True, exist_ok=True)
+            (_d / "edge_crash.log").write_text(traceback.format_exc(), encoding="utf-8")
+            sys.exit(0)
+        print("\n".join(lines))
+        print(f"\n[报告已落盘] {out}", file=sys.stderr)
+        return
+
+    if not args.ts:
+        ap.error("--rule/--all 模式需要 --ts（pre-ts 疑点边试算用 --edge）")
     if args.all == bool(args.rule.strip()):
         ap.error("--rule 与 --all 必须二选一")
 

@@ -734,3 +734,88 @@ class TestJoinSafetyAliasIndex:
         dim_sqls = [s for s in seen_sqls if "dim_cust" in s and "WHERE" in s]
         assert any("c2.status = 1" in s for s in dim_sqls), dim_sqls
         assert "JOIN 2" in joined
+
+
+class TestEdgeImpact:
+    """--edge 疑点边交集式试算（pre-ts，评估层上报增值——engineer 面；无 JOIN）：
+    B 重复组+样例 / A 多对多检出 / 重复键∩对侧=当前命中面（零命中带风险披露）。"""
+
+    def _rs(self, tmp_path):
+        import json as _json
+        d = tmp_path / "_internal"
+        d.mkdir(exist_ok=True)
+        (d / "rs_input.json").write_text(_json.dumps(
+            {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}}},
+            ensure_ascii=False), encoding="utf-8")
+        return d / "rs_input.json"
+
+    def _run(self, monkeypatch, tmp_path, handler):
+        from diagnose_fanout import run_edge_impact
+        _patch(monkeypatch, handler)
+        rs = self._rs(tmp_path)
+        lines, out = run_edge_impact(
+            rs,
+            side_a={"schema": "ods", "table": "main_f", "key": "order_id", "where": ""},
+            side_b={"schema": "ods", "table": "dim_cust", "key": "cust_code", "where": "status=1"},
+            top=3)
+        return "\n".join(lines), out
+
+    def test_zero_hit_risk_disclosure(self, monkeypatch, tmp_path):
+        """重复键全不命中对侧——当前未膨胀+未来命中即膨胀的风险披露（材料B核心）。"""
+        def h(sql):
+            if "COUNT(DISTINCT" in sql:
+                if "dim_cust" in sql:
+                    return [{"total": 120000, "d": 119963}]
+                return [{"total": 50000, "d": 50000}]
+            if "GROUP BY" in sql:  # 重复键组
+                return [{"cust_code": "c_001", "dup": 3}, {"cust_code": "c_002", "dup": 2}]
+            if "SELECT DISTINCT" in sql:  # 命中查询
+                return []
+            return []
+        text, out = self._run(monkeypatch, tmp_path, h)
+        assert "重复 37 组" in text and "cust_code = 'c_001'" in text  # 重复组+样例
+        assert "唯一" in text and "多对多" not in text       # A 侧唯一
+        assert "0 组存在于 A——当前零命中=未膨胀" in text
+        assert "未来命中即膨胀" in text
+        assert out.exists() and "edge_dim_cust" in str(out)  # 落盘 diagnose/
+
+    def test_hits_reported(self, monkeypatch, tmp_path):
+        def h(sql):
+            if "COUNT(DISTINCT" in sql:
+                return [{"total": 120000, "d": 119963}] if "dim_cust" in sql else \
+                    [{"total": 50000, "d": 50000}]
+            if "GROUP BY" in sql:
+                return [{"cust_code": "c_001", "dup": 3}, {"cust_code": "c_002", "dup": 2}]
+            if "SELECT DISTINCT" in sql:
+                return [{"order_id": "c_001"}]
+            return []
+        text, _ = self._run(monkeypatch, tmp_path, h)
+        assert "2 组重复键中 1 组的键值存在于 A——当前膨胀面 1 组" in text
+
+    def test_many_to_many_flagged(self, monkeypatch, tmp_path):
+        """对侧键也重复——多对多，此边必膨胀收敛必选。"""
+        def h(sql):
+            if "COUNT(DISTINCT" in sql:
+                return [{"total": 120000, "d": 119963}] if "dim_cust" in sql else \
+                    [{"total": 50000, "d": 49990}]
+            if "GROUP BY" in sql:
+                return [{"cust_code": "c_001", "dup": 3}]
+            if "SELECT DISTINCT" in sql:
+                return [{"order_id": "c_001"}]
+            return []
+        text, _ = self._run(monkeypatch, tmp_path, h)
+        assert "多对多：此边必膨胀，收敛必选" in text
+
+    def test_null_dup_keys_excluded(self, monkeypatch, tmp_path):
+        """NULL 键关联不上——不入命中面。"""
+        def h(sql):
+            if "COUNT(DISTINCT" in sql:
+                return [{"total": 100, "d": 98}] if "dim_cust" in sql else \
+                    [{"total": 50, "d": 50}]
+            if "GROUP BY" in sql:
+                return [{"cust_code": None, "dup": 2}, {"cust_code": "c_1", "dup": 2}]
+            if "SELECT DISTINCT" in sql:
+                return []
+            return []
+        text, _ = self._run(monkeypatch, tmp_path, h)
+        assert "1 组重复键中 0 组" in text  # NULL 组不入分母
