@@ -194,8 +194,8 @@ designer 内部会自行完成"产 design_decisions.yaml → 调 assemble_ts.py 
 ```
 Task(
   subagent_type="dws-designer",
-  description="产出TS制品包",
-  prompt="输入只读 {deliver}/_internal/rs_input_view.json（紧凑视图，唯一人读入口——rs_input.json 是脚本域文件不读），产出 TS 制品包（ts.json + {资产名}_ts.md）到 {deliver}/。视图**若含** join_type_risk 段或字段『决策』标记（1b 有人工决策时才有——没有则忽略本句），它是已拍板的输入事实，按其口径设计不重新质疑方向。"
+  description="设计（评估+TS）",
+  prompt="先做输入评估（view 的「评估清单」段→填空→一次 explore --eval）。完成判据双态：评估有疑点→回复=评估结果+疑点清单（各补一句疑似方向）并结束本轮——这是本任务的合格完成形态（你会被带答案恢复继续；先想后续设计没有价值：答案若改输入，设计全部作废）；评估无疑点→继续五层设计，产出 TS 制品包（ts.json + {资产名}_ts.md）到 {deliver}/。输入只读 {deliver}/_internal/rs_input_view.json（紧凑视图，唯一人读入口——rs_input.json 是脚本域文件不读）。视图**若含** join_type_risk 段或字段『决策』标记（1b 有人工决策时才有——没有则忽略本句），它是已拍板的输入事实，按其口径设计不重新质疑方向。"
 )
 ```
 
