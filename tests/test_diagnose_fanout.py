@@ -819,3 +819,21 @@ class TestEdgeImpact:
             return []
         text, _ = self._run(monkeypatch, tmp_path, h)
         assert "1 组重复键中 0 组" in text  # NULL 组不入分母
+
+    def test_join_type_boundary_and_affected_rows(self, monkeypatch, tmp_path):
+        """JOIN 类型边界注记（防误读'换 INNER 躲膨胀'）+ 受影响 A 行数。"""
+        def h(sql):
+            if "COUNT(DISTINCT" in sql:
+                return [{"total": 120000, "d": 119963}] if "dim_cust" in sql else \
+                    [{"total": 50000, "d": 50000}]
+            if "GROUP BY" in sql:
+                return [{"cust_code": "c_001", "dup": 3}, {"cust_code": "c_002", "dup": 2}]
+            if "SELECT DISTINCT" in sql:
+                return [{"order_id": "c_001"}]
+            if "COUNT(1) AS c" in sql:  # 受影响 A 行数
+                return [{"c": 42}]
+            return []
+        text, _ = self._run(monkeypatch, tmp_path, h)
+        assert "涉及 A 侧 42 行" in text
+        assert "膨胀面与 JOIN 类型无关" in text and "换 INNER 躲不掉膨胀" in text
+        assert "丢行面" in text  # INNER 独有风险边界说破

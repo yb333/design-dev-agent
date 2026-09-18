@@ -888,9 +888,23 @@ def run_edge_impact(rs_path: Path, side_a: dict, side_b: dict, top: int = 5) -> 
                 lines.append(f"命中：{len(dups)} 组重复键中 0 组存在于 A——当前零命中=未膨胀；"
                              f"风险=未来命中即膨胀（发散键进入主表即放大）")
             else:
+                aff_note = ""
+                try:
+                    aff_sql = (f"SELECT COUNT(1) AS c FROM {side_a['schema']}.{side_a['table']}")
+                    if side_a.get("where"):
+                        aff_sql += f" WHERE {side_a['where']} AND ({conds})"
+                    else:
+                        aff_sql += f" WHERE {conds}"
+                    aff = int(db.one(aff_sql).get("c", 0))
+                    aff_note = f"，涉及 A 侧 {aff} 行"
+                except Exception:
+                    pass  # 行数补充失败不影响命中面主结论（fail-soft）
                 hs = "；".join(_pair_cond(ak, h).strip("()") for h in hits[:top])
                 lines.append(f"命中：{len(dups)} 组重复键中 {k} 组的键值存在于 A——"
-                             f"当前膨胀面 {k} 组（例: {hs}）")
+                             f"当前膨胀面 {k} 组{aff_note}（例: {hs}）")
+            lines.append("（膨胀面与 JOIN 类型无关——INNER/LEFT 下命中组同样放大行数，"
+                         "换 INNER 躲不掉膨胀；INNER 另有丢行面[A 键无匹配即丢]，"
+                         "属另一疑点域：键值重叠率/整体试算）")
     finally:
         db.close()
     base = rs_path.parent / "diagnose" if rs_path.parent.name == "_internal" \
