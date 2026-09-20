@@ -449,6 +449,21 @@ class TestRunEval:
         assert "免实测行忽略" in out       # 免实测行不接受回灌（声明依据已定）
         assert "不在 rs_input" in out      # 未知别名报错指路
 
+    def test_dedupe_note_plain(self, tmp_path, monkeypatch):
+        """同表同键同限定只跑一次——注记白话可读且指明与谁重复（用户反馈看不懂旧文案）。"""
+        from explore import run_eval
+        p = self._setup(tmp_path, [
+            {"source_schema": "ods", "source_table": "ods_f", "source_alias": "f", "join_condition": ""},
+            {"source_schema": "ods", "source_table": "dim_cust", "source_alias": "c1",
+             "join_condition": "客户编码关联，状态有效"},
+            {"source_schema": "ods", "source_table": "dim_cust", "source_alias": "c2",
+             "join_condition": "客户编码关联，状态有效"},
+        ], {"ods.ods_f": {"order_id": "i"}, "ods.dim_cust": {"cust_code": "v"}})
+        self._fake_db(monkeypatch, [("FROM ods.dim_cust", [{"total": 50, "distinct_cnt": 50}])])
+        out = run_eval(p, "zz", "c1|cust_code|\nc2|cust_code|\n")
+        assert "与 [c1] 查同一表同键同限定——只跑一次，结论共用" in out
+        assert out.count("join_key_unique: true") == 1
+
 
 class TestEvalCli:
     """CLI 级：--eval 端到端（heredoc 'N' 引号原样到达=通道级回归）、兜底草稿、

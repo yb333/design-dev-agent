@@ -477,16 +477,16 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
 
     from schema_query import lookup_table, _similar_names
     to_run = []  # (tag, sch, tbl, key, where, gate_note)
-    seen = set()
+    seen: dict = {}  # (schema,table,key,where) -> 首个 tag（同表同键同限定只跑一次）
     cache_map: dict = {}
     for tag, sch, tbl, key, where in merged:
         if not key:
             continue
         dedup = (sch.lower(), tbl.lower(), key.lower(), where.lower())
         if dedup in seen:
-            exc.append(f"[{tag}] 同表同键同限定与前行重复——去重")
+            exc.append(f"[{tag}] 与 [{seen[dedup]}] 查同一表同键同限定——只跑一次，结论共用")
             continue
-        seen.add(dedup)
+        seen[dedup] = tag
         ck = (sch.lower(), tbl.lower())
         if ck not in cache_map:
             cache_map[ck] = lookup_table(rs_path, sch, tbl)
