@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""diagnose_fanout——关联质量定位器（闸口①批量预检 + UT 回路 6b 深查）。
+"""diagnose_fanout——关联质量定位器。一个工具两个时点，按 **ts 是否已产** 选模式：
+
+  - **评估期（无 ts.json）→ --edge 疑点边交集式试算**：designer 评估层上报"从表键不唯一"
+    疑点后，engineer 做实**当前影响**给人做材料（重复键 ∩ 对侧键 → 当前命中 K 组/
+    零命中+未来命中即膨胀风险披露）。**无需 --ts**——ts 没产正是用本模式的原因。
+  - **有 ts.json（UT 回路 6b / 闸口①）→ --rule 单规则深查 / --all 批量**：逐表键唯一性+
+    声明对照+join_safety 断言对照+整体试算严重性。
 
 ★ 解决什么：关联的三类边界场景给确定性事实（engineer 质检用，判断归人）：
   1. 类型不一致 → 1b precheck 关联键类型对账（人决策），不在本工具；
@@ -12,13 +18,20 @@
   规则 filter / condition 字面量项全部并入；**字面量值形态按列类型开局修正**
   （char 列裸数值 = 声明错误，按 '值' 执行并披露——真实 ETL 照写会炸）。
   单表故障隔离（条件失败=发现不下伪结论/跳过续跑）+全函数 fail-soft 终层（内部缺陷 exit 0 不阻断）；依赖中间表的规则闸口①不可查（表未建，UT 兜底）。
-
-  用法同构（闸口① --all 批量 / 6b --rule 单规则）：驱动自检 → 逐表唯一性+声明对照
-  （全量）+join_safety 断言对照 → 整体试算严重性。
+  --edge：只测疑点边不构造链（链级=设计后 --all 的活）；交集式无 JOIN（查询自身不发散）；
+  产物落 _internal/diagnose/（engineer 材料），永不回写 view（designer 输入面零结论级内容）。
 
 用法:
-  python diagnose_fanout.py --ts {ts路径} --rule R0001 [--top 5]   # 6b 深查
-  python diagnose_fanout.py --ts {ts路径} --all                    # 闸口①批量（分规则全量落盘）
+  # 评估期（无 ts）——疑点边试算（A=对侧，B=疑点侧；参数抄 designer 评估结果的事实行）:
+  python diagnose_fanout.py --rs {rs路径} --edge \\
+      --schema-a ods --table-a main_f --key-a order_id \\
+      --schema-b ods --table-b dim_cust --key-b cust_code --where-b "status=1"
+
+  # UT 回路 6b（有 ts）——单规则深查:
+  python diagnose_fanout.py --ts {ts路径} --rule R0001 [--top 5]
+
+  # 闸口①批量（有 ts）:
+  python diagnose_fanout.py --ts {ts路径} --all
 
 退出码: 0=诊断完成（报告 stdout + 落 _internal/diagnose/）, 1=用法/文件错, 2=无库（环境归人）
 """
@@ -918,8 +931,14 @@ def run_edge_impact(rs_path: Path, side_a: dict, side_b: dict, top: int = 5) -> 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="UT 回路关联发散定位器（逐表按声明条件查键唯一性+实锤+驱动表自检；"
-                    "--edge=pre-ts 疑点边交集式试算[评估层上报增值，engineer 面]")
+        description="关联质量定位器——一个工具两个时点：无 ts（评估期）--edge 疑点边交集式试算；"
+                    "有 ts（UT 6b/闸口①）--rule 深查 / --all 批量",
+        epilog="示例:\n"
+               "  评估期(无 ts): %(prog)s --rs {rs} --edge --schema-a ods --table-a main_f "
+               "--key-a order_id --schema-b ods --table-b dim_cust --key-b cust_code "
+               "--where-b 'status=1'\n"
+               "  UT 6b(有 ts):  %(prog)s --ts {ts} --rule R0001\n"
+               "  闸口①(有 ts):  %(prog)s --ts {ts} --all")
     ap.add_argument("--ts", default="", help="ts.json 路径（--rule/--all 模式必填；--edge 模式不用）")
     ap.add_argument("--rs", default="", help="rs_input.json 路径（--edge 模式锚点：选源+报告落盘位）")
     ap.add_argument("--edge", action="store_true",
