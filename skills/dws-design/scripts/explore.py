@@ -439,6 +439,7 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
     # plan 行元数据索引（is_main/partner——engineer 侧 --edge --doubt 别名驱动派生用）
     meta_by_alias = {r["alias"].strip().lower():
                      {"is_main": bool(r.get("is_main")), "partner": r.get("partner") or "",
+                      "partner_key": r.get("partner_key") or "",
                       "schema": r["schema"], "table": r["table"]}
                      for r in plan["run"]}
     ok_tags, exc, facts, doubts = [], [], [], []
@@ -486,7 +487,8 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
             _m = meta_by_alias.get(tag.strip().lower(), {})
             eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": "",
                               "where": where, "is_main": _m.get("is_main", False),
-                              "partner": _m.get("partner", ""), "verdict": "not_answered"})
+                              "partner": _m.get("partner", ""), "partner_key": _m.get("partner_key", ""),
+                              "verdict": "not_answered"})
             if _m.get("is_main"):
                 doubts.append(f"{tag}/{tbl}: 主表业务主键未确定（粒度无据——RS/mapping 声明的键"
                               "对不出或未填）——粒度/键声明问题，无关联边可试算")
@@ -527,7 +529,8 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                              "——给调用方核实的线索）" if sim else ""))
             eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
                               "where": where, "is_main": _m2.get("is_main", False),
-                              "partner": _m2.get("partner", ""), "verdict": "gate_missing"})
+                              "partner": _m2.get("partner", ""), "partner_key": _m2.get("partner_key", ""),
+                              "verdict": "gate_missing"})
             continue
         gate_note = "" if st == "ok" else (
             f"（键存在性未核: {'无 schema_cache' if st == 'no_cache' else f'{sch}.{tbl} 不在 cache'}）")
@@ -596,7 +599,8 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                          f"reason: \"连不上库未实测 {key} {q}\"}}")
             eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
                               "where": where, "is_main": _m.get("is_main", False),
-                              "partner": _m.get("partner", ""), "verdict": "unverified"})
+                              "partner": _m.get("partner", ""), "partner_key": _m.get("partner_key", ""),
+                              "verdict": "unverified"})
         else:
             total, uniq = got
             if total == uniq:
@@ -605,14 +609,16 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                              f"reason: \"实测: {key} {q}，{total} 行零重复\"}}")
                 eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
                                   "where": where, "is_main": _m.get("is_main", False),
-                                  "partner": _m.get("partner", ""), "verdict": "unique",
+                                  "partner": _m.get("partner", ""), "partner_key": _m.get("partner_key", ""),
+                              "verdict": "unique",
                                   "total": total})
             else:
                 facts.append(f"- {{alias: {tag}, join_key_unique: false, "
                              f"reason: \"实测: {key} {q}，{total} 行重复 {total - uniq}\", strategy: \"\"}}")
                 eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
                                   "where": where, "is_main": _m.get("is_main", False),
-                                  "partner": _m.get("partner", ""), "verdict": "non_unique",
+                                  "partner": _m.get("partner", ""), "partner_key": _m.get("partner_key", ""),
+                              "verdict": "non_unique",
                                   "total": total, "dup": total - uniq})
     parts = [f"── 评估结果（实测 {len(seen)} 项；✓ 唯一 {len(ok_tags)}："
              f"{'、'.join(ok_tags) if ok_tags else '无'}）──"]

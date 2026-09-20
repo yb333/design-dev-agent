@@ -819,7 +819,8 @@ class TestEdgeImpact:
         import dws_db
         rs = self._setup(tmp_path, self._rows(), cache_tables=self._CACHE)
         captured = []
-        ex = _patch(monkeypatch, lambda sql: (captured.append(sql) or [{"x": 1}]))
+        ex = _patch(monkeypatch, lambda sql: (
+            captured.append(sql) or ([{"groups": 3}] if "AS groups" in sql else [{"x": 1}])))
         try:
             run_edge_impact(rs, "c1")
         except Exception:
@@ -920,6 +921,100 @@ class TestEdgeImpact:
             {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}}}), encoding="utf-8")
         with pytest.raises(ValueError, match="先让 designer 跑一次"):
             run_edge_impact(d / "rs_input.json", "c1")
+
+    def test_zero_param_batch_all_doubts(self, monkeypatch, tmp_path):
+        """零参数批量化（2026-09-20 复调：engineer 常规场景直接跑脚本零输入——
+        疑点清单落盘里现成，无需人挑）：自动跑全部 verdict=non_unique 从表行，
+        逐边结论+◆分隔+合并落盘 edge_batch.md。"""
+        from diagnose_fanout import run_edge_impact
+        rows = self._rows() + [
+            {"alias": "c9", "schema": "ods", "table": "dim_org", "key": "org_code",
+             "where": "", "is_main": False, "partner": "f", "verdict": "non_unique"},
+        ]
+        cache = dict(self._CACHE); cache["ods.dim_org"] = {"org_code": "v"}
+        rs = self._setup(tmp_path, rows, cache_tables=cache)
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 2}]),
+            ("AS total FROM ods.dim_cust", [{"total": 100}]),
+            ("AS total FROM ods.dim_org", [{"total": 80}]),
+            ("AS total FROM ods.main_f", [{"total": 50000}]),
+            ("AS hits", [{"hits": 0}]),
+            ("AS d FROM", [{"total": 50000, "d": 50000}]),
+        ])
+        stdout, out, _full = run_edge_impact(rs)  # ← 零参数
+        text = "\n".join(stdout)
+        assert "◆ c1" in text and "◆ c9" in text          # 两条疑点都跑了
+        assert text.count("当前零命中=未膨胀") == 2
+        assert "edge_batch" in str(out) and out.exists()   # 合并落盘
+
+    def test_batch_per_edge_failsoft(self, monkeypatch, tmp_path):
+        """批量逐边容错：一条边闸拦（键不存在）出错误行，另一条照跑。"""
+        from diagnose_fanout import run_edge_impact
+        rows = self._rows() + [
+            {"alias": "c8", "schema": "ods", "table": "dim_bad", "key": "ghost_key",
+             "where": "", "is_main": False, "partner": "f", "verdict": "non_unique"},
+        ]
+        rs = self._setup(tmp_path, rows, cache_tables=self._CACHE)  # dim_bad 不在 cache→闸拦
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 2}]),
+            ("AS total FROM ods.dim_cust", [{"total": 100}]),
+            ("AS total FROM ods.main_f", [{"total": 50000}]),
+            ("AS hits", [{"hits": 0}]),
+            ("AS d FROM", [{"total": 50000, "d": 50000}]),
+        ])
+        stdout, _, _ = run_edge_impact(rs)
+        text = "\n".join(stdout)
+        assert "[c8] ✗" in text and "不在 schema_cache" in text   # 坏边=错误行
+        assert "◆ c1" in text and "当前零命中=未膨胀" in text      # 好边照跑
+
+    def test_no_doubts_clean_message(self, tmp_path):
+        from diagnose_fanout import run_edge_impact
+        rows = [self._rows()[0]]  # 只有主表 unique 行
+        rs = self._setup(tmp_path, rows)
+        with pytest.raises(ValueError, match="无可试算边"):
+            run_edge_impact(rs)
+
+    def test_arity_mismatch_clean_error_not_crash(self, tmp_path):
+        """键复合度不匹配（内网实测 IndexError 崩溃的根因）——清晰报错不崩。"""
+        from diagnose_fanout import run_edge_impact
+        rows = [
+            {"alias": "f", "schema": "ods", "table": "main_f", "key": "order_id",
+             "where": "", "is_main": True, "partner": "", "verdict": "unique"},
+            {"alias": "c1", "schema": "ods", "table": "dim_cust", "key": "code,renter_id",
+             "where": "", "is_main": False, "partner": "f", "verdict": "non_unique"},
+        ]  # 无 partner_key → 兜底对侧自身键（单列）vs 疑点复合键（2 列）
+        cache = dict(self._CACHE); cache["ods.dim_cust"].update({"code": "v", "renter_id": "v"})
+        rs = self._setup(tmp_path, rows, cache_tables=cache)
+        with pytest.raises(ValueError, match="复合度不匹配"):
+            run_edge_impact(rs, "c1")
+
+    def test_partner_key_paired_derivation(self, monkeypatch, tmp_path):
+        """对侧键=关联条件配对列（partner_key）：B 复合 2 列时 A 也 2 列（同 pair
+        收集——复合度天然一致，不再兜底对侧自身键）。"""
+        from diagnose_fanout import run_edge_impact
+        rows = [
+            {"alias": "f", "schema": "ods", "table": "main_f", "key": "order_id",
+             "where": "", "is_main": True, "partner": "", "verdict": "unique"},
+            {"alias": "c1", "schema": "ods", "table": "dim_cust", "key": "code,renter_id",
+             "where": "", "is_main": False, "partner": "f", "partner_key": "cust_code,tenant_id",
+             "verdict": "non_unique"},
+        ]
+        cache = dict(self._CACHE)
+        cache["ods.dim_cust"].update({"code": "v", "renter_id": "v"})
+        cache["ods.main_f"].update({"cust_code": "v", "tenant_id": "v"})
+        rs = self._setup(tmp_path, rows, cache_tables=cache)
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 1}]),
+            ("AS total FROM ods.dim_cust", [{"total": 100}]),
+            ("AS total FROM ods.main_f", [{"total": 50000}]),
+            ("AS hits", [{"hits": 0}]),
+            ("SELECT DISTINCT cust_code, tenant_id", [{"total": 50000, "d": 50000}]),
+        ])
+        stdout, _, _ = run_edge_impact(rs, "c1")
+        text = "\n".join(stdout)
+        assert "对侧 ods.main_f key=(cust_code,tenant_id)" in text    # 配对列做 A 键
+        assert "对侧键=关联条件配对列" in text                          # 派生来源披露
+
 
 
 class TestCompositeKeyStatDws:

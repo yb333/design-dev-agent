@@ -58,7 +58,7 @@ def extract_join_facts(condition: str, alias: str) -> dict:
     """
     cond = str(condition or "").strip()
     facts = {"structured": False, "key": "", "where": "", "treat_hit": False,
-             "treat_signal": "", "partition_cols": [], "partner": ""}
+             "treat_signal": "", "partition_cols": [], "partner": "", "partner_cols": []}
     if not cond:
         return facts
     m = _RN_EQ_RE.search(cond)
@@ -74,19 +74,20 @@ def extract_join_facts(condition: str, alias: str) -> dict:
         facts["partition_cols"] = [re.sub(r"^[a-z_]\w*\.", "", c.strip(), flags=re.IGNORECASE)
                                    for c in pm.group(1).split(",")]
     al = (alias or "").strip().lower()
-    my_cols, cross_pair, partner = [], False, ""
+    my_cols, other_cols, cross_pair, partner = [], [], False, ""
     for left, right in parse_join_pairs(cond):
         la = (left[0] or "").strip().lower()
         ra = (right[0] or "").strip().lower()
         if la == al and ra and ra != al:
-            my_cols.append(left[1]); cross_pair = True
+            my_cols.append(left[1]); other_cols.append(right[1]); cross_pair = True
             partner = partner or (right[0] or "").strip()
         elif ra == al and la and la != al:
-            my_cols.append(right[1]); cross_pair = True
+            my_cols.append(right[1]); other_cols.append(left[1]); cross_pair = True
             partner = partner or (left[0] or "").strip()
     if my_cols and cross_pair:
         facts["structured"] = True
         facts["partner"] = partner
+        facts["partner_cols"] = other_cols  # 与 key 按同一等值对配对——复合度一致
         seen, kk = set(), []
         for c in my_cols:
             if c.lower() not in seen:
@@ -157,6 +158,7 @@ def build_eval_plan_data(rs_input: dict) -> dict:
             run.append({"alias": alias, "schema": sch, "table": tbl, "key": f["key"],
                         "where": f["where"], "prefilled": True,
                         "is_main": False, "partner": f.get("partner") or "",
+                        "partner_key": ",".join(f.get("partner_cols") or []),
                         "note": f"预填自结构化条件（核一眼）{'〔precheck已核〕' if verified else ''}  {src_note}"})
         elif not cond:
             run.append({"alias": alias, "schema": sch, "table": tbl, "key": "", "where": "",

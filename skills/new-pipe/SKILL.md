@@ -209,10 +209,10 @@ designer 完成后用 `ls` 验证 `{deliver}/` 下已生成 ts.json 与 `{资产
 2. **做实**（R1 套路封顶 2 步）：⑤查 mapping——答案在既有材料里=**自答**，Task 带 task_id 恢复 designer 会话续跑（不问人）；①②查证原文把差异摆清；④不可验，直接进材料；③**必跑边级试算**（人拿"当前不膨胀但未来命中即膨胀"和拿"可能发散"是完全不同的决策；**无试算结论进问人材料=裸转发**）——**无需 --ts**（评估期 ts 未产正用此模式；--rule/--all 是有 ts 后 UT/闸口① 的用法）：
 
 ```
-python {skill目录}/scripts/diagnose_fanout.py --rs {deliver}/_internal/rs_input.json --edge --doubt {疑点别名}
+python {skill目录}/scripts/diagnose_fanout.py --rs {deliver}/_internal/rs_input.json --edge
 ```
 
-   **只传疑点别名**（抄评估结果的疑点行，如 c1）——表/键/限定从 designer `--eval` 落盘的 `eval_result.json` 自动派生，对侧自动（落盘 partner > 主表推断，链式边加 `--partner {别名}`）；主表粒度线疑点（③b）会被工具拒绝并指路——不跑试算，材料直接带三选。参数手传兜底：`--override --join-key-b/--where-b ...`（走同一存在性闸）。
+   **零参数直接跑**：自动试算落盘里全部"从表键不唯一"疑点（逐边结论+◆分隔+合并落盘）——疑点清单 designer `--eval` 已落盘 `eval_result.json`，表/键/限定/对侧全部自动派生（对侧键=关联条件配对列，复合度天然一致；自然语言边兜底主表推断+披露）。单疑点复测才用 `--doubt {别名}`（链式边加 `--partner`）；主表粒度线疑点（③b）会被工具拒绝并指路——不跑试算，材料直接带三选。参数手传兜底：`--override --join-key-b/--where-b ...`（走同一存在性闸）。
 3. **攒批问人一次**（四件套：实测事实/根因方向/影响[边试算结论]/选项三选）——疑点全列齐，不逐条拉扯；
 4. **按答案三路由**：修源头/退 BA → 终止本轮（输出终止报告：上报事实+人的选择+重启条件[源端修正后重跑步骤 1]，评估层设计作废是预期内）｜采纳验证过的条件继续 → 带**裁决**恢复 designer 会话（只带裁决不带试算分析）｜接受+收敛策略 → 带策略恢复（designer 落进 join_safety.strategy）。
 

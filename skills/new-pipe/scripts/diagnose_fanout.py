@@ -862,36 +862,92 @@ def _edge_gate(rs_path: Path, side: dict, keys: list, side_label: str) -> None:
                          f"不是换近名字段")
 
 
-def run_edge_impact(rs_path: Path, doubt: str, partner: str = "",
+def run_edge_impact(rs_path: Path, doubt: str = "", partner: str = "",
                     override: dict = None, top: int = 5) -> tuple[list[str], Path, list[str]]:
-    """疑点边影响试算（pre-ts，2026-09-20 重写为单侧接口）：engineer 只传疑点别名
-    --doubt c1（对侧自动：落盘 partner > --partner > 主表推断）——表/键/限定全部从
-    --eval 落盘事实派生，转录出错面归零；--override 兜底通道手传键/限定（走同一
-    存在性闸；场景=落盘缺失/显式覆盖复测）。
+    """疑点边影响试算（pre-ts，2026-09-20 单侧接口；同日复调：**零参数批量化**——
+    doubt 留空=自动跑落盘里全部"从表键不唯一"疑点[verdict=non_unique 且非主表]，
+    engineer 常规场景直接跑脚本零输入；--doubt 仅作单疑点过滤[复测用]）。
 
-    探测=对"唯一重复键集"的 EXISTS 计数（GROUP BY 出的键集按键唯一——数学上不可能
-    发散；无 OR 枚举无上限截断，性能与重复组数量解耦）。主表粒度线疑点（is_main）
-    无边可试算——直接拒绝并指向③b 路由（补键/退BA/收敛，材料直接带）。
-    返回 (stdout 结论行, 报告落盘路径, 全量报告行——stdout 砍常态噪声只出结论)。"""
+    参数派生链：疑点行（eval_result.json）→ 表/键/限定；对侧键=**等值对配对列**
+    （partner_key——`f.x=c1.code AND f.y=c1.renter_id` 的 A 侧键=x,y，与疑点键
+    复合度天然一致；旧版用对侧自身键，复合度不匹配直接 IndexError 崩溃）>
+    对侧行自身键兜底（自然语言边，披露）。探测=对唯一重复键集 EXISTS 计数。
+    批量模式逐边 fail-soft（单边参数错/异常出错误行，不杀整批）。
+    返回 (stdout 结论行, 报告路径, 全量报告行)。"""
     ev = _load_eval_result(rs_path)
     rows = {r["alias"].strip().lower(): r for r in (ev.get("rows") or [])}
-    dl = (doubt or "").strip().lower()
+    override = override or {}
+
+    if doubt:
+        targets = [doubt.strip().lower()]
+    else:
+        targets = [al for al, r in rows.items()
+                   if r.get("verdict") == "non_unique" and not r.get("is_main")]
+        if not targets:
+            raise ValueError("落盘里没有'从表键不唯一'疑点（verdict=non_unique 的从表行为空）——"
+                             "无可试算边；③b 主表粒度/④口径类疑点不走本工具，材料直接组")
+
+    connect = _target_schema_from_rs(rs_path)
+    if not connect:
+        raise ValueError("rs_input 里取不到 meta.target.f_table.schema（选源锚点）")
+    stdout_all: list[str] = []
+    full_all: list[str] = []
+    out_name = "edge_batch.md"  # 单边成功后按疑点表名覆盖（先验校验可能抛错，不预取）
+    db = None  # 懒连接：目标校验（别名/主表/键/闸）不过不发起任何连库
+    try:
+        for dl in targets:
+            if len(targets) > 1:
+                stdout_all.append(f"◆ {dl}")
+                full_all.append(f"◆ {dl}")
+            try:
+                prep = _edge_prepare(rs_path, rows, ev, dl,
+                                     partner=partner, override=override)
+                if db is None:
+                    db = _Db(connect)
+                s_lines, f_lines, tbl = _edge_exec(db, prep, top=top)
+                stdout_all.extend(s_lines)
+                full_all.extend(f_lines)
+                if len(targets) == 1:
+                    out_name = f"edge_{tbl}.md"
+            except (ValueError, RuntimeError) as e:
+                if len(targets) == 1:
+                    raise  # 单疑点过滤模式=严格（调用方点名要这条边，错误直抛给人看）
+                # 批量模式逐边 fail-soft：单边参数错/派生失败出错误行，不杀整批
+                msg = f"[{dl}] ✗ {e}"
+                stdout_all.append(msg)
+                full_all.append(msg)
+    finally:
+        if db is not None:
+            db.close()
+    base = rs_path.parent / "diagnose" if rs_path.parent.name == "_internal" \
+        else rs_path.parent / "_internal" / "diagnose"
+    base.mkdir(parents=True, exist_ok=True)
+    out = base / out_name
+    out.write_text("# 疑点边试算（" + ("、".join(targets)) + "）\n\n```\n"
+                   + "\n".join(full_all) + "\n```\n", encoding="utf-8")
+    return stdout_all, out, full_all
+
+
+def _edge_prepare(rs_path: Path, rows: dict, ev: dict, doubt_alias: str,
+                  partner: str = "", override: dict = None) -> dict:
+    """单边的参数派生+全部校验（**零连库**——别名/主表/键/对侧/复合度/存在性闸，
+    任一不过 ValueError，不发起任何 SQL）。返回执行所需的全部上下文。"""
+    override = override or {}
+    dl = doubt_alias.strip().lower()
     if dl not in rows:
-        raise ValueError(f"疑点别名 '{doubt}' 不在 eval_result.json（可用: "
+        raise ValueError(f"疑点别名 '{doubt_alias}' 不在 eval_result.json（可用: "
                          f"{sorted(rows)}）——对照评估结果的疑点行抄别名")
     drow = rows[dl]
     if drow.get("is_main"):
-        raise ValueError(f"'{doubt}' 是主表粒度线（业务主键问题）——无关联边可试算；"
-                         f"③b 路由：材料直接带三选（补键[复合]/退BA修数据/收敛策略），不跑本工具")
-    override = override or {}
+        raise ValueError(f"'{doubt_alias}' 是主表粒度线（业务主键问题）——无边可试算；"
+                         f"③b 路由：材料直接带三选（补键[复合]/退BA修数据/收敛策略）")
     side_b = {"schema": drow["schema"], "table": drow["table"],
               "key": override.get("join_key_b") or drow.get("key") or "",
               "where": override.get("where_b", drow.get("where") or "")}
     if not side_b["key"]:
-        raise ValueError(f"疑点行 '{doubt}' 落盘无键（未答行）——先补答重跑 --eval，"
+        raise ValueError(f"疑点行 '{doubt_alias}' 落盘无键（未答行）——先补答重跑 --eval，"
                          f"或 --override --join-key-b 手传")
 
-    # 对侧解析：--partner > 落盘 partner > 主表推断（披露）
     pl = (partner or "").strip().lower()
     partner_note = ""
     if not pl:
@@ -904,124 +960,114 @@ def run_edge_impact(rs_path: Path, doubt: str, partner: str = "",
         raise ValueError(f"对侧别名 '{partner or pl}' 不在 eval_result.json（可用: "
                          f"{sorted(rows)}）——链式边用 --partner 指定真实对侧")
     prow = rows[pl]
+    # 对侧键派生链：override > 等值对配对列（partner_key——复合度与疑点键天然一致）>
+    # 对侧行自身键（自然语言兜底，披露）
+    a_key = override.get("join_key_a") or (drow.get("partner_key") or "").strip() \
+        or (prow.get("key") or "")
+    if not a_key:
+        raise ValueError(f"对侧键派生不出：疑点行无 partner_key（自然语言边）且对侧行 "
+                         f"'{pl}' 无自身键——--override --join-key-a 手传")
+    if (drow.get("partner_key") or "").strip() and not override.get("join_key_a"):
+        partner_note = "（对侧键=关联条件配对列）" + partner_note
     side_a = {"schema": prow["schema"], "table": prow["table"],
-              "key": override.get("join_key_a") or prow.get("key") or "",
-              "where": override.get("where_a", prow.get("where") or "")}
-    if not side_a["key"]:
-        raise ValueError(f"对侧行 '{pl}' 落盘无键——主表未答业务主键？先补答重跑 --eval，"
-                         f"或 --override --join-key-a 手传")
+              "key": a_key, "where": override.get("where_a", prow.get("where") or "")}
 
     ak, bk = _edge_keys(side_a["key"]), _edge_keys(side_b["key"])
+    if len(ak) != len(bk):
+        raise ValueError(f"键复合度不匹配：疑点 {len(bk)} 列[{'/'.join(bk)}] vs 对侧 "
+                         f"{len(ak)} 列[{'/'.join(ak)}]——对照关联声明原文的对侧列；"
+                         f"异构边用 --override --join-key-a 指定真实对侧键")
     for s, ks in ((side_a, ak), (side_b, bk)):
         _edge_ident(s["schema"], s["table"], *ks)
     _edge_gate(rs_path, side_b, bk, "疑点")
     _edge_gate(rs_path, side_a, ak, "对侧")
-    connect = _target_schema_from_rs(rs_path)
-    if not connect:
-        raise ValueError("rs_input 里取不到 meta.target.f_table.schema（选源锚点）")
+    return {"side_a": side_a, "side_b": side_b, "ak": ak, "bk": bk,
+            "partner_note": partner_note, "doubt_alias": doubt_alias}
+
+
+def _edge_exec(db: "_Db", prep: dict, top: int = 5) -> tuple[list[str], list[str], str]:
+    """单边查询执行（prepare 通过后；db 由外层传入复用连接）。
+    返回 (stdout 结论行, 全量行, 疑点表名)。"""
+    side_a, side_b = prep["side_a"], prep["side_b"]
+    ak, bk = prep["ak"], prep["bk"]
+    partner_note = prep["partner_note"]
 
     def _nullguard(keys):
         return " AND ".join(f"{k} IS NOT NULL" for k in keys)
 
-    # 唯一重复键集（GROUP BY 出的键集按键唯一——对它 EXISTS 数学上不发散；
-    # NULL 键关联不上，集内剔除；有限定时 NULL 守卫并入限定 AND 连接）
     _bw = (f"({side_b['where']}) AND {_nullguard(bk)}" if side_b.get("where")
            else _nullguard(bk))
     dup_sql = (f"SELECT {', '.join(bk)}, COUNT(1) AS dup FROM {side_b['schema']}.{side_b['table']}"
                f" WHERE {_bw} GROUP BY {', '.join(bk)} HAVING COUNT(1) > 1")
     on_pair = " AND ".join(f"m.{ak[i]} = d.{bk[i]}" for i in range(len(bk)))
+    _a_where = f" AND ({side_a['where']})" if side_a.get("where") else ""
 
     stdout_lines: list[str] = []
     full_lines: list[str] = []
-    db = _Db(connect)
-    try:
-        # B 侧统计 + 重复组数
-        bs = db.one(f"SELECT COUNT(1) AS total FROM {side_b['schema']}.{side_b['table']}"
-                    + (f" WHERE ({side_b['where']})" if side_b.get("where") else ""))
-        dup_n_row = db.one(f"SELECT COUNT(1) AS groups FROM ({dup_sql}) _d")
-        dup_groups = int(dup_n_row.get("groups") or 0)
-        b_line = (f"疑点侧 {side_b['schema']}.{side_b['table']} key=({side_b['key']})"
-                  + (f" 限定({side_b['where']})" if side_b.get("where") else "")
-                  + f"：{bs.get('total', 0)} 行，重复键 {dup_groups} 组")
-        stdout_lines.append(b_line)
-        full_lines.append(b_line)
-        # 重复组样例（仅落盘）
-        if dup_groups:
-            sample_rows = db.rows(dup_sql + f" ORDER BY dup DESC LIMIT {top}")
-            if sample_rows:
-                sample = "；".join((_pair_cond(bk, r).strip("()") + f" ×{int(r.get('dup', 0))}")
-                                   for r in sample_rows)
-                full_lines.append(f"  重复组样例: {sample}")
-        # 对侧唯一性（多对多检出）+ 命中面（EXISTS 对唯一集）
-        a_stat = db.one(f"SELECT COUNT(1) AS total FROM {side_a['schema']}.{side_a['table']}"
+    # B 侧统计 + 重复组数
+    bs = db.one(f"SELECT COUNT(1) AS total FROM {side_b['schema']}.{side_b['table']}"
+                + (f" WHERE ({side_b['where']})" if side_b.get("where") else ""))
+    dup_groups = int(db.one(f"SELECT COUNT(1) AS groups FROM ({dup_sql}) _d").get("groups") or 0)
+    b_line = (f"疑点侧 {side_b['schema']}.{side_b['table']} key=({side_b['key']})"
+              + (f" 限定({side_b['where']})" if side_b.get("where") else "")
+              + f"：{bs.get('total', 0)} 行，重复键 {dup_groups} 组")
+    stdout_lines.append(b_line); full_lines.append(b_line)
+    if dup_groups:
+        sample_rows = db.rows(dup_sql + f" ORDER BY dup DESC LIMIT {top}")
+        if sample_rows:
+            sample = "；".join((_pair_cond(bk, r).strip("()") + f" ×{int(r.get('dup', 0))}")
+                               for r in sample_rows)
+            full_lines.append(f"  重复组样例: {sample}")
+    # 对侧唯一性（多对多检出）
+    if len(ak) == 1:
+        a_uniq = db.one(f"SELECT COUNT(1) AS total, COUNT(DISTINCT {ak[0]}) AS d "
+                        f"FROM {side_a['schema']}.{side_a['table']}"
                         + (f" WHERE ({side_a['where']})" if side_a.get("where") else ""))
-        hit_row = db.one(f"SELECT COUNT(1) AS hits FROM ({dup_sql}) d "
-                         f"WHERE EXISTS (SELECT 1 FROM {side_a['schema']}.{side_a['table']} m"
-                         + (f" WHERE ({side_a['where']}) AND {on_pair}" if side_a.get("where")
-                            else f" WHERE {on_pair}") + ")")
-        hits = int(hit_row.get("hits") or 0)
-        ak_single = len(ak) == 1
-        # 对侧键唯一性（多对多判定）：A 侧 total vs distinct
-        if ak_single:
-            a_uniq = db.one(f"SELECT COUNT(1) AS total, COUNT(DISTINCT {ak[0]}) AS d "
-                            f"FROM {side_a['schema']}.{side_a['table']}"
-                            + (f" WHERE ({side_a['where']})" if side_a.get("where") else ""))
-        else:
-            a_uniq = db.one(f"SELECT COUNT(1) AS total, (SELECT COUNT(1) FROM (SELECT DISTINCT "
-                            f"{', '.join(ak)} FROM {side_a['schema']}.{side_a['table']}"
-                            + (f" WHERE ({side_a['where']})" if side_a.get("where") else "")
-                            + f") _dx) AS d FROM {side_a['schema']}.{side_a['table']}"
-                            + (f" WHERE ({side_a['where']})" if side_a.get("where") else ""))
-        a_dup = int(a_uniq.get("total") or 0) - int(a_uniq.get("d") or 0)
-        a_line = (f"对侧 {side_a['schema']}.{side_a['table']} key=({side_a['key']})"
-                  + (f" 限定({side_a['where']})" if side_a.get("where") else "")
-                  + f"：{a_uniq.get('total', 0)} 行"
-                  + (f"，键重复 {a_dup}——多对多：此边必膨胀，收敛必选" if a_dup else "，键唯一"))
-        stdout_lines.append(a_line)
-        full_lines.append(a_line)
-        # 命中结论
-        if dup_groups == 0:
-            hit_line = "疑点侧键唯一——无需本试算（疑点可能已失效，复核 --eval）"
-            stdout_lines.append(hit_line); full_lines.append(hit_line)
-        elif hits == 0:
+    else:
+        aw = (f" WHERE ({side_a['where']})" if side_a.get("where") else "")
+        a_uniq = db.one(f"SELECT COUNT(1) AS total, (SELECT COUNT(1) FROM (SELECT DISTINCT "
+                        f"{', '.join(ak)} FROM {side_a['schema']}.{side_a['table']}{aw}) _dx) "
+                        f"AS d FROM {side_a['schema']}.{side_a['table']}{aw}")
+    a_dup = int(a_uniq.get("total") or 0) - int(a_uniq.get("d") or 0)
+    a_line = (f"对侧 {side_a['schema']}.{side_a['table']} key=({side_a['key']})"
+              + (f" 限定({side_a['where']})" if side_a.get("where") else "")
+              + f"：{a_uniq.get('total', 0)} 行"
+              + (f"，键重复 {a_dup}——多对多：此边必膨胀，收敛必选" if a_dup else "，键唯一"))
+    stdout_lines.append(a_line); full_lines.append(a_line)
+    # 命中面（EXISTS 对唯一集）
+    if dup_groups == 0:
+        hit_line = "疑点侧键唯一——无需本试算（疑点可能已失效，复核 --eval）"
+        stdout_lines.append(hit_line); full_lines.append(hit_line)
+    else:
+        hits = int(db.one(f"SELECT COUNT(1) AS hits FROM ({dup_sql}) d "
+                          f"WHERE EXISTS (SELECT 1 FROM {side_a['schema']}.{side_a['table']} m "
+                          f"WHERE {on_pair}{_a_where})").get("hits") or 0)
+        if hits == 0:
             hit_line = (f"命中：{dup_groups} 组重复键中 0 组存在于对侧——当前零命中=未膨胀；"
                         f"风险=未来命中即膨胀（发散键进入主表即放大）")
             stdout_lines.append(hit_line); full_lines.append(hit_line)
         else:
-            aff_row = db.one(f"SELECT COUNT(1) AS c FROM {side_a['schema']}.{side_a['table']} m "
+            aff = int(db.one(f"SELECT COUNT(1) AS c FROM {side_a['schema']}.{side_a['table']} m "
                              f"WHERE EXISTS (SELECT 1 FROM ({dup_sql}) d WHERE {on_pair})"
-                             + ("" if not side_a.get("where")
-                                else f" AND ({side_a['where']})"))
-            aff = int(aff_row.get("c") or 0)
+                             f"{_a_where}").get("c") or 0)
             hit_line = (f"命中：{dup_groups} 组重复键中 {hits} 组存在于对侧——"
                         f"当前膨胀面 {hits} 组，涉及对侧 {aff} 行")
             stdout_lines.append(hit_line); full_lines.append(hit_line)
-            # 命中样例（仅落盘）
             hs = db.rows(f"SELECT DISTINCT {', '.join(ak)} FROM {side_a['schema']}.{side_a['table']} m "
                          f"WHERE EXISTS (SELECT 1 FROM ({dup_sql}) d WHERE {on_pair})"
-                         + ("" if not side_a.get("where") else f" AND ({side_a['where']})")
-                         + f" LIMIT {top}")
+                         f"{_a_where} LIMIT {top}")
             if hs:
                 full_lines.append("  命中样例: " + "；".join(_pair_cond(ak, h).strip("()") for h in hs))
-        bnote = ("（膨胀面与 JOIN 类型无关——INNER/LEFT 下命中组同样放大，换 INNER 躲不掉膨胀；"
-                 "INNER 另有丢行面[对侧键无匹配即丢]，属另一疑点域：键值重叠率/整体试算）")
-        stdout_lines.append(bnote); full_lines.append(bnote)
-        if partner_note:
-            stdout_lines.append(partner_note); full_lines.append(partner_note)
-        full_lines.append("")
-        full_lines.append("—— 查询原文（审计可回溯）——")
-        full_lines.append(f"[B 重复键集] {dup_sql}")
-        full_lines.append(f"[命中面] SELECT COUNT(1) FROM ({dup_sql}) d WHERE EXISTS(... m {on_pair})")
-    finally:
-        db.close()
-    base = rs_path.parent / "diagnose" if rs_path.parent.name == "_internal" \
-        else rs_path.parent / "_internal" / "diagnose"
-    base.mkdir(parents=True, exist_ok=True)
-    out = base / f"edge_{side_b['table']}.md"
-    out.write_text("# 疑点边试算 " + f"{doubt}: {side_b['table']}.{side_b['key']} ↔ "
-                   f"{side_a['table']}.{side_a['key']}\n\n```\n" + "\n".join(full_lines) + "\n```\n",
-                   encoding="utf-8")
-    return stdout_lines, out, full_lines
+    bnote = ("（膨胀面与 JOIN 类型无关——INNER/LEFT 下命中组同样放大，换 INNER 躲不掉膨胀；"
+             "INNER 另有丢行面[对侧键无匹配即丢]，属另一疑点域：键值重叠率/整体试算）")
+    stdout_lines.append(bnote); full_lines.append(bnote)
+    if partner_note:
+        stdout_lines.append(partner_note); full_lines.append(partner_note)
+    full_lines.append("")
+    full_lines.append("—— 查询原文（审计可回溯）——")
+    full_lines.append(f"[B 重复键集] {dup_sql}")
+    full_lines.append(f"[命中面] SELECT COUNT(1) FROM ({dup_sql}) d WHERE EXISTS(... m {on_pair})")
+    return stdout_lines, full_lines, side_b["table"]
 
 
 def main():
@@ -1029,8 +1075,9 @@ def main():
         description="关联质量定位器——一个工具两个时点：无 ts（评估期）--edge 疑点边交集式试算；"
                     "有 ts（UT 6b/闸口①）--rule 深查 / --all 批量",
         epilog="示例:\n"
-               "  评估期(无 ts) 主路径: %(prog)s --rs {rs} --edge --doubt c1"
-               "（对侧自动派生；链式边加 --partner b）\n"
+               "  评估期(无 ts) 常规零参数: %(prog)s --rs {rs} --edge"
+               "（自动跑落盘全部疑点边，逐边结论+合并落盘）\n"
+               "  单疑点复测:            %(prog)s --rs {rs} --edge --doubt c1（链式边加 --partner b）\n"
                "  评估期 兜底通道:     %(prog)s --rs {rs} --edge --doubt c1 --override"
                " --join-key-b code --where-b 'status=1'\n"
                "  UT 6b(有 ts):  %(prog)s --ts {ts} --rule R0001\n"
@@ -1042,7 +1089,8 @@ def main():
                          "做实当前命中面给人做材料——对唯一重复键集 EXISTS 探测（数学上不发散）；"
                          "参数从 --eval 落盘事实派生，只需 --doubt 疑点别名")
     ap.add_argument("--doubt", default="",
-                    help="edge 主路径：疑点别名（抄评估结果的疑点行，如 c1）——表/键/限定自动派生")
+                    help="edge 可选过滤：疑点别名（缺省=零参数批量，自动跑落盘全部'从表键不唯一'"
+                         "疑点——常规场景直接 --edge 零参数；--doubt 仅单疑点复测用）")
     ap.add_argument("--partner", default="",
                     help="edge 可选：对侧别名（链式边才指定；缺省=落盘 partner 或主表推断）")
     ap.add_argument("--override", action="store_true",
@@ -1060,9 +1108,8 @@ def main():
     if args.edge:
         if not args.rs:
             ap.error("--edge 需要 --rs（锚点+落盘派生源）")
-        if not args.doubt:
-            ap.error("--edge 需要 --doubt（疑点别名——抄评估结果的疑点行；"
-                     "全参数手传也以别名为锚：表从 rs_input 反解）")
+        # --doubt 可选：缺省=零参数批量（自动跑落盘里全部"从表键不唯一"疑点——
+        # engineer 常规场景直接跑脚本，疑点清单落盘里现成，无需挑）
         _manual = {"join_key_b": args.join_key_b, "where_b": args.where_b,
                    "join_key_a": args.join_key_a, "where_a": args.where_a}
         if any(_manual.values()) and not args.override:
@@ -1074,7 +1121,7 @@ def main():
             sys.exit(2)
         try:
             lines, out, _full = run_edge_impact(
-                rs_path, args.doubt, partner=args.partner, override=override,
+                rs_path, doubt=args.doubt, partner=args.partner, override=override,
                 top=args.top)
         except ConnectionError as e:
             print(f"[环境] 无库/连不上: {e}——环境问题归人", file=sys.stderr)
