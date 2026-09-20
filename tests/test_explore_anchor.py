@@ -76,13 +76,15 @@ class TestCompositeKey:
     def test_join_key_sql_composite(self):
         from explore import build_join_key_sql
         sql = build_join_key_sql("dim", "t", "tenant_id, order_no", "is_current = 1")
-        assert "COUNT(DISTINCT (tenant_id, order_no))" in sql
+        # 2026-09-18 改形：DWS COUNT(DISTINCT) 只收单表达式——复合键子查询先 DISTINCT 再计数
+        assert "SELECT DISTINCT tenant_id, order_no" in sql
+        assert "COUNT(DISTINCT" not in sql
         assert "COUNT(1)" in sql and "count(*)" not in sql
 
     def test_overlap_sql_composite_row_text(self):
         from explore import build_overlap_sample_sql
-        # 复合键行构造器整体转 text（单列输出，交集逻辑不变）
-        assert "(x, y)::text" in build_overlap_sample_sql("ods", "t1", "x,y")
+        # 2026-09-18 改形：record cast (x,y)::text 在 DWS 不可靠——各列 ::text 拼接
+        assert "x::text || '~|~' || y::text" in build_overlap_sample_sql("ods", "t1", "x,y")
         assert "k::text" in build_overlap_sample_sql("ods", "t1", "k")
 
     def test_split_key(self):
