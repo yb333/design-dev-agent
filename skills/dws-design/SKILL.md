@@ -50,7 +50,7 @@ description: >-
 
 ### 评估层（第0层之前）— 输入评估：这份输入设计得下去吗
 
-**想清楚**：三问——①每张源表什么粒度（明细还是汇总）？②每条 join_condition 的键唯一性有依据吗（输入声明 / 实测 / 疑点）？③输入存疑标记各是什么？依据优先级：已核标记与免实测声明（直接用）→ 实测 → 疑点上报。
+**想清楚**：三问——①每张源表什么粒度（明细还是汇总）？②每条 join_condition 的键唯一性有依据吗（输入声明 / 实测 / 疑点）？③输入存疑标记各是什么？依据优先级：免实测声明（直接用）→ 实测 → 疑点上报。**〔存在性+类型已核，唯一性未测〕标记不构成唯一性依据**——它只担保字段存在/类型，唯一性必须 `--eval` 实测（标了已核也要跑，内网实证：标记被泛化成"都查过了"跳过评估）。
 
 **产出**：join_safety 事实行（含依据，实测数字直贴 decisions）+ 疑点清单（随回复上报，各补一句疑似方向——上报疑点是合格交卷的一部分，不是失败。疑点答案若改输入，手头设计作废，所以先报再做）。
 
@@ -62,7 +62,16 @@ c2|cust_code|status=1 and del_flag='N'
 EOF
 ```
 
-（bash heredoc 引号免疫；PowerShell 先 `$OutputEncoding=[Text.Encoding]::UTF8` 再 `@'…'@ | python …`）
+（bash/zsh 用 heredoc[上方形态，引号免疫]；**PowerShell 标准写法**=先设编码再 here-string 管道：
+
+```powershell
+$OutputEncoding=[Text.Encoding]::UTF8
+@'
+c2|cust_code|status=1 and del_flag='N'
+'@ | python {location所在目录}/scripts/explore.py --rs {deliver}/_internal/rs_input.json --eval
+```
+
+清单全预填时更简：直接执行 `python … --eval`（不带管道）即自动全量实测）
 
 **闭合**：每条 join_condition 落到"有依据 / 进疑点清单"二态之一，疑点已随回复上报；**疑点清（无疑点，或上报后答复已带回）才进五层**。join_safety 条目有据（N_JOIN3 拦漏条目）兜底。
 

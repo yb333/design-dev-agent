@@ -1151,7 +1151,7 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "fields": cnt, "join": st.get("join_condition", ""),
         }
         if f"{sch}.{tbl}".lower() in _verified_tbls:
-            entry["precheck已核"] = f"存在性+来源类型（{_dbv_via}）"
+            entry["precheck已核"] = f"存在性+来源类型（{_dbv_via}；不含键唯一性——唯一性归 --eval 实测）"
         table_list.append(entry)
 
     # precheck 入口闸检出（designer 第一眼要处理：无出处条件字段 / 逻辑字段落地提示）
@@ -1342,14 +1342,16 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "用法": (
                 # 全预填（零 ? 行）→ 提示直接跑（2026-09-20：工具支持空 stdin 全量
                 # 连跑，但 designer 不知道"可以直接跑"会犹豫 stdin 给什么）
-                ("本清单已全部预填——无需填空，直接跑：explore --eval（不带 heredoc/"
-                 "空 stdin 即可，工具自动全量实测）"
+                ("本清单已全部预填——无需填空，直接跑：explore --eval（不带管道直接执行，"
+                 "工具自动全量实测）"
                  if _plan["run"] and all(r["key"] for r in _plan["run"]) else
                  "填空只读本 view（mapping 中文名对物理名；对不出留空=自动进疑点）。"
                  "唯一一次工具调用：explore --eval，stdin 只给 ? 行答案（别名|键|限定；"
-                 "预填行自动跑不用抄）——heredoc/管道透传引号免疫，PowerShell 先 "
-                 "$OutputEncoding=[Text.Encoding]::UTF8")
-                + "。评估结果（✓ 折叠只报异常/事实行+疑点清单）随回复上报"),
+                 "预填行自动跑不用抄）——bash 用 heredoc；PowerShell 先 "
+                 "$OutputEncoding=[Text.Encoding]::UTF8 再 @'…'@ | python …（here-string 管道）")
+                + "。已核标记=存在性+来源类型，**不含键唯一性**——唯一性只有本工具"
+                  "实测才有结论，标了已核也要跑（2026-09-20 内网实证：标记被泛化成"
+                  "'都查过了'跳过评估）。评估结果（✓ 折叠只报异常/事实行+疑点清单）随回复上报"),
         }
 
     # 关联键类型对账（precheck 检出+决策后写进 rs_input，designer 必须看到：

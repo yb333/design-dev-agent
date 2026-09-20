@@ -1584,7 +1584,8 @@ class TestAllPrefilledDirectRunHint:
               "field_mappings": []}
         view = build_compact(rs)
         usage = view["评估清单"]["用法"]
-        assert "已全部预填" in usage and "直接跑" in usage and "空 stdin" in usage
+        assert "已全部预填" in usage and "直接跑" in usage and "不带管道直接执行" in usage
+        assert "不含键唯一性" in usage                       # 防泛化跳过（内网实报锚）
         assert "?" not in " ".join(r["行"] for r in view["评估清单"]["需实测"])  # 零 ? 行
 
     def test_has_question_rows_usage_keeps_fill_guide(self):

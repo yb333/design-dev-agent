@@ -163,23 +163,23 @@ def build_eval_plan_data(rs_input: dict) -> dict:
                         "where": f["where"], "prefilled": True,
                         "is_main": False, "partner": f.get("partner") or "",
                         "partner_key": ",".join(f.get("partner_cols") or []),
-                        "note": f"预填自结构化条件（核一眼）{'〔precheck已核〕' if verified else ''}  {src_note}"})
+                        "note": f"预填自结构化条件（核一眼）{'〔存在性+类型已核，唯一性未测〕' if verified else ''}  {src_note}"})
         elif not cond:
             if pk_str:
                 run.append({"alias": alias, "schema": sch, "table": tbl, "key": pk_str, "where": "",
                             "prefilled": True, "is_main": True, "pk_declared": True,
                             "note": f"主表/粒度证据线：键=业务主键（mapping 声明：{pk_str}——"
-                                    f"核一眼，粒度变化才调）{'〔precheck已核〕' if verified else ''}"})
+                                    f"核一眼，粒度变化才调）{'〔存在性+类型已核，唯一性未测〕' if verified else ''}"})
             else:
                 run.append({"alias": alias, "schema": sch, "table": tbl, "key": "", "where": "",
                             "prefilled": False, "is_main": True,
                             "note": f"主表/粒度证据线：键=业务主键（mapping 未标记主键——从字段中文名/RS 粒度声明判断）"
-                                    f"{'〔precheck已核〕' if verified else ''}"})
+                                    f"{'〔存在性+类型已核，唯一性未测〕' if verified else ''}"})
         else:
             run.append({"alias": alias, "schema": sch, "table": tbl, "key": "", "where": "",
                         "prefilled": False, "is_main": False,
                         "note": f"自然语言——填你从原文读出的键/限定（从 view 的 mapping 中文名对物理名；"
-                                f"对不出就留空=自动进疑点；填错流水线会拦）{'〔precheck已核〕' if verified else ''}  {src_note}"})
+                                f"对不出就留空=自动进疑点；填错流水线会拦）{'〔存在性+类型已核，唯一性未测〕' if verified else ''}  {src_note}"})
     return {"run": run, "treat": treat, "warn": warn}
 
 
