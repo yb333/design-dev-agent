@@ -532,41 +532,6 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                               "partner": _m2.get("partner", ""), "partner_key": _m2.get("partner_key", ""),
                               "verdict": "gate_missing"})
             continue
-        # ★ 对侧关联字段存在性闸（2026-09-20 内网实测：从表键存在通过、但关联条件
-        # 里主表侧字段在主表不存在——被掩盖到后续才炸。partner_key=与疑点键配对的
-        # 对侧列[同 pair 收集]，补齐"关联是对等的"这一半检查；自然语言行无
-        # partner_key 不查不误报）
-        _pal = (_m2.get("partner") or "").strip().lower()
-        _pk = (_m2.get("partner_key") or "").strip()
-        if _pk and _pal:
-            _prow = meta_by_alias.get(_pal)
-            if _prow:
-                _pck = (_prow["schema"].lower(), _prow["table"].lower())
-                if _pck not in cache_map:
-                    cache_map[_pck] = lookup_table(rs_path, _prow["schema"], _prow["table"])
-                _pst, _pcols = cache_map[_pck]
-                if _pst == "ok" and _pcols:
-                    _pcolsl = {str(c).lower() for c in _pcols}
-                    _p_missing = [k for k in split_key(_pk) if k.lower() not in _pcolsl]
-                    if _p_missing:
-                        _psim = []
-                        for _k in _p_missing:
-                            _s = _similar_names(_k, _pcols or {})
-                            if _s:
-                                _psim.append(f"{_k}→相近 {','.join(_s)}")
-                        exc.append(f"[{tag}] 关联条件对侧: {_prow['table']} 缺字段 "
-                                   f"{', '.join(_p_missing)}（关联条件引用了 {_pal} 侧的它们）"
-                                   + (f"（{'；'.join(_psim)}）" if _psim else ""))
-                        doubts.append(f"{tag}→{_pal}/{_prow['table']}: 关联条件引用了"
-                                      f" {_pal} 侧表没有的字段 {', '.join(_p_missing)}"
-                                      + (f"（相近名: {'；'.join(s.split('→相近 ')[-1] for s in _psim)}"
-                                         "——给调用方核实的线索）" if _psim else ""))
-                        eval_rows.append({"alias": tag, "schema": sch, "table": tbl,
-                                          "key": key, "where": where,
-                                          "is_main": _m2.get("is_main", False),
-                                          "partner": _pal, "partner_key": _pk,
-                                          "verdict": "partner_gate_missing"})
-                        continue
         gate_note = "" if st == "ok" else (
             f"（键存在性未核: {'无 schema_cache' if st == 'no_cache' else f'{sch}.{tbl} 不在 cache'}）")
         to_run.append((tag, sch, tbl, key, where, gate_note))
