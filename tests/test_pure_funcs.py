@@ -1055,3 +1055,39 @@ class TestColumnOrderCheck:
         from ut_precheck import compare_column_order
         ok, _ = compare_column_order(["ID", "Org_Name"], ["id", "org_name"])
         assert ok
+
+
+class TestDqRuleFilenameAndFieldPriority:
+    """rule_id 锚定文件名（2026-09-18）+ run_dq_checks 读侧 sql_file 字段优先。"""
+
+    def test_dq_rule_filename_shape(self):
+        from run_ut import dq_rule_filename
+        assert dq_rule_filename("DQ_01", "产品编码非空") == "DQ_01_产品编码非空.sql"
+        assert dq_rule_filename("DQ_02", "a/b:c") == "DQ_02_a_b_c.sql"       # 非法字符清洗
+        assert dq_rule_filename("DQ_03", "") == "DQ_03.sql"                  # 语义名空兜底
+        assert len(dq_rule_filename("DQ_04", "长" * 50)) <= len("DQ_04_" + "长" * 30 + ".sql")
+
+    def test_run_dq_checks_sql_file_field_priority(self, tmp_path):
+        """dq.json 的 sql_file 字段优先（改语义名同步字段即可），无字段走旧约定派生。"""
+        from run_ut import run_dq_checks
+
+        class FakeEx:
+            def execute(self, sql):
+                class R:
+                    success = True
+                    error = ""
+                    rows = [{"v": 0}]
+                return R()
+        # 字段声明：文件名与旧约定不同——按字段找到（改名自由）
+        named = tmp_path / "DQ_01_改名后的检查.sql"
+        named.write_text("SELECT 1", encoding="utf-8")
+        res = run_dq_checks(FakeEx(), tmp_path, [
+            {"rule_id": "DQ_01", "check_type": "空值检查", "rule_name": "改名后的检查",
+             "sql_file": "DQ_01_改名后的检查.sql"}], {})
+        assert res[0]["status"] == "PASS" and res[0]["file"] == "DQ_01_改名后的检查.sql"
+        # 无字段：旧约定派生（legacy ts.dq_rules 条目）
+        legacy = tmp_path / "dq_01_空值检查.sql"
+        legacy.write_text("SELECT 1", encoding="utf-8")
+        res2 = run_dq_checks(FakeEx(), tmp_path, [
+            {"check_type": "空值检查", "rule_name": "x"}], {})
+        assert res2[0]["file"] == "dq_01_空值检查.sql" and res2[0]["status"] == "PASS"

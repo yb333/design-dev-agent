@@ -31,6 +31,7 @@ baseline 清单+影响分析，不走新建的 RS 驱动契约）+ --dq-dir（SQ
 """
 
 import sys
+import re
 import json
 import argparse
 from pathlib import Path
@@ -39,7 +40,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 
 import yaml  # noqa: E402  (design-decisions 读 dq 任务 project 覆盖用)
-from run_ut import dq_filename  # noqa: E402  文件名单点（UT 侧同源派生）
+from run_ut import dq_filename, dq_rule_filename  # noqa: E402  文件名单点（UT 侧同源派生）
 from sql_parse import (  # noqa: E402
     extract_qualified_refs, extract_logic_refs, find_three_part_refs,
     extract_from_tables, split_cte_main, extract_top_projection,
@@ -135,9 +136,77 @@ def _target_alias_columns(sql: str, f_short: str, f_schema: str) -> dict:
 # ============================================================
 # 校验主函数
 # ============================================================
+_AGG_FN_RE = re.compile(r'\b(sum|count|avg|max|min|string_agg)\s*\(', re.IGNORECASE)
+
+
+def _cte_scopes(sql: str) -> list:
+    """提取 CTE 体列表（`WITH name AS ( body )` 的 body）——逐作用域语法检查用。
+
+    括号深度感知 + 字符串字面量跳过（内网实证 2026-09-18：聚合错误写在 CTE 里
+    被旧版"只扫主查询体"漏检——CTE 忘 GROUP BY 返回任意行，比主查询错更隐蔽）。
+    """
+    import re as _re
+    scopes = []
+    for m in _re.finditer(r'\b(\w+)\s+AS\s*\(', sql, _re.IGNORECASE):
+        start = m.end()
+        depth, i, n = 1, start, len(sql)
+        in_str, sc = False, ""
+        while i < n and depth > 0:
+            ch = sql[i]
+            if in_str:
+                if ch == sc:
+                    in_str = False
+            elif ch in "'\"":
+                in_str, sc = True, ch
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+        if depth == 0:
+            scopes.append(sql[start:i - 1])
+    return scopes
+
+
+def _top_clause_text(scope: str, start_kw: str, end_kws) -> str:
+    """顶层 start_kw 子句文本（到顶层 end_kws 关键字或串尾；深度感知+字符串跳过）。"""
+    import re as _re
+    m = _re.search(rf'\b{start_kw}\b', scope, _re.IGNORECASE)
+    if not m:
+        return ""
+    depth, i, n = 0, m.end(), len(scope)
+    in_str, sc = False, ""
+    end_pat = _re.compile(rf'\b({"|".join(end_kws)})\b', _re.IGNORECASE)
+    while i < n:
+        ch = scope[i]
+        if in_str:
+            if ch == sc:
+                in_str = False
+        elif ch in "'\"":
+            in_str, sc = True, ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0:
+            mm = end_pat.match(scope, i)
+            if mm:
+                return scope[m.end():i]
+        i += 1
+    return scope[m.end():]
+
+
+def _scope_agg_needs_gb(scope: str) -> bool:
+    """该作用域是否顶层聚合（需 GROUP BY）——只看顶层 SELECT 投影与 HAVING，
+    不看 WHERE/子查询（标量子查询聚合合法，不强制外层分组——旧版整段正则误拦）。"""
+    proj = _top_clause_text(scope, "select", ("from", "where", "group", "having", "order", "limit", "union"))
+    having = _top_clause_text(scope, "having", ("order", "limit", "union"))
+    return bool(_AGG_FN_RE.search(proj) or _AGG_FN_RE.search(having))
+
+
 def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
                        schema_cache_path: str = "", rs_contract: bool = True,
-                       declined: list = None):
+                       declined: list = None, fused: list = None):
     """校验 producer 的 rules 清单并补全条目。返回 (rules_out, DqResult)。
 
     rs_contract=False（opt 场景）：跳过 N_DQ1-3 的 RS 对照——条目权威=baseline
@@ -145,23 +214,28 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
     declined：producer 建议不做的 RS 条目（[{rs_rule_name, reason}]）——结构类
     检查（类型一致性/字段存在性）已被流程内建覆盖，做 DQ 是重复；计入 RS 覆盖
     但拍板权在人（ts.md"建议不做"段）。
+    fused：producer 的融合申报（2026-09-18，[{rule_id, covered_rs: [RS 需求名],
+    note}]）——多条不同措辞的同一检查合并为一条规则；每条 covered_rs 计入 RS
+    覆盖（N_DQ2 计数契约），ts.md 融合注记段人可见，拍板权在人。
     """
     vr = DqResult()
 
-    # --- N_DQ1/2/3：与 RS 对照（declined=producer 建议不做的条目——显式决策计入覆盖，
-    # 拍板权在人：ts.md 表格后的"建议不做"段）---
+    # --- N_DQ1/2/3：与 RS 对照（declined=建议不做 / fused=融合覆盖，都计入覆盖核算）---
     declined = declined or []
+    fused = fused or []
     if rs_contract:
         rs_dq = rs_input.get("dq_requirements", []) or []
         n_rs, n_dec = len(rs_dq), len(rules_in)
-        n_dec_ok = n_dec + len(declined)
-        if n_rs > 0 and n_dec_ok == 0:
+        n_fused_cover = sum(len(f.get("covered_rs") or []) for f in fused)
+        covered = n_dec + len(declined) + n_fused_cover
+        if n_rs > 0 and covered == 0:
             vr.hard("N_DQ1",
                     f"RS 有 {n_rs} 条 DQ 需求（dq_requirements），但 dq.json 的 rules 为空——"
                     f"dws-dq-producer 未完成 DQ 设计（闸口①材料不完整，不放进 UT）")
-        elif 0 < n_dec_ok < n_rs:
-            _note = f"（另有 {len(declined)} 条建议不做——人拍板见 ts.md）" if declined else ""
-            vr.warn("N_DQ2", f"RS 有 {n_rs} 条 DQ 需求，DQ 只设计了 {n_dec} 条{_note}，核对是否漏")
+        elif 0 < covered < n_rs:
+            _note = (f"（另有 declined {len(declined)} 条/fused 覆盖 {n_fused_cover} 条"
+                     f"——人拍板见 ts.md）" if (declined or fused) else "")
+            vr.warn("N_DQ2", f"RS 有 {n_rs} 条 DQ 需求，覆盖 {covered} 条（设计了 {n_dec} 条）{_note}，核对是否漏")
         elif n_rs == 0 and n_dec > 0:
             vr.warn("N_DQ3", f"RS 未提 DQ 需求，但自行设计了 {n_dec} 条——DQ 是业务决策归 RS，请确认")
 
@@ -199,12 +273,23 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
     field_all = f_fields | cache_fields
 
     rules_out = []
+    seen_rule_ids: set = set()
     for i, d in enumerate(rules_in, 1):
         name = d.get("rule_name") or d.get("check_type") or f"?#{i}"
         check_type = (d.get("check_type") or "").strip()
         mode = (d.get("mode") or "").strip().lower() or "assertion"  # 缺省补全
         vc = (d.get("violation_condition") or "").strip()
         ambiguities = d.get("ambiguities") or []
+        rule_id = (d.get("rule_id") or "").strip()
+
+        # --- rule_id 机器键（2026-09-18：文件名锚定，创建时定号只增删永不重编）---
+        if not rule_id:
+            vr.hard("N_DQ4", f"rules[{i}]（{name}）缺 rule_id——创建时定号（DQ_01…DQ_NN，"
+                             f"此后只增删不重编），是文件名的机器锚")
+        elif rule_id in seen_rule_ids:
+            vr.hard("N_DQ4", f"rules[{i}]（{name}）rule_id='{rule_id}' 与前面规则重复——机器键必须唯一")
+        else:
+            seen_rule_ids.add(rule_id)
 
         # mode 值合法（轻校验：缺省已补，乱值拦）
         if mode not in ("assertion", "compare"):
@@ -233,12 +318,21 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
                 vr.hard("N_DQ5", f"rules[{i}]（{name}）violation_condition 引用不存在：{bad}")
             if not cache_fields:
                 vr.warn("N_DQ5", f"rules[{i}]（{name}）无 schema_cache——源表字段侧引用存在性未校验（闸口①人工确认）")
-        # --- N_DQ9/N_DQ10 SQL 文件 ---
-        fname = dq_filename(i, check_type)
+        # --- N_DQ9/N_DQ10 SQL 文件（sql_file 声明优先：rule_id 前缀对账——语义后缀
+        # 纯装饰可自由改，机器键只认 rule_id；未声明按约定派生）---
+        declared = (d.get("sql_file") or "").strip()
+        if declared:
+            if rule_id and declared != f"{rule_id}.sql" and not declared.startswith(f"{rule_id}_"):
+                vr.hard("N_DQ9", f"rules[{i}]（{name}）sql_file='{declared}' 前缀不含 rule_id "
+                                 f"'{rule_id}'——文件名={rule_id}_{{清洗语义名}}.sql（语义装饰可改，id 锚不可错）")
+            fname = declared
+        else:
+            fname = dq_rule_filename(rule_id, d.get("rule_name") or check_type) if rule_id \
+                else dq_filename(i, check_type)
         fpath = dq_dir / fname
         sql = ""
         if not check_type or not fpath.exists():
-            vr.hard("N_DQ9", f"rules[{i}]（{name}）SQL 文件缺失（预期 {fname}——文件名=规则序号+清洗 check_type）")
+            vr.hard("N_DQ9", f"rules[{i}]（{name}）SQL 文件缺失（预期 {fname}）")
         else:
             sql = fpath.read_text(encoding="utf-8").strip()
             if not sql:
@@ -275,15 +369,15 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
                 if missing_bk:
                     vr.hard("N_DQ10", f"rules[{i}]（{name}）输出列缺业务键 {missing_bk}——"
                                        f"违规行要能回溯到业务对象（输出列=业务键+违规字段值）")
-            # 聚合语法（2026-09-15 内网实证：聚合对比缺 GROUP BY——返回全 NULL，
-            # producer 自己推测根因）：顶层 SELECT 含聚合函数但无 GROUP BY → 语法/语义错
-            import re as _re
-            _body_main = (split_cte_main(sql)[1] or sql)
-            _has_agg = bool(_re.search(r'\b(sum|count|avg|max|min|string_agg)\s*\(', _body_main, _re.IGNORECASE))
-            _has_gb = bool(_re.search(r'\bgroup\s+by\b', _body_main, _re.IGNORECASE))
-            if _has_agg and not _has_gb:
-                vr.hard("N_DQ10", f"rules[{i}]（{name}）SQL 有聚合列但无 GROUP BY——"
-                                   f"聚合对比必须分组（分组键也输出）；聚合后才判的条件收 HAVING")
+            # 聚合语法（逐作用域，2026-09-18：CTE 体+主查询体分别检——内网实证聚合
+            # 错在 CTE 里被旧版"只扫主查询体"漏检；只看顶层投影/HAVING 的聚合——
+            # WHERE 标量子查询聚合合法不误拦）
+            for _scope in (_cte_scopes(sql) + [(split_cte_main(sql)[1] or sql)]):
+                if _scope_agg_needs_gb(_scope) and not re.search(r'\bgroup\s+by\b', _scope, re.IGNORECASE):
+                    _where = "CTE" if _scope in _cte_scopes(sql) else "主查询"
+                    vr.hard("N_DQ10", f"rules[{i}]（{name}）{_where}作用域有聚合列但无 GROUP BY——"
+                                       f"聚合对比必须分组（分组键也输出）；聚合后才判的条件收 HAVING")
+                    break
             # FROM 表引用 ⊆ 源表∪目标表，tmp 拦截（CTE 名豁免）
             for t in extract_from_tables(sql):
                 tl = _short(t)
@@ -298,7 +392,7 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
 
         rules_out.append({
             "idx": i,
-            "rule_id": d.get("rule_id") or f"DQ_{i:03d}",
+            "rule_id": rule_id or f"DQ_{i:03d}",
             "rule_name": d.get("rule_name") or check_type,
             "check_type": check_type,
             "scope": d.get("scope") or "",
@@ -310,6 +404,19 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
             "waive_reason": d.get("waive_reason") or "",
             "sql_file": fname,
         })
+
+    # --- fused 申报对账（2026-09-18：多条不同措辞的同一检查合并为一条——rule_id
+    # 必须存在于 rules，covered_rs 必须是真实 RS 需求名；覆盖数已在 N_DQ2 计入）---
+    if fused:
+        rs_names = {str(r.get("rule_name") or "") for r in (rs_input.get("dq_requirements") or [])}
+        for f in fused:
+            rid = (f.get("rule_id") or "").strip()
+            if rid not in seen_rule_ids:
+                vr.hard("N_DQ2", f"fused 条目引用的 rule_id '{rid}' 不存在于 rules——融合申报必须指向真实规则")
+            for rs_name in (f.get("covered_rs") or []):
+                if rs_contract and str(rs_name) not in rs_names:
+                    vr.hard("N_DQ2", f"fused 条目（{rid}）覆盖的 RS 需求名 '{rs_name}' 不存在于"
+                                     f" dq_requirements——对照 RS 的 rule_name 改拼写")
 
     return rules_out, vr
 
@@ -388,6 +495,15 @@ def render_dq_section(dq: dict, rs_dq: list) -> str:
         lines.append("")
         for d in declined:
             lines.append(f"- RS「{d.get('rs_rule_name', '?')}」: {d.get('reason', '')}")
+        lines.append("")
+    fused = dq.get("fused") or []
+    if fused:
+        lines.append("**融合申报（多条不同措辞的同一检查合并为一条规则——闸口①人可见，不同意则要求拆开）：**")
+        lines.append("")
+        for f in fused:
+            covered = "、「".join(str(c) for c in (f.get("covered_rs") or []))
+            lines.append(f"- {f.get('rule_id', '?')} 融合自 RS「{covered}」" +
+                         (f"（{f.get('note', '')}）" if f.get("note") else ""))
         lines.append("")
     return "\n".join(lines)
 
@@ -478,6 +594,7 @@ def main():
 
     rules_in = dq_src.get("rules") or []
     declined_in = dq_src.get("declined") or []
+    fused_in = dq_src.get("fused") or []
     dq_dir = Path(args.dq_dir) if args.dq_dir else ts_path.parent / "dq"
     rs_dq = rs_input.get("dq_requirements", []) or []
 
@@ -491,7 +608,7 @@ def main():
 
     rules_out, vr = validate_and_build(rs_input, ts, rules_in, dq_dir, cache_arg,
                                        rs_contract=not args.no_rs_contract,
-                                       declined=declined_in)
+                                       declined=declined_in, fused=fused_in)
 
     if vr.n_hard:
         print(f"DQ 校验失败（{vr.n_hard} 项硬阻断）：", file=sys.stderr)
@@ -514,6 +631,8 @@ def main():
     }
     if declined_in:
         dq["declined"] = declined_in
+    if fused_in:
+        dq["fused"] = fused_in
     dq_task = build_dq_task(ts, design_decisions)
     if dq_task:
         dq["tasks"] = {"dq": dq_task}

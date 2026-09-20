@@ -60,6 +60,86 @@ def _is_suspect(fm: dict) -> str:
     return ""
 
 
+def build_dq_plan(dq_reqs: list) -> dict:
+    """DQ 规划工作单（2026-09-18 定调：producer 把"翻译需求"跳步成"直接写 SQL"——
+    补规划层，镜像主线评估层的预填表单模式：机械部分归工具，语义裁决归 producer）。
+
+    确定性产出（producer 只填空不枚举）：
+    - rows：每条 RS 需求 → 场景分类预判（断言空值/重复/阈值/数量一致性/聚合对比/
+      逻辑复核）+ mode 建议 + declined 候选标记（结构类已被流程内建覆盖）
+    - fusion_candidates：疑似同一检查的需求对（文本 bigram 相似度——只标候选，
+      融不融由 producer 裁决并写 dq.json 的 fused 申报）
+    """
+    scene_rules = [
+        ("结构类候选", None, [("类型一致", "结构"), ("字段存在", "结构"), ("表结构", "结构"),
+                              ("落地", "结构"), ("都创建", "结构"), ("对齐", "结构")]),
+        ("数量一致性", "compare", [("行数", "数量"), ("条数", "数量"), ("记录数", "数量"),
+                                    ("数量一致", "数量")]),
+        ("聚合对比", "compare", [("汇总", "聚合"), ("合计", "聚合"), ("金额一致", "聚合"),
+                                  ("总量", "聚合")]),
+        ("逻辑复核", "compare", [("口径", "复核"), ("重新计算", "复核"), ("重算", "复核"),
+                                  ("计算逻辑", "复核")]),
+        ("断言-重复", "assertion", [("重复", "重复"), ("唯一", "重复")]),
+        ("断言-阈值", "assertion", [("不超过", "阈值"), ("大于", "阈值"), ("小于", "阈值"),
+                                     ("范围", "阈值"), ("阈值", "阈值")]),
+        ("断言-空值", "assertion", [("空", "空值"), ("null", "空值"), ("非空", "空值")]),
+    ]
+
+    def _classify(req: dict) -> dict:
+        blob = " ".join(str(req.get(k) or "") for k in ("rule_name", "rule_desc", "check_type", "scope"))
+        low = blob.lower()
+        for scene, mode, kws in scene_rules:
+            if any(str(k).lower() in low for k, _tag in kws):
+                if scene == "结构类候选":
+                    return {"场景": "结构类候选（declined 候选）", "mode 建议": "-",
+                            "declined_candidate": True,
+                            "候选理由": "结构类检查疑已被流程内建覆盖（precheck 类型对账/字段闭合/UT 列序）——你确认后写 dq.json 的 declined"}
+                return {"场景": scene, "mode 建议": mode, "declined_candidate": False}
+        return {"场景": "未分类（你判断）", "mode 建议": "assertion", "declined_candidate": False}
+
+    rows = []
+    for j, req in enumerate(dq_reqs, 1):
+        c = _classify(req)
+        rows.append({"rs_idx": j,
+                     "rule_name": req.get("rule_name", ""),
+                     "check_type": req.get("check_type", ""),
+                     "rule_desc": str(req.get("rule_desc") or "")[:120],
+                     **c})
+    return {
+        "rows": rows,
+        "fusion_candidates": _fusion_candidates(dq_reqs),
+        "用法": ("规划在先：逐行确认场景/mode（改预判直接改）；declined 候选确认后进 dq.json 的 declined；"
+                 "fusion_candidates 是工具标的疑似同文异述对——融不融你裁决，融合了写 dq.json 的 fused "
+                 "（[{rule_id, covered_rs, note}]，covered_rs=被并掉的 RS 需求名）；"
+                 "规划定完再写 SQL（每条规划行→一条规则或 declined/fused），交卷自查=行行有落点。"),
+    }
+
+
+def _bigrams(s: str) -> set:
+    t = "".join(ch for ch in str(s or "") if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+    return {t[i:i + 2] for i in range(len(t) - 1)} if len(t) > 1 else ({t} if t else set())
+
+
+def _fusion_candidates(dq_reqs: list, threshold: float = 0.22) -> list:
+    """疑似同一检查的需求对（bigram Jaccard≥阈值——0.22 校准：真实同义对
+    「产品编码非空/编码不可为空值」=0.26，跨场景对≈0.03；宁可多标候选误扰，
+    裁决归 producer——候选漏标=融合漏做[RS 计数契约会 warn]，候选多标=多看一眼）。"""
+    texts = [" ".join(str(r.get(k) or "") for k in ("rule_name", "rule_desc", "check_type"))
+             for r in dq_reqs]
+    grams = [_bigrams(t) for t in texts]
+    out = []
+    for i in range(len(texts)):
+        for j in range(i + 1, len(texts)):
+            if not grams[i] or not grams[j]:
+                continue
+            sim = len(grams[i] & grams[j]) / len(grams[i] | grams[j])
+            if sim >= threshold:
+                out.append({"rs_idx": [i + 1, j + 1],
+                            "names": [dq_reqs[i].get("rule_name", ""), dq_reqs[j].get("rule_name", "")],
+                            "相似度": round(sim, 2)})
+    return out
+
+
 def build_context(rs_input: dict, ts: dict) -> dict:
     fms = rs_input.get("field_mappings", []) or []
     dq_reqs = rs_input.get("dq_requirements", []) or []
@@ -145,6 +225,7 @@ def build_context(rs_input: dict, ts: dict) -> dict:
     return {
         "spec_type": "dq_context",
         "dq_requirements": dq_reqs,
+        "plan": build_dq_plan(dq_reqs),
         "target": {
             "f_table": f"{f_meta.get('schema', '')}.{f_meta.get('table', '')}",
             "f_table_cn": f_meta.get("cn", ""),

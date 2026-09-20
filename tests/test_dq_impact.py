@@ -117,10 +117,10 @@ class TestAssembleDqOptParams:
             "## 7. 数据质量检查(DQ)\n\n*(占位)*\n\n---\n\n## 8. 增量设计\n", encoding="utf-8")
         (build / "_internal" / "rs_input.json").write_text(
             json.dumps({"dq_requirements": []}, ensure_ascii=False), encoding="utf-8")
-        (build / "dq" / "dq_01_空值检查.sql").write_text(
+        (build / "dq" / "DQ_001_产品编码非空.sql").write_text(
             "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL", encoding="utf-8")
         (build / "dq.json").write_text(json.dumps({"rules": [
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+            {"rule_id": "DQ_001", "scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
              "mode": "assertion", "violation_condition": "t.prod_code IS NULL",
              "rule_desc": "违规=空"}]}, ensure_ascii=False), encoding="utf-8")
         return build, arc_tmp
@@ -141,7 +141,7 @@ class TestAssembleDqOptParams:
             sys.argv = old_argv
         assert ei.value.code == 0
         dq = json.loads((build / "dq.json").read_text(encoding="utf-8"))
-        assert dq["rules"][0]["sql_file"] == "dq_01_空值检查.sql"  # 补全写回
+        assert dq["rules"][0]["sql_file"] == "DQ_001_产品编码非空.sql"  # 补全写回
         assert "t.prod_code IS NULL" in (arc_tmp / "ts.md").read_text(encoding="utf-8")
 
     def test_rs_contract_would_fire_dq3_without_flag(self, tmp_path):

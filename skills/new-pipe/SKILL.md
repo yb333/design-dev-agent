@@ -321,12 +321,13 @@ Task(
   subagent_type="dws-dq-producer",
   description="DQ检查设计实现",
   prompt="DQ 检查的设计与实现（按 dws-dq skill 流程）：rs_input: {deliver}/_internal/rs_input.json，
-          ts: {deliver}/ts.json（只读结构），直接产 dq.json 到 {deliver}/、
-          检查 SQL 到 {deliver}/dq/。"
+          ts: {deliver}/ts.json（只读结构），先完成规划（切片 plan 工作单——场景确认/
+          融合裁决/declined 确认/rule_id 定号）再写 SQL，产 dq.json 到 {deliver}/、
+          检查 SQL 到 {deliver}/dq/（文件名={rule_id}_{清洗rule_name}.sql）。"
 )
 ```
 
-producer 交卷后**校验渲染**（硬阻断，失败恢复 producer 会话修，限 3 轮）：
+producer 交卷后**校验渲染**（硬阻断，失败**带全量错误清单**恢复 producer 会话一次修完——逐条带逐轮修=烧轮次；限 3 轮）：
 
 ```bash
 python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --dq-src {deliver}/dq.json \

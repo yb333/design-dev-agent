@@ -294,7 +294,7 @@ def read_select(select_dir: Path, rule_code: str) -> str:
 
 
 def dq_filename(idx: int, check_type: str) -> str:
-    """DQ 检查 SQL 文件确定名：dq_{NN}_{清洗check_type}.sql。
+    """DQ 检查 SQL 文件确定名（旧约定派生，legacy 兜底）：dq_{NN}_{清洗check_type}.sql。
 
     唯一键是规则数组序号（check_type 是"检查类型"不是规则身份，重复是
     常态——两条空值检查同名文件会互相覆盖静默丢检查）；check_type 清洗后保留
@@ -304,6 +304,18 @@ def dq_filename(idx: int, check_type: str) -> str:
     """
     safe = re.sub(r"[^\w\u4e00-\u9fff]+", "_", (check_type or "").strip())
     return f"dq_{idx:02d}_{safe}.sql"
+
+
+def dq_rule_filename(rule_id: str, name: str) -> str:
+    """DQ 文件确定名（rule_id 锚定版，2026-09-18）：{rule_id}_{清洗语义名}.sql。
+
+    机器键=rule_id（创建时定号 DQ_01…**只增删永不重编**——修回路融合/删规则不再
+    牵动其他规则文件名，idx↔文件名错位类别整体消失）；语义名（rule_name 优先，
+    check_type 兜底）纯装饰——改语义只同步 sql_file 字段，系统零感知（前缀校验
+    只认 rule_id）。清洗同旧规则；超 30 字截断。
+    """
+    safe = re.sub(r"[^\w\u4e00-\u9fff]+", "_", (name or "").strip())[:30].strip("_")
+    return f"{rule_id}_{safe}.sql" if safe else f"{rule_id}.sql"
 
 
 def load_dq_rules(build_dir) -> list:
@@ -365,7 +377,9 @@ def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
     for i, rule in enumerate(dq_rules or [], 1):
         check_type = (rule.get("check_type") or "").strip()
         rule_name = rule.get("rule_name") or check_type
-        fname = dq_filename(i, check_type)
+        # 文件名读侧：dq.json 的 sql_file 字段优先（rule_id 锚定版，2026-09-18——
+        # producer 自报文件名，语义后缀可自由改），无字段走旧约定派生（legacy 兜底）
+        fname = (rule.get("sql_file") or "").strip() or dq_filename(i, check_type)
         entry = {"rule_name": rule_name, "check_type": check_type, "file": fname,
                  "mode": rule.get("mode") or "assertion", "waived": bool(rule.get("waived")),
                  "status": "PASS", "detail": "", "rows": 0, "samples": []}

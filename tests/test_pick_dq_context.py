@@ -115,3 +115,41 @@ class TestQueryService:
         rs = _rs(fms)
         hits = query_field(rs, "pay")
         assert {h["target_column"] for h in hits} == {"amount", "tax"}
+
+
+class TestDqPlan:
+    """plan 规划工作单（2026-09-18：producer 跳过分析直接写 SQL——补规划层，
+    镜像评估层预填表单：场景分类/融合候选/declined 候选归工具，裁决归 producer）。"""
+
+    def test_scene_classification(self):
+        from pick_dq_context import build_dq_plan
+        p = build_dq_plan([
+            {"rule_name": "产品编码非空", "rule_desc": "不能为空", "check_type": "空值检查", "scope": "字段级"},
+            {"rule_name": "订单行数一致", "rule_desc": "目标行数与源表记录数一致", "check_type": "一致性检查", "scope": "表级"},
+            {"rule_name": "落地类型一致", "rule_desc": "落地类型与 mapping 对齐", "check_type": "结构检查", "scope": "表级"},
+        ])
+        by = {r["rule_name"]: r for r in p["rows"]}
+        assert by["产品编码非空"]["场景"] == "断言-空值" and by["产品编码非空"]["mode 建议"] == "assertion"
+        assert by["订单行数一致"]["场景"] == "数量一致性" and by["订单行数一致"]["mode 建议"] == "compare"
+        assert by["落地类型一致"]["declined_candidate"] is True
+
+    def test_fusion_candidates_same_check_detected(self):
+        """同义不同述的两条需求（内网真实形态）必须进候选。"""
+        from pick_dq_context import build_dq_plan, _fusion_candidates
+        reqs = [
+            {"rule_name": "产品编码非空", "rule_desc": "产品编码不能为空", "check_type": "空值检查", "scope": "字段级"},
+            {"rule_name": "编码不可为空值", "rule_desc": "编码为空就是违规", "check_type": "空值检查", "scope": "字段级"},
+            {"rule_name": "订单行数一致", "rule_desc": "目标表行数与源表记录数一致", "check_type": "一致性检查", "scope": "表级"},
+        ]
+        cands = _fusion_candidates(reqs)
+        pairs = {tuple(c["rs_idx"]) for c in cands}
+        assert (1, 2) in pairs          # 同义对标出
+        assert (1, 3) not in pairs and (2, 3) not in pairs  # 跨场景不误标
+
+    def test_context_contains_plan(self):
+        from pick_dq_context import build_context
+        rs = {"field_mappings": [], "dq_requirements": [
+            {"rule_name": "a", "rule_desc": "b", "check_type": "c", "scope": "d"}],
+              "source_tables": []}
+        ctx = build_context(rs, {"meta": {"target": {"f_table": {}}}, "design": {}})
+        assert "plan" in ctx and ctx["plan"]["rows"][0]["rule_name"] == "a"

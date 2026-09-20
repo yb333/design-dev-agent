@@ -70,10 +70,11 @@ def _run(tmp_path, rules_in, ts=None, rs=None, cache_tables=None, sqls=None):
     rs = rs or _rs()
     dq_dir = tmp_path / "dq"
     dq_dir.mkdir(exist_ok=True)
-    import re
-    _clean = lambda s: re.sub(r"[^\w\u4e00-\u9fff]+", "_", (s or "").strip())
+    from run_ut import dq_rule_filename
     for i, d in enumerate(rules_in, 1):
-        fname = f"dq_{i:02d}_{_clean(d.get('check_type'))}.sql"
+        rid = (d.get("rule_id") or "").strip()
+        fname = dq_rule_filename(rid, d.get("rule_name") or d.get("check_type")) if rid \
+            else f"dq_{i:02d}_{d.get('check_type')}.sql"
         content = (sqls or {}).get(i) or (
             f"/* DQ */\nSELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE {d.get('violation_condition', '1=1')}")
         (dq_dir / fname).write_text(content, encoding="utf-8")
@@ -254,7 +255,7 @@ class TestDeclined:
         import re as _re
         dq_dir = tmp_path / "dq2"
         dq_dir.mkdir()
-        (dq_dir / "dq_01_空值检查.sql").write_text(
+        (dq_dir / "DQ_001_产品编码非空.sql").write_text(
             "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL", encoding="utf-8")
         rules_out, vr = validate_and_build(
             rs2, ts, [_rule()], dq_dir,
@@ -276,15 +277,68 @@ class TestAssembly:
     def test_rules_out_shape_and_completion(self, tmp_path):
         """补全：idx/sql_file 派生/mode 缺省；ambiguities 透传（对比式不再要求锚定/来源声明）。"""
         rules_out, vr = _run(tmp_path, [
-            _rule(rule_id=None, mode="", ambiguities=[{"note": "口径二义", "options": ["A", "B"]}]),
+            _rule(rule_id="DQ_001", mode="", ambiguities=[{"note": "口径二义", "options": ["A", "B"]}]),
             _rule(rule_id="DQ_002", mode="compare", check_type="一致性检查",
-                  rule_name="金额复核", violation_condition="t.id <> s.id（独立重算）")])
+                  rule_name="金额一致性", violation_condition="t.id <> s.id（独立重算）")])
         r1, r2 = rules_out
-        assert r1["idx"] == 1 and r1["sql_file"] == "dq_01_空值检查.sql"
+        assert r1["idx"] == 1 and r1["sql_file"] == "DQ_001_产品编码非空.sql"
         assert r1["rule_id"] == "DQ_001" and r1["mode"] == "assertion"
         assert r1["ambiguities"][0]["note"] == "口径二义" and r1["waived"] is False
-        assert r2["idx"] == 2 and r2["sql_file"] == "dq_02_一致性检查.sql"
+        assert r2["idx"] == 2 and r2["sql_file"] == "DQ_002_金额一致性.sql"
         assert not any(i["level"] == "hard" for i in vr.items)
+
+    def test_rule_id_missing_and_duplicate_hard(self, tmp_path):
+        """rule_id=机器键（2026-09-18 文件名锚定）：缺失/重复都硬拦。"""
+        _, vr = _run(tmp_path, [_rule(rule_id=None)])
+        assert any(i["code"] == "N_DQ4" and "缺 rule_id" in i["msg"] for i in vr.items)
+        _, vr2 = _run(tmp_path, [_rule(), _rule(rule_name="产品编码非空2")])
+        assert any(i["code"] == "N_DQ4" and "重复" in i["msg"] for i in vr2.items)
+
+    def test_sql_file_prefix_mismatch_hard(self, tmp_path):
+        """sql_file 自报但前缀不含 rule_id——硬拦（语义装饰可改，id 锚不可错）。"""
+        dq_dir = tmp_path / "dq"
+        dq_dir.mkdir()
+        (dq_dir / "别的名字.sql").write_text(
+            "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL",
+            encoding="utf-8")
+        _, vr = validate_and_build(_rs(), _ts(), [_rule(sql_file="别的名字.sql")], dq_dir)
+        assert any(i["code"] == "N_DQ9" and "前缀不含 rule_id" in i["msg"] for i in vr.items)
+
+    def test_fused_coverage_and_render(self, tmp_path):
+        """fused 申报（2026-09-18）：覆盖计数入 N_DQ2；rule_id/RS 名对账；ts.md 融合注记。"""
+        rs2 = _rs(dq_needs=[
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+             "rule_desc": "产品编码不能为空"},
+            {"scope": "字段级", "check_type": "空值检查", "rule_name": "编码不可为空值",
+             "rule_desc": "编码为空就是违规"}])
+        rules_out, vr = _run(tmp_path, [_rule()], rs=rs2)
+        assert any(i["code"] == "N_DQ2" for i in vr.items)  # 未申报融合→覆盖不足 warn
+        rules_out, vr = _run(tmp_path, [_rule()], rs=rs2,
+                             fused=[{"rule_id": "DQ_001", "covered_rs": ["编码不可为空值"],
+                                     "note": "同一检查不同措辞"}]) if False else (None, None)
+        # _run 不传 fused——直接调 validate_and_build 带 fused
+        from run_ut import dq_rule_filename
+        dq_dir = tmp_path / "dqf"
+        dq_dir.mkdir()
+        (dq_dir / dq_rule_filename("DQ_001", "产品编码非空")).write_text(
+            "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL",
+            encoding="utf-8")
+        rules_out, vr = validate_and_build(
+            rs2, _ts(), [_rule()], dq_dir,
+            fused=[{"rule_id": "DQ_001", "covered_rs": ["编码不可为空值"], "note": "同一检查不同措辞"}])
+        assert not any(i["code"] == "N_DQ2" for i in vr.items)  # 融合覆盖计入→契约齐
+        # 对账两硬拦
+        _, vrx = validate_and_build(rs2, _ts(), [_rule()], dq_dir,
+                                    fused=[{"rule_id": "DQ_099", "covered_rs": ["编码不可为空值"]}])
+        assert any("rule_id 'DQ_099' 不存在" in i["msg"] for i in vrx.items)
+        _, vry = validate_and_build(rs2, _ts(), [_rule()], dq_dir,
+                                    fused=[{"rule_id": "DQ_001", "covered_rs": ["不存在的需求"]}])
+        assert any("RS 需求名 '不存在的需求' 不存在" in i["msg"] for i in vry.items)
+        from assemble_dq import render_dq_section
+        text = render_dq_section({"rules": rules_out,
+                                  "fused": [{"rule_id": "DQ_001", "covered_rs": ["编码不可为空值"],
+                                             "note": "同一检查不同措辞"}]}, rs2["dq_requirements"])
+        assert "融合申报" in text and "编码不可为空值" in text and "DQ_001" in text
 
     def test_patch_ts_md_keeps_mainline_bytes(self, tmp_path):
         md = tmp_path / "ts.md"
@@ -364,10 +418,10 @@ class TestRealChain:
         # 端到端：断言式 DQ 在真实 ts 上校验通过（精简形态：无锚定声明要求）
         dq_dir = tmp_path / "dq"
         dq_dir.mkdir()
-        (dq_dir / "dq_01_空值检查.sql").write_text(
+        (dq_dir / "DQ_001_id_非空.sql").write_text(
             "SELECT t.id FROM dws.dwb_test_f t WHERE t.id IS NULL", encoding="utf-8")
         rules_in = [{
-            "scope": "字段级", "check_type": "空值检查", "rule_name": "id 非空",
+            "rule_id": "DQ_001", "scope": "字段级", "check_type": "空值检查", "rule_name": "id 非空",
             "mode": "assertion", "violation_condition": "t.id IS NULL", "rule_desc": "违规=id 空"}]
         rules_out, vr = validate_and_build(rs, ts, rules_in, dq_dir)
         assert not any(i["level"] == "hard" for i in vr.items), vr.report_lines()
@@ -392,10 +446,11 @@ class TestMain:
 
     def test_main_success(self, tmp_path):
         build = self._setup(tmp_path)
-        (build / "dq" / "dq_01_空值检查.sql").write_text(
+        (build / "dq" / "DQ_001_产品编码非空.sql").write_text(
             "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL", encoding="utf-8")
         (build / "dq.json").write_text(json.dumps({"rules": [
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+            {"rule_id": "DQ_001", "scope": "字段级", "check_type": "空值检查",
+             "rule_name": "产品编码非空",
              "mode": "assertion", "violation_condition": "t.prod_code IS NULL",
              "rule_desc": "违规=空"}]}, ensure_ascii=False), encoding="utf-8")
         import assemble_dq
@@ -412,7 +467,7 @@ class TestMain:
         assert ei.value.code == 0
         dq = json.loads((build / "dq.json").read_text(encoding="utf-8"))
         assert dq["rules"][0]["mode"] == "assertion"
-        assert dq["rules"][0]["idx"] == 1 and dq["rules"][0]["sql_file"] == "dq_01_空值检查.sql"
+        assert dq["rules"][0]["idx"] == 1 and dq["rules"][0]["sql_file"] == "DQ_001_产品编码非空.sql"
         assert dq["tasks"]["dq"]["task_name"] == "task_dwb_test_f_dq"
         md = (build / "dwb_test_f_ts.md").read_text(encoding="utf-8")  # 标准名被渲染
         assert "t.prod_code IS NULL" in md
@@ -420,10 +475,11 @@ class TestMain:
     def test_main_legacy_ts_md_fallback(self, tmp_path):
         """旧档兜底：只有 ts.md（无标准名）时渲染进 ts.md。"""
         build = self._setup(tmp_path, md_name="ts.md")
-        (build / "dq" / "dq_01_空值检查.sql").write_text(
+        (build / "dq" / "DQ_001_产品编码非空.sql").write_text(
             "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL", encoding="utf-8")
         (build / "dq.json").write_text(json.dumps({"rules": [
-            {"scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空",
+            {"rule_id": "DQ_001", "scope": "字段级", "check_type": "空值检查",
+             "rule_name": "产品编码非空",
              "mode": "assertion", "violation_condition": "t.prod_code IS NULL",
              "rule_desc": "违规=空"}]}, ensure_ascii=False), encoding="utf-8")
         import assemble_dq
@@ -455,3 +511,66 @@ class TestMain:
         finally:
             _sys.argv = old_argv
         assert ei.value.code == 1
+
+
+class TestGroupByPerScope:
+    """聚合语法逐作用域（2026-09-18 内网实证：聚合错在 CTE 里被旧版只扫主查询体漏检；
+    WHERE 标量子查询聚合合法，旧版整段正则误拦——两个方向一起修）。"""
+
+    def _sql_run(self, tmp_path, sql, rid="DQ_001", rn="金额一致性"):
+        from run_ut import dq_rule_filename
+        dq_dir = tmp_path / ("dq" + rid)
+        dq_dir.mkdir(exist_ok=True)
+        (dq_dir / dq_rule_filename(rid, rn)).write_text(sql, encoding="utf-8")
+        return validate_and_build(_rs(), _ts(), [
+            _rule(rule_id=rid, rule_name=rn, check_type="一致性检查", mode="compare",
+                  violation_condition="t.id <> s.id")], dq_dir)
+
+    def test_cte_agg_missing_groupby_caught(self, tmp_path):
+        """CTE 内聚合无 GROUP BY——旧版漏检（返回任意行比主查询错更隐蔽），必须拦。"""
+        sql = ("WITH s AS (SELECT b.id, SUM(b.amt) AS total FROM ods.ods_test_f b) "
+               "SELECT t.id, s.total FROM dws.dwb_test_f t JOIN s ON s.id = t.id")
+        _, vr = self._sql_run(tmp_path, sql)
+        assert any("CTE" in i["msg"] and "GROUP BY" in i["msg"] for i in vr.items)
+
+    def test_cte_agg_with_groupby_ok(self, tmp_path):
+        sql = ("WITH s AS (SELECT b.id, SUM(b.amt) AS total FROM ods.ods_test_f b GROUP BY b.id) "
+               "SELECT t.id, s.total FROM dws.dwb_test_f t JOIN s ON s.id = t.id")
+        _, vr = self._sql_run(tmp_path, sql)
+        assert not any("GROUP BY" in i["msg"] for i in vr.items)
+
+    def test_where_scalar_subquery_not_flagged(self, tmp_path):
+        """WHERE 标量子查询聚合（合法，不强制外层分组）——不得误拦。"""
+        sql = ("SELECT t.id, t.prod_code FROM dws.dwb_test_f t "
+               "WHERE t.amt <> (SELECT SUM(b.amt) FROM ods.ods_test_f b WHERE b.id = t.id)")
+        _, vr = self._sql_run(tmp_path, sql)
+        assert not any("GROUP BY" in i["msg"] for i in vr.items)
+
+    def test_fix_loop_fusion_stability(self, tmp_path):
+        """修回路稳定性：融合（删中间规则）后其余规则的文件名/sql_file 零变化、零 N_DQ9。"""
+        from run_ut import dq_rule_filename
+        dq_dir = tmp_path / "dqz"
+        dq_dir.mkdir()
+        rules = [_rule(rule_id="DQ_001"),
+                 _rule(rule_id="DQ_002", rule_name="编码不可为空值"),
+                 _rule(rule_id="DQ_003", mode="compare", check_type="一致性检查",
+                       rule_name="金额一致性", violation_condition="t.id <> s.id")]
+        for d in rules:
+            rid, rn = d["rule_id"], d["rule_name"]
+            (dq_dir / dq_rule_filename(rid, rn)).write_text(
+                f"SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL",
+                encoding="utf-8")
+        rules_out, vr = validate_and_build(_rs(), _ts(), rules, dq_dir)
+        assert not any(i["level"] == "hard" for i in vr.items)
+        # 融合 DQ_002 并入 DQ_001（删 002）——其余规则零感知
+        fused_rules = [rules[0], rules[2]]
+        rules_out2, vr2 = validate_and_build(
+            _rs(dq_needs=[
+                {"scope": "字段级", "check_type": "空值检查", "rule_name": "产品编码非空", "rule_desc": "x"},
+                {"scope": "字段级", "check_type": "空值检查", "rule_name": "编码不可为空值", "rule_desc": "y"}]),
+            _ts(), fused_rules, dq_dir,
+            fused=[{"rule_id": "DQ_001", "covered_rs": ["编码不可为空值"], "note": "同义融合"}])
+        assert not any(i["code"] == "N_DQ9" for i in vr2.items)      # 零文件错位
+        by_id = {r["rule_id"]: r for r in rules_out2}
+        assert by_id["DQ_003"]["sql_file"] == "DQ_003_金额一致性.sql"  # 文件名零变化
+        assert by_id["DQ_001"]["sql_file"] == "DQ_001_产品编码非空.sql"
