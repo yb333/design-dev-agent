@@ -1339,11 +1339,17 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "输入存疑": [f"{w['alias']}/{w['field']}: {w['issue']}" for w in _plan["warn"]],
             "存疑处置": "核 mapping 出处——逻辑成立 → 落地其产生逻辑（如 derived_fields）；"
                         "对不上 → 记疑点上报（字段名写错归人裁决）",
-            "用法": ("填空只读本 view（mapping 中文名对物理名；对不出留空=自动进疑点）。"
-                     "唯一一次工具调用：explore --eval，stdin 只给 ? 行答案（别名|键|限定；"
-                     "预填行自动跑不用抄）——heredoc/管道透传引号免疫，PowerShell 先 "
-                     "$OutputEncoding=[Text.Encoding]::UTF8。评估结果（✓ 折叠只报异常/"
-                     "事实行+疑点清单）随回复上报"),
+            "用法": (
+                # 全预填（零 ? 行）→ 提示直接跑（2026-09-20：工具支持空 stdin 全量
+                # 连跑，但 designer 不知道"可以直接跑"会犹豫 stdin 给什么）
+                ("本清单已全部预填——无需填空，直接跑：explore --eval（不带 heredoc/"
+                 "空 stdin 即可，工具自动全量实测）"
+                 if _plan["run"] and all(r["key"] for r in _plan["run"]) else
+                 "填空只读本 view（mapping 中文名对物理名；对不出留空=自动进疑点）。"
+                 "唯一一次工具调用：explore --eval，stdin 只给 ? 行答案（别名|键|限定；"
+                 "预填行自动跑不用抄）——heredoc/管道透传引号免疫，PowerShell 先 "
+                 "$OutputEncoding=[Text.Encoding]::UTF8")
+                + "。评估结果（✓ 折叠只报异常/事实行+疑点清单）随回复上报"),
         }
 
     # 关联键类型对账（precheck 检出+决策后写进 rs_input，designer 必须看到：

@@ -1566,3 +1566,33 @@ class TestDeclaredPkExtraction:
         assert main_row["行"] == "f|id|" and "mapping 声明" in main_row["说明"]
         assert "核 mapping 出处" in sec["存疑处置"]               # 处置头一次
         assert sec["输入存疑"] == ["f/xx: 不在物理表里；mapping「明细」段提到它"]  # 事实+线索
+
+
+class TestAllPrefilledDirectRunHint:
+    """全预填直跑提示（2026-09-20：工具支持空 stdin 全量连跑，但 designer 不知道
+    "可以直接跑"会犹豫 stdin 给什么——用法文案动态分支）。"""
+
+    def test_all_prefilled_usage_says_direct_run(self):
+        from preprocess import build_compact
+        rs = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}},
+                        "declared_business_key": ["id"]},
+              "source_tables": [
+                  {"source_schema": "ods", "source_table": "m", "source_alias": "f",
+                   "join_condition": ""},
+                  {"source_schema": "ods", "source_table": "c", "source_alias": "c1",
+                   "join_condition": "f.id=c1.id and c1.status=1"}],   # 结构化预填
+              "field_mappings": []}
+        view = build_compact(rs)
+        usage = view["评估清单"]["用法"]
+        assert "已全部预填" in usage and "直接跑" in usage and "空 stdin" in usage
+        assert "?" not in " ".join(r["行"] for r in view["评估清单"]["需实测"])  # 零 ? 行
+
+    def test_has_question_rows_usage_keeps_fill_guide(self):
+        from preprocess import build_compact
+        rs = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
+              "source_tables": [
+                  {"source_schema": "ods", "source_table": "c", "source_alias": "c1",
+                   "join_condition": "客户编码关联"}],   # 自然语言 ? 行
+              "field_mappings": []}
+        view = build_compact(rs)
+        assert "填空" in view["评估清单"]["用法"]            # 填空指引仍在
