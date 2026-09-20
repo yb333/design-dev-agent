@@ -547,3 +547,25 @@ class TestEvalCli:
                         capture_output=True, text=True, timeout=60)
             assert r.returncode != 0
 
+
+
+class TestCompositeKeySqlDws:
+    """复合键 DWS 兼容（2026-09-18 内网实证：count(distinct a,b) 报错——DWS 的
+    COUNT(DISTINCT) 只收单表达式；官方替代=拼接/子查询/UNIQ[近似]，精确判定用子查询）。"""
+
+    def test_join_key_sql_composite_subquery_form(self):
+        sql = build_join_key_sql("ods", "t1", "code, renter_id", "status=1")
+        assert "SELECT DISTINCT code, renter_id" in sql        # 子查询先 DISTINCT 再计数
+        assert "COUNT(DISTINCT" not in sql                     # 多列 DISTINCT 不再出现
+        assert "WHERE status=1" in sql
+
+    def test_join_key_sql_single_unchanged(self):
+        sql = build_join_key_sql("ods", "t1", "code")
+        assert sql == ("SELECT COUNT(1) AS total, COUNT(DISTINCT code) AS distinct_cnt "
+                       "FROM ods.t1")
+
+    def test_overlap_sql_composite_concat(self):
+        from explore import build_overlap_sample_sql
+        sql = build_overlap_sample_sql("ods", "t1", "a,b")
+        assert "a::text || '~|~' || b::text" in sql            # record cast 不再使用
+        assert "::text" in sql and "LIMIT" in sql

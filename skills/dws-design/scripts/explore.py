@@ -61,11 +61,13 @@ def split_key(key: str) -> list[str]:
 
 
 def build_join_key_sql(schema: str, table: str, key: str, where_clause: str = "") -> str:
-    """构造 JOIN 键唯一性试算 SQL（--key 支持逗号分隔复合键——COUNT(DISTINCT (a,b))）。
+    """构造 JOIN 键唯一性试算 SQL（--key 支持逗号分隔复合键）。
 
-    SELECT COUNT(1) AS total, COUNT(DISTINCT {键}) AS distinct_cnt
-    FROM {schema}.{table}
-    [WHERE {where_clause}]
+    单键：SELECT COUNT(1), COUNT(DISTINCT {键}) FROM {表} [WHERE ...]
+    复合键：DWS（PG9.2 内核）COUNT(DISTINCT) 只收单表达式——count(distinct a,b)
+    报错（2026-09-18 内网实证），改子查询先 DISTINCT 再计数（官方替代三选一：
+    拼接/子查询/UNIQ[近似，不用于精确判定]——子查询语义最准：NULL 组合按一组
+    去重，与"NULL 键不算发散"同向）。
 
     单表查询，不 JOIN——避免 JOIN 发散污染结论。
     """
@@ -76,14 +78,15 @@ def build_join_key_sql(schema: str, table: str, key: str, where_clause: str = ""
     _validate_identifier(f"{schema}.{table}")
     for k in keys:
         _validate_identifier(k)
-    key_expr = f"({', '.join(keys)})" if len(keys) > 1 else keys[0]
-    sql = (
-        f"SELECT COUNT(1) AS total, COUNT(DISTINCT {key_expr}) AS distinct_cnt "
-        f"FROM {schema}.{table}"
-    )
-    if where_clause and where_clause.strip():
-        sql += f" WHERE {where_clause.strip()}"
-    return sql
+    where_part = f" WHERE {where_clause.strip()}" if where_clause and where_clause.strip() else ""
+    if len(keys) > 1:
+        cols = ", ".join(keys)
+        return (f"SELECT COUNT(1) AS total, "
+                f"(SELECT COUNT(1) FROM (SELECT DISTINCT {cols} "
+                f"FROM {schema}.{table}{where_part}) AS _dx) AS distinct_cnt "
+                f"FROM {schema}.{table}{where_part}")
+    return (f"SELECT COUNT(1) AS total, COUNT(DISTINCT {keys[0]}) AS distinct_cnt "
+            f"FROM {schema}.{table}{where_part}")
 
 
 def _validate_identifier(name: str) -> None:
@@ -131,15 +134,16 @@ def build_overlap_sample_sql(schema: str, table: str, key: str,
 
     SELECT DISTINCT {key}::text AS v FROM {schema}.{table} [WHERE ...] LIMIT 500
     ::text 归一显示形态（数值/日期侧也能跟字符侧直观比对）。
-    --key 逗号分隔复合键 → DISTINCT (a,b)::text 整串归一（内网实测：多字段关联
-    此前查不了）。
+    --key 逗号分隔复合键 → 各列 ::text 后 '~|~' 拼接整串归一（record cast
+    `(a,b)::text` 在 DWS 上不可靠，拼接是采样启发可接受的碰撞面）。
     """
     _validate_identifier(f"{schema}.{table}")
     keys = split_key(key)
     for k in keys:
         _validate_identifier(k)
-    key_expr = f"({', '.join(keys)})" if len(keys) > 1 else keys[0]
-    sql = (f"SELECT DISTINCT {key_expr}::text AS v FROM {schema}.{table}")
+    key_expr = (f"{keys[0]}::text" if len(keys) == 1
+                else " || '~|~' || ".join(f"{k}::text" for k in keys))
+    sql = (f"SELECT DISTINCT {key_expr} AS v FROM {schema}.{table}")
     if where_clause and where_clause.strip():
         sql += f" WHERE {where_clause.strip()}"
     sql += f" LIMIT {OVERLAP_SAMPLE_LIMIT}"

@@ -136,7 +136,8 @@ class TestFanoutLocalization:
 
 class TestDeclaredConditionsHonored:
     def test_composite_key_and_filter_in_query(self, monkeypatch, tmp_path):
-        """复合键 + 声明过滤必须真进 SQL：COUNT(DISTINCT (x, tenant)) + WHERE c.is_current = 1。"""
+        """复合键 + 声明过滤必须真进 SQL：子查询 DISTINCT (x, tenant) + WHERE c.is_current = 1
+        （2026-09-18 改形：DWS COUNT(DISTINCT) 只收单表达式，复合键子查询先 DISTINCT 再计数）。"""
         def h(sql):
             return [{"total": 50, "uniq": 50, "nulls": 0}]
 
@@ -144,7 +145,8 @@ class TestDeclaredConditionsHonored:
             {"alias": "c", "type": "LEFT JOIN",
              "condition": "a.x = c.x and a.tenant = c.tenant and c.is_current = 1"}]), h)
         joined = "\n".join(ex.captured)
-        assert "COUNT(DISTINCT (x, tenant))" in joined          # 复合键（单列查会误报）
+        assert "SELECT DISTINCT x, tenant" in joined              # 复合键（单列查会误报）
+        assert "COUNT(DISTINCT (x" not in joined                  # 旧多列 DISTINCT 形态不再出现
         assert "is_current = 1" in joined                       # condition 字面量项并入（单表 WHERE 剥别名前缀）
         assert "在关联条件下唯一" in "\n".join(lines)
 
@@ -837,3 +839,60 @@ class TestEdgeImpact:
         assert "涉及 A 侧 42 行" in text
         assert "膨胀面与 JOIN 类型无关" in text and "换 INNER 躲不掉膨胀" in text
         assert "丢行面" in text  # INNER 独有风险边界说破
+
+
+class TestCompositeKeyStatDws:
+    """复合键统计的 DWS 兼容（count(distinct a,b) 报错——子查询先 DISTINCT 再计数）。"""
+
+    def test_key_stat_composite_subquery(self):
+        from diagnose_fanout import _key_stat
+        seen = []
+
+        class _Rec:
+            def one(self, sql):
+                seen.append(sql)
+                return {"total": 10, "uniq": 8, "nulls": 0}
+        _key_stat(_Rec(), "ods", "t", ["code", "renter_id"], "")
+        assert "SELECT DISTINCT code, renter_id" in seen[0] and "COUNT(DISTINCT" not in seen[0]
+
+    def test_key_stat_single_unchanged(self):
+        from diagnose_fanout import _key_stat
+        seen = []
+
+        class _Rec:
+            def one(self, sql):
+                seen.append(sql)
+                return {"total": 10, "uniq": 10, "nulls": 0}
+        _key_stat(_Rec(), "ods", "t", ["code"], "")
+        assert "COUNT(DISTINCT code)" in seen[0]
+
+    def test_edge_stat_composite_subquery(self, monkeypatch, tmp_path):
+        from diagnose_fanout import run_edge_impact
+        _patch(monkeypatch, lambda sql: (
+            [{"total": 10, "d": 8}] if "COUNT(" in sql or "SELECT DISTINCT code" in sql
+            and "FROM (SELECT" not in sql else []))
+        import json as _json
+        d = tmp_path / "_internal"
+        d.mkdir()
+        (d / "rs_input.json").write_text(_json.dumps(
+            {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}}}), encoding="utf-8")
+        import diagnose_fanout as df
+        captured = {}
+        orig = df._Db
+        class _DbSpy(orig):
+            def __init__(self, schema):
+                pass
+            def one(self, sql):
+                captured.setdefault("sqls", []).append(sql)
+                return {"total": 10, "d": 8}
+            def rows(self, sql):
+                captured.setdefault("sqls", []).append(sql)
+                return []
+            def close(self):
+                pass
+        monkeypatch.setattr(df, "_Db", _DbSpy)
+        run_edge_impact(d / "rs_input.json",
+                        side_a={"schema": "ods", "table": "m", "key": "id", "where": ""},
+                        side_b={"schema": "ods", "table": "t", "key": "code,rid", "where": ""})
+        first = captured["sqls"][0]
+        assert "SELECT DISTINCT code, rid" in first and "COUNT(DISTINCT" not in first

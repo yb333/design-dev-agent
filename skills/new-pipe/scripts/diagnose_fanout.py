@@ -348,16 +348,22 @@ def _cast_err_hint(err_text) -> str:
 
 
 def _key_stat(db: _Db, schema: str, table: str, cols: list[str], where: str) -> dict:
-    """COUNT(1) vs COUNT(DISTINCT 组合键)（NULL 键行单独数——NULL 不参与 join 不会发散）。"""
+    """COUNT(1) vs 组合键唯一数（NULL 键行单独数——NULL 不参与 join 不会发散）。
+    复合键用子查询先 DISTINCT 再计数——DWS 的 COUNT(DISTINCT) 只收单表达式，
+    count(distinct a,b) 报错（2026-09-18 内网实证）。"""
     key = ", ".join(cols)
     # NULL 键行数用 CASE（GaussDB=PG9.2 内核，无 FILTER 子句）——NULL 不参与 join 不会发散
     # COUNT(1) 而非 COUNT(*)（平台口径，性能更合理）
     null_cond = " OR ".join(f"{c} IS NULL" for c in cols)
-    sql = (f"SELECT COUNT(1) AS total, COUNT(DISTINCT ({key})) AS uniq, "
+    where_part = f" WHERE {where}" if where else ""
+    if len(cols) > 1:
+        uniq_expr = (f"(SELECT COUNT(1) FROM (SELECT DISTINCT {key} "
+                     f"FROM {schema}.{table}{where_part}) AS _dx)")
+    else:
+        uniq_expr = f"COUNT(DISTINCT {cols[0]})"
+    sql = (f"SELECT COUNT(1) AS total, {uniq_expr} AS uniq, "
            f"SUM(CASE WHEN {null_cond} THEN 1 ELSE 0 END) AS nulls "
-           f"FROM {schema}.{table}")
-    if where:
-        sql += f" WHERE {where}"
+           f"FROM {schema}.{table}{where_part}")
     row = db.one(sql)
     return {"total": int(row.get("total") or 0), "uniq": int(row.get("uniq") or 0),
             "nulls": int(row.get("nulls") or 0)}
@@ -845,10 +851,16 @@ def run_edge_impact(rs_path: Path, side_a: dict, side_b: dict, top: int = 5) -> 
         raise ValueError("rs_input 里取不到 meta.target.f_table.schema（选源锚点）")
 
     def _stat(side: dict, keys: list[str]) -> dict:
-        ke = ", ".join(keys) if len(keys) > 1 else keys[0]
-        sql = (f"SELECT COUNT(1) AS total, COUNT(DISTINCT {ke}) AS d FROM {side['schema']}.{side['table']}")
-        if side.get("where"):
-            sql += f" WHERE {side['where']}"
+        w = f" WHERE {side['where']}" if side.get("where") else ""
+        if len(keys) > 1:
+            # DWS COUNT(DISTINCT) 只收单表达式——复合键子查询先 DISTINCT 再计数
+            ke = ", ".join(keys)
+            sql = (f"SELECT COUNT(1) AS total, (SELECT COUNT(1) FROM "
+                   f"(SELECT DISTINCT {ke} FROM {side['schema']}.{side['table']}{w}) AS _dx) AS d "
+                   f"FROM {side['schema']}.{side['table']}{w}")
+        else:
+            sql = (f"SELECT COUNT(1) AS total, COUNT(DISTINCT {keys[0]}) AS d "
+                   f"FROM {side['schema']}.{side['table']}{w}")
         row = db.one(sql)
         return {"total": int(row.get("total", 0)), "d": int(row.get("d", 0))}
 
