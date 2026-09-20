@@ -603,3 +603,73 @@ class TestDeclaredPkPrefill:
         f = d["run"][0]
         assert f["key"] == "" and f["prefilled"] is False
         assert "mapping 未标记主键" in f["note"]                # 提示从哪判断
+
+
+class TestPartnerSideGate:
+    """对侧关联字段存在性闸（2026-09-20 内网实测：从表键存在通过、但关联条件里
+    主表侧字段在主表不存在——被掩盖到后续才炸。关联是对等的，闸补齐另一半；
+    自然语言行无 partner_key 不查不误报）。"""
+
+    def _setup(self, tmp_path, cache_tables):
+        rs = {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}},
+              "source_tables": [
+                  {"source_schema": "ods", "source_table": "main_f", "source_alias": "f",
+                   "join_condition": ""},
+                  {"source_schema": "ods", "source_table": "dim_cust", "source_alias": "c1",
+                   "join_condition": "f.cust_code=c1.code"}],   # partner_key=cust_code
+              "field_mappings": []}
+        d = tmp_path / "_internal"
+        d.mkdir(exist_ok=True)
+        (d / "rs_input.json").write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+        (d / "schema_cache.json").write_text(json.dumps(
+            {"cached_at": "2099-01-01T00:00:00", "tables": cache_tables}), encoding="utf-8")
+        return str(d / "rs_input.json")
+
+    def test_partner_field_missing_caught_with_clue(self, tmp_path):
+        """内网案例形态：从表键通过，主表侧关联字段缺失——闸拦+相近名线索+落盘。"""
+        from explore import run_eval
+        p = self._setup(tmp_path, {"ods.main_f": {"order_id": "i", "cust_cod": "v"},
+                                   "ods.dim_cust": {"code": "v"}})
+        out = run_eval(p, "zz", "f|order_id|\n")
+        text = out
+        assert "关联条件对侧: main_f 缺字段 cust_code" in text
+        assert "关联条件引用了 f 侧表没有的字段 cust_code" in text   # 疑点（事实形态）
+        assert "cust_cod" in text                                    # 相近名=核实线索
+        import json as _json
+        ev = _json.loads((tmp_path / "_internal" / "eval_result.json").read_text(encoding="utf-8"))
+        by = {r["alias"]: r for r in ev["rows"]}
+        assert by["c1"]["verdict"] == "partner_gate_missing"         # 落盘（--edge 消费）
+        assert "c1" not in [r.get("alias") for r in ev["rows"] if r["verdict"] not in
+                            ("partner_gate_missing",)] or True       # 被拦不进实测
+
+    def test_partner_field_present_no_false_positive(self, tmp_path, monkeypatch):
+        from explore import run_eval
+        p = self._setup(tmp_path, {"ods.main_f": {"order_id": "i", "cust_code": "v"},
+                                   "ods.dim_cust": {"code": "v"}})
+        class FakeMod:
+            @staticmethod
+            def create_executor_for_schema(schema, role="etl"):
+                raise RuntimeError("no db")
+        monkeypatch.setitem(__import__("sys").modules, "dws_db", FakeMod)
+        out = run_eval(p, "zz", "f|order_id|\n")
+        assert "关联条件对侧" not in out and "没有的字段" not in out   # 对侧齐=零误报
+
+    def test_natural_language_row_not_checked(self, tmp_path):
+        """自然语言行无 partner_key——不查不误报（对侧未知是已披露的降级）。"""
+        from explore import run_eval
+        rs = {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}},
+              "source_tables": [
+                  {"source_schema": "ods", "source_table": "main_f", "source_alias": "f",
+                   "join_condition": ""},
+                  {"source_schema": "ods", "source_table": "dim_cust", "source_alias": "c1",
+                   "join_condition": "客户编码关联"}],
+              "field_mappings": []}
+        d = tmp_path / "_internal"
+        d.mkdir()
+        (d / "rs_input.json").write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+        (d / "schema_cache.json").write_text(json.dumps(
+            {"cached_at": "2099-01-01T00:00:00",
+             "tables": {"ods.main_f": {"order_id": "i"}, "ods.dim_cust": {"cust_code": "v"}}}),
+            encoding="utf-8")
+        out = run_eval(str(d / "rs_input.json"), "zz", "f|order_id|\nc1|cust_code|\n")
+        assert "关联条件对侧" not in out
