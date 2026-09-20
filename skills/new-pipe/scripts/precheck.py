@@ -873,13 +873,17 @@ def _check_join_conditions(
                 mention_texts=[txt for t in scope_tables for txt in mention_texts.get(t, [])])
             where_desc = where
             if prov:
+                # 文案只说检测器担保的事实（物理表查无 + mapping 段提到），
+                # 不越界解读成"逻辑字段/产物"（2026-09-20 用户定调：确定的事实
+                # 确定地说，不确定的猜测不确定地说；处置指引上提区头写一次
+                # 不逐条重复）
                 issues.append({
                     "table": scope_tables[0] if len(scope_tables) == 1 else ",".join(scope_tables),
                     "field": field, "level": "note",
-                    "issue": f"join_condition 引用逻辑字段（出处档 {prov}）——设计时须落地其产生逻辑，不能直接引用",
+                    "issue": f"不在物理表里；mapping「{prov}」段提到它",
                 })
                 result.add_pass(
-                    f"关联条件逻辑字段 {where_desc}: {field}（有出处，designer 落地）")
+                    f"关联条件字段 {where_desc}: {field}（物理表查无，mapping 段有提及——designer 核出处）")
                 return
             if len(known) == len(scope_tables) and scope_tables:
                 # 表在缓存但结构为空 = 表不存在/无权限（_check_db_schema 已报表级 error，
@@ -890,9 +894,9 @@ def _check_join_conditions(
                     _why = ("典型是 copy 源代码的逻辑字段残留（如 rn=1 开窗取一）或笔误；"
                             "需源端补出处（写明产生逻辑）或修正 mapping")
                 result.add_error(
-                    f"[条件字段] {where_desc} 引用 '{field}'：不在源表结构里且无产生逻辑记载——{_why}")
+                    f"[条件字段] {where_desc} 引用 '{field}'：不在源表结构里，mapping 也无提及——{_why}")
                 issues.append({"table": ",".join(scope_tables), "field": field,
-                               "level": "error", "issue": "无出处（不在表结构，无产生逻辑记载）"})
+                               "level": "error", "issue": "不在物理表里，mapping 也没提到它"})
             else:
                 # 表结构不可得：mapping 声明过该列也算数（join-only 键）
                 if any(field in mapped_cols.get(t, set()) for t in scope_tables):
@@ -904,9 +908,9 @@ def _check_join_conditions(
                     _why2 = "表不在 schema 缓存（该表未入校验范围——mapping 无字段映射的纯关联表；重跑 precheck 连库补齐）"
                 result.add_warn(
                     f"[条件字段] {where_desc} 引用 '{field}'：{_why2}，"
-                    f"且不在 mapping 字段集、无产生逻辑记载——确认字段真实存在或有出处")
+                    f"且不在 mapping 字段集——确认字段真实存在")
                 issues.append({"table": ",".join(scope_tables), "field": field,
-                               "level": "warn", "issue": f"存在性未校验（{_why2}），mapping 无记载"})
+                               "level": "warn", "issue": f"存在性未核（{_why2}），mapping 也没提到它"})
 
         # ① 别名限定引用 a.x：绑定到该别名对应的表
         for al, col in qualified:

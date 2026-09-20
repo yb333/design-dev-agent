@@ -123,6 +123,10 @@ def build_eval_plan_data(rs_input: dict) -> dict:
     sts = rs_input.get("source_tables") or []
     dbv = {str(t).lower() for t in ((rs_input.get("_db_verified") or {}).get("tables") or [])}
     issues = rs_input.get("_condition_issues") or []
+    # 声明主键（mapping remark 标"主键"提取，2026-09-20——主表线预填消 ? 求证摩擦）
+    declared_pk = [str(k).strip() for k in
+                   ((rs_input.get("meta") or {}).get("declared_business_key") or []) if str(k).strip()]
+    pk_str = ",".join(declared_pk)
     run, treat, warn = [], [], []
     for st in sts:
         alias = str(st.get("source_alias") or "?")
@@ -161,9 +165,16 @@ def build_eval_plan_data(rs_input: dict) -> dict:
                         "partner_key": ",".join(f.get("partner_cols") or []),
                         "note": f"预填自结构化条件（核一眼）{'〔precheck已核〕' if verified else ''}  {src_note}"})
         elif not cond:
-            run.append({"alias": alias, "schema": sch, "table": tbl, "key": "", "where": "",
-                        "prefilled": False, "is_main": True,
-                        "note": f"主表/粒度证据线：键=业务主键（RS/mapping 声明的键）{'〔precheck已核〕' if verified else ''}"})
+            if pk_str:
+                run.append({"alias": alias, "schema": sch, "table": tbl, "key": pk_str, "where": "",
+                            "prefilled": True, "is_main": True, "pk_declared": True,
+                            "note": f"主表/粒度证据线：键=业务主键（mapping 声明：{pk_str}——"
+                                    f"核一眼，粒度变化才调）{'〔precheck已核〕' if verified else ''}"})
+            else:
+                run.append({"alias": alias, "schema": sch, "table": tbl, "key": "", "where": "",
+                            "prefilled": False, "is_main": True,
+                            "note": f"主表/粒度证据线：键=业务主键（mapping 未标记主键——从字段中文名/RS 粒度声明判断）"
+                                    f"{'〔precheck已核〕' if verified else ''}"})
         else:
             run.append({"alias": alias, "schema": sch, "table": tbl, "key": "", "where": "",
                         "prefilled": False, "is_main": False,
@@ -186,7 +197,8 @@ def render_eval_draft(rs_input: dict) -> str:
         for t in d["treat"]:
             out.append(f"{t['alias']}|{t['schema']}.{t['table']}  命中:{t['signal']}  {t['check']}\n    原文:「{t['src']}」")
     if d["warn"]:
-        out.append("\n⚠ 输入存疑（precheck 检出——直接进疑点清单上报）：")
+        out.append("\n⚠ 输入存疑（处置写一次，逐条只列事实：核 mapping 出处——逻辑成立 → "
+                   "落地其产生逻辑（如 derived_fields）；对不上 → 记疑点上报（字段名写错归人裁决））：")
         for w in d["warn"]:
             out.append(f"⚠ {w['alias']}/{w['field']}: {w['issue']}")
     return "\n".join(out)

@@ -1296,6 +1296,10 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
             "说明": ("设计目标表是 F 表（_f 后缀）。design_decisions 的 target_table 填 F 表名。"
                      "I 视图是 F 表的固定镜像，由 assemble_ddl 按 meta.target.i_view 自动生成（i_view 为空则不建）。"),
         }
+    _dpk = (rs_input.get("meta", {}).get("declared_business_key") or [])
+    if _dpk:
+        if isinstance(compact.get("target"), dict):
+            compact["target"]["声明主键"] = _dpk
 
     # 数据探索（RS L01：表量级/空值率/发散说明——设计第4层的输入事实；缺失也要标注，
     # 让 designer 知道"没有"而不是"不知道有没有"）
@@ -1333,6 +1337,8 @@ def build_compact(rs_input: dict[str, Any]) -> dict[str, Any]:
                  "核对": t["check"], "原文": t["src"]}
                 for t in _plan["treat"]],
             "输入存疑": [f"{w['alias']}/{w['field']}: {w['issue']}" for w in _plan["warn"]],
+            "存疑处置": "核 mapping 出处——逻辑成立 → 落地其产生逻辑（如 derived_fields）；"
+                        "对不上 → 记疑点上报（字段名写错归人裁决）",
             "用法": ("填空只读本 view（mapping 中文名对物理名；对不出留空=自动进疑点）。"
                      "唯一一次工具调用：explore --eval，stdin 只给 ? 行答案（别名|键|限定；"
                      "预填行自动跑不用抄）——heredoc/管道透传引号免疫，PowerShell 先 "
@@ -1509,6 +1515,18 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
         f_table_name = final_table
         i_view_name = final_table + "_i"
 
+    # 声明主键提取（2026-09-20 内网实测：mapping 的 remark 标"主键"但未结构化——
+    # 评估清单主表线成 ? 逼 designer 求证考古，短路了标准流程。提取为结构化字段，
+    # 多条主键标记=复合键保序；无标记=空列表，消费方按缺省处理）
+    declared_pk: list[str] = []
+    _seen_pk = set()
+    for fm in slim_mapping["field_mappings"]:
+        if "主键" in str(fm.get("remark") or ""):
+            _tc = str(fm.get("target_column") or "").strip()
+            if _tc and _tc.lower() not in _seen_pk:
+                _seen_pk.add(_tc.lower())
+                declared_pk.append(_tc)
+
     rs_input: dict[str, Any] = {
         "meta": {
             "target": {
@@ -1517,6 +1535,7 @@ def build_rs_input(mapping_raw: dict[str, Any], rs_data: dict[str, Any]) -> dict
             },
             "owner": rs_meta.get("owner", {}) if isinstance(rs_meta, dict) else {},
             "grain": rs_meta.get("grain", "") if isinstance(rs_meta, dict) else "",
+            "declared_business_key": declared_pk,
             "load_strategy": {
                 "strategy": rs_data.get("schedule", {}).get("strategy", ""),
                 "incremental_key": rs_data.get("schedule", {}).get("incremental_key", ""),

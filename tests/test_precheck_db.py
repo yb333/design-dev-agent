@@ -1448,9 +1448,9 @@ class TestJoinConditionGate:
         m_errs = [e for e in result.errors if "ods_m_f" in e and "rn" in e]
         assert not a_errs, f"A 有出处不该报: {a_errs}"
         assert m_errs, "M 无出处应报"
-        assert any("designer 落地" in p for p in result.passed), result.passed  # 放行+落地提示
+        assert any("designer 核出处" in p for p in result.passed), result.passed  # 放行+核出处提示
         assert any(i["field"] == "rn" and i["level"] == "note"
-                   for i in rs["_condition_issues"])
+                   and "mapping「" in i["issue"] for i in rs["_condition_issues"])  # 事实+线索形态
 
     def test_typo_family_caught(self, tmp_path):
         """笔误家族（cust_id vs 表里无此列）同一机制收编 → error。"""

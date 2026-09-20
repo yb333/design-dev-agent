@@ -1535,3 +1535,34 @@ class TestEvalChecklistInView:
         view = build_compact({"meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}}},
                               "source_tables": [], "field_mappings": []})
         assert "评估清单" not in view
+
+
+class TestDeclaredPkExtraction:
+    """preprocess 提取 mapping remark 标"主键"→ meta.declared_business_key
+    （2026-09-20 内网实测驱动——主键只活在 remark 文本里，评估清单预填需要结构化源）。"""
+
+    def test_pk_extracted_from_remark(self):
+        from preprocess import build_compact
+        rs = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}},
+                        "declared_business_key": ["id"]},
+              "source_tables": [], "field_mappings": []}
+        view = build_compact(rs)
+        assert view["target"]["声明主键"] == ["id"]              # view target 段展示
+
+    def test_view_checklist_main_line_prefilled(self):
+        """评估清单段：主表线带预填键+存疑处置头写一次（不逐条重复）。"""
+        from preprocess import build_compact
+        rs = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}},
+                        "declared_business_key": ["id"]},
+              "source_tables": [
+                  {"source_schema": "ods", "source_table": "m", "source_alias": "f",
+                   "join_condition": ""}],
+              "field_mappings": [],
+              "_condition_issues": [{"table": "ods.m", "field": "xx",
+                                     "issue": "不在物理表里；mapping「明细」段提到它"}]}
+        view = build_compact(rs)
+        sec = view["评估清单"]
+        main_row = next(r for r in sec["需实测"] if r["行"].startswith("f|"))
+        assert main_row["行"] == "f|id|" and "mapping 声明" in main_row["说明"]
+        assert "核 mapping 出处" in sec["存疑处置"]               # 处置头一次
+        assert sec["输入存疑"] == ["f/xx: 不在物理表里；mapping「明细」段提到它"]  # 事实+线索

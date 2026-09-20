@@ -569,3 +569,37 @@ class TestCompositeKeySqlDws:
         sql = build_overlap_sample_sql("ods", "t1", "a,b")
         assert "a::text || '~|~' || b::text" in sql            # record cast 不再使用
         assert "::text" in sql and "LIMIT" in sql
+
+
+class TestDeclaredPkPrefill:
+    """声明主键预填（2026-09-20 内网实测：mapping remark 标了"主键"但评估清单
+    主表线成 ?——designer 求证考古短路了标准流程；预填消摩擦）。"""
+
+    def _rs(self, declared):
+        rs = {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}},
+              "source_tables": [
+                  {"source_schema": "ods", "source_table": "main_f", "source_alias": "f",
+                   "join_condition": ""}],
+              "field_mappings": []}
+        if declared:
+            rs["meta"]["declared_business_key"] = declared
+        return rs
+
+    def test_pk_prefilled_main_line(self):
+        from eval_workbench import build_eval_plan_data
+        d = build_eval_plan_data(self._rs(["order_id"]))
+        f = d["run"][0]
+        assert f["key"] == "order_id" and f["prefilled"] is True and f["is_main"] is True
+        assert "mapping 声明：order_id" in f["note"]          # 预填来源披露
+
+    def test_pk_composite_prefilled(self):
+        from eval_workbench import build_eval_plan_data
+        d = build_eval_plan_data(self._rs(["tenant_id", "order_no"]))
+        assert d["run"][0]["key"] == "tenant_id,order_no"     # 复合键逗号拼
+
+    def test_no_pk_still_question_with_hint(self):
+        from eval_workbench import build_eval_plan_data
+        d = build_eval_plan_data(self._rs([]))
+        f = d["run"][0]
+        assert f["key"] == "" and f["prefilled"] is False
+        assert "mapping 未标记主键" in f["note"]                # 提示从哪判断
