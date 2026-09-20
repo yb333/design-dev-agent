@@ -739,106 +739,187 @@ class TestJoinSafetyAliasIndex:
 
 
 class TestEdgeImpact:
-    """--edge 疑点边交集式试算（pre-ts，评估层上报增值——engineer 面；无 JOIN）：
-    B 重复组+样例 / A 多对多检出 / 重复键∩对侧=当前命中面（零命中带风险披露）。"""
+    """--edge 疑点边影响试算（2026-09-20 重写：--doubt 别名驱动——参数从 --eval 落盘
+    eval_result.json 派生[表/键/限定零手抄]，对侧自动[落盘 partner>主表推断]；
+    EXISTS 对唯一重复键集探测[无 OR 枚举无上限]；存在性闸参数错零 SQL 发起；
+    stdout 只出结论/全量报告落盘；主表粒度线疑点③b 拒绝）。"""
 
-    def _rs(self, tmp_path):
+    def _setup(self, tmp_path, ev_rows, main_alias="f", cache_tables=None):
         import json as _json
         d = tmp_path / "_internal"
         d.mkdir(exist_ok=True)
         (d / "rs_input.json").write_text(_json.dumps(
             {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}}},
             ensure_ascii=False), encoding="utf-8")
+        (d / "eval_result.json").write_text(_json.dumps(
+            {"rows": ev_rows, "main_alias": main_alias}, ensure_ascii=False), encoding="utf-8")
+        if cache_tables is not None:
+            (d / "schema_cache.json").write_text(_json.dumps(
+                {"cached_at": "2099-01-01T00:00:00", "tables": cache_tables}), encoding="utf-8")
         return d / "rs_input.json"
 
-    def _run(self, monkeypatch, tmp_path, handler):
+    def _fake_db(self, monkeypatch, results):
+        class FakeResult:
+            success = True
+            error = ""
+            def __init__(self, rows):
+                self.rows = rows
+        class FakeExecutor:
+            def test_connection(self):
+                return True
+            def execute(self, sql):
+                for pat, rows in results:
+                    if pat in sql:
+                        return FakeResult(rows)
+                return FakeResult([])
+            def close(self):
+                pass
+        class FakeMod:
+            @staticmethod
+            def create_executor_for_schema(schema, role="etl"):
+                return FakeExecutor()
+        monkeypatch.setitem(__import__("sys").modules, "dws_db", FakeMod)
+
+    _CACHE = {"ods.dim_cust": {"cust_code": "v", "code_x": "v", "cust_id": "i"},
+              "ods.main_f": {"order_id": "i", "cust_code": "v"}}
+
+    def _rows(self):
+        return [
+            {"alias": "f", "schema": "ods", "table": "main_f", "key": "order_id",
+             "where": "", "is_main": True, "partner": "", "verdict": "unique"},
+            {"alias": "c1", "schema": "ods", "table": "dim_cust", "key": "cust_code",
+             "where": "status=1", "is_main": False, "partner": "f", "verdict": "non_unique"},
+        ]
+
+    def test_doubt_driven_zero_hit(self, monkeypatch, tmp_path):
+        """主路径：--doubt 派生全参数；EXISTS 探测零命中+风险披露。"""
         from diagnose_fanout import run_edge_impact
-        _patch(monkeypatch, handler)
-        rs = self._rs(tmp_path)
-        lines, out = run_edge_impact(
-            rs,
-            side_a={"schema": "ods", "table": "main_f", "key": "order_id", "where": ""},
-            side_b={"schema": "ods", "table": "dim_cust", "key": "cust_code", "where": "status=1"},
-            top=3)
-        return "\n".join(lines), out
+        rs = self._setup(tmp_path, self._rows(), cache_tables=self._CACHE)
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 37}]),                      # 重复组数
+            ("AS total FROM ods.dim_cust", [{"total": 120000}]),  # B 行数
+            ("AS total FROM ods.main_f", [{"total": 50000}]),     # A 行数（多对多检）
+            ("AS hits", [{"hits": 0}]),                           # 命中面
+            ("AS d FROM", [{"total": 50000, "d": 50000}]),             # A 唯一性
+            ("ORDER BY dup DESC", [{"cust_code": "c_001", "dup": 3}]),
+        ])
+        stdout, out, full = run_edge_impact(rs, "c1")
+        text = "\n".join(stdout)
+        assert "疑点侧 ods.dim_cust key=(cust_code) 限定(status=1)：120000 行，重复键 37 组" in text
+        assert "0 组存在于对侧——当前零命中=未膨胀" in text and "未来命中即膨胀" in text
+        assert "对侧 ods.main_f key=(order_id)：50000 行，键唯一" in text
+        assert "INNER/LEFT 下命中组同样放大" in text            # JOIN 边界注记
+        assert out.exists() and "edge_dim_cust" in str(out)
+        assert "重复组样例" in "\n".join(full) and "重复组样例" not in text  # 样例仅落盘
+        assert "查询原文" in "\n".join(full)                     # SQL 审计段落盘
 
-    def test_zero_hit_risk_disclosure(self, monkeypatch, tmp_path):
-        """重复键全不命中对侧——当前未膨胀+未来命中即膨胀的风险披露（材料B核心）。"""
-        def h(sql):
-            if "COUNT(DISTINCT" in sql:
-                if "dim_cust" in sql:
-                    return [{"total": 120000, "d": 119963}]
-                return [{"total": 50000, "d": 50000}]
-            if "GROUP BY" in sql:  # 重复键组
-                return [{"cust_code": "c_001", "dup": 3}, {"cust_code": "c_002", "dup": 2}]
-            if "SELECT DISTINCT" in sql:  # 命中查询
-                return []
-            return []
-        text, out = self._run(monkeypatch, tmp_path, h)
-        assert "重复 37 组" in text and "cust_code = 'c_001'" in text  # 重复组+样例
-        assert "唯一" in text and "多对多" not in text       # A 侧唯一
-        assert "0 组存在于 A——当前零命中=未膨胀" in text
-        assert "未来命中即膨胀" in text
-        assert out.exists() and "edge_dim_cust" in str(out)  # 落盘 diagnose/
+    def test_exists_form_no_or_enumeration(self, monkeypatch, tmp_path):
+        """EXISTS 对唯一集——命中查询无 OR 枚举（治性能崩塌+上限截断）。"""
+        from diagnose_fanout import run_edge_impact
+        import dws_db
+        rs = self._setup(tmp_path, self._rows(), cache_tables=self._CACHE)
+        captured = []
+        ex = _patch(monkeypatch, lambda sql: (captured.append(sql) or [{"x": 1}]))
+        try:
+            run_edge_impact(rs, "c1")
+        except Exception:
+            pass  # 假库返回形状不全——只看 SQL 形态
+        hit_sqls = [s for s in captured if "EXISTS" in s]
+        assert hit_sqls, "命中查询必须是 EXISTS 形态"
+        for s in hit_sqls:
+            assert " OR " not in s.replace("ORDER BY", ""), f"命中查询不得 OR 枚举: {s[:120]}"
+        assert any("GROUP BY" in s and "HAVING COUNT(1) > 1" in s for s in captured)  # 唯一重复键集
 
-    def test_hits_reported(self, monkeypatch, tmp_path):
-        def h(sql):
-            if "COUNT(DISTINCT" in sql:
-                return [{"total": 120000, "d": 119963}] if "dim_cust" in sql else \
-                    [{"total": 50000, "d": 50000}]
-            if "GROUP BY" in sql:
-                return [{"cust_code": "c_001", "dup": 3}, {"cust_code": "c_002", "dup": 2}]
-            if "SELECT DISTINCT" in sql:
-                return [{"order_id": "c_001"}]
-            return []
-        text, _ = self._run(monkeypatch, tmp_path, h)
-        assert "2 组重复键中 1 组的键值存在于 A——当前膨胀面 1 组" in text
+    def test_hits_with_affected_rows(self, monkeypatch, tmp_path):
+        from diagnose_fanout import run_edge_impact
+        rs = self._setup(tmp_path, self._rows(), cache_tables=self._CACHE)
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 37}]),
+            ("AS total FROM ods.dim_cust", [{"total": 120000}]),
+            ("AS total FROM ods.main_f", [{"total": 50000}]),
+            ("AS hits", [{"hits": 3}]),
+            ("AS d FROM", [{"total": 50000, "d": 50000}]),
+            ("AS c FROM", [{"c": 4200}]),                        # 受影响行
+        ])
+        stdout, _, _ = run_edge_impact(rs, "c1")
+        text = "\n".join(stdout)
+        assert "37 组重复键中 3 组存在于对侧——当前膨胀面 3 组，涉及对侧 4200 行" in text
 
     def test_many_to_many_flagged(self, monkeypatch, tmp_path):
-        """对侧键也重复——多对多，此边必膨胀收敛必选。"""
-        def h(sql):
-            if "COUNT(DISTINCT" in sql:
-                return [{"total": 120000, "d": 119963}] if "dim_cust" in sql else \
-                    [{"total": 50000, "d": 49990}]
-            if "GROUP BY" in sql:
-                return [{"cust_code": "c_001", "dup": 3}]
-            if "SELECT DISTINCT" in sql:
-                return [{"order_id": "c_001"}]
-            return []
-        text, _ = self._run(monkeypatch, tmp_path, h)
-        assert "多对多：此边必膨胀，收敛必选" in text
+        from diagnose_fanout import run_edge_impact
+        rs = self._setup(tmp_path, self._rows(), cache_tables=self._CACHE)
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 5}]),
+            ("AS total FROM ods.dim_cust", [{"total": 100}]),
+            ("AS total FROM ods.main_f", [{"total": 50000}]),
+            ("AS hits", [{"hits": 2}]),
+            ("AS d", [{"total": 50000, "d": 49990}]),
+            ("AS c FROM", [{"c": 10}]),
+        ])
+        stdout, _, _ = run_edge_impact(rs, "c1")
+        assert "多对多：此边必膨胀，收敛必选" in "\n".join(stdout)
 
-    def test_null_dup_keys_excluded(self, monkeypatch, tmp_path):
-        """NULL 键关联不上——不入命中面。"""
-        def h(sql):
-            if "COUNT(DISTINCT" in sql:
-                return [{"total": 100, "d": 98}] if "dim_cust" in sql else \
-                    [{"total": 50, "d": 50}]
-            if "GROUP BY" in sql:
-                return [{"cust_code": None, "dup": 2}, {"cust_code": "c_1", "dup": 2}]
-            if "SELECT DISTINCT" in sql:
-                return []
-            return []
-        text, _ = self._run(monkeypatch, tmp_path, h)
-        assert "1 组重复键中 0 组" in text  # NULL 组不入分母
+    def test_main_table_doubt_rejected_3b(self, tmp_path):
+        """主表粒度线疑点无边可试算——③b 路由拒绝（补键/退BA/收敛，不跑本工具）。"""
+        from diagnose_fanout import run_edge_impact
+        rs = self._setup(tmp_path, self._rows())
+        with pytest.raises(ValueError, match="③b 路由"):
+            run_edge_impact(rs, "f")
 
-    def test_join_type_boundary_and_affected_rows(self, monkeypatch, tmp_path):
-        """JOIN 类型边界注记（防误读'换 INNER 躲膨胀'）+ 受影响 A 行数。"""
-        def h(sql):
-            if "COUNT(DISTINCT" in sql:
-                return [{"total": 120000, "d": 119963}] if "dim_cust" in sql else \
-                    [{"total": 50000, "d": 50000}]
-            if "GROUP BY" in sql:
-                return [{"cust_code": "c_001", "dup": 3}, {"cust_code": "c_002", "dup": 2}]
-            if "SELECT DISTINCT" in sql:
-                return [{"order_id": "c_001"}]
-            if "COUNT(1) AS c" in sql:  # 受影响 A 行数
-                return [{"c": 42}]
-            return []
-        text, _ = self._run(monkeypatch, tmp_path, h)
-        assert "涉及 A 侧 42 行" in text
-        assert "膨胀面与 JOIN 类型无关" in text and "换 INNER 躲不掉膨胀" in text
-        assert "丢行面" in text  # INNER 独有风险边界说破
+    def test_doubt_not_in_rows_lists_available(self, tmp_path):
+        from diagnose_fanout import run_edge_impact
+        rs = self._setup(tmp_path, self._rows())
+        with pytest.raises(ValueError, match="可用: \['c1', 'f'\]"):
+            run_edge_impact(rs, "zz9")
+
+    def test_gate_missing_key_error_points_to_eval_result(self, tmp_path):
+        """参数错零 SQL 发起：键不在表——闸拦并指向 eval_result.json（治传错无提示）。"""
+        from diagnose_fanout import run_edge_impact
+        rows = self._rows()
+        rows[1]["key"] = "order_id"  # 把 A 的键塞给 B——闸拦
+        rs = self._setup(tmp_path, rows, cache_tables=self._CACHE)
+        with pytest.raises(ValueError, match="对照 eval_result.json"):
+            run_edge_impact(rs, "c1")
+
+    def test_partner_fallback_to_main_with_note(self, monkeypatch, tmp_path):
+        """对侧缺省=落盘 partner>主表推断（自然语言条件披露'按主表推断'）。"""
+        from diagnose_fanout import run_edge_impact
+        rows = self._rows()
+        rows[1]["partner"] = ""  # 抹掉结构化 partner → 主表推断
+        rs = self._setup(tmp_path, rows, cache_tables=self._CACHE)
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 2}]),
+            ("AS total FROM ods.dim_cust", [{"total": 100}]),
+            ("AS total FROM ods.main_f", [{"total": 50}]),
+            ("AS hits", [{"hits": 0}]),
+            ("AS d", [{"total": 50, "d": 50}]),
+        ])
+        stdout, _, _ = run_edge_impact(rs, "c1")
+        assert "对侧按主表推断" in "\n".join(stdout)
+
+    def test_override_channel_changes_key(self, monkeypatch, tmp_path):
+        """--override 兜底：手传键覆盖派生值（走同一存在性闸）。"""
+        from diagnose_fanout import run_edge_impact
+        rs = self._setup(tmp_path, self._rows(), cache_tables=self._CACHE)
+        self._fake_db(monkeypatch, [
+            ("AS groups", [{"groups": 1}]),
+            ("AS total FROM ods.dim_cust", [{"total": 100}]),
+            ("AS total FROM ods.main_f", [{"total": 50}]),
+            ("AS hits", [{"hits": 0}]),
+            ("AS d", [{"total": 50, "d": 50}]),
+        ])
+        stdout, _, _ = run_edge_impact(rs, "c1", override={"join_key_b": "code_x"})
+        assert "key=(code_x)" in "\n".join(stdout)
+
+    def test_eval_result_missing_directs_to_eval(self, tmp_path):
+        from diagnose_fanout import run_edge_impact
+        import json as _json
+        d = tmp_path / "_internal"
+        d.mkdir()
+        (d / "rs_input.json").write_text(_json.dumps(
+            {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}}}), encoding="utf-8")
+        with pytest.raises(ValueError, match="先让 designer 跑一次"):
+            run_edge_impact(d / "rs_input.json", "c1")
 
 
 class TestCompositeKeyStatDws:
@@ -867,32 +948,23 @@ class TestCompositeKeyStatDws:
         assert "COUNT(DISTINCT code)" in seen[0]
 
     def test_edge_stat_composite_subquery(self, monkeypatch, tmp_path):
+        """复合键（2026-09-20 重写后由 run_edge_impact 承载）：唯一重复键集/对侧统计
+        的复合键形态=子查询先 DISTINCT 再计数，COUNT(DISTINCT a,b) 不出现。"""
         from diagnose_fanout import run_edge_impact
-        _patch(monkeypatch, lambda sql: (
-            [{"total": 10, "d": 8}] if "COUNT(" in sql or "SELECT DISTINCT code" in sql
-            and "FROM (SELECT" not in sql else []))
-        import json as _json
-        d = tmp_path / "_internal"
-        d.mkdir()
-        (d / "rs_input.json").write_text(_json.dumps(
-            {"meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}}}), encoding="utf-8")
-        import diagnose_fanout as df
-        captured = {}
-        orig = df._Db
-        class _DbSpy(orig):
-            def __init__(self, schema):
-                pass
-            def one(self, sql):
-                captured.setdefault("sqls", []).append(sql)
-                return {"total": 10, "d": 8}
-            def rows(self, sql):
-                captured.setdefault("sqls", []).append(sql)
-                return []
-            def close(self):
-                pass
-        monkeypatch.setattr(df, "_Db", _DbSpy)
-        run_edge_impact(d / "rs_input.json",
-                        side_a={"schema": "ods", "table": "m", "key": "id", "where": ""},
-                        side_b={"schema": "ods", "table": "t", "key": "code,rid", "where": ""})
-        first = captured["sqls"][0]
-        assert "SELECT DISTINCT code, rid" in first and "COUNT(DISTINCT" not in first
+        ev = TestEdgeImpact()
+        rs = ev._setup(tmp_path, [
+            {"alias": "f", "schema": "ods", "table": "main_f", "key": "order_id,tenant_id",
+             "where": "", "is_main": True, "partner": "", "verdict": "unique"},
+            {"alias": "c1", "schema": "ods", "table": "dim_cust", "key": "code,rid",
+             "where": "", "is_main": False, "partner": "f", "verdict": "non_unique"},
+        ], cache_tables={"ods.dim_cust": {"code": "v", "rid": "v"},
+                         "ods.main_f": {"order_id": "i", "tenant_id": "i"}})
+        captured = []
+        _patch(monkeypatch, lambda sql: (captured.append(sql) or [{"x": 1}]))
+        try:
+            run_edge_impact(rs, "c1")
+        except Exception:
+            pass  # 假库返回形状不全——只看 SQL 形态
+        assert any("SELECT DISTINCT order_id, tenant_id" in s for s in captured)
+        assert not any("COUNT(DISTINCT code, rid)" in s for s in captured)
+        assert any("code IS NOT NULL AND rid IS NOT NULL" in s for s in captured)  # NULL 守卫

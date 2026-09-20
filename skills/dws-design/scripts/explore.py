@@ -436,7 +436,13 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
     for it in answers:
         ans_by_alias.setdefault(it["alias"].strip().lower(), []).append(it)
     treat_aliases = {t["alias"].strip().lower() for t in plan["treat"]}
+    # plan 行元数据索引（is_main/partner——engineer 侧 --edge --doubt 别名驱动派生用）
+    meta_by_alias = {r["alias"].strip().lower():
+                     {"is_main": bool(r.get("is_main")), "partner": r.get("partner") or "",
+                      "schema": r["schema"], "table": r["table"]}
+                     for r in plan["run"]}
     ok_tags, exc, facts, doubts = [], [], [], []
+    eval_rows: list = []  # 落盘 eval_result.json（engineer 诊断派生源，2026-09-20）
 
     # 免实测行：✓ 核对一致折叠进汇总（事实行自动生成）；不一致/口径不全→疑点
     for t in plan["treat"]:
@@ -473,11 +479,19 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
             else:
                 merged.append((it["alias"], it["schema"], it["table"], it["key"], it["where"]))
 
-    # 未答 ? 行 → 自动疑点（留空=合法答案）
+    # 未答 ? 行 → 自动疑点（留空=合法答案；主表线未答=粒度无据，另点名）
     for tag, sch, tbl, key, where in merged:
         if not key:
             exc.append(f"[{tag}] {tbl} ？未答")
-            doubts.append(f"{tag}/{tbl}: 键未确定（自然语言条件对不出物理名，原文见 view 评估清单）")
+            _m = meta_by_alias.get(tag.strip().lower(), {})
+            eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": "",
+                              "where": where, "is_main": _m.get("is_main", False),
+                              "partner": _m.get("partner", ""), "verdict": "not_answered"})
+            if _m.get("is_main"):
+                doubts.append(f"{tag}/{tbl}: 主表业务主键未确定（粒度无据——RS/mapping 声明的键"
+                              "对不出或未填）——粒度/键声明问题，无关联边可试算")
+            else:
+                doubts.append(f"{tag}/{tbl}: 键未确定（自然语言条件对不出物理名，原文见 view 评估清单）")
 
     from schema_query import lookup_table, _similar_names
     to_run = []  # (tag, sch, tbl, key, where, gate_note)
@@ -486,6 +500,7 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
     for tag, sch, tbl, key, where in merged:
         if not key:
             continue
+        _m2 = meta_by_alias.get(tag.strip().lower(), {})
         dedup = (sch.lower(), tbl.lower(), key.lower(), where.lower())
         if dedup in seen:
             exc.append(f"[{tag}] 与 [{seen[dedup]}] 查同一表同键同限定——只跑一次，结论共用")
@@ -510,6 +525,9 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
             doubts.append(f"{tag}/{tbl}: 键字段 {', '.join(missing)} 物理不存在"
                           + (f"（相近名: {'；'.join(s.split('→相近 ')[-1] for s in sim)}"
                              "——给调用方核实的线索）" if sim else ""))
+            eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
+                              "where": where, "is_main": _m2.get("is_main", False),
+                              "partner": _m2.get("partner", ""), "verdict": "gate_missing"})
             continue
         gate_note = "" if st == "ok" else (
             f"（键存在性未核: {'无 schema_cache' if st == 'no_cache' else f'{sch}.{tbl} 不在 cache'}）")
@@ -553,8 +571,14 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
                             except Exception:
                                 pass
                             exc.append(f"[{tag}] {tbl} key=({key}) ✗ 不唯一（重复 {total - uniq}）{sample}")
-                            doubts.append(f"{tag}/{tbl}: {key} 限定({where or '无'})下不唯一"
-                                          f"（{total} 行重复 {total - uniq}）")
+                            _m = meta_by_alias.get(tag.strip().lower(), {})
+                            if _m.get("is_main"):
+                                doubts.append(f"{tag}/{tbl}: 主表业务主键 {key} 不唯一"
+                                              f"（{total} 行重复 {total - uniq}）——粒度/键声明问题，"
+                                              f"无关联边可试算；方向=补键[复合]/退BA修数据/收敛策略")
+                            else:
+                                doubts.append(f"{tag}/{tbl}: {key} 限定({where or '无'})下不唯一"
+                                              f"（{total} 行重复 {total - uniq}）")
                     except Exception as e:
                         exc.append(f"[{tag}] 查询异常: {e}")
             finally:
@@ -565,19 +589,31 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
     for tag, sch, tbl, key, where, gate_note in to_run:
         got = meas.get((tag, sch, tbl, key, where))
         q = f"限定({where})" if where else "无限定"
+        _m = meta_by_alias.get(tag.strip().lower(), {})
         if got is None:
             exc.append(f"[{tag}] {tbl} key=({key}) 唯一性未实测（连不上库）{gate_note}")
             facts.append(f"- {{alias: {tag}, join_key_unique: \"未验证\", "
                          f"reason: \"连不上库未实测 {key} {q}\"}}")
+            eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
+                              "where": where, "is_main": _m.get("is_main", False),
+                              "partner": _m.get("partner", ""), "verdict": "unverified"})
         else:
             total, uniq = got
             if total == uniq:
                 ok_tags.append(tag)
                 facts.append(f"- {{alias: {tag}, join_key_unique: true, "
                              f"reason: \"实测: {key} {q}，{total} 行零重复\"}}")
+                eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
+                                  "where": where, "is_main": _m.get("is_main", False),
+                                  "partner": _m.get("partner", ""), "verdict": "unique",
+                                  "total": total})
             else:
                 facts.append(f"- {{alias: {tag}, join_key_unique: false, "
                              f"reason: \"实测: {key} {q}，{total} 行重复 {total - uniq}\", strategy: \"\"}}")
+                eval_rows.append({"alias": tag, "schema": sch, "table": tbl, "key": key,
+                                  "where": where, "is_main": _m.get("is_main", False),
+                                  "partner": _m.get("partner", ""), "verdict": "non_unique",
+                                  "total": total, "dup": total - uniq})
     parts = [f"── 评估结果（实测 {len(seen)} 项；✓ 唯一 {len(ok_tags)}："
              f"{'、'.join(ok_tags) if ok_tags else '无'}）──"]
     parts.extend(exc)
@@ -588,6 +624,15 @@ def run_eval(rs_path: str, target_schema: str, stdin_text: str) -> str:
         parts.extend(f"{i}) {d}" for i, d in enumerate(doubts, 1))
     else:
         parts.append("（无——评估层无疑点，直接进五层）")
+    # 落盘 eval_result.json（engineer 侧 --edge --doubt 别名驱动派生的参数源，2026-09-20；
+    # stdout 是 designer 面，此文件是 engineer 诊断输入——角色面分立）
+    try:
+        (Path(rs_path).parent / "eval_result.json").write_text(
+            json.dumps({"rows": eval_rows,
+                        "main_alias": next((r["alias"] for r in plan["run"] if r.get("is_main")), "")},
+                       ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass  # 落盘失败不阻断评估主流程
     return "\n".join(parts)
 
 

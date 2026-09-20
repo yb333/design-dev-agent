@@ -194,7 +194,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | 问题类型 | 确定性路由（不问人） | 根因/语义时的归宿 |
 |---|---|---|
 | SQL 语法类（COLUMN/TYPE/SYNTAX/DOES NOT EXIST；DQ FAIL/MISSING） | 恢复 coder 旧会话修复 | — |
-| 设计期关联疑点（键不唯一且输入无声明，designer 评估层上报带疑似方向——评估结果=事实行+疑点清单） | R1 套路做实：复测+**diagnose_fanout --edge 边级交集试算**（pre-ts 无 JOIN：疑点侧重复组∩对侧键→当前命中面/零命中+风险披露；自然语言边披露降级） | 人三选：源头修 mapping / 采纳验证过的条件本次继续 / 退 BA·接受+收敛策略（Task 带 task_id 恢复 designer 会话，只带裁决不带分析）；终局实证=闸口① diagnose_fanout --all |
+| 设计期关联疑点（designer 评估层上报带疑似方向——评估结果=事实行+疑点清单） | **③a 从表键发散**：R1 套路 `diagnose_fanout --edge --doubt {别名}`（2026-09-20 重写：参数从 --eval 落盘 eval_result.json 派生[表/键/限定零手抄]，对唯一重复键集 EXISTS 探测[无 OR 枚举]，存在性闸拦参数错，stdout 结论+全量落盘；主表疑点自动拒→③b）/ **③b 主表粒度线发散**：无边可试算，材料直接带三选 | 人三选：源头修 mapping / 采纳验证过的条件本次继续 / 退 BA·接受+收敛策略（Task 带 task_id 恢复 designer 会话，只带裁决不带分析；③b 选项=补键[复合]/退BA/收敛）；终局实证=闸口① diagnose_fanout --all |
 | 类型风险（跨大类转换） | — | 1b 问人（转换/不加/返源端） |
 | 关联键类型跨大类 | — | 1b 问人（转换/改关联键/接受） |
 | 值域溢出（numeric overflow/value too long） | — | 按 1b 值域菜单：源输入→**BA** 改模型；过程决策→**SE** 拍板 |
