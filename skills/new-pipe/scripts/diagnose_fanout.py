@@ -1123,8 +1123,10 @@ def main():
             lines, out, _full = run_edge_impact(
                 rs_path, doubt=args.doubt, partner=args.partner, override=override,
                 top=args.top)
-        except ConnectionError as e:
-            print(f"[环境] 无库/连不上: {e}——环境问题归人", file=sys.stderr)
+        except (ConnectionError, FileNotFoundError) as e:
+            # FileNotFoundError=数据库配置缺失（dws_db 侧抛）——同属环境错归人，
+            # 不进 fail-soft（掉进去=谎报"工具缺陷"且 exit 0 假成功，测试实抓）
+            print(f"[环境] 无库/连不上/配置缺失: {e}——环境问题归人", file=sys.stderr)
             sys.exit(2)
         except (ValueError, RuntimeError, json.JSONDecodeError) as e:
             print(f"[错误] {e}", file=sys.stderr)

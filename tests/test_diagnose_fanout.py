@@ -1063,3 +1063,187 @@ class TestCompositeKeyStatDws:
         assert any("SELECT DISTINCT order_id, tenant_id" in s for s in captured)
         assert not any("COUNT(DISTINCT code, rid)" in s for s in captured)
         assert any("code IS NOT NULL AND rid IS NOT NULL" in s for s in captured)  # NULL 守卫
+
+
+class TestEdgeRealChain:
+    """真实链路契约测试（--eval 真实落盘 → --edge 消费——治 fixture 手写形态与真实
+    产出脱节：explore 改 eval_result.json 键名/verdict 值时消费端测试还绿着、生产
+    已断；同族教训=assemble_dq 的 TestRealChain[target_field 键 bug]。**内网实报
+    复合键案例（code,renter_id vs 单键主表——IndexError 崩溃现场）全链覆盖**）。"""
+
+    def _rs(self, tmp_path):
+        import json as _json
+        d = tmp_path / "_internal"
+        d.mkdir(exist_ok=True)
+        (d / "rs_input.json").write_text(_json.dumps({
+            "meta": {"target": {"f_table": {"schema": "zz", "table": "t_f"}}},
+            "source_tables": [
+                {"source_schema": "ods", "source_table": "main_f", "source_alias": "f",
+                 "join_condition": ""},
+                {"source_schema": "ods", "source_table": "dim_cust", "source_alias": "c1",
+                 "join_condition": "f.cust_code=c1.code and f.tenant_id=c1.renter_id"},
+            ],
+            "field_mappings": []}, ensure_ascii=False), encoding="utf-8")
+        (d / "schema_cache.json").write_text(_json.dumps(
+            {"cached_at": "2099-01-01T00:00:00", "tables": {
+                "ods.main_f": {"order_id": "i", "cust_code": "v", "tenant_id": "v"},
+                "ods.dim_cust": {"code": "v", "renter_id": "v"}}}), encoding="utf-8")
+        return d / "rs_input.json"
+
+    def _run_eval(self, monkeypatch, tmp_path, answer="f|order_id|"):
+        """跑真实 --eval（假库：dim_cust 复合键不唯一，主表唯一）→ 返回落盘 dict。"""
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "dws-design" / "scripts"))
+        from explore import run_eval
+
+        class FakeResult:
+            success = True
+            error = ""
+            def __init__(self, rows):
+                self.rows = rows
+        class FakeExecutor:
+            def test_connection(self):
+                return True
+            def execute(self, sql):
+                # 统计查询（单键 COUNT(DISTINCT) / 复合键子查询两形态外层都是
+                # AS total + AS distinct_cnt——按表返回，复合键统计形态变化不漏配）
+                if "AS total" in sql and "AS distinct_cnt" in sql and "FROM ods.dim_cust" in sql:
+                    return FakeResult([{"total": 1000, "distinct_cnt": 960}])   # 不唯一
+                if "AS total" in sql and "AS distinct_cnt" in sql and "FROM ods.main_f" in sql:
+                    return FakeResult([{"total": 500, "distinct_cnt": 500}])     # 唯一
+                return FakeResult([])
+            def close(self):
+                pass
+        class FakeMod:
+            @staticmethod
+            def create_executor_for_schema(schema, role="etl"):
+                return FakeExecutor()
+        monkeypatch.setitem(_sys.modules, "dws_db", FakeMod)
+        rs = self._rs(tmp_path)
+        run_eval(str(rs), "zz", answer)
+        import json as _json
+        return _json.loads((rs.parent / "eval_result.json").read_text(encoding="utf-8"))
+
+    def test_real_chain_composite_key(self, monkeypatch, tmp_path):
+        """内网实报案例全链：--eval（复合键疑点落盘）→ --edge 零参数批量消费，
+        对侧键=配对列（cust_code,tenant_id）复合度一致，不再 IndexError。"""
+        ev = self._run_eval(monkeypatch, tmp_path)
+        by = {r["alias"]: r for r in ev["rows"]}
+        # 契约断言：真实落盘形态（消费端依赖的每个键都真实存在）
+        assert by["c1"]["key"] == "code,renter_id"                 # 预填复合键
+        assert by["c1"]["partner_key"] == "cust_code,tenant_id"    # 配对列（同 pair 收集）
+        assert by["c1"]["partner"] == "f" and by["c1"]["verdict"] == "non_unique"
+        assert by["f"]["is_main"] is True and ev["main_alias"] == "f"
+        # 零参数批量消费真实落盘文件
+        from diagnose_fanout import run_edge_impact
+        captured = []
+        _patch(monkeypatch, lambda sql: (
+            captured.append(sql) or ([{"groups": 4}] if "AS groups" in sql else [{"x": 1}])))
+        stdout, out, _full = run_edge_impact(self._rs(tmp_path).parent / "rs_input.json")
+        text = "\n".join(stdout)
+        assert "疑点侧 ods.dim_cust key=(code,renter_id)" in text
+        assert "对侧 ods.main_f key=(cust_code,tenant_id)" in text        # 配对列做 A 键
+        assert "对侧键=关联条件配对列" in text
+        # SQL 形态：复合键两侧成对出现于 JOIN 条件，且 DWS 兼容（无 COUNT(DISTINCT a,b)）
+        join_pair = [s for s in captured if "EXISTS" in s]
+        assert join_pair and any("m.cust_code = d.code" in s and "m.tenant_id = d.renter_id" in s
+                                 for s in join_pair)
+        assert not any("COUNT(DISTINCT code" in s for s in captured)
+
+    def test_real_chain_shape_contract(self, monkeypatch, tmp_path):
+        """消费端契约固化：--edge 依赖的 eval_result.json 键集（alias/schema/table/
+        key/where/is_main/partner/partner_key/verdict/main_alias）真实产出齐全。"""
+        ev = self._run_eval(monkeypath := monkeypatch, tmp_path)
+        need = {"alias", "schema", "table", "key", "where", "is_main",
+                "partner", "partner_key", "verdict"}
+        for r in ev["rows"]:
+            missing = need - set(r.keys())
+            assert not missing, f"真实落盘缺消费端依赖的键 {missing}（explore 侧漂移）"
+        assert "main_alias" in ev
+
+
+class TestEdgeCli:
+    """CLI 级测试（SKILL 教的命令形态必须真实可跑——治 argparse 接线/报错路径
+    零覆盖；离线确定性：校验在懒连接前，错误路径不碰库）。"""
+
+    def _script(self):
+        return Path(__file__).resolve().parent.parent / "skills" / "new-pipe" / "scripts" / "diagnose_fanout.py"
+
+    def _fixture(self, tmp_path, rows, cache=None):
+        import json as _json
+        d = tmp_path / "_internal"
+        d.mkdir()
+        (d / "rs_input.json").write_text(_json.dumps(
+            {"meta": {"target": {"f_table": {"schema": "zz_nodb", "table": "t_f"}}}}),
+            encoding="utf-8")
+        (d / "eval_result.json").write_text(_json.dumps(
+            {"rows": rows, "main_alias": "f"}, ensure_ascii=False), encoding="utf-8")
+        if cache:
+            (d / "schema_cache.json").write_text(_json.dumps(
+                {"cached_at": "2099-01-01T00:00:00", "tables": cache}), encoding="utf-8")
+        return d / "rs_input.json"
+
+    _ROWS = [
+        {"alias": "f", "schema": "ods", "table": "main_f", "key": "order_id",
+         "where": "", "is_main": True, "partner": "", "verdict": "unique"},
+        {"alias": "c1", "schema": "ods", "table": "dim_cust", "key": "cust_code",
+         "where": "", "is_main": False, "partner": "f", "partner_key": "cust_code",
+         "verdict": "non_unique"},
+    ]
+    _CACHE = {"ods.dim_cust": {"cust_code": "v"}, "ods.main_f": {"order_id": "i", "cust_code": "v"}}
+
+    def test_zero_param_cli_skips_to_env_error(self, tmp_path):
+        """SKILL 教的零参数命令真实可跑：prepare 全过 → 懒连接发现无库 → exit 2 环境错。"""
+        import subprocess as _sp
+        import sys as _sys
+        rs = self._fixture(tmp_path, self._ROWS, cache=self._CACHE)
+        r = _sp.run([_sys.executable, str(self._script()), "--rs", str(rs), "--edge"],
+                    capture_output=True, text=True, timeout=60)
+        assert r.returncode == 2                       # 环境错归人（不是崩溃/不是 1）
+        assert "无库" in r.stderr or "连不上" in r.stderr
+
+    def test_cli_gate_error_exit1_with_pointer(self, tmp_path):
+        """闸拦（键不存在）→ exit 1 + 指向 eval_result.json（校验零连库，离线确定）。"""
+        import subprocess as _sp
+        import sys as _sys
+        rows = [dict(self._ROWS[0]),
+                {**self._ROWS[1], "key": "order_id", "partner_key": ""}]  # A 的键塞给 B
+        rs = self._fixture(tmp_path, rows, cache=self._CACHE)
+        r = _sp.run([_sys.executable, str(self._script()), "--rs", str(rs), "--edge", "--doubt", "c1"],
+                    capture_output=True, text=True, timeout=60)
+        assert r.returncode == 1
+        assert "参数错" in r.stderr and "eval_result.json" in r.stderr
+
+    def test_cli_arity_error_clean_not_crash(self, tmp_path):
+        """内网实报的复合度场景经 CLI：清晰 exit 1，无堆栈留盘。"""
+        import subprocess as _sp
+        import sys as _sys
+        rows = [self._ROWS[0], {**self._ROWS[1], "key": "code,rid", "partner_key": ""}]
+        cache = {k: dict(v) for k, v in self._CACHE.items()}
+        cache["ods.dim_cust"].update({"code": "v", "rid": "v"})
+        rs = self._fixture(tmp_path, rows, cache=cache)
+        r = _sp.run([_sys.executable, str(self._script()), "--rs", str(rs), "--edge", "--doubt", "c1"],
+                    capture_output=True, text=True, timeout=60)
+        assert r.returncode == 1 and "复合度不匹配" in r.stderr
+        assert "堆栈留盘" not in r.stderr                # 不再进 fail-soft 崩溃通道
+
+    def test_cli_manual_params_require_override(self, tmp_path):
+        """手传键不写 --override → argparse 报错（主路径参数派生，禁手抄）。"""
+        import subprocess as _sp
+        import sys as _sys
+        rs = self._fixture(tmp_path, self._ROWS)
+        r = _sp.run([_sys.executable, str(self._script()), "--rs", str(rs), "--edge",
+                     "--doubt", "c1", "--join-key-b", "code"],
+                    capture_output=True, text=True, timeout=60)
+        assert r.returncode != 0 and "--override" in r.stderr
+
+
+class TestEdgeDocContract:
+    """文档契约：SKILL/手册教的 --edge 命令=零参数形态（旧全参数接口退役不得回流）。"""
+
+    def test_skill_edge_command_zero_param(self):
+        skill = Path(__file__).resolve().parent.parent / "skills" / "new-pipe" / "SKILL.md"
+        text = skill.read_text(encoding="utf-8")
+        assert "--edge\n" in text or "--edge`" in text or "--edge " in text
+        for gone in ("--schema-a", "--table-a", "--key-a", "--schema-b", "--table-b", "--key-b"):
+            assert gone not in text, f"旧全参数接口 {gone} 回流到 SKILL"
