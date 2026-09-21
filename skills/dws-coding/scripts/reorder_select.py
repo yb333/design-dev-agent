@@ -32,6 +32,10 @@ def reorder(sql: str, expect: list[str]) -> tuple[str, list[str]]:
         return sql, ["无可解析的顶层 SELECT..FROM——不动（宁放过不误报）"]
     if items and items[0][0] == "*":
         return sql, ["SELECT * ——不重排（check_sql 会拦）"]
+    # UNION 场景拒改：两支按位对齐，只重排第一支会破坏对齐（切分只取第一支）
+    _cte, main = split_cte_main(sql)
+    if re.search(r'\bUNION\b', main if main else sql, re.IGNORECASE):
+        return sql, ["含 UNION（多支按位对齐）——不重排（各支单独写对齐，或拆规则）"]
     notes = []
     by_name: dict[str, str] = {}
     for name, text in items:

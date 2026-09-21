@@ -86,6 +86,32 @@ FROM ods.ods_test_f s"""
         from sql_parse import split_top_projection_items
         assert [n for n, _ in split_top_projection_items(new_sql)] == ["order_no", "cust_code"]
 
+    def test_scalar_subquery_item_moves_intact(self):
+        """投影项含 FROM 的标量子查询：整项保持参与重排（2026-09-21 修——旧版段定位
+        取第一个 FROM 把子查询切开、后续项全丢）。"""
+        sql = ("SELECT s.cust_code,\n"
+               "    (SELECT max(p.pay_time) FROM ods.pay p WHERE p.order_no = s.order_no) AS amount,\n"
+               "    s.order_no\n"
+               "FROM ods.ods_test_f s")
+        new_sql, _ = reorder(sql, ["order_no", "cust_code", "amount"])
+        from sql_parse import split_top_projection_items
+        assert [n for n, _ in split_top_projection_items(new_sql)] == ["order_no", "cust_code", "amount"]
+        assert "(SELECT max(p.pay_time) FROM ods.pay p WHERE p.order_no = s.order_no) AS amount" in new_sql
+
+    def test_from_subquery_supported(self):
+        sql = "SELECT s.cust_code, s.order_no FROM (SELECT order_no, cust_code FROM ods.t) s"
+        new_sql, _ = reorder(sql, ["order_no", "cust_code"])
+        from sql_parse import split_top_projection_items
+        assert [n for n, _ in split_top_projection_items(new_sql)] == ["order_no", "cust_code"]
+        assert "FROM (SELECT order_no, cust_code FROM ods.t) s" in new_sql
+
+    def test_union_refused(self):
+        """UNION（多支按位对齐）拒改——只重排第一支会破坏两支对齐。"""
+        sql = ("SELECT s.cust_code, s.order_no FROM ods.t1 s "
+               "UNION ALL SELECT t.cust_code, t.order_no FROM ods.t2 t")
+        new_sql, notes = reorder(sql, ["order_no", "cust_code"])
+        assert new_sql == sql and any("UNION" in n for n in notes)
+
 
 class TestCli:
     def test_end_to_end_write_back_and_dry_run(self, tmp_path):

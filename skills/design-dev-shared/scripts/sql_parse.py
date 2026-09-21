@@ -820,10 +820,29 @@ def split_top_projection_items(sql: str):
     """
     _cte, main = split_cte_main(sql or "")
     body = main if main else (sql or "")
-    m = re.search(r'\bSELECT\b(.*?)\bFROM\b', body, re.IGNORECASE | re.DOTALL)
+    m = re.search(r'\bSELECT\b', body, re.IGNORECASE)
     if not m:
         return None
-    seg = m.group(1)
+    # 投影段终点=**depth==0 处的 FROM**（括号感知）——投影项里的标量子查询自带 FROM，
+    # 旧版非贪婪正则 (.*?)\bFROM\b 取第一个 FROM 会把子查询切开（2026-09-21 实证：
+    # `s.a, (SELECT max(p.x)` 截断、后续项全丢；check_sql 侧表现为误判不可比漏检）
+    i, depth, seg_end = m.end(), 0, None
+    while i < len(body):
+        ch = body[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and body[i:i + 4].upper() == "FROM":
+            before = body[i - 1] if i > 0 else " "
+            after = body[i + 4:i + 5]
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                seg_end = i
+                break
+        i += 1
+    if seg_end is None:
+        return None
+    seg = body[m.end():seg_end]
     items, depth, cur = [], 0, ""
     for ch in seg:
         if ch == "(":
