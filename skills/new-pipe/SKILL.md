@@ -322,8 +322,9 @@ Task(
   prompt="DQ 检查的设计与实现（按 dws-dq skill 流程）：rs_input: {deliver}/_internal/rs_input.json，
           ts: {deliver}/ts.json（只读结构），先完成规划（切片 plan 工作单——场景确认/
           融合裁决/declined 确认/rule_id 定号）再写 SQL，产 dq.json 到 {deliver}/、
-          检查 SQL 到 {deliver}/dq/（文件名={rule_id}_{清洗rule_name}.sql）。
-          写完即跑 assemble_dq 校验补全（命令见 skill §3），问题一轮修完再重跑，全绿才交卷。"
+          检查 SQL 到 {deliver}/dq/（文件名=纯 rule_id，如 DQ_01.sql——零清洗，装饰名由校验器统一 rename）。
+          写完即跑 assemble_dq 校验补全（命令见 skill §3），问题一轮修完再重跑，全绿才交卷
+          （判非自己写错的契约矛盾→⚠上报，不删条目不删文件；取消检查=declined 申报归人拍板）。"
 )
 ```
 

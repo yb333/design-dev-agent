@@ -2,8 +2,8 @@
 #
 # producer 直接产两样（2026-09-15 两跳并一跳，无 decisions 中间产物）：
 #   1. {build}/dq.json —— 本模板的 rules 数组（最薄形态：只写 rules，其余键由 assemble_dq 校验补全）
-#   2. {build}/dq/dq_{NN}_{检查类型}.sql —— 一条一个文件，NN=数组序号 01 起
-#      （检查类型清洗=非字母/数字/中文/下划线换 `_`，与 run_ut.dq_filename 同一规则）
+#   2. {build}/dq/{rule_id}.sql —— 一条一个文件，文件名=纯 rule_id（如 DQ_01.sql，零清洗零装饰；
+#      标准装饰名由 assemble_dq 校验时统一 rename 派生——信息已在 dq.json 里=机器派生）
 #
 # rules 条目（两种 mode 二选一；idx/sql_file/generated_by 等由校验器补，不用写）：
 #
@@ -19,6 +19,13 @@
 #  "mode": "compare",
 #  "violation_condition": "t.amount <> s.pay + s.discount（独立重算值与存量不等即违规）",
 #  "rule_desc": "违规=目标表金额与源表 pay+discount 独立重算值不等"}
+#
+# ── 集合级形态声明（2026-09-21）：数量一致性/聚合对比这类"一行=一个检查结论、天然无业务键"
+#    的检查条目写 "output_form": "set"（行级检查不写，缺省 row——输出列=业务键+违规字段值）──
+# {"rule_id": "DQ_003", "scope": "表级", "check_type": "数量一致性检查", "rule_name": "目标行数与源表一致",
+#  "mode": "compare", "output_form": "set",
+#  "violation_condition": "目标表行数 <> 源表行数（两侧不等即违规）",
+#  "rule_desc": "违规=目标行数与源表行数不等"}
 #
 # ── 歧义标注（两模式通用；有二义才写，宁标勿猜——闸口①人裁决）──
 # "ambiguities": [{"note": "mapping 的 del_flag 口径二义：'已删除=1' 或 '已删除=Y'",

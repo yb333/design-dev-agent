@@ -318,25 +318,29 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
                 vr.hard("N_DQ5", f"rules[{i}]（{name}）violation_condition 引用不存在：{bad}")
             if not cache_fields:
                 vr.warn("N_DQ5", f"rules[{i}]（{name}）无 schema_cache——源表字段侧引用存在性未校验（闸口①人工确认）")
-        # --- N_DQ9/N_DQ10 SQL 文件（sql_file 声明优先：rule_id 前缀对账——语义后缀
-        # 纯装饰可自由改，机器键只认 rule_id；未声明按约定派生）---
-        declared = (d.get("sql_file") or "").strip()
-        if declared:
-            if rule_id and declared != f"{rule_id}.sql" and not declared.startswith(f"{rule_id}_"):
-                vr.hard("N_DQ9", f"rules[{i}]（{name}）sql_file='{declared}' 前缀不含 rule_id "
-                                 f"'{rule_id}'——文件名={rule_id}_{{清洗语义名}}.sql（语义装饰可改，id 锚不可错）")
-            fname = declared
-        else:
-            fname = dq_rule_filename(rule_id, d.get("rule_name") or check_type) if rule_id \
-                else dq_filename(i, check_type)
-        fpath = dq_dir / fname
+        # --- N_DQ9 SQL 文件（2026-09-21 通道收口：producer 落盘纯 {rule_id}.sql 零清洗——
+        # LLM 手算清洗函数必错（内网实证 dq_01_xxx_id空值检查 vs 预期 dq_01_xxx_id_xxx_
+        # 空值检查）；标准装饰名由本装配器统一 rename 派生并回写 sql_file 真值，声明不再
+        # 参与文件定位；兼容直接落标准名。两种形态都找不到=缺失）---
+        canonical = dq_rule_filename(rule_id, d.get("rule_name") or check_type) if rule_id \
+            else dq_filename(i, check_type)
+        candidates = [f"{rule_id}.sql", canonical] if rule_id else [canonical]
+        fpath = next((dq_dir / c for c in candidates if (dq_dir / c).exists()), None)
         sql = ""
-        if not check_type or not fpath.exists():
-            vr.hard("N_DQ9", f"rules[{i}]（{name}）SQL 文件缺失（预期 {fname}）")
+        if not check_type or fpath is None:
+            vr.hard("N_DQ9", f"rules[{i}]（{name}）SQL 文件缺失（落盘 {candidates[0]}）")
         else:
             sql = fpath.read_text(encoding="utf-8").strip()
             if not sql:
-                vr.hard("N_DQ9", f"rules[{i}]（{name}）SQL 文件为空：{fname}")
+                vr.hard("N_DQ9", f"rules[{i}]（{name}）SQL 文件为空：{fpath.name}")
+            elif fpath.name != canonical:
+                fpath.rename(dq_dir / canonical)    # producer 纯 id 形态 → 标准装饰名（清洗归机器）
+        fname = canonical
+        # output_form 形态声明（row 缺省/set 集合级）——合法性校验不依赖 SQL 内容，缺失路径也查
+        output_form = str(d.get("output_form") or "row").strip().lower()
+        if output_form not in ("row", "set"):
+            vr.hard("N_DQ10", f"rules[{i}]（{name}）output_form='{output_form}' 非法——"
+                               f"合法值 row=行级（业务键+违规字段值，缺省）/ set=集合级（检查项+两侧聚合值）")
         if sql:
             # 基础风格三项（原 check_sql --dq 吸收——2026-09-15 校验合并：DQ 唯一校验入口）
             for _fn, _tag in ((check_bracket_balance, "[语法]"), (check_no_select_star, "[规范]"),
@@ -361,14 +365,17 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
                 if bad_cols:
                     vr.hard("N_DQ10", f"rules[{i}]（{name}）SQL 里目标表别名 '{al}' 引用了"
                                        f"目标表没有的列 {sorted(set(bad_cols))}——对照 ts.tables 改拼写（幻觉列）")
-            # 输出列含 business_key（违规行要能回溯到业务对象）
+            # 输出列含 business_key（行级默认形态——违规行要能回溯到业务对象）；集合级
+            # （output_form=set：数量一致性/聚合对比——一行=一个检查结论）天然无业务键
+            # 不拦——2026-09-21 内网实证三族模板与本项矛盾，producer 被迫自删规则砸序号
             bk = [str(k).lower() for k in (ts.get("design", {}).get("business_key") or [])]
             proj = extract_top_projection(sql)
-            if proj is not None and proj != ["*"] and bk:
+            if proj is not None and proj != ["*"] and bk and output_form == "row":
                 missing_bk = [k for k in bk if k not in proj]
                 if missing_bk:
                     vr.hard("N_DQ10", f"rules[{i}]（{name}）输出列缺业务键 {missing_bk}——"
-                                       f"违规行要能回溯到业务对象（输出列=业务键+违规字段值）")
+                                       f"违规行要能回溯到业务对象（行级=业务键+违规字段值；"
+                                       f"集合级检查条目声明 output_form=\"set\"）")
             # 聚合语法（逐作用域，2026-09-18：CTE 体+主查询体分别检——内网实证聚合
             # 错在 CTE 里被旧版"只扫主查询体"漏检；只看顶层投影/HAVING 的聚合——
             # WHERE 标量子查询聚合合法不误拦）
@@ -403,6 +410,7 @@ def validate_and_build(rs_input: dict, ts: dict, rules_in: list, dq_dir: Path,
             "waived": bool(d.get("waived")),
             "waive_reason": d.get("waive_reason") or "",
             "sql_file": fname,
+            "output_form": output_form,
         })
 
     # --- fused 申报对账（2026-09-18：多条不同措辞的同一检查合并为一条——rule_id

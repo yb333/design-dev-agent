@@ -44,13 +44,14 @@ python {dws-dq 的 scripts 目录}/pick_dq_context.py --rs {build}/_internal/rs_
 1. **`{build}/dq.json`**——最薄形态只写 `rules` 数组（+规划产出的 `declined` / `fused`；idx/sql_file 等由 assemble_dq 校验补全）：
    - **rule_id 必填**（创建时定号，见 §2.4）。
    - **mode 判定**：声明"什么是违规"（空值/重复/阈值越界）→ 断言式（可缺省）；比对两套计算（目标vs来源一致、字段逻辑复核）→ **对比式（独立重算——你的价值所在：从源表独立实现口径，不抄被检对象）**，mode 写 "compare"。
+   - **output_form 形态声明**（缺省 row=行级）：**集合级检查**（数量一致性/聚合对比——一行=一个检查结论，天然无业务键）写 `"output_form": "set"`，行级（空值/重复/阈值/字段比对——一条违规数据一行）不写。声明决定校验分支（set 不查业务键输出列）。
    - **scope / check_type / rule_name 跟 RS 一致**（分类不变）；条数可拆不可少（融合的按 fused 申报对账）。
    - **violation_condition**：断言式=SQL 表达式（WHERE 直搬）；对比式=比对口径摘要声明（方向写清"不等/不一致即违规"）。
    - **rule_desc 必须写"违规=…"方向**（防译反）。
    - **检查成本**：随调度每天跑——聚合比对（行数/金额汇总）优先于全量明细逐行，能收时间窗就收（如当日分区）。
-2. **`{build}/dq/{rule_id}_{清洗rule_name}.sql`**——每条一个文件（**文件名=rule_id 机器锚+语义名装饰**：rule_name 清洗[非字母/数字/中文/下划线换 `_`，超 30 字截断]；改语义名时同步 dq.json 的 `sql_file` 字段即可，id 锚不动）：
+2. **`{build}/dq/{rule_id}.sql`**——每条一个文件，**文件名=纯 rule_id**（如 DQ_01.sql；**你不做任何清洗/装饰**——标准装饰名 {rule_id}_{清洗语义名}.sql 由 assemble_dq 校验时统一 rename 并回写 sql_file。信息已在 dq.json 里=机器派生，手算清洗必错）：
    - **WHERE/HAVING**：阈值/比例逻辑全收进来；断言式直搬自己的 violation_condition
-   - **输出列 = 业务键（切片 business_key）+ 违规字段值**——断言式输出违规字段本身；对比式输出两侧值（存量值 + 重算值，列名区分如 `amount` / `expected_amount`）。不 SELECT *，不带审计字段
+   - **输出列按形态两型**：**行级（缺省）= 业务键（切片 business_key）+ 违规字段值**——断言式输出违规字段本身；对比式输出两侧值（存量值 + 重算值，列名区分如 `amount` / `expected_amount`）；**集合级（output_form=set）= 检查项 + 分组键 + 两侧聚合值**（数量一致性输出两侧计数、聚合对比输出两侧聚合值——一行=一个检查结论，无业务键）。两型都不 SELECT *，不带审计字段
    - 表引用 **schema 全限定**；只碰检查对象和资产内源表
    - 参数直接写 `${参数名}`（UT 执行前替换测试值）
    - SQL 规范同 dws-coding standards：注释一律 `/* */`、标准 SQL 不猜方言
@@ -66,7 +67,7 @@ FROM {schema}.{target_table} t
 WHERE t.order_amount IS NULL;
 ```
 
-**聚合对比范式**（聚合口径复核——如"各状态金额合计与源表一致"）：
+**聚合对比范式**（聚合口径复核——如"各状态金额合计与源表一致"；条目声明 `"output_form": "set"`）：
 - 聚合列在 SELECT 输出、分组键也输出、**聚合条件收 HAVING**（聚合后才可判的条件写 WHERE 会语法错或语义错）
 - 形态：`SELECT t.status, SUM(t.amount) FROM ... GROUP BY t.status HAVING SUM(t.amount) <> s.total`——两侧聚合口径独立实现后比对，违规行=分组键+两侧聚合值
 - **聚合列无 GROUP BY = 语法错**（assemble_dq 拦）；结果全 NULL 先查 HAVING/GROUP BY 是否缺失（口径没错时最常见根因）
@@ -84,7 +85,7 @@ JOIN {schema}.{source_table} s ON s.order_id = t.order_id
 WHERE t.amount <> s.pay + s.discount;
 ```
 
-模板（跨表数量一致性——目标与源表行数对比）：
+模板（跨表数量一致性——目标与源表行数对比；集合级，条目声明 `"output_form": "set"`）：
 
 ```sql
 /* DQ-数量一致性: 目标行数与源表一致 —— 违规=两侧行数不等 */
@@ -118,6 +119,8 @@ python {本 skill 的 scripts 目录}/assemble_dq.py --ts {build}/ts.json --dq-s
 ```
 
 一步完成校验（引用对账/禁 tmp/幻觉列/schema 前缀/业务键输出列/rule_id 唯一/sql_file 前缀对账）+补全+ts.md 表格渲染。不过**把列出的问题一轮修完再重跑**（逐条修逐轮跑=烧轮次；限 3 轮）。
+
+**已定号条目不可自行删除**（内网实证：自删砸序号连锁）——校验拦下且你判断非自己写错（契约/模板矛盾类，如「输出列模板与校验要求打架」）→ 首行 ⚠ 上报 engineer 带冲突点，不删规则不删文件；确要取消某条检查 → `declined` 申报（rs_rule_name+reason，拍板权在人）。删除后 rule_id 空号合法（永不重编，空号是历史不是错误）。
 
 ## 4. 交卷
 

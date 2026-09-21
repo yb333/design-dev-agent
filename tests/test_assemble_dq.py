@@ -294,15 +294,17 @@ class TestAssembly:
         _, vr2 = _run(tmp_path, [_rule(), _rule(rule_name="产品编码非空2")])
         assert any(i["code"] == "N_DQ4" and "重复" in i["msg"] for i in vr2.items)
 
-    def test_sql_file_prefix_mismatch_hard(self, tmp_path):
-        """sql_file 自报但前缀不含 rule_id——硬拦（语义装饰可改，id 锚不可错）。"""
+    def test_sql_file_declaration_ignored_and_overwritten(self, tmp_path):
+        """（2026-09-21 通道收口）sql_file 声明不再参与文件定位/前缀对账——文件按
+        {rule_id}.sql 或标准名在位即可，装配回写标准名真值（旧"前缀对账硬拦"退役）。"""
         dq_dir = tmp_path / "dq"
         dq_dir.mkdir()
-        (dq_dir / "别的名字.sql").write_text(
+        (dq_dir / "DQ_001.sql").write_text(
             "SELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL",
             encoding="utf-8")
-        _, vr = validate_and_build(_rs(), _ts(), [_rule(sql_file="别的名字.sql")], dq_dir)
-        assert any(i["code"] == "N_DQ9" and "前缀不含 rule_id" in i["msg"] for i in vr.items)
+        rules_out, vr = validate_and_build(_rs(), _ts(), [_rule(sql_file="别的名字.sql")], dq_dir)
+        assert not any(i["code"] == "N_DQ9" for i in vr.items)
+        assert rules_out[0]["sql_file"].startswith("DQ_001_")   # 声明被标准名覆盖
 
     def test_fused_coverage_and_render(self, tmp_path):
         """fused 申报（2026-09-18）：覆盖计数入 N_DQ2；rule_id/RS 名对账；ts.md 融合注记。"""
@@ -574,3 +576,103 @@ class TestGroupByPerScope:
         by_id = {r["rule_id"]: r for r in rules_out2}
         assert by_id["DQ_003"]["sql_file"] == "DQ_003_金额一致性.sql"  # 文件名零变化
         assert by_id["DQ_001"]["sql_file"] == "DQ_001_产品编码非空.sql"
+
+
+# ============================================================
+# output_form 分级 + 文件名通道收口（2026-09-21 内网实报两问题）
+# ============================================================
+_COUNT_SQL = """/* DQ-数量一致性: 目标行数与源表一致 —— 违规=两侧行数不等 */
+SELECT
+    'row_count' AS check_item,
+    t.cnt AS target_rows,
+    s.cnt AS source_rows
+FROM (SELECT COUNT(1) AS cnt FROM dws.dwb_test_f) t,
+     (SELECT COUNT(1) AS cnt FROM ods.ods_test_f) s
+WHERE t.cnt <> s.cnt"""
+
+
+def _count_rule():
+    return _rule(rule_id="DQ_003", scope="表级", check_type="数量一致性检查",
+                 rule_name="目标行数与源表一致", mode="compare", output_form="set",
+                 violation_condition="目标表行数 <> 源表行数（两侧不等即违规）",
+                 rule_desc="违规=目标行数与源表行数不等")
+
+
+def _count_rs():
+    return _rs([{"scope": "表级", "check_type": "数量一致性检查",
+                 "rule_name": "目标行数与源表一致", "rule_desc": "目标表行数与源表一致"}])
+
+
+class TestOutputForm:
+    """集合级检查（数量一致性模板形态——内网实测报的数据形态）无业务键不拦。"""
+
+    def test_set_form_count_check_passes_without_business_key(self, tmp_path):
+        rules_out, vr = _run(tmp_path, [_count_rule()], rs=_count_rs(), sqls={1: _COUNT_SQL})
+        assert "N_DQ10" not in _codes(vr)
+        assert rules_out[0]["output_form"] == "set"
+
+    def test_row_default_missing_business_key_still_flags(self, tmp_path):
+        """缺省 row 形态输出列无业务键 → 照拦（回归）。"""
+        rules_out, vr = _run(tmp_path, [_rule(rule_id="DQ_009", rule_name="行数裸查")],
+                             sqls={1: "/* DQ */\nSELECT t.prod_code FROM dws.dwb_test_f t "
+                                      "WHERE t.prod_code IS NULL"})
+        assert any("缺业务键" in i["msg"] for i in vr.items if i["code"] == "N_DQ10")
+
+    def test_set_form_declared_but_row_sql_flags(self, tmp_path):
+        """set 条目走行级 SQL 不误拦（set 放宽是单向的——形态声明信任 producer）。"""
+        rules_out, vr = _run(tmp_path, [_count_rule()], rs=_count_rs())
+        assert "N_DQ10" not in _codes(vr)   # _run 默认 SQL 含业务键 id，本就用例验证不炸
+
+    def test_illegal_output_form_value_flags(self, tmp_path):
+        rule = _count_rule()
+        rule["output_form"] = "aggregate"
+        _, vr = _run(tmp_path, [rule], rs=_count_rs(), sqls={1: _COUNT_SQL})
+        assert any("output_form" in i["msg"] and "非法" in i["msg"] for i in vr.items)
+
+
+class TestFilenameChannel:
+    """producer 落盘纯 {rule_id}.sql → 装配器 rename 标准装饰名+回写 sql_file 真值。"""
+
+    def test_plain_id_file_renamed_to_canonical(self, tmp_path):
+        ts, rs = _ts(), _rs()
+        dq_dir = tmp_path / "dq"
+        dq_dir.mkdir()
+        (dq_dir / "DQ_001.sql").write_text(
+            "/* DQ */\nSELECT t.id, t.prod_code FROM dws.dwb_test_f t WHERE t.prod_code IS NULL",
+            encoding="utf-8")
+        rules_out, vr = validate_and_build(rs, ts, [_rule()], dq_dir, "")
+        from run_ut import dq_rule_filename
+        canonical = dq_rule_filename("DQ_001", "产品编码非空")
+        assert (dq_dir / canonical).exists()          # rename 落位
+        assert not (dq_dir / "DQ_001.sql").exists()   # 原纯 id 名已不存在
+        assert rules_out[0]["sql_file"] == canonical  # 真值回写
+        assert "N_DQ9" not in _codes(vr)
+
+    def test_canonical_name_still_accepted(self, tmp_path):
+        """直接落标准装饰名照常（兼容路径，不发生 rename）。"""
+        rules_out, vr = _run(tmp_path, [_rule()])
+        assert rules_out[0]["sql_file"].startswith("DQ_001_")
+        assert "N_DQ9" not in _codes(vr)
+
+    def test_both_forms_missing_flags(self, tmp_path):
+        ts, rs = _ts(), _rs()
+        dq_dir = tmp_path / "dq"
+        dq_dir.mkdir()
+        _, vr = validate_and_build(rs, ts, [_rule()], dq_dir, "")
+        assert any(i["code"] == "N_DQ9" and "缺失" in i["msg"] for i in vr.items)
+
+
+class TestSkillDocContract:
+    """文档契约：SKILL 与模板的文件名通道/output_form/无删除权条款与实现一致。"""
+
+    def test_skill_carries_new_channel_terms(self):
+        skill = (Path(__file__).resolve().parent.parent / "skills" / "dws-dq" / "SKILL.md"
+                 ).read_text(encoding="utf-8")
+        assert "{build}/dq/{rule_id}.sql" in skill       # 纯 id 落盘契约
+        assert "output_form" in skill                    # 形态声明
+        assert "不可自行删除" in skill                    # 无删除权纪律
+
+    def test_template_carries_new_channel_terms(self):
+        tpl = (Path(__file__).resolve().parent.parent / "skills" / "dws-dq" / "assets"
+               / "dq-template.json").read_text(encoding="utf-8")
+        assert "{rule_id}.sql" in tpl and "output_form" in tpl
