@@ -135,17 +135,20 @@ Task(subagent_type="dws-dq-producer", description="DQ 影响重做 {资产}",
   prompt="优化模式：按 dws-dq skill 流程。ts: {arc_tmp}/ts.json（只读结构），baseline DQ 清单:
           {arc_tmp}/dq.json，重做清单（只重做这些条目，其余原样抄进 rules 保持全量）:
           {build}/_internal/dq_impact.md。直接产 dq.json 到 {build}/dq.json（producer 交卷形态），
-          重做的 SQL 落 {build}/dq/（文件名与清单同名=该条当前版）。")
+          重做的 SQL 落 {build}/dq/（文件名与清单同名=该条当前版）。
+          写完即跑自校验修到全绿（问题一轮修完再重跑，限 3 轮）：
+          python ../new-pipe/scripts/assemble_dq.py --ts {arc_tmp}/ts.json \
+            --dq-src {build}/dq.json --dq-dir {build}/dq --no-rs-contract")
 ```
 
-交卷后校验渲染（opt 参数：SQL 在变更现场 --dq-dir；条目权威=baseline 清单不走 RS 对照）：
+**交卷复核（轻量——验证声明，不重跑确定性校验）**：producer 回报四数（重做 SQL 文件数 / 断言式与对比式条数 / 歧义数 / declined 数），对账磁盘事实——`{build}/dq/` 重做文件数、`{build}/dq.json` rules 条数与两数组长度、`{arc_tmp}/ts.md` DQ 章节在位（渲染真发生过）。对账通过即归位：`cp {build}/dq.json {arc_tmp}/dq.json`；**对不上才恢复 producer 会话**（带差异清单，限 3 轮），此时重跑同款命令：
 
 ```bash
 python ../new-pipe/scripts/assemble_dq.py --ts {arc_tmp}/ts.json \
   --dq-src {build}/dq.json --dq-dir {build}/dq --no-rs-contract
 ```
 
-校验补全的 dq.json 落 {build}（校验后由你 cp 到 {arc_tmp}/dq.json——进度态全量更新）+ ts.md DQ 章节渲染进 {arc_tmp}。围栏全过后新 SQL 入临时档案：`cp {build}/dq/*.sql {arc_tmp}/dq/`。
+围栏全过后新 SQL 入临时档案：`cp {build}/dq/*.sql {arc_tmp}/dq/`。
 
 ## 步骤 4：编码（SQL 围栏闸门在你）
 

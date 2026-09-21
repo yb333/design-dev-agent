@@ -321,18 +321,25 @@ Task(
   prompt="DQ 检查的设计与实现（按 dws-dq skill 流程）：rs_input: {deliver}/_internal/rs_input.json，
           ts: {deliver}/ts.json（只读结构），先完成规划（切片 plan 工作单——场景确认/
           融合裁决/declined 确认/rule_id 定号）再写 SQL，产 dq.json 到 {deliver}/、
-          检查 SQL 到 {deliver}/dq/（文件名={rule_id}_{清洗rule_name}.sql）。"
+          检查 SQL 到 {deliver}/dq/（文件名={rule_id}_{清洗rule_name}.sql）。
+          写完即跑 assemble_dq 校验补全（命令见 skill §3），问题一轮修完再重跑，全绿才交卷。"
 )
 ```
 
-producer 交卷后**校验渲染**（硬阻断，失败**带全量错误清单**恢复 producer 会话一次修完——逐条带逐轮修=烧轮次；限 3 轮）：
+**交卷复核（轻量——验证声明，不重跑确定性校验：producer 已自跑修到全绿，同脚本跑两遍结果必然相同）**。producer 按约回报四数（SQL 文件数 / 断言式与对比式条数 / 歧义标注数 / declined 数），对账磁盘事实：
+
+- `dq/` 下 .sql 文件数 = 回报数 = dq.json rules 条数；
+- 歧义数 / declined 数 = dq.json 两数组长度（闸口② 材料，必须点名核对）；
+- ts.md DQ 章节在位（= 装配渲染真发生过，防没跑装配就自称全绿）。
+
+**对不上才恢复 producer 会话**（带差异清单一次修完，限 3 轮），此时才有必要重跑全量校验：
 
 ```bash
 python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --dq-src {deliver}/dq.json \
     --rs {deliver}/_internal/rs_input.json
 ```
 
-校验补全 dq.json（idx/文件名/mode 缺省/meta+dq 调度任务）+ 校验（文件在位/引用对账/禁 tmp/幻觉列/SQL 风格项）+ ts.md 追加 DQ 表格（主线章节字节不动，含歧义标注与 declined 建议不做段）。**DQ 设计材料归闸口②**——与执行结果同屏判读（审口径时直接看跑出来的数字）。
+补全（idx/文件名/mode 缺省/meta+dq 调度任务）+ 校验（文件在位/引用对账/禁 tmp/幻觉列/SQL 风格项）+ ts.md 追加 DQ 表格（主线章节字节不动，含歧义标注与 declined 建议不做段）。**DQ 设计材料归闸口②**——与执行结果同屏判读（审口径时直接看跑出来的数字）。
 
 ### 4d：init coder（计划 init_rules 非空时，等 4b 完成）
 

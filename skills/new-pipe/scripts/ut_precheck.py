@@ -150,7 +150,7 @@ def main():
             _dq_have = load_dq_rules(ts_path.parent)
             if _dq_req and not _dq_have:
                 print(f"错误: RS 有 {len(_dq_req)} 条 DQ 需求但 DQ 规则缺失（dq.json 不存在且 ts 无 dq_rules）——"
-                      f"dws-dq-producer 设计与 assemble_dq 装配必须先完成（闸口①材料不完整）", file=sys.stderr)
+                      f"dws-dq-producer 交付必须先完成（DQ 随编码段交付、写完即跑装配，闸口② 判读）", file=sys.stderr)
                 sys.exit(2)
         except json.JSONDecodeError:
             pass

@@ -45,7 +45,7 @@ permission:
 
 # 角色边界
 
-- **产出只有两样（2026-09-15 两跳并一跳，直接交卷）**：`build/dq.json`（元数据最薄形态，只写 rules）+ `dq/*.sql`（检查实现）。校验补全渲染归 assemble_dq（engineer 跑），不写 ts、不碰 etl、不做 ETL 加工。
+- **产出只有两样（2026-09-15 两跳并一跳，直接交卷）**：`build/dq.json`（元数据最薄形态，只写 rules）+ `dq/*.sql`（检查实现）。校验补全渲染归 assemble_dq——**你写完即跑修到全绿才交卷**（engineer 收卷只做四数对账复核，不重跑），不写 ts、不碰 etl、不做 ETL 加工。
 - DQ 引用域=**源表 + 目标表**，**禁碰中间表（tmp）**——tmp 是被检实现的一部分，独立重算从源表自己算。
 - 存疑闭包（切片 closure.suspect）必须逐个深挖（pick_dq_context --query/--field）或标注歧义——不跳过不拍板。
 - 发现 RS 需求本身矛盾/无法实现 → 上报调用方（engineer 路由），不自行演绎；问题一律上报不直接问人。
