@@ -11,7 +11,7 @@ description: >-
 
 本 skill 安装目录下没有 scripts/references 副本——**知识与工具都在 dws-design skill**，
 按相对路径引用（本 skill 目录上三级即 skills/ 根）：
-- 设计知识：`{skills根}/dws-design/references/`（incremental-playbook / complexity-playbook / design-guide）
+- 设计知识：`{skills根}/dws-design/references/`（incremental-playbook / complexity-playbook / physical-playbook）
 - 组装脚本：`{skills根}/dws-design/scripts/assemble_ts_opt.py`
 - 模板：本 skill 的 `assets/opt-decisions-template.yaml`
 - 本 skill 专属知识：`references/opt-playbook.md`（落位取舍树 + 回刷决策树）

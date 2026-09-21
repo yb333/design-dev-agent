@@ -20,7 +20,7 @@ skills/
 ├── dws-design/          # 设计 skill（designer agent 用）
 │   ├── scripts/         # assemble_ts.py assemble_ts_opt.py(opt侧用) explore.py check_field.py(字段查证,designer自有入口) pick_targets.py(字段清单取料,designer自有入口)
 │   ├── assets/          # ts-template.json design-decisions-template.yaml schema_apps.example.json
-│   └── references/      # design-guide.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
+│   └── references/      # physical-playbook.md(物理决策) incremental-playbook.md complexity-playbook.md rs-input-format.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
 │   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py（视图=F表配套镜像非规则，is_view_step 概念已清除）
 │   └── assets/          # db-sources.example.json shujia_config.example.json lts_config.example.json etl-templates.md
@@ -272,7 +272,7 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 - `skills/dws-design/SKILL.md`——★ **评估层+五层决策骨架**（designer 思考主线，改设计流程先读这个）
 - `skills/dws-design/references/incremental-playbook.md`——增量设计全集（数据流/累积共建/排重/初始化/豁免）
 - `skills/dws-design/references/complexity-playbook.md`——复杂度评估 + CTE/物化决策 + step_type 决策树
-- `skills/dws-design/references/design-guide.md`——物理设计决策（分布键/分区）+ 依赖类型（精简版）
+- `skills/dws-design/references/physical-playbook.md`——物理设计决策（分布键/分区）+ 依赖类型（精简版）；2026-09-21 更名自 design-guide（拆分后只剩物理决策，旧总名名不副实）
 - `skills/dws-design/assets/ts-template.json`——ts.json 权威结构定义
 - `skills/dws-design/assets/design-decisions-template.yaml`——designer 产出格式（含 build_mode/dedup_strategy/data_volume/exemptions）
 - `docs/architecture/architecture.md`——架构（环境/四区/决策记录）
@@ -286,7 +286,7 @@ python install.py                    # 全局安装 skill/agent/command 到 ~/.c
 
 ### 本轮改造（设计思维重构 + TS 校验契约补强，2026-08）
 
-design-guide.md 已从 335 行大杂烩拆分为：design-guide（物理决策，70行）+ incremental-playbook（增量全集）+ complexity-playbook（复杂度/物化/step_type）。SKILL.md 的 9 步操作清单已重构为**五层决策骨架**。assemble_ts.py 新增 `run_all_validations`（~38 条校验，五层分组）+ `ValidationResult`（分层报错）+ 软阻断豁免机制。design_decisions 模板补 `build_mode`/`dedup_strategy`/`data_volume`/`exemptions`。preprocess.py 内嵌的死代码 precheck 副本已删除。测试 419→465。
+design-guide.md 已从 335 行大杂烩拆分为：design-guide（物理决策，70行；2026-09-21 更名 physical-playbook）+ incremental-playbook（增量全集）+ complexity-playbook（复杂度/物化/step_type）。SKILL.md 的 9 步操作清单已重构为**五层决策骨架**。assemble_ts.py 新增 `run_all_validations`（~38 条校验，五层分组）+ `ValidationResult`（分层报错）+ 软阻断豁免机制。design_decisions 模板补 `build_mode`/`dedup_strategy`/`data_volume`/`exemptions`。preprocess.py 内嵌的死代码 precheck 副本已删除。测试 419→465。
 
 ### init 双管道模型改造（2026-08，设计侧 + 下游物化 已全通）
 

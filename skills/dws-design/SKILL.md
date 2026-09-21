@@ -142,7 +142,7 @@ c2|cust_code|status=1 and del_flag='N'
 
 **想清楚**：
 - **分布键**：按业务主键 / 关联使用频率（减少重分布）/ 离散程度选，与数据量无关。多表 JOIN 时各表分布键必须一致。
-  → 详见 `references/design-guide.md` §1.1
+  → 详见 `references/physical-playbook.md` §1.1
 - **关联安全（每个声明的 JOIN：⓪条件可信 + 三维判断，都要有结论）**：
   - ⓪ **条件语义（先于三维）**：join_condition 里"取一/最新/去重"类过滤（如 rn=1）= 从表按业务键不唯一的强信号——①方向必须有对齐结论（GROUP BY 收敛 / 取最新有效行），开窗口径业务语义源端给，designer 不编。存在性/出处已由 precheck+评估层把关，此处兜底语义。
     **开窗列（rn 等设计产物字段）的合法通道（N30 拦你没声明时照此补）**——三形态按场景选，物化层级是设计自由度：
@@ -160,7 +160,7 @@ c2|cust_code|status=1 and del_flag='N'
   - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'——不报错只静默空关联）。存疑时 explore.py `--check-overlap`（双侧 schema/table/key 各一组）重叠率试算取证。
   三维（①②③）都要有结论——①的事实底座来自评估层；②③存疑才取证（工具按需调，不逐 JOIN 机械跑）。
 - **调度**：schedule_type（从 RS 调度频率推导）、cron（Quartz 6 段标准表达式）、依赖类型（默认宽依赖）
-  → 依赖类型选择见 `references/design-guide.md` §二
+  → 依赖类型选择见 `references/physical-playbook.md` §二
 
 **产出**：`tables.{表}.distribution_key`、`join_safety`、`schedule`
 **闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在；joins 引用的字段在源表/tmp 表真实存在（N30，有 schema_cache 时硬校验——⓪的产物兜底）；join_type_risk 检出对的 cast/豁免核对（N_JOIN1）；自设关联的键两侧类型可比（N_JOIN2，跨大类须声明 cast）
@@ -203,11 +203,11 @@ c2|cust_code|status=1 and del_flag='N'
 | RS 标了增量（L07 增量识别方式 ≠ "不涉及"）| `references/incremental-playbook.md` |
 | 第2层评估复杂度 / 要拆步骤 / 要建中间表 | `references/complexity-playbook.md` |
 | 累积共建场景（多规则写同一中间表）| `references/incremental-playbook.md` §三/§四 |
-| 分布键/分区/依赖类型 | `references/design-guide.md`（每次都薄，直接读）|
+| 分布键/分区/依赖类型 | `references/physical-playbook.md`（每次都薄，直接读）|
 | 组装目标参照（ts.json/ts.md 结构）| `assets/ts-template.json` / `ts-template.md` |
 | 理解 RS 输入格式 | `references/rs-input-format.md` |
 
-> 简单全量单表资产：五层很快走完，第2层不拆中间表（走 full 单规则），第3层全量，只读 design-guide.md 就够。
+> 简单全量单表资产：五层很快走完，第2层不拆中间表（走 full 单规则），第3层全量，只读 physical-playbook.md 就够。
 
 ### DQ 已迁出（2026-09-14）
 

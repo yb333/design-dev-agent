@@ -1974,7 +1974,7 @@ def build_rule(rule_dec, field_map, rs_source_tables, target_schema=""):
         "design_intent": rule_dec.get("design_intent", ""),
         "load_mode": rule_dec.get("load_mode", "truncate_table"),
         "write_condition": rule_dec.get("write_condition", ""),  # 写入条件（MERGE ON/分区名/delete WHERE），designer填脚本只搬运
-        "step_type": rule_dec.get("step_type", "full"),  # full/aggregate/incremental_extract/merge（design-guide §4.4）
+        "step_type": rule_dec.get("step_type", "full"),  # full/aggregate/incremental_extract/merge（complexity-playbook §四）
         "target_role": rule_dec.get("target_role", "target"),  # intermediate/target
         "produces_for": rule_dec.get("produces_for", []) or [],  # 中间表规则填：产出供哪些规则消费
         "reads": [str(r.get("table") if isinstance(r, dict) else r) for r in reads],  # 表名列表（DAG）
