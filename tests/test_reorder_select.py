@@ -105,12 +105,31 @@ FROM ods.ods_test_f s"""
         assert [n for n, _ in split_top_projection_items(new_sql)] == ["order_no", "cust_code"]
         assert "FROM (SELECT order_no, cust_code FROM ods.t) s" in new_sql
 
-    def test_union_refused(self):
-        """UNION（多支按位对齐）拒改——只重排第一支会破坏两支对齐。"""
+    def test_union_all_branches_reordered(self):
+        """UNION 多支每支独立重排到同一期望序（2026-09-21 用户定调：工具为 coder
+        服务不拒改——两支本就按位对齐，各支排到 INSERT 清单序即对齐）；连接词原文保持。"""
         sql = ("SELECT s.cust_code, s.order_no FROM ods.t1 s "
-               "UNION ALL SELECT t.cust_code, t.order_no FROM ods.t2 t")
+               "UNION ALL "
+               "SELECT t.cust_code, t.order_no FROM ods.t2 t")
         new_sql, notes = reorder(sql, ["order_no", "cust_code"])
-        assert new_sql == sql and any("UNION" in n for n in notes)
+        from sql_parse import split_top_projection_items, split_cte_main
+        # 逐支验证
+        _cte, main = split_cte_main(new_sql)
+        branches = main.split("UNION ALL")
+        assert [n for n, _ in split_top_projection_items(branches[0])] == ["order_no", "cust_code"]
+        assert [n for n, _ in split_top_projection_items(branches[1])] == ["order_no", "cust_code"]
+        assert "UNION ALL" in new_sql and "ods.t1" in new_sql and "ods.t2" in new_sql
+
+    def test_union_plain_keyword_and_idempotent(self):
+        """裸 UNION 连接词也切得动；整体幂等（已排再跑零改动）。"""
+        sql = ("SELECT t2.cust_code, t2.order_no FROM ods.t2 t2 "
+               "UNION "
+               "SELECT t1.cust_code, t1.order_no FROM ods.t1 t1")
+        expect = ["order_no", "cust_code"]
+        new_sql, _ = reorder(sql, expect)
+        assert "UNION " in new_sql
+        again_sql, notes = reorder(new_sql, expect)
+        assert again_sql == new_sql and any("零改动" in n for n in notes)
 
 
 class TestCli:

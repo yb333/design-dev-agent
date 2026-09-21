@@ -4,38 +4,72 @@
 （LLM 手排长清单=确定性工作交给模型必漂，排一轮查一轮烧轮次）。本工具=纯
 permutation：期望序与 INSERT 列清单**同函数同源**（run_ut._resolve_insert_columns：
 结构源序 ∩ 规则产出列——SELECT 排到与 INSERT 清单完全一致，按位对齐零错位）；
-各项表达式**原文保持不动只换顺序**（括号感知切分，case when 多行/函数嵌套随项走）。
-幂等：已按序=零改动。opt 场景**不适用**（baseline 老列序受 fence 锁定，重排=动老列）。
+各项表达式**原文保持不动只换顺序**（括号感知切分，case when 多行/函数嵌套/
+标量子查询随项走）；**UNION 多支每支独立重排到同一期望序**（两支本就按位对齐，
+连接词原文保持）；幂等：已按序=零改动。opt 场景**不适用**（baseline 老列序受
+fence 锁定，重排=动老列）。
 
 用法：
   python reorder_select.py --sql {etl/R0001.sql} --ts {ts.json} --rule R0001 [--dry-run]
 """
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
-from sql_parse import split_top_projection_items, split_cte_main  # noqa: E402
+from sql_parse import split_top_projection_items, split_cte_main, find_projection_span  # noqa: E402
 from run_ut import _resolve_insert_columns, rule_output_fields  # noqa: E402
 
 
-def reorder(sql: str, expect: list[str]) -> tuple[str, list[str]]:
-    """重排主查询顶层投影到 expect 序。返回 (新 SQL, 披露行)。
+def _split_union_branches(main: str) -> list[str]:
+    """顶层 UNION 切支（括号感知，词边界，吃掉 ALL）——返回 [支, 连接词, 支, ...] 交替列表。
 
-    规则：expect 命中的项按 expect 序在前；未命中项（多列/无名/重名后续）保持
-    原相对序在后（对错归 check_sql/6a 对账，本工具只管序）；拒改形态原样返回+披露。
+    支与连接词的原文切片保留各自首尾空白——"".join(parts) 完整还原原文。
+    无顶层 UNION 返回 [main] 单支。
     """
-    items = split_top_projection_items(sql)
+    cuts = []   # 每个 UNION 关键字的 (start, end)
+    i, depth, n = 0, 0, len(main)
+    while i < n:
+        ch = main[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and main[i:i + 5].upper() == "UNION":
+            before = main[i - 1] if i > 0 else " "
+            if not (before.isalnum() or before == "_"):
+                j = i + 5
+                k = j
+                while k < n and main[k] in " \t":
+                    k += 1
+                if main[k:k + 3].upper() == "ALL" and not (main[k + 3:k + 4].isalnum() or main[k + 3:k + 4] == "_"):
+                    j = k + 3
+                cuts.append((i, j))
+                i = j
+                continue
+        i += 1
+    if not cuts:
+        return [main]
+    parts = [main[:cuts[0][0]]]
+    for idx, (s, e) in enumerate(cuts):
+        parts.append(main[s:e])
+        nxt = cuts[idx + 1][0] if idx + 1 < len(cuts) else n
+        parts.append(main[e:nxt])
+    return parts
+
+
+def _reorder_branch(branch: str, expect: list[str]) -> tuple[str, list[str]]:
+    """单支（无顶层 UNION 的 SELECT 体）投影重排；返回 (新支文本, 披露行)。
+
+    expect 命中的项按 expect 序在前；未命中项（多列/无名/重名后续）保持原相对序
+    在后（对错归 check_sql/6a 对账，本工具只管序）；项序未变=原文返回（支级幂等）。
+    """
+    items = split_top_projection_items(branch)
     if items is None:
-        return sql, ["无可解析的顶层 SELECT..FROM——不动（宁放过不误报）"]
+        return branch, ["支无可解析的 SELECT..FROM——保持原样（宁放过）"]
     if items and items[0][0] == "*":
-        return sql, ["SELECT * ——不重排（check_sql 会拦）"]
-    # UNION 场景拒改：两支按位对齐，只重排第一支会破坏对齐（切分只取第一支）
-    _cte, main = split_cte_main(sql)
-    if re.search(r'\bUNION\b', main if main else sql, re.IGNORECASE):
-        return sql, ["含 UNION（多支按位对齐）——不重排（各支单独写对齐，或拆规则）"]
+        return branch, ["支含 SELECT * ——该支不重排（check_sql 会拦）"]
     notes = []
     by_name: dict[str, str] = {}
     for name, text in items:
@@ -47,31 +81,50 @@ def reorder(sql: str, expect: list[str]) -> tuple[str, list[str]]:
             by_name[name] = text
     ordered = [(f, by_name.pop(f)) for f in expect if f in by_name]
     placed_texts = {t for _, t in ordered}
-    leftovers = [(n, t) for n, t in items if t not in placed_texts]   # 原相对序收尾
-    new_items = ordered + leftovers
-    old_texts = [t for _, t in items]
-    new_texts = [t for _, t in new_items]
-    if new_texts == old_texts:
-        return sql, ["已按 INSERT 列清单序——零改动（幂等）"]
-    # 写回：body 为原文后缀（split_cte_main 语义）——前缀（WITH 段/头注释）保持不动
+    leftovers = [(nm, t) for nm, t in items if t not in placed_texts]   # 原相对序收尾
+    new_texts = [t for _, t in ordered] + [t for _, t in leftovers]
+    if new_texts == [t for _, t in items]:
+        return branch, []                      # 支级幂等：序未变原文返回
+    span = find_projection_span(branch)
+    if span is None:
+        return branch, ["支投影段定位失败——保持原样"]
+    new_branch = (branch[:span[0]] + "\n    " + ",\n    ".join(new_texts) + "\n"
+                  + branch[span[1]:])
+    return new_branch, notes
+
+
+def reorder(sql: str, expect: list[str]) -> tuple[str, list[str]]:
+    """重排主查询顶层投影到 expect 序（UNION 多支每支独立排到同一序）。
+
+    WITH 段（CTE）原文保持；返回 (新 SQL, 披露行)；拒改形态原样返回+披露。
+    """
     _cte, main = split_cte_main(sql)
     body = main if main else sql
     if not sql.endswith(body):
         return sql, ["主查询体定位失败（非原文后缀）——不动（宁放过）"]
-    m = re.search(r'\bSELECT\b(.*?)\bFROM\b', body, re.IGNORECASE | re.DOTALL)
-    if not m:
-        return sql, ["无可解析的顶层 SELECT..FROM——不动"]
-    new_body = (body[:m.start(1)] + "\n    " + ",\n    ".join(new_texts) + "\n"
-                + body[m.end(1):])
-    new_sql = sql[:len(sql) - len(body)] + new_body
-    return new_sql, notes or []
+    parts = _split_union_branches(body)
+    new_parts, notes_all, changed = [], [], False
+    bi = 0
+    for k, part in enumerate(parts):
+        if k % 2 == 1:
+            new_parts.append(part)             # UNION 连接词原文
+            continue
+        bi += 1
+        new_branch, notes = _reorder_branch(part, expect)
+        new_parts.append(new_branch)
+        changed = changed or (new_branch != part)
+        notes_all += [f"[支{bi}] {n}" for n in notes]
+    if not changed:
+        return sql, notes_all or ["已按 INSERT 列清单序——零改动（幂等）"]
+    new_sql = sql[:len(sql) - len(body)] + "".join(new_parts)
+    return new_sql, notes_all
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="SELECT 顶层投影按 INSERT 列清单序重排（幂等；只换序不改表达式）",
+        description="SELECT 顶层投影按 INSERT 列清单序重排（幂等；只换序不改表达式；UNION 每支独立排）",
         epilog="期望序=结构源序∩规则产出列（与 INSERT 列清单同源）——按位对齐零错位。"
-               "opt 场景不适用（baseline 老列序受 fence 锁定）。")
+               "UNION 多支每支独立重排到同一序（连接词保持）。opt 场景不适用（baseline 老列序受 fence 锁定）。")
     ap.add_argument("--sql", required=True, help="coder 的 SELECT 文件路径")
     ap.add_argument("--ts", required=True, help="ts.json 路径")
     ap.add_argument("--rule", required=True, help="规则编码（rules 或 init.rules）")

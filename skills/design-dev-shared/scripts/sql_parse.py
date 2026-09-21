@@ -810,23 +810,17 @@ def check_no_line_comment(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
-def split_top_projection_items(sql: str):
-    """顶层 SELECT 投影项切分（括号感知逗号），返回 [(输出名, 项原文)] 保序。
+def find_projection_span(body: str):
+    """顶层投影段 span：主 SELECT 关键词后 到 **depth==0 处 FROM** 前的 (start, end)。
 
-    输出名：AS 别名优先（小写），裸列名/别名.列取列名；顶层 SELECT * / t.* 返回
-    [("*", "*")]；无名项（函数表达式无 AS）名=None；无 SELECT..FROM 结构返回 None。
-    2026-09-21 自 extract_top_projection 抽出单点化——名字提取与项原文同源，
-    reorder_select（投影重排器）按项原文 permutation 零加工（表达式原文不动只换序）。
+    括号感知——投影项里的标量子查询自带 FROM 不误切（2026-09-21 实证旧非贪婪正则
+    `(.*?)\\bFROM\\b` 取第一个 FROM 把子查询切开、后续项全丢）。无 SELECT/FROM 返回
+    None。split_top_projection_items（切项）与 reorder_select（原文替换）共用单点。
     """
-    _cte, main = split_cte_main(sql or "")
-    body = main if main else (sql or "")
     m = re.search(r'\bSELECT\b', body, re.IGNORECASE)
     if not m:
         return None
-    # 投影段终点=**depth==0 处的 FROM**（括号感知）——投影项里的标量子查询自带 FROM，
-    # 旧版非贪婪正则 (.*?)\bFROM\b 取第一个 FROM 会把子查询切开（2026-09-21 实证：
-    # `s.a, (SELECT max(p.x)` 截断、后续项全丢；check_sql 侧表现为误判不可比漏检）
-    i, depth, seg_end = m.end(), 0, None
+    i, depth = m.end(), 0
     while i < len(body):
         ch = body[i]
         if ch == "(":
@@ -837,12 +831,25 @@ def split_top_projection_items(sql: str):
             before = body[i - 1] if i > 0 else " "
             after = body[i + 4:i + 5]
             if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
-                seg_end = i
-                break
+                return (m.end(), i)
         i += 1
-    if seg_end is None:
+    return None
+
+
+def split_top_projection_items(sql: str):
+    """顶层 SELECT 投影项切分（括号感知逗号），返回 [(输出名, 项原文)] 保序。
+
+    输出名：AS 别名优先（小写），裸列名/别名.列取列名；顶层 SELECT * / t.* 返回
+    [("*", "*")]；无名项（函数表达式无 AS）名=None；无 SELECT..FROM 结构返回 None。
+    2026-09-21 自 extract_top_projection 抽出单点化——名字提取与项原文同源，
+    reorder_select（投影重排器）按项原文 permutation 零加工（表达式原文不动只换序）。
+    """
+    _cte, main = split_cte_main(sql or "")
+    body = main if main else (sql or "")
+    span = find_projection_span(body)
+    if span is None:
         return None
-    seg = body[m.end():seg_end]
+    seg = body[span[0]:span[1]]
     items, depth, cur = [], 0, ""
     for ch in seg:
         if ch == "(":
