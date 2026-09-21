@@ -239,7 +239,7 @@ def run():
     rules_dir = config_dir / "_references" / "rules" / RULES_DIR_NAME
     rules_dir.mkdir(parents=True, exist_ok=True)
     db_config = rules_dir / "db-sources.json"
-    db_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "db-sources.example.json"
+    db_example = SCRIPT_DIR / "docs" / "templates" / "examples" / "db-sources.example.json"
     if not db_config.exists() and db_example.exists():
         shutil.copy2(str(db_example), str(db_config))
         print("[6/6] 数据库配置初始化...")
@@ -255,7 +255,7 @@ def run():
 
     # ── 7. 术加租户配置初始化（exporter 用；2026-09-10 自 platform_config 改名）──
     pf_config = rules_dir / "shujia_config.json"
-    pf_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "shujia_config.example.json"
+    pf_example = SCRIPT_DIR / "docs" / "templates" / "examples" / "shujia_config.example.json"
     if not pf_config.exists() and pf_example.exists():
         shutil.copy2(str(pf_example), str(pf_config))
         print("[7/9] 术加租户配置初始化...")
@@ -272,7 +272,7 @@ def run():
     # ── 8. LTS 配置初始化（2026-09-10 三合一：任务路径[设计期 assemble_ts 盖章] +
     #    导出期 consts + 跨集群 depTaskIds；schedule_config/platform_config.lts 均并入退役）──
     lts_config = rules_dir / "lts_config.json"
-    lts_example = SCRIPT_DIR / "skills" / "dws-coding" / "assets" / "lts_config.example.json"
+    lts_example = SCRIPT_DIR / "docs" / "templates" / "examples" / "lts_config.example.json"
     if not lts_config.exists() and lts_example.exists():
         shutil.copy2(str(lts_example), str(lts_config))
         print("[8/9] LTS 配置初始化（任务路径 + 导出期 consts + dep_task_ids）...")
@@ -289,7 +289,7 @@ def run():
 
     # ── 9. schema↔appid 映射初始化（deliver 目录层 + export job 参数的标准源）──
     sa_config = rules_dir / "schema_apps.json"
-    sa_example = SCRIPT_DIR / "skills" / "dws-design" / "assets" / "schema_apps.example.json"
+    sa_example = SCRIPT_DIR / "docs" / "templates" / "examples" / "schema_apps.example.json"
     if not sa_config.exists() and sa_example.exists():
         shutil.copy2(str(sa_example), str(sa_config))
         print("[9/10] schema↔appid 映射初始化...")

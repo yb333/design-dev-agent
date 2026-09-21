@@ -87,7 +87,7 @@ def main():
             print(f"  原因: 配置结构错误")
             for b in bad:
                 print(f"    - {b}")
-            print(f"  参考: skills/dws-coding/assets/db-sources.example.json")
+            print(f"  参考: docs/templates/examples/db-sources.example.json（项目仓）")
             sys.exit(1)
     except json.JSONDecodeError as e:
         print("NO_DB_SOURCE")

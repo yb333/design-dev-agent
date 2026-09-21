@@ -141,8 +141,8 @@ c2|cust_code|status=1 and del_flag='N'
 ### 第4层 工程保障 — 分布键 + 关联安全 + 调度
 
 **想清楚**：
-- **分布键**：按业务主键 / 关联使用频率（减少重分布）/ 离散程度选，与数据量无关。多表 JOIN 时各表分布键必须一致。
-  → 详见 `references/physical-playbook.md` §1.1
+- **分布键**（决策维度按序：**经常 JOIN 的字段**[多表 JOIN 各表分布键必须一致→本地关联免重分布] > **业务主键**[高基数防倾斜] > WHERE 高频过滤字段；与数据量无关）：事实表=业务主键；维度表=**REPLICATION**（小表广播，join 零重分布）；中间表=与下游 JOIN 字段一致。低基数字段（status/gender 类）必致倾斜不能用。物理三件套（列存/HASH 分布/LOW 压缩）是 coder 建表固定标准，你不用管语法——你判断的只有：**分布键选哪个、要不要分区**。
+- **分区**：默认**不分区**；只有明确会计期/按时间切片查询需求才按 `account_period` 分区（LIST/RANGE）。
 - **关联安全（每个声明的 JOIN：⓪条件可信 + 三维判断，都要有结论）**：
   - ⓪ **条件语义（先于三维）**：join_condition 里"取一/最新/去重"类过滤（如 rn=1）= 从表按业务键不唯一的强信号——①方向必须有对齐结论（GROUP BY 收敛 / 取最新有效行），开窗口径业务语义源端给，designer 不编。存在性/出处已由 precheck+评估层把关，此处兜底语义。
     **开窗列（rn 等设计产物字段）的合法通道（N30 拦你没声明时照此补）**——三形态按场景选，物化层级是设计自由度：
@@ -159,8 +159,17 @@ c2|cust_code|status=1 and del_flag='N'
     靠这一维判断兜住——不写 cast 就是签了"可比"**。
   - ③ **内容语义**：类型全兼容但值域可能对不上（'1' vs '01'——不报错只静默空关联）。存疑时 explore.py `--check-overlap`（双侧 schema/table/key 各一组）重叠率试算取证。
   三维（①②③）都要有结论——①的事实底座来自评估层；②③存疑才取证（工具按需调，不逐 JOIN 机械跑）。
-- **调度**：schedule_type（从 RS 调度频率推导）、cron（Quartz 6 段标准表达式）、依赖类型（默认宽依赖）
-  → 依赖类型选择见 `references/physical-playbook.md` §二
+- **调度**：schedule_type（从 RS 调度频率推导）、cron（Quartz 6 段标准表达式）、依赖类型选 dep_type：
+
+  | 类型 | 含义 | 典型场景 |
+  |------|------|---------|
+  | **宽依赖（默认）** | 当天任意时间或计划时间前后 N 小时内完成过就行 | 大部分场景（不确定就用它） |
+  | 同周期依赖 | 依赖和被依赖调度频率时间点完全相同，跑完才轮到我 | 同频任务间依赖 |
+  | 时间点依赖 | 等到依赖任务在指定时间点执行完成后再跑 | 精确控制执行顺序 |
+  | 上周期依赖 | 当前任务计划时间匹配被依赖任务的上一个计划时间 | T-1 场景（今天用昨天的数据） |
+  | 虚拟依赖 | 依赖源端实时任务（非周期任务），任务里新增 URL 类型 job 查数据库判断依赖状态 | 源端是实时任务 |
+
+  I 视图→F 表、DQ→I 视图的宽依赖由脚本自动补，不用填。
 
 **产出**：`tables.{表}.distribution_key`、`join_safety`、`schedule`
 **闭合条件**（assemble_ts 校验）：schedule_type 合法；cron 格式合法；distribute_type 合法；distribution_key 字段在所属表存在；joins 引用的字段在源表/tmp 表真实存在（N30，有 schema_cache 时硬校验——⓪的产物兜底）；join_type_risk 检出对的 cast/豁免核对（N_JOIN1）；自设关联的键两侧类型可比（N_JOIN2，跨大类须声明 cast）
@@ -203,11 +212,10 @@ c2|cust_code|status=1 and del_flag='N'
 | RS 标了增量（L07 增量识别方式 ≠ "不涉及"）| `references/incremental-playbook.md` |
 | 第2层评估复杂度 / 要拆步骤 / 要建中间表 | `references/complexity-playbook.md` |
 | 累积共建场景（多规则写同一中间表）| `references/incremental-playbook.md` §三/§四 |
-| 分布键/分区/依赖类型 | `references/physical-playbook.md`（每次都薄，直接读）|
 | 组装目标参照（ts.json/ts.md 结构）| `assets/ts-template.json` / `ts-template.md` |
-| 理解 RS 输入格式 | `references/rs-input-format.md` |
+| 理解 RS 输入格式 | `docs/specs/rs-input-format.md`（维护者向——RS→rs_input 字段级格式；designer 输入=view 勿回查原文，内网无项目仓此条仅本机维护参考） |
 
-> 简单全量单表资产：五层很快走完，第2层不拆中间表（走 full 单规则），第3层全量，只读 physical-playbook.md 就够。
+> 简单全量单表资产：五层很快走完，第2层不拆中间表（走 full 单规则），第3层全量，第4层标准已就地可查（分布键/分区/依赖类型），无需再读任何 playbook。
 
 ### DQ 已迁出（2026-09-14）
 
