@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 from run_ut import wrap_insert, read_select, run_dq_checks, load_dq_rules, rule_output_fields
 from sql_fence import check_sql_fence, rule_declaration
-from explain_check import _analyze_plan, _parse_actual_rows, _STREAM_PATTERN, STREAM_LIMIT
+from explain_check import _analyze_plan, _parse_actual_rows
 
 # MINUS 结果取样上限（报告用样例，不搬全量数据）
 SAMPLE_LIMIT = 5

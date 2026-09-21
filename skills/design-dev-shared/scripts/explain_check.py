@@ -17,6 +17,12 @@ import re as _re
 # PART 变体——type: 任意值都算），Streaming (type: GATHER) / Stream[name:S1, type: ...] 格式都认
 _STREAM_PATTERN = _re.compile(
     r"(?:Streaming|Stream)\s*[\(\[][^)\]]*?type\s*:", _re.IGNORECASE)
+# "identified by plan id" 详情段（Predicate Information / Datanode Execution Information）
+# 的条目标题行："{plan_id} --{算子文本}"（如 " 1 --Streaming (type: GATHER)"）——它是对表格内
+# 已有算子的详情索引，不是新算子；计数必须排除，否则同一算子被数两遍（2026-09-21 内网实测：
+# 表格 40 + 段标题重复 → 52 假超标）。表格数据行（" 5 | ->  Streaming ..."）与 PG 文本树行
+# （"->  Streaming ..."）都不以 数字-- 开头，不受排除影响。
+_PLANID_HEADING_LINE = _re.compile(r"^\s*\d+\s*--")
 # 不下推标志（华为云《语句下推调优》官方判据，2026-09-02 查证）：
 #   计划中出现 Data Node Scan 节点（伴随 _REMOTE_TABLE_QUERY_）= 不可下推——
 #   可下推部分下推、剩余中间结果拉到 CN 执行，CN 成性能瓶颈；
@@ -66,6 +72,13 @@ def _parse_actual_rows(plan_text: str):
     return None
 
 
+def _count_stream_operators(plan_text: str) -> int:
+    """STREAM 算子计数：逐行统计（计划一行=一算子），排除 plan-id 详情段标题行的重复引用。"""
+    return sum(1 for line in plan_text.splitlines()
+               if not _PLANID_HEADING_LINE.match(line)
+               and _STREAM_PATTERN.search(line))
+
+
 def _analyze_plan(plan_text: str, rule_code: str, ts_path, diag_dir=None) -> tuple[list[str], str]:
     """分析计划文本跑两门槛：①不下推（Data Node Scan 官方判据）②STREAM 算子数≤50。
     计划原文（含 actual 值）落盘可回溯。返回 (问题列表[空=通过], 计划文件路径)。
@@ -76,9 +89,9 @@ def _analyze_plan(plan_text: str, rule_code: str, ts_path, diag_dir=None) -> tup
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(f"-- EXPLAIN ANALYZE {rule_code}\n\n{plan_text}\n", encoding="utf-8")
     issues = []
-    streams = _STREAM_PATTERN.findall(plan_text)
-    if len(streams) > STREAM_LIMIT:
-        issues.append(f"STREAM 算子 {len(streams)} 个 > {STREAM_LIMIT}"
+    streams = _count_stream_operators(plan_text)
+    if streams > STREAM_LIMIT:
+        issues.append(f"STREAM 算子 {streams} 个 > {STREAM_LIMIT}"
                       f"（gather/redistribute/broadcast 过多→大量线程消耗性能下降，人判改写/分布键）")
     hits = [m for m in _NO_PUSHDOWN_MARKERS if m in plan_text]
     if hits:

@@ -96,7 +96,7 @@ def _deploy_all_ddl(ddl_executor, ddl_dir: Path, rb_dir: Path,
 # ★ 执行计划两门槛原语下沉 shared（2026-09-04：ut_opt 复用——搬体留名 re-export）
 from explain_check import (  # noqa: F401
     _STREAM_PATTERN, _NO_PUSHDOWN_MARKERS, STREAM_LIMIT, _ACTUAL_ROWS_TEXT_PATTERNS,
-    _parse_actual_rows, _analyze_plan,
+    _parse_actual_rows, _analyze_plan, _count_stream_operators,
 )
 
 def compare_column_order(expected: list, actual: list) -> tuple[bool, list]:
@@ -301,7 +301,7 @@ def main():
                 for pi in plan_issues:
                     print(f"  ⚠️ 计划门槛: {pi}")
             else:
-                streams = len(_STREAM_PATTERN.findall(plan_text))
+                streams = _count_stream_operators(plan_text)
                 print(f"  📋 计划检查: 通过（STREAM {streams}/{STREAM_LIMIT}，无 Data Node Scan）→ {plan_file}")
 
             # 列序对账（2026-09-11 定调）：SELECT 实际输出列序 vs ts 结构源字段序。
