@@ -194,7 +194,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | 问题类型 | 确定性路由（不问人） | 根因/语义时的归宿 |
 |---|---|---|
 | SQL 语法类（COLUMN/TYPE/SYNTAX/DOES NOT EXIST；DQ FAIL/MISSING） | 恢复 coder 旧会话修复 | — |
-| 设计期关联疑点（designer 评估层上报带疑似方向——评估结果=事实行+疑点清单） | **③a 从表键发散**：R1 套路 `diagnose_fanout --edge --doubt {别名}`（2026-09-20 重写：参数从 --eval 落盘 eval_result.json 派生[表/键/限定零手抄]，对唯一重复键集 EXISTS 探测[无 OR 枚举]，存在性闸拦参数错，stdout 结论+全量落盘；主表疑点自动拒→③b）/ **③b 主表粒度线发散**：无边可试算，材料直接带三选 | 人三选：源头修 mapping / 采纳验证过的条件本次继续 / 退 BA·接受+收敛策略（Task 带 task_id 恢复 designer 会话，只带裁决不带分析；③b 选项=补键[复合]/退BA/收敛）；终局实证=闸口① diagnose_fanout --all |
+| 设计期关联疑点（designer 评估层上报带疑似方向——评估结果=事实行+疑点清单） | **③a 从表键发散**：R1 套路 `diagnose_fanout --edge`（2026-09-20 重写：参数从 --eval 落盘 eval_result.json 派生[表/键/限定零手抄]，对唯一重复键集 EXISTS 探测[无 OR 枚举]，存在性闸拦参数错，stdout 结论+全量落盘；主表疑点自动拒→③b）/ **③b 主表粒度线发散**：无边可试算，材料直接带选项 | 人选项三态（**选择题形态，reason 由 engineer 标准化代笔；自由文本=按内容自由决策**）：修源端（退 BA——修数据/修口径/**定收敛口径**，2026-09-21 定调收敛决策归源端设计侧不自主发明）/ 采纳已声明条件（mapping 有依据漏采纳，试算验证后补进 join）/ **知情接受**（试算证明当前不影响主表粒度，零改动——裁决回写 join_safety `unique=false+reason` 留痕，闸口①已知接受不重复弹）；Task 带 task_id 恢复 designer 会话，只带裁决不带分析；③b 选项=补键[复合]/退BA修数据；终局实证=闸口① diagnose_fanout --all |
 | 类型风险（跨大类转换） | — | 1b 问人（转换/不加/返源端） |
 | 关联键类型跨大类 | — | 1b 问人（转换/改关联键/接受） |
 | 值域溢出（numeric overflow/value too long） | — | 按 1b 值域菜单：源输入→**BA** 改模型；过程决策→**SE** 拍板 |

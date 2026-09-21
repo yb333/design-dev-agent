@@ -200,6 +200,55 @@ class TestDeclaredConditionsHonored:
         assert "FROM dim.dim_cust" in "\n".join(ex.captured)  # 表名带各自 schema 限定
 
 
+class TestConstructedSkip:
+    """构造性唯一免实测（2026-09-21 用户实报：开窗 rn 关联在闸口①弹"查询失败"误导人）——
+    tmp 边/条件含 derived_fields 声明的派生字段 → 免测结论行不发起物理查询；未声明的列不
+    存在照旧弹（真幻觉列不放过）。"""
+
+    def _ts_derived(self):
+        return _ts([{"alias": "p", "type": "LEFT JOIN",
+                     "condition": "a.order_no = p.order_no AND p.rn = 1",
+                     "derived_fields": {"rn": "row_number() OVER (PARTITION BY order_no "
+                                              "ORDER BY pay_time DESC)"}}])
+
+    def test_derived_field_edge_skips_physical_query(self, monkeypatch, tmp_path):
+        def h(sql):
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        lines, concl, ex = _run(monkeypatch, tmp_path, self._ts_derived(), h)
+        joined = "\n".join(lines)
+        assert "免实测" in joined and "设计构造字段" in joined and "rn" in joined
+        assert "查询失败" not in joined                              # 不再弹误导性失败
+        assert "不可物理重放" in joined                              # 整体试算同口径跳过
+        assert not any("pay" in s and "GROUP BY" in s for s in ex.captured)  # 未发起键统计
+
+    def test_tmp_edge_skips_physical_query(self, monkeypatch, tmp_path):
+        def h(sql):
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        ts = _ts([{"alias": "t", "type": "LEFT JOIN", "condition": "a.order_no = t.order_no"}])
+        ts["rules"]["R0001"]["source_tables"].append(
+            {"schema": "dws", "table": "tmp_pay_latest", "alias": "t", "_from_reads": True})
+        lines, _, ex = _run(monkeypatch, tmp_path, ts, h)
+        joined = "\n".join(lines)
+        assert "免实测" in joined and "中间表" in joined
+        assert not any("tmp_pay_latest" in s for s in ex.captured)   # 未对未建表发起查询
+
+    def test_undeclared_derived_col_still_flags(self, monkeypatch, tmp_path):
+        """条件引用 rn 但 joins 没声明 derived_fields → 列不存在照旧弹（真幻觉归 N38 域）。"""
+        def h(sql):
+            if "pay" in sql:
+                return ("ERR", 'column "p.rn" does not exist')
+            return [{"total": 100, "uniq": 100, "nulls": 0}]
+
+        ts = _ts([{"alias": "p", "type": "LEFT JOIN",
+                   "condition": "a.order_no = p.order_no AND p.rn = 1"}])
+        lines, _, _ = _run(monkeypatch, tmp_path, ts, h)
+        joined = "\n".join(lines)
+        assert "查询失败" in joined and "免实测" not in joined
+        assert "列不存在" in joined                                  # 分类提示保留
+
+
 class TestDrivingTable:
     def test_driving_business_key_dup_flagged_as_non_join(self, monkeypatch, tmp_path):
         """驱动表自身 business_key 重复 → 非关联问题（粒度/主键），钉死事实。"""

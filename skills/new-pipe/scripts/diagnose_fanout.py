@@ -337,6 +337,27 @@ def _err_classify(err_text) -> str:
     return ""
 
 
+def _constructed_skip(j: dict, own: list, where: str, alias: str, tmp_aliases: set):
+    """构造性唯一免实测判别（2026-09-21 用户实报：闸口①对开窗取最新关联弹"查询失败"误导人）：
+    ①关联对象是中间表——闸口①表未建/属设计构造产物；②条件引用 joins.derived_fields 声明的
+    派生字段（开窗序号 rn 等）——非物理列，对物理表实测必然列不存在。两形态唯一性都由设计
+    构造保证（开窗 partition 键=关联键时 rn=1 每组一条，数学唯一非统计唯一），出免测结论行
+    不发起物理查询（静默跳过像"检查没了"）；未命中声明的列不存在照旧弹（真幻觉列归 N38 域）。
+    返回 None=照常实测；str=免测理由。"""
+    if alias in tmp_aliases:
+        return "中间表（设计构造产物，闸口①未建）"
+    dv = j.get("derived_fields") if isinstance(j, dict) else None
+    names = {str(k).strip().lower() for k in dv} if isinstance(dv, dict) else set()
+    if not names:
+        return None
+    hit = {str(c).strip().lower() for c in own} & names
+    if not hit and where:
+        hit = {w.lower() for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", where)} & names
+    if hit:
+        return f"条件含设计构造字段 {sorted(hit)}（joins.derived_fields 声明）"
+    return None
+
+
 def _cast_err_hint(err_text) -> str:
     """识别隐式转换类报错（回放声明条件时字面量与列类型不匹配——如 varchar 列
     = 数值字面量，内核把列值隐式 cast 成 numeric，脏值即炸。这本身是诊断发现：
@@ -403,10 +424,15 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
     joins_decl = rule.get("joins") or []
     if not joins_decl or not driving or driving not in binding:
         return "none"
-    # 中间表闸口①未建（DDL 在步骤4）——天然边界，UT 兜底
+    # 中间表闸口①未建（DDL 在步骤4）——天然边界，UT 兜底；含设计构造字段（开窗序号等，
+    # joins.derived_fields 声明）的边物理表重放语义已变（无开窗=全表行），同样不可重放——
+    # 2026-09-21 补：此前这类边整体试算弹"查询失败跳过"，把合法设计误导成故障
     involved = [driving] + [(j.get("alias") or "").strip().lower() for j in joins_decl]
-    if any(a in tmp_aliases or a not in binding for a in involved):
-        lines.append("[声明计数] 依赖中间表（reads tmp，闸口①表未建）或别名未绑定——跳过，UT 兜底")
+    if any(a in tmp_aliases or a not in binding for a in involved) \
+            or any(isinstance(j.get("derived_fields"), dict) and j["derived_fields"]
+                   for j in joins_decl):
+        lines.append("[声明计数] 依赖中间表（reads tmp，闸口①表未建）/条件含设计构造字段"
+                     "（开窗等不可物理重放）或别名未绑定——跳过，UT 兜底")
         return "skip"
     d_sch, d_tbl = binding[driving]
     where_txt = f" WHERE {rule_filter_text}" if (rule_filter_text or "").strip() else ""
@@ -485,7 +511,8 @@ def _join_counts(db: _Db, rule: dict, binding: dict, driving: str, tmp_aliases: 
                     _nu_tables.append(f"JOIN {_i}（{_tbl_short}，声明不唯一）")
             if _nu_tables:
                 _note = (f"；⚠ 驱动数据当前未命中发散键（{'、'.join(_nu_tables)}）——"
-                         f"现在不发散≠未来不发散，命中即膨胀，闸口①人判是否加限定/收敛")
+                         f"现在不发散≠未来不发散，命中即膨胀——闸口①人判：修源端（含定收敛口径）"
+                         f"/采纳已声明条件/知情接受（join_safety 留痕）")
         lines.append(f"[整体试算] 按声明条件把全部关联拼起来数行数：驱动 {before} 行 → 关联后 {after} 行（无膨胀无丢行{_note}）")
     # 空关联率（LEFT join 逐个——值域/内容不一致维度的系统性检查）
     for i, j in enumerate(joins_decl, 1):
@@ -637,6 +664,15 @@ def diagnose(ts_path: Path, rule_code: str, top: int = 5, db: "_Db | None" = Non
                 where = " AND ".join(dict.fromkeys(
                     x for x in (_strip_alias(tm, alias) for tm in terms) if x))
                 mapping_decl = mapping_joins.get(tbl.rsplit(".", 1)[-1].lower(), "")
+                # ★ 构造性唯一免实测（2026-09-21）：tmp 边/条件含派生字段（开窗序号 rn 等）
+                # 不发起物理查询——闸口①对这类边弹"查询失败"会把合法设计误导成故障
+                _skip = _constructed_skip(j, own, where, alias, tmp_aliases)
+                if _skip:
+                    verdicts.append(f"JOIN {i} {tbl}：免实测（{_skip}——唯一性由设计构造保证）")
+                    lines.append(f"[JOIN {i}] {sch}.{tbl}（{alias}）✓ 免实测——{_skip}，"
+                                 f"唯一性由设计构造保证，不发起物理查询。")
+                    lines.append(f"  ｜关联条件（designer 写的）：{cond}")
+                    continue
                 # ★ 单表故障隔离 + 降级废除（2026-09-15：join filter 存在的意义就是
                 # "源表主键≠关联键，加条件保唯一"——降级不带条件查出的"不唯一"是伪信号
                 # （无条件不唯一是预期）。条件查询失败本身=诊断发现：报错原文+分类提示
@@ -940,7 +976,7 @@ def _edge_prepare(rs_path: Path, rows: dict, ev: dict, doubt_alias: str,
     drow = rows[dl]
     if drow.get("is_main"):
         raise ValueError(f"'{doubt_alias}' 是主表粒度线（业务主键问题）——无边可试算；"
-                         f"③b 路由：材料直接带三选（补键[复合]/退BA修数据/收敛策略）")
+                         f"③b 路由：材料直接带选项（补键[复合]/退BA修数据——收敛口径归源端，设计侧不自主发明）")
     side_b = {"schema": drow["schema"], "table": drow["table"],
               "key": override.get("join_key_b") or drow.get("key") or "",
               "where": override.get("where_b", drow.get("where") or "")}
