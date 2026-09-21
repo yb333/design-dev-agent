@@ -1283,7 +1283,7 @@ class TestErrorGrouping:
 
 
 # TestDQDriven 已删（2026-09-14 DQ 拆分）：N_DQ1-N_DQ3/dq 任务语义迁
-# new-pipe/scripts/assemble_dq.py，测试见 tests/test_assemble_dq.py。
+# dws-dq/scripts/assemble_dq.py，测试见 tests/test_assemble_dq.py。
 # make_dq_rs_input 工厂保留（新测试与 view 相关测试复用）。
 
 
@@ -2649,7 +2649,7 @@ class TestJoinKeyTypesAndDqContract:
                    for i in vr.items)
 
     # ---------- N_DQ4 / N_DQ5 已迁（2026-09-14 DQ 拆分）----------
-    # 校验权威在 new-pipe/scripts/assemble_dq.py，测试见 tests/test_assemble_dq.py。
+    # 校验权威在 dws-dq/scripts/assemble_dq.py，测试见 tests/test_assemble_dq.py。
 
     # ---------- design_logic 单行归一（落盘形态） ----------
 

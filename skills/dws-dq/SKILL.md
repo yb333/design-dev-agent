@@ -113,7 +113,7 @@ HAVING COUNT(1) > 1;
 ## 3. 写完即跑校验（唯一校验入口——2026-09-15 合并：check_sql --dq 已并入）
 
 ```bash
-python {new-pipe 的 scripts 目录}/assemble_dq.py --ts {build}/ts.json --dq-src {build}/dq.json \
+python {本 skill 的 scripts 目录}/assemble_dq.py --ts {build}/ts.json --dq-src {build}/dq.json \
     --rs {build}/_internal/rs_input.json
 ```
 

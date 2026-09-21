@@ -66,12 +66,13 @@ python {SKILL_BASE}/scripts/check_env.py
 - `design-dev-shared/scripts`（SHARED_SCRIPTS = `{SKILL_BASE}/../design-dev-shared/scripts`）：**共用入口**（preprocess——两剧本共用 / check_db——两剧本共用 / assemble_ddl——new-pipe 直调+opt 侧 assemble_ddl_opt import / resolve_appid）+ **公共库**（dws_db/config_paths/run_ut/sql_parse/dws_standards/ts_compat/type_compat/schema_query——schema_query 是字段查询能力层，designer 入口 check_field / coder 入口 pick_fields 的内核）。
 - `dws-design/scripts`（DESIGN_SCRIPTS = `{SKILL_BASE}/../dws-design/scripts`）：designer 调的（assemble_ts/explore/check_field/pick_targets/fill_*_decision）。
 - `dws-coding/scripts`（CODING_SCRIPTS = `{SKILL_BASE}/../dws-coding/scripts`）：coder 调的（slice_ts/check_sql/pick_fields）。
+- `dws-dq/scripts`（DQ_SCRIPTS = `{SKILL_BASE}/../dws-dq/scripts`）：DQ producer 写完即跑的 assemble_dq（校验装配渲染，2026-09-21 归位自 new-pipe——producer 岗位工具对齐 pick_dq_context 先例）。
 
 **先定位路径再开工**——本 skill 加载注入的 Base directory 即锚点（`{SKILL_BASE}` = .../skills/new-pipe）。
 
 bash 调用时用推算出的**绝对路径**（会话 cwd 不在 skill 目录，裸相对路径会指错）。
 
-下文用 `PIPE_SCRIPTS` 代指本剧本脚本目录，`DESIGN_SCRIPTS`/`CODING_SCRIPTS` 代指设计/编码段脚本目录，`SHARED_SCRIPTS` 代指 shared 公共目录（共用入口 + 公共库）。
+下文用 `PIPE_SCRIPTS` 代指本剧本脚本目录，`DESIGN_SCRIPTS`/`CODING_SCRIPTS`/`DQ_SCRIPTS` 代指设计/编码/DQ 段脚本目录，`SHARED_SCRIPTS` 代指 shared 公共目录（共用入口 + 公共库）。
 调用时把变量替换为实际路径，例如：`python <SHARED_SCRIPTS>/preprocess.py ...`
 
 ### 确定 {deliver}（probe 先行，资产定位全从输入推导）
@@ -335,7 +336,7 @@ Task(
 **对不上才恢复 producer 会话**（带差异清单一次修完，限 3 轮），此时才有必要重跑全量校验：
 
 ```bash
-python PIPE_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --dq-src {deliver}/dq.json \
+python DQ_SCRIPTS/assemble_dq.py --ts {deliver}/ts.json --dq-src {deliver}/dq.json \
     --rs {deliver}/_internal/rs_input.json
 ```
 

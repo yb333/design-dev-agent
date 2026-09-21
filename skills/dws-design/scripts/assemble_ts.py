@@ -1177,7 +1177,7 @@ def run_all_validations(decisions: dict, rs_input: dict, field_map: dict,
     # ============================================================
     # DQ 校验（N_DQ1-N_DQ5）已随 DQ 拆分迁出（2026-09-14）：
     # DQ 设计独立成 dws-dq-producer 产物（dq.json），校验在
-    # new-pipe/scripts/assemble_dq.py（producer 写完即跑，闸口①后并行窗口）。
+    # new-pipe 剧本 4c：dws-dq/scripts/assemble_dq.py（producer 写完即跑，闸口①后并行窗口）。
     # ============================================================
 
     # ============================================================
