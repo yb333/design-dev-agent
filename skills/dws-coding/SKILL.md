@@ -109,9 +109,17 @@ python {skill目录}/scripts/pick_fields.py --ts {ts路径} --rule {规则号} -
 - 方言对照表与 schema 全限定细节见 §0 / §3.2（原则见岗位定义 agents/dws-coder.md）
 - **★ 投影只写本规则产出列，禁 NULL AS x 凑全列**（2026-09-15）：INSERT 列清单=结构源序∩产出列——未产出的列 INSERT 缺省即 NULL（写 NULL 补位纯冗余）；**merge_into/update 场景写 NULL = 每次增量把该列旧值清空**（SET 只 SET 产出列、其余列保留旧值才是正确语义），凑数即写错数据
 
-### 步骤 5：静态对比
+### 步骤 5：投影重排 + 静态对比
 
-调 check_sql.py 检查 SELECT 和 ts.json 切片是否一致（表/字段/JOIN/口径引用）：
+**先排后查**（写完第一动作=reorder，幂等零成本——列序是确定性 permutation 不该手排）：
+
+```bash
+python {skill目录}/scripts/reorder_select.py --sql {你的SELECT文件} --ts {ts路径} --rule {规则号}
+```
+
+顶层投影按 **INSERT 列清单序**（结构源序∩产出列，与 INSERT 同源）重排——表达式原文不动只换序，已按序零改动。多列/无名项保持原位收尾（对错由下一步查）。**opt 场景不跑**（baseline 老列序受 fence 锁定）。
+
+然后调 check_sql.py 检查 SELECT 和 ts.json 切片是否一致（表/字段/JOIN/口径引用）：
 
 ```bash
 python {skill目录}/scripts/check_sql.py --sql {你的SELECT文件} --ts {ts路径} --rule {规则号}

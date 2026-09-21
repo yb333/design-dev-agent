@@ -22,7 +22,7 @@ skills/
 │   ├── assets/          # ts-template.json design-decisions-template.yaml（运行时模板——内网 agent 仅可达装好的 skill，必须随 skill 走）
 │   └── references/      # incremental-playbook.md complexity-playbook.md
 ├── dws-coding/          # 编码 skill（coder agent 用）
-│   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py（视图=F表配套镜像非规则，is_view_step 概念已清除）
+│   ├── scripts/         # check_sql.py slice_ts.py pick_fields.py reorder_select.py(投影按INSERT清单序重排,2026-09-21:确定性permutation归工具,coder写完先排后查)（视图=F表配套镜像非规则，is_view_step 概念已清除）
 │   └── assets/          # etl-templates.md（coder 运行时模板；config 案例三件已挪 docs/templates/examples/）
 ├── dws-dq/              # DQ 检查设计与实现 skill（★dws-dq-producer 专用，2026-09-14 DQ 拆分：一体产 dq.json+SQL，断言式翻译/对比式独立重算；工具=pick_dq_context/assemble_dq）
 │   ├── scripts/         # pick_dq_context.py(producer 自有入口,对齐 check_field/slice_ts 模式:三件套取料——RS需求+目标结构+mapping确定性闭包+存疑显式标记+--query/--field深挖服务) assemble_dq.py(★DQ校验渲染器=唯一校验入口:producer直产dq.json——校验[N_DQ1/4/5/9/10:RS对照+declined甄别/引用对账禁tmp/幻觉列/SQL风格项(schema前缀·业务键输出列·SELECT*,2026-09-15吸收check_sql --dq)]+补全+ts.md DQ表格追加渲染[含declined建议不做段],评审只看ts.md;schema_cache缺省自动定位_internal/。2026-09-21 归位自 new-pipe——producer 岗位工具写完即跑,engineer 收卷对账不过时兜底重跑)
@@ -71,7 +71,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 | **dws-engineer** | 设计开发段**编排+质检**：契约参数→加载剧本→调管线脚本→起 designer/producer/coder→跑确定性验证产事实→按分流表路由问题→守闸口（判断=分流不定罪，定罪归闸口人） | new-pipe / opt-pipe（按模式路由） | check_env（步骤0探针）；管线脚本经 bash python 调（不属 agent 工具） | `ddlc_design_dev/**`（含 opt/ 优化现场与 archive/ 档案） |
 | **dws-designer** | 设计判断（纯主线，无 DQ），产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（评估层唯一动作 --eval：草稿随 view 预置→stdin 答案合并→存在性+唯一性流水线→评估结果随回复上报）/ check_field（引用确认器）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
 | **dws-dq-producer** | ★DQ 翻译者+独立实现者（2026-09-14 拆分）：断言式翻译+对比式独立重算，**直接产 dq.json+SQL**（两跳并一跳 2026-09-15，无 decisions 中间产物）；身份级纪律=输入隔离（不读 design_logic/ETL SQL）/歧义不拍板标注上交/检查成本自约束 | dws-dq | pick_dq_context（三件套取料+--query/--field 深挖）/ assemble_dq（唯一校验入口——写完即跑，2026-09-15 合并 check_sql --dq） | `dq/*.sql`、`build/dq.json` |
-| **dws-coder** | 单规则加工 SELECT（DQ 已拆归 producer） | dws-coding / dws-coding-opt（按任务路由） | slice_ts / pick_fields / check_sql | `etl/*.sql` |
+| **dws-coder** | 单规则加工 SELECT（DQ 已拆归 producer） | dws-coding / dws-coding-opt（按任务路由） | slice_ts / pick_fields / check_sql / reorder_select（写完先跑：投影按 INSERT 清单序重排幂等；opt 不适用） | `etl/*.sql` |
 
 > ★ **上报路由统一（2026-09-15 定调+复调）**：子 agent（designer/coder/producer）的问题一律**上报调用方 engineer**——两通道：回复内结构化上报（常态；阻塞=首行 ⚠ 标记后结束会话，question 已 deny：源码级查证其机制只会直连人/子会话调用挂死，两种都坏）/结构化产物字段（歧义/declined 随材料上交）。engineer=**第一响应人**（上报处理协议四步：核实→诊断方向→影响评估→路由，永不裸转发——身份层定调+方法手册 new-pipe/references/report-triage.md，opt 跨引）：表内确定性技术回路直接恢复会话修（不问人），语义/表外带四件套（实测事实+根因方向+影响+选项）给人，人答案经 engineer 回子 agent。engineer 不代答语义决策（红线 L3 归闸口人）。
 

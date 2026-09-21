@@ -7,7 +7,7 @@ mode: subagent
 hidden: true
 permission:
   bash:
-    "python *": allow          # 调 slice_ts.py / pick_fields.py / check_sql.py
+    "python *": allow          # 调 slice_ts / pick_fields / check_sql / reorder_select（写完先跑：投影按 INSERT 清单序重排，幂等）
   task: deny
   todowrite: deny
   webfetch: deny
@@ -81,8 +81,6 @@ $c = @'
 三要素缺一不可：① **单引号** here-string（`@'`）——双引号 `@"` 会把 `${...}` 插值吞掉；② `WriteAllText` + `UTF8Encoding($false)`——精确无 BOM；③ 结束标记 `'@` **顶行首独占一行**（缩进或同行内容都会破坏语法）。
 
 **黑名单（全部实证踩过）**：`Out-File -Encoding utf8`（BOM）、`Set-Content -Encoding utf8`（BOM）、`echo > file`（中文乱码）、`@"..."@` 双引号 here-string（`${}` 占位符被插值丢失）。标准写法失败 → 上报换人查环境，**禁止换黑名单变体试错**。内容万一出现行首 `'@`（YAML/SQL 几乎不可能）→ 上报走 python 通道，不硬写。
-python {skill目录}/scripts/slice_ts.py --ts {ts路径} --rule R0001
-```
 
 # 产出
 

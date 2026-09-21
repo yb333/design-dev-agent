@@ -810,6 +810,50 @@ def check_no_line_comment(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
+def split_top_projection_items(sql: str):
+    """顶层 SELECT 投影项切分（括号感知逗号），返回 [(输出名, 项原文)] 保序。
+
+    输出名：AS 别名优先（小写），裸列名/别名.列取列名；顶层 SELECT * / t.* 返回
+    [("*", "*")]；无名项（函数表达式无 AS）名=None；无 SELECT..FROM 结构返回 None。
+    2026-09-21 自 extract_top_projection 抽出单点化——名字提取与项原文同源，
+    reorder_select（投影重排器）按项原文 permutation 零加工（表达式原文不动只换序）。
+    """
+    _cte, main = split_cte_main(sql or "")
+    body = main if main else (sql or "")
+    m = re.search(r'\bSELECT\b(.*?)\bFROM\b', body, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None
+    seg = m.group(1)
+    items, depth, cur = [], 0, ""
+    for ch in seg:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            items.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        items.append(cur)
+    out = []
+    for c in items:
+        c = c.strip()
+        if c == "*" or re.fullmatch(r'[A-Za-z_]\w*\.\*', c):
+            return [("*", "*")]
+        am = re.search(r'\bAS\s+([A-Za-z_]\w*)\s*$', c, re.IGNORECASE)
+        if am:
+            out.append((am.group(1).lower(), c))
+        elif re.fullmatch(r'[A-Za-z_]\w*', c):
+            out.append((c.lower(), c))
+        elif re.fullmatch(r'[A-Za-z_]\w*\.[A-Za-z_]\w*', c):
+            out.append((c.rsplit(".", 1)[1].lower(), c))
+        else:
+            out.append((None, c))
+    return out
+
+
 def extract_top_projection(sql: str):
     """顶层 SELECT 投影列名序列（保序；AS 别名优先，别名.列取列名）。
 
@@ -819,40 +863,11 @@ def extract_top_projection(sql: str):
 
     消费者：check_sql 投影列序对账（vs 结构源字段序——按位对齐的 INSERT 乱序
     =静默错位数据）、DQ 输出列业务键校验（set 化用）。
+    切分原语已单点化到 split_top_projection_items（2026-09-21），本函数只做名字投影。
     """
-    _cte, main = split_cte_main(sql or "")
-    body = main if main else (sql or "")
-    m = re.search(r'\bSELECT\b(.*?)\bFROM\b', body, re.IGNORECASE | re.DOTALL)
-    if not m:
+    items = split_top_projection_items(sql)
+    if items is None:
         return None
-    seg = m.group(1)
-    cols, depth, cur = [], 0, ""
-    for ch in seg:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            cols.append(cur)
-            cur = ""
-        else:
-            cur += ch
-    if cur.strip():
-        cols.append(cur)
-    out = []
-    for c in cols:
-        c = c.strip()
-        if c == "*":
-            return ["*"]
-        am = re.search(r'\bAS\s+([A-Za-z_]\w*)\s*$', c, re.IGNORECASE)
-        if am:
-            out.append(am.group(1).lower())
-        elif re.fullmatch(r'[A-Za-z_]\w*', c):
-            out.append(c.lower())
-        elif re.fullmatch(r'[A-Za-z_]\w*\.[A-Za-z_]\w*', c):
-            out.append(c.rsplit(".", 1)[1].lower())
-        elif re.fullmatch(r'[A-Za-z_]\w*\.\*', c):
-            return ["*"]
-        else:
-            return None  # 函数表达式无 AS 等无名项——序校验不可比，整体跳过
-    return out
+    if any(n is None for n, _ in items):
+        return None
+    return [n for n, _ in items]
