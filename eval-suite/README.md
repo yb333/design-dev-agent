@@ -177,7 +177,9 @@ SUM vs 裸列/引用错列/常量变值都 diff）。
 |---|---|
 | 双模式 | `--mode quick`（默认）=快速评估导入，行级带 metric_name（8 列）；`--mode dataset`=**评估集**（后续主形态：评估任务固定、资产=评估集），无 metric_name（评估器在评估任务层选）+ `retrieval_context` 列 |
 | 数据语义 | input/expected=案例设计侧确定性派生（RS→完成标准清单）；**actual=ts.md §1 概述 + DDL/ETL SQL 文件原文全量嵌入**（平台只见 Excel 这一格，文件名清单喂不了 judge）+档案来源（可回溯），单文件/总量截断封顶（`CAP_PER_FILE`/`CAP_ACTUAL`）；retrieval_context（dataset）=rs_input 映射清单摘要（源→规则→目标）——agent 的"检索上下文"即 RS/mapping 输入材料；**不编造输出** |
-| 本地试点 | `python3 platform_export.py --source archive --root ../10_project_deliver [--mode dataset]`（当前 11 行）；**单案例端到端试点加 `--case 003 --out out/pilot_003_import`**（子串匹配，内网换真实案例同参数复用） |
+| 粒度扩容 | `--granularity task|rule|both`（默认 task）：rule=每规则一行（30+ 主力——规则=交付件自然子单元，每行真实 SQL+字段清单；老编号批多规则单 SQL 文件如实一行）/ both=并集（本地 44 行）。兼容三代 ts 结构（fields 三桶 dict / flat list / field_targets）与老式 rs_input target 嵌套 |
+| 评估集扩容底账 | 本地两代真实运行：编号批 11 案例（老代）+ 未编号批 10 案例（新代，ts.md 命名 `{资产}_ts.md`、etl/dq/export 俱全）；编号×未编号同资产两代产物并存=两次真实运行，行均真实 |
+| 本地试点 | `python3 platform_export.py --source archive --root ../10_project_deliver [--mode dataset] [--granularity both]`（both 44 行）；**单案例端到端试点加 `--case 003 --out out/pilot_003_import`**（子串匹配，内网换真实案例同参数复用） |
 | 内网真实案例 | 同命令换 `--root` 指内网 10_project_deliver（兼容 build/ 新布局与老式平铺） |
 | evalsuite 源 | `--source evalsuite`：cases/ 的 expectations.json × 产物档案 join（存量仅 001 有 expectations，且该案例无产物——基本空跑，留作 cases_real 复用该形态时的入口） |
 | 平台口径收口 | 表头全集/指标合法值集中在脚本顶部常量（`QUICK_COLUMNS`/`DATASET_COLUMNS`/`DEFAULT_METRIC_NAME`），平台确认后只改一处 |
