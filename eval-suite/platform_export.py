@@ -57,11 +57,11 @@ DATASET_COLUMNS = [
 DEFAULT_METRIC_NAME = "任务成功率"  # ← quick 模式专用，换成平台评估器的准确名称
 
 CAP_INPUT = 1200
-CAP_ACTUAL = 16000   # 平台只认 Excel 这一格——产物原文全量嵌入（Excel 单格硬限 32767，留裕量；judge 上下文未知可调低）
-CAP_PER_FILE = 8000  # 单个产物文件内容上限（超长 SQL 截断封顶）
+CAP_ACTUAL = 26000  # 平台只认 Excel 这一格——产物原文全量嵌入（实测最大案例 raw 21845；Excel 单格硬限 32767 留裕量）
+CAP_PER_FILE = 12000  # 单个产物文件内容上限（超长 SQL 截断封顶）
 CAP_EXPECTED = 4500  # 完成标准含目标字段/来源表清单（judge 逐项核验的枚举依据；实测最大案例 raw 4117）
 CAP_UT = 2000        # UT 报告摘要上限（任务成功率系 judge 要流程证据——ut_report.md 是对外报告）
-CAP_RETRIEVAL = 1000
+CAP_RETRIEVAL = 5000  # rs_input 映射清单摘要（廉价上下文，放全量免截断）
 CAP_RS_DIGEST = 500
 
 
@@ -244,6 +244,8 @@ def payload_from_archive(case_dir: Path):
         "retrieval": mapping_digest(rs),
         "expected": expected,
         "actual": build_actual(art_root, str(case_dir)),
+        # 上传前确定性自检依据：这些字段必须出现在（截断后的）actual 里，judge 才核得完覆盖
+        "coverage_fields": tgt_fields,
     }, None
 
 
@@ -394,14 +396,21 @@ def main():
         entry = {"case": case_dir.name}
         if payload:
             row = shape_row(payload, args.mode, args.metric_name)
-            entry.update({
-                "included": True,
-                "len_input": len(row["input"]),
-                "len_actual": len(row["actual_output"]),
-                "len_expected": len(row["expected_output"]),
-                **({"len_retrieval": len(row["retrieval_context"])} if args.mode == "dataset" else {}),
-            })
-            rows.append(row)
+            # 确定性覆盖自检：expected 承诺的每个字段必须在 judge 实际可见的 actual 里——
+            # 截断/缺产物导致的核不了，上传了必扣分，自检不过整行拦下
+            missing = [f for f in payload.get("coverage_fields", []) if f not in row["actual_output"]]
+            if missing:
+                entry.update({"included": False,
+                              "skip_reason": f"覆盖自检不过：{len(missing)} 字段不在 actual（截断/缺产物）：{', '.join(missing[:5])}…"})
+            else:
+                entry.update({
+                    "included": True,
+                    "len_input": len(row["input"]),
+                    "len_actual": len(row["actual_output"]),
+                    "len_expected": len(row["expected_output"]),
+                    **({"len_retrieval": len(row["retrieval_context"])} if args.mode == "dataset" else {}),
+                })
+                rows.append(row)
         else:
             entry.update({"included": False, "skip_reason": skip})
         case_log.append(entry)
