@@ -1,0 +1,455 @@
+﻿metric_name,input,actual_output,expected_output,trace,turns,tools_called,expected_tools
+任务成功率,"任务：为  完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：
+粒度：每行一个订单
+调度：全量调度 / T+1，一天一调
+映射字段 7 项，来源表 1 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `dws.dwb_trade_order_d`(订单汇总表) |
+| **I 视图** | `dws.dwb_trade_order_d_i`(F表镜像) |
+| **目标粒度** | 每行一个订单+客户组合 |
+| **写入策略** | 全量调度 |
+| **分布键** | order_id |
+| **字段统计** | 业务 3 + 审计 4 = 总计 7 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 1 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | ods.ods_trade_order_di | 订单明细接入表 | a |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_trade_order_d.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/002_dwb_trade_order_d","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 ，粒度：每行一个订单
+- 覆盖全部 7 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 dws.dwb_trade_wide_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：交易宽表
+粒度：每行一个订单
+调度：全量调度 / T+1，一天一调
+映射字段 15 项，来源表 5 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `dws.dwb_trade_wide_f`(交易宽表) |
+| **I 视图** | `dws.dwb_trade_wide_i`(F表镜像) |
+| **目标粒度** | 每行一个订单 |
+| **写入策略** | 全量调度 |
+| **分布键** | order_id |
+| **字段统计** | 业务 11 + 审计 4 = 总计 15 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 1 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | ods.ods_trade_order_di | 订单明细 | o |
+| 2 | dwrdim.dim_cust_d | 客户维表 | c |
+| 3 | dwrdim.dim_product_d | 商品维表 | p |
+| 4 | ods.ods_payment_di | 支付明细 | pay |
+| 5 | ods.ods_logistics_di | 物流明细 | log |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_trade_wide_f.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/003_dwb_trade_wide_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 dws.dwb_trade_wide_f，粒度：每行一个订单
+- 覆盖全部 15 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_trade_wide_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slshp.dwb_shop_center_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：店铺中心宽表
+粒度：每行一个店铺记录
+调度：全量调度 / T+1，一天一调
+映射字段 20 项，来源表 4 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slshp.dwb_shop_center_f`(店铺中心宽表) |
+| **I 视图** | `slshp.dwb_shop_center_i`(F表镜像) |
+| **目标粒度** | 每行一个店铺记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | shop_id |
+| **字段统计** | 业务 16 + 审计 4 = 总计 20 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 1 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | dim.dim_shop_f | 店铺维度表 | dsf |
+| 2 | dim.dim_region_f | 地区维度表 | drf |
+| 3 | sdord.dwd_order_f | 订单明细事实表 | dof |
+| 4 | sdrev.dwd_review_f | 评价事实表 | drf5 |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_shop_center_f.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/004_dwb_shop_center_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slshp.dwb_shop_center_f，粒度：每行一个店铺记录
+- 覆盖全部 20 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_shop_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slusr.dwb_user_center_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：用户中心宽表
+粒度：每行一个用户记录
+调度：全量调度 / T+1，一天一调
+映射字段 46 项，来源表 9 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slusr.dwb_user_center_f`(用户中心宽表) |
+| **I 视图** | `slusr.dwb_user_center_i`(F表镜像) |
+| **目标粒度** | 每行一个用户记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | user_id |
+| **字段统计** | 业务 42 + 审计 4 = 总计 46 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 3 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | dim.dim_user_f | 用户维度表 | duf |
+| 2 | dim.dim_user_level_f | 用户等级维度表 | dul |
+| 3 | dim.dim_region_f | 地区维度表 | drf |
+| 4 | dim.dim_user_source_f | 用户来源维度表 | dus |
+| 5 | sdord.dwd_order_f | 订单明细事实表 | dof |
+| 6 | sdlog.dwd_user_behavior_f | 用户行为事实表 | dub |
+| 7 | sdmar.dwd_coupon_use_f | 优惠券使用事实表 | dcu |
+| 8 | sdref.dwd_refund_f | 退款事实表 | drf9 |
+| 9 | sdlog.dwd_cart_f | 购物车事实表 | dcf |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_user_center_f.sql
+- ddl/create_table_dwb_user_center_f_tmp1.sql
+- ddl/create_table_dwb_user_center_f_tmp2.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/005_dwb_user_center_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slusr.dwb_user_center_f，粒度：每行一个用户记录
+- 覆盖全部 46 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_user_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slord.dwb_user_behavior_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：用户行为宽表
+粒度：每行一个用户行为记录
+调度：全量调度 / T+1，一天一调
+映射字段 264 项，来源表 9 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slord.dwb_user_behavior_f`(用户行为宽表) |
+| **I 视图** | `slord.dwb_user_behavior_i`(F表镜像) |
+| **目标粒度** | 每行一个用户行为记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | behavior_id |
+| **字段统计** | 业务 260 + 审计 4 = 总计 264 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 1 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | ods.ods_order_main_f | 订单主表 | oom |
+| 2 | dim.dim_product_d | 商品维度表 | dpd |
+| 3 | dim.dim_user_base_d | 用户基础维度表 | dub |
+| 4 | ods.ods_content_interaction_f | 内容互动表 | oci |
+| 5 | dim.dim_content_d | 内容维度表 | dcd |
+| 6 | dim.dim_user_base_d | 用户基础维度表 | dub7 |
+| 7 | ods.ods_social_relation_f | 社交关系表 | osr |
+| 8 | dim.dim_user_profile_d | 用户画像维度表 | dup |
+| 9 | dim.dim_user_base_d | 用户基础维度表 | dub10 |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_user_behavior_f.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/006_dwb_user_behavior_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slord.dwb_user_behavior_f，粒度：每行一个用户行为记录
+- 覆盖全部 264 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_user_behavior_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slscc.dwb_supply_chain_center_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：供应链中心宽表
+粒度：每行一个供应链记录
+调度：全量调度 / T+1，一天一调
+映射字段 23 项，来源表 5 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slscc.dwb_supply_chain_center_f`(供应链中心宽表) |
+| **I 视图** | `slscc.dwb_supply_chain_center_i`(F表镜像) |
+| **目标粒度** | 每行一个供应链记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | purchase_id |
+| **字段统计** | 业务 19 + 审计 4 = 总计 23 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 1 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | sdinv.dwd_purchase_f | 采购事实表 | dpf |
+| 2 | dim.dim_supplier_f | 供应商维度表 | dsf |
+| 3 | dim.dim_product_f | 商品维度表 | dpf4 |
+| 4 | dim.dim_warehouse_f | 仓库维度表 | dwf |
+| 5 | sdinv.dwd_inventory_f | 库存事实表 | dif |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_supply_chain_center_f.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/007_dwb_supply_chain_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slscc.dwb_supply_chain_center_f，粒度：每行一个供应链记录
+- 覆盖全部 23 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_supply_chain_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slas.dwb_after_sale_center_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：售后服务中心宽表
+粒度：每行一个售后服务记录
+调度：全量调度 / T+1，一天一调
+映射字段 24 项，来源表 5 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slas.dwb_after_sale_center_f`(售后服务中心宽表) |
+| **I 视图** | `slas.dwb_after_sale_center_i`(F表镜像) |
+| **目标粒度** | 每行一个售后服务记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | refund_id |
+| **字段统计** | 业务 20 + 审计 4 = 总计 24 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 1 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | sdref.dwd_refund_f | 退款事实表 | drf |
+| 2 | sdord.dwd_order_f | 订单明细事实表 | dof |
+| 3 | dim.dim_user_f | 用户维度表 | duf |
+| 4 | dim.dim_product_f | 商品维度表 | dpf |
+| 5 | sdcs.dwd_service_ticket_f | 工单事实表 | dst |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_after_sale_center_f.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/008_dwb_after_sale_center_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slas.dwb_after_sale_center_f，粒度：每行一个售后服务记录
+- 覆盖全部 24 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_after_sale_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slprd.dwb_product_center_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：商品中心宽表
+粒度：每行一个商品记录
+调度：全量调度 / T+1，一天一调
+映射字段 39 项，来源表 7 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slprd.dwb_product_center_f`(商品中心宽表) |
+| **I 视图** | `slprd.dwb_product_center_i`(F表镜像) |
+| **目标粒度** | 每行一个商品记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | product_id |
+| **字段统计** | 业务 35 + 审计 4 = 总计 39 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 3 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | dim.dim_product_f | 商品维度表 | dpf |
+| 2 | dim.dim_product_category_f | 商品分类维度表 | dpc |
+| 3 | dim.dim_brand_f | 品牌维度表 | dbf |
+| 4 | dim.dim_shop_f | 店铺维度表 | dsf |
+| 5 | sdinv.dwd_inventory_f | 库存事实表 | dif |
+| 6 | sdord.dwd_order_detail_f | 订单商品明细事实表 | dod |
+| 7 | sdrev.dwd_review_f | 评价事实表 | drf |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_product_center_f.sql
+- ddl/create_table_dwb_product_review_tmp1.sql
+- ddl/create_table_dwb_product_sales_tmp1.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/009_dwb_product_center_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slprd.dwb_product_center_f，粒度：每行一个商品记录
+- 覆盖全部 39 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_product_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slusr.dwb_user_profile_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：用户画像宽表
+粒度：每行一个用户画像记录
+调度：全量调度 / T+1，一天一调
+映射字段 187 项，来源表 4 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slusr.dwb_user_profile_f`(用户画像宽表) |
+| **I 视图** | `slusr.dwb_user_profile_i`(F表镜像) |
+| **目标粒度** | 每行一个用户画像记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | user_id |
+| **字段统计** | 业务 183 + 审计 4 = 总计 187 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 1 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | ods.ods_user_basic_f | 用户基础信息表 | oub |
+| 2 | dim.dim_user_level_d | 用户等级维度表 | dul |
+| 3 | dim.dim_region_d | 地区维度表 | drd |
+| 4 | dim.dim_user_source_d | 用户来源维度表 | dus |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_user_profile_f.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/010_dwb_user_profile_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slusr.dwb_user_profile_f，粒度：每行一个用户画像记录
+- 覆盖全部 187 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_user_profile_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slmar.dwb_marketing_center_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：营销中心宽表
+粒度：每行一个营销记录
+调度：全量调度 / T+1，一天一调
+映射字段 29 项，来源表 5 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slmar.dwb_marketing_center_f`(营销中心宽表) |
+| **I 视图** | `slmar.dwb_marketing_center_i`(F表镜像) |
+| **目标粒度** | 每行一个营销记录 |
+| **写入策略** | 全量调度 |
+| **分布键** | activity_id |
+| **字段统计** | 业务 25 + 审计 4 = 总计 29 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 2 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | sdmar.dwd_activity_f | 活动事实表 | daf |
+| 2 | dim.dim_activity_type_f | 活动类型维度表 | dat |
+| 3 | dim.dim_coupon_f | 优惠券维度表 | dcf |
+| 4 | sdmar.dwd_coupon_use_f | 优惠券使用事实表 | dcu |
+| 5 | sdord.dwd_order_f | 订单明细事实表 | dof |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_marketing_center_f.sql
+- ddl/create_table_dwb_marketing_order_tmp.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/011_dwb_marketing_center_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slmar.dwb_marketing_center_f，粒度：每行一个营销记录
+- 覆盖全部 29 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_marketing_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,
+任务成功率,"任务：为 slord.dwb_order_center_f 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。
+表说明：订单中心宽表
+粒度：每行一个订单
+调度：全量调度 / T+1，一天一调
+映射字段 150 项，来源表 18 张。","设计摘要（ts.md §1 概述，真实运行档案摘录）：
+## 1. 概述
+
+| 项目 | 内容 |
+|------|------|
+| **F 表** | `slord.dwb_order_center_f`(订单中心宽表) |
+| **I 视图** | `slord.dwb_order_center_i`(F表镜像) |
+| **目标粒度** | 每行一个订单 |
+| **写入策略** | 全量调度 |
+| **分布键** | order_id |
+| **字段统计** | 业务 146 + 审计 4 = 总计 150 |
+| **审计字段来源** | 全部来自 RS/mapping |
+| **规则数** | 4 |
+
+**来源表**:
+
+| # | 表名 | 中文名 | 别名 |
+|---|------|--------|------|
+| 1 | sdord.dwd_order_f | 订单明细事实表 | dof |
+| 2 | sdord.dwd_order_detail_f | 订单商品明细事实表 | dod |
+| 3 | sdpay.dwd_payment_f | 支付事实表 | dpf |
+| 4 | sdlog.dwd_logistics_f | 物流事实表 | dlf |
+| 5 | sdmar.dwd_coupon_use_f | 优惠券使用事实表 | dcu |
+| 6 | dim.dim_user_f | 用户维度表 | duf |
+| 7 | dim.dim_user_level_f | 用户等级维度表 | dul |
+| 8 | dim.dim_product_f | 商品维度表 | dpf7 |
+| 9 | dim.dim_product_category_f | 商品分类维度表 | dpc |
+| 10 | dim.dim_brand_f | 品牌维度表 | dbf |
+| 11 | dim.dim_shop_f | 店铺维度表 | dsf |
+| 12 | dim.dim_region_f | 地区维度表 | drf |
+| 13 | dim.dim_warehouse_f | 仓库维度表 | dwf |
+| 14 | dim.dim_payment_method_f | 支付方式维度表 | dpm |
+| 15 | dim.dim_logistics_company_f | 物流公司维度表 | dlc |
+| 16 | dim.dim_coupon_f | 优惠券维度表 | dcf |
+| 17 | dim.dim_activity_f | 营销活动维度表 | daf |
+| 18 | sdref.dwd_refund_f | 退款事实表 | drf17 |
+
+---
+
+产物清单：
+- ddl/create_table_dwb_order_center_f.sql
+- ddl/create_table_dwb_order_center_prod_tmp2.sql
+- ddl/create_table_dwb_order_center_shop_tmp3.sql
+- ddl/create_table_dwb_order_center_user_tmp1.sql
+- select/R0001_select.sql
+
+档案来源：../10_project_deliver/012_dwb_order_center_f","任务完成标准（自 RS 派生）：
+- 产出 TS 设计（ts.md/ts.json），目标表 slord.dwb_order_center_f，粒度：每行一个订单
+- 覆盖全部 150 个映射字段的加工口径，无遗漏无幻觉字段
+- 建表 DDL（create_table_dwb_order_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+- 调度方案：全量调度",,,,

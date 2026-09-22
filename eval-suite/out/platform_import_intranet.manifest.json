@@ -1,0 +1,215 @@
+{
+ "generated_at": "2026-09-22T11:49:08",
+ "metric_name": "任务成功率",
+ "source": "archive",
+ "cases": [
+  {
+   "case": "001_dwl_con_pu_any_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "002_dwb_trade_order_d",
+   "included": true,
+   "len_input": 102,
+   "len_actual": 546,
+   "len_expected": 151,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "003_dwb_trade_wide_f",
+   "included": true,
+   "len_input": 127,
+   "len_actual": 692,
+   "len_expected": 188,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "004_dwb_shop_center_f",
+   "included": true,
+   "len_input": 134,
+   "len_actual": 662,
+   "len_expected": 194,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "005_dwb_user_center_f",
+   "included": true,
+   "len_input": 134,
+   "len_actual": 983,
+   "len_expected": 194,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "006_dwb_user_behavior_f",
+   "included": true,
+   "len_input": 139,
+   "len_actual": 922,
+   "len_expected": 201,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "007_dwb_supply_chain_f",
+   "included": true,
+   "len_input": 144,
+   "len_actual": 745,
+   "len_expected": 211,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "008_dwb_after_sale_center_f",
+   "included": true,
+   "len_input": 143,
+   "len_actual": 738,
+   "len_expected": 207,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "009_dwb_product_center_f",
+   "included": true,
+   "len_input": 137,
+   "len_actual": 912,
+   "len_expected": 200,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "010_dwb_user_profile_f",
+   "included": true,
+   "len_input": 138,
+   "len_actual": 685,
+   "len_expected": 199,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "011_dwb_marketing_center_f",
+   "included": true,
+   "len_input": 139,
+   "len_actual": 794,
+   "len_expected": 204,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "012_dwb_order_center_f",
+   "included": true,
+   "len_input": 135,
+   "len_actual": 1450,
+   "len_expected": 195,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  },
+  {
+   "case": "dwb_after_sale_center_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_marketing_center_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_order_center_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_product_center_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_shop_center_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_supply_chain_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_trade_order_d",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_trade_wide_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_user_behavior_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_user_center_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwb_user_profile_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  },
+  {
+   "case": "dwl_con_pu_any_f",
+   "included": false,
+   "skip_reason": "无 ts.md 产物档案（未完成或目录不合规）"
+  }
+ ]
+}

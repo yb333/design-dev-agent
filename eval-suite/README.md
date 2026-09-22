@@ -181,5 +181,5 @@ SUM vs 裸列/引用错列/常量变值都 diff）。
 | evalsuite 源 | `--source evalsuite`：cases/ 的 expectations.json × 产物档案 join（存量仅 001 有 expectations，且该案例无产物——基本空跑，留作 cases_real 复用该形态时的入口） |
 | 平台口径收口 | 表头全集/指标合法值集中在脚本顶部常量（`COLUMNS`/`DEFAULT_METRIC_NAME`），平台确认后只改一处 |
 | 预检 | 产出的 csv 可直接喂本地 deepeval `EvaluationDataset.add_test_cases_from_csv_file` 验格式 |
-| 产物 | `out/platform_import[_intranet].{xlsx,csv}` + `.manifest.json`（每案例取料/跳过原因，gitignore） |
+| 产物 | `out/platform_import[_intranet].{xlsx,csv}` + `.manifest.json`（每案例取料/跳过原因）；目录 gitignore，**测试期 intranet 三件 `git add -f` 入库供内网拉测，测完 `git rm --cached eval-suite/out/*` 恢复** |
 | 评估器选型 | 选**任务成功率**（本地零新增、语义与档案=人审通过记录严丝合缝）；多轮任务完成度本地无 turns 记录不可选 |
