@@ -175,11 +175,12 @@ SUM vs 裸列/引用错列/常量变值都 diff）。
 
 | 要点 | 说明 |
 |---|---|
-| 数据语义 | input/expected=案例设计侧确定性派生（RS→完成标准清单）；actual=ts.md §1 概述摘录+产物清单+档案来源（可回溯）；**不编造输出** |
-| 本地试点 | `python3 platform_export.py --source archive --root ../10_project_deliver`（当前 11 行） |
+| 双模式 | `--mode quick`（默认）=快速评估导入，行级带 metric_name（8 列）；`--mode dataset`=**评估集**（后续主形态：评估任务固定、资产=评估集），无 metric_name（评估器在评估任务层选）+ `retrieval_context` 列 |
+| 数据语义 | input/expected=案例设计侧确定性派生（RS→完成标准清单）；actual=ts.md §1 概述摘录+产物清单+档案来源（可回溯）；retrieval_context（dataset）=rs_input 映射清单摘要（源→规则→目标）——agent 的"检索上下文"即 RS/mapping 输入材料；**不编造输出** |
+| 本地试点 | `python3 platform_export.py --source archive --root ../10_project_deliver [--mode dataset]`（当前 11 行） |
 | 内网真实案例 | 同命令换 `--root` 指内网 10_project_deliver（兼容 build/ 新布局与老式平铺） |
 | evalsuite 源 | `--source evalsuite`：cases/ 的 expectations.json × 产物档案 join（存量仅 001 有 expectations，且该案例无产物——基本空跑，留作 cases_real 复用该形态时的入口） |
-| 平台口径收口 | 表头全集/指标合法值集中在脚本顶部常量（`COLUMNS`/`DEFAULT_METRIC_NAME`），平台确认后只改一处 |
+| 平台口径收口 | 表头全集/指标合法值集中在脚本顶部常量（`QUICK_COLUMNS`/`DATASET_COLUMNS`/`DEFAULT_METRIC_NAME`），平台确认后只改一处 |
 | 预检 | 产出的 csv 可直接喂本地 deepeval `EvaluationDataset.add_test_cases_from_csv_file` 验格式 |
-| 产物 | `out/platform_import[_intranet].{xlsx,csv}` + `.manifest.json`（每案例取料/跳过原因）；目录 gitignore，**测试期 intranet 三件 `git add -f` 入库供内网拉测，测完 `git rm --cached eval-suite/out/*` 恢复** |
+| 产物 | `out/platform_[import|dataset][_intranet].{xlsx,csv}` + `.manifest.json`（每案例取料/跳过原因）；目录 gitignore，**测试期产物已 `git add -f` 入库供内网拉测，测完 `git rm --cached eval-suite/out/*` 恢复** |
 | 评估器选型 | 选**任务成功率**（本地零新增、语义与档案=人审通过记录严丝合缝）；多轮任务完成度本地无 turns 记录不可选 |

@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""内网评测平台导入集一键构造器（2026-09-22）。
+"""内网评测平台导入集/评估集一键构造器（2026-09-22）。
+
+平台两种形态，同一份原料：
+
+  quick   快速评估导入：行级带 metric_name（评估器随行走）——8 列模板
+  dataset 评估集构建：无 metric_name（评估器在评估任务层选）+ retrieval_context
 
 本地试点 → 平台口径确认 → 内网真实案例，同一条命令：
 
-  # 本地试点（eval-suite 虚拟案例 × 10_project_deliver 产物档案 join）
-  python3 platform_export.py --source evalsuite
-  # 内网真实案例（10_project_deliver 档案直读，兼容老式平铺与 build/ 新布局）
-  python3 platform_export.py --source archive --root <内网10_project_deliver路径>
+  # 本地试点·快速评估导入（quick）
+  python3 platform_export.py --source archive --root ../10_project_deliver
+  # 评估集（dataset，后续主形态：评估任务固定，资产=评估集）
+  python3 platform_export.py --source archive --root ../10_project_deliver --mode dataset
+  # 内网真实案例：--root 换内网 10_project_deliver（兼容老式平铺与 build/ 新布局）
 
 产物三件（过程可视可回溯）：
-  out/platform_import.xlsx            平台导入文件
-  out/platform_import.csv             同内容 csv——本地 deepeval 预检（EvaluationDataset 加载）
-  out/platform_import.manifest.json   每案例取料清单（用了哪个档案/各列字符数/跳过原因）
+  out/platform_[import|dataset][_intranet].{xlsx,csv}   平台导入文件 + csv 孪生（本地 deepeval 预检）
+  out/...manifest.json                                   每案例取料清单（档案/字符数/跳过原因）
 
 数据语义：input / expected_output = 案例设计侧构造（任务指令 + 完成标准）；
-actual_output = 真实运行档案摘录（ts.md §1 概述 + 产物清单），不编造输出。
+actual_output = 真实运行档案摘录（ts.md §1 概述 + 产物清单）；
+retrieval_context（dataset 模式）= rs_input 映射清单摘要——对 agent 而言"检索到的上下文"
+就是 RS/mapping 输入材料，语义同源。不编造输出。
 """
 
 from __future__ import annotations
@@ -28,7 +35,8 @@ from datetime import datetime
 from pathlib import Path
 
 # ── 平台口径（唯一调整点：平台确认表头全集/指标合法值后只改这里）─────────
-COLUMNS = [
+# quick=快速评估导入模板（行级带 metric_name）
+QUICK_COLUMNS = [
     "metric_name",
     "input",
     "actual_output",
@@ -38,12 +46,24 @@ COLUMNS = [
     "tools_called",
     "expected_tools",
 ]
-DEFAULT_METRIC_NAME = "任务成功率"  # ← 换成平台评估器的准确名称
+# dataset=评估集（无 metric_name——评估器在评估任务层选；多 retrieval_context）
+DATASET_COLUMNS = [
+    "input",
+    "actual_output",
+    "expected_output",
+    "retrieval_context",
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools",
+]
+DEFAULT_METRIC_NAME = "任务成功率"  # ← quick 模式专用，换成平台评估器的准确名称
 EMPTY_COLUMNS = ["trace", "turns", "tools_called", "expected_tools"]  # 任务成功率评估器不消费，留空
 
 CAP_INPUT = 1200
 CAP_ACTUAL = 2000
 CAP_EXPECTED = 900
+CAP_RETRIEVAL = 1000
 CAP_RS_DIGEST = 500
 
 
@@ -117,7 +137,7 @@ def list_artifacts(art_root: Path) -> list[str]:
     return out
 
 
-# ── 行构造 ────────────────────────────────────────────────
+# ── 取料 → payload（模式无关的核心四元组）──────────────────
 
 def build_actual(art_root: Path, provenance: str) -> str:
     overview = ts_md_overview(art_root)
@@ -128,8 +148,23 @@ def build_actual(art_root: Path, provenance: str) -> str:
     return "\n".join(parts)
 
 
-def row_from_archive(case_dir: Path, metric: str):
-    """10_project_deliver 案例目录 → 一行（task 粒度）。"""
+def mapping_digest(rs: dict) -> str:
+    """retrieval_context 素材：mapping 字段映射清单（源→规则→目标）。"""
+    lines = []
+    for m in rs.get("field_mappings", []) or []:
+        src_table, src_col = m.get("source_table") or "", m.get("source_column") or ""
+        src = f"{src_table}.{src_col}" if (src_table or src_col) else "（无源声明）"
+        lines.append(
+            f"{src} --[{m.get('transform_rule', '')}]--> "
+            f"{m.get('target_column', '')}({m.get('target_column_cn', '')})"
+        )
+    if not lines:
+        return ""
+    return f"输入材料：mapping 字段映射 {len(lines)} 项（源→规则→目标）：\n" + "\n".join(lines)
+
+
+def payload_from_archive(case_dir: Path):
+    """10_project_deliver 案例目录 → payload（task 粒度）。"""
     art_root = find_artifact_root(case_dir)
     if art_root is None:
         return None, "无 ts.md 产物档案（未完成或目录不合规）"
@@ -150,12 +185,7 @@ def row_from_archive(case_dir: Path, metric: str):
     sched = rs.get("schedule", {}) or {}
     dq = rs.get("dq_requirements", []) or []
 
-    def src_name(s):
-        if isinstance(s, dict):
-            return s.get("table") or s.get("name") or str(s)
-        return str(s)
-
-    inp = (
+    task_input = (
         f"任务：为 {full} 完成设计、评审、开发及测试（输入=RS+mapping，流程=设计→闸口→编码→UT）。\n"
         f"表说明：{desc}\n粒度：{grain}\n调度：{sched.get('strategy', '')} / {sched.get('frequency', '')}\n"
         f"映射字段 {len(fields)} 项，来源表 {len(sources)} 张。"
@@ -168,13 +198,13 @@ def row_from_archive(case_dir: Path, metric: str):
         f"- 调度方案：{sched.get('strategy', '')}"
         + (f"；DQ 检查 {len(dq)} 条落地为 dq/*.sql" if dq else "")
     )
-    actual = build_actual(art_root, str(case_dir))
-    row = {c: "" for c in COLUMNS}
-    row["metric_name"] = metric
-    row["input"] = clip(inp, CAP_INPUT)
-    row["actual_output"] = clip(actual, CAP_ACTUAL)
-    row["expected_output"] = clip(expected, CAP_EXPECTED)
-    return row, None
+    return {
+        "task_input": task_input,
+        "rs_digest": "",
+        "retrieval": mapping_digest(rs),
+        "expected": expected,
+        "actual": build_actual(art_root, str(case_dir)),
+    }, None
 
 
 def asset_name(dirname: str) -> str:
@@ -197,8 +227,8 @@ def match_deliver(asset: str, deliver_root: Path):
     return max(cands, key=lambda d: (d / "ddlc_design_dev").stat().st_mtime)
 
 
-def row_from_evalsuite(case_dir: Path, deliver_root: Path, metric: str):
-    """eval-suite 案例 → 一行：input/expected 来自 expectations.json，actual 来自产物档案。"""
+def payload_from_evalsuite(case_dir: Path, deliver_root: Path):
+    """eval-suite 案例 → payload：input/expected 来自 expectations.json，actual 来自产物档案。"""
     exp = load_json(case_dir / "expectations.json")
     if exp is None:
         return None, "expectations.json 缺失"
@@ -212,7 +242,6 @@ def row_from_evalsuite(case_dir: Path, deliver_root: Path, metric: str):
             rs_digest = clip(rs_md.read_text(encoding="utf-8").strip(), CAP_RS_DIGEST)
         except Exception:
             rs_digest = ""
-    inp = f"任务：{prompt}\n目标表：{target}\n需求摘要（RS）：\n{rs_digest}"
 
     scoring = exp.get("scoring", {}) or {}
     checks = exp.get("checks", []) or []
@@ -224,29 +253,47 @@ def row_from_evalsuite(case_dir: Path, deliver_root: Path, metric: str):
         exp_lines.append("- 应产出文件：" + ", ".join(files[:12]))
         if len(files) > 12:
             exp_lines.append(f"  （等共 {len(files)} 个）")
-    expected = "\n".join(exp_lines)
 
     deliver = match_deliver(asset_name(case_dir.name), deliver_root)
     if deliver is None:
         return None, f"10_project_deliver 无匹配产物档案（资产 {asset_name(case_dir.name)}）"
-    art_root = find_artifact_root(deliver)
-    actual = build_actual(art_root, str(deliver))
-    row = {c: "" for c in COLUMNS}
-    row["metric_name"] = metric
-    row["input"] = clip(inp, CAP_INPUT)
-    row["actual_output"] = clip(actual, CAP_ACTUAL)
-    row["expected_output"] = clip(expected, CAP_EXPECTED)
-    return row, None
+    return {
+        "task_input": f"任务：{prompt}\n目标表：{target}",
+        "rs_digest": rs_digest,
+        "retrieval": ("输入材料（RS）摘要：\n" + rs_digest) if rs_digest else "",
+        "expected": "\n".join(exp_lines),
+        "actual": build_actual(find_artifact_root(deliver), str(deliver)),
+    }, None
+
+
+# ── payload → 行（quick / dataset 两种形态）────────────────
+
+def shape_row(payload: dict, mode: str, metric: str) -> dict:
+    columns = QUICK_COLUMNS if mode == "quick" else DATASET_COLUMNS
+    row = {c: "" for c in columns}
+    if mode == "quick":
+        row["metric_name"] = metric
+        inp = payload["task_input"]
+        if payload["rs_digest"]:
+            inp += f"\n需求摘要（RS）：\n{payload['rs_digest']}"
+        row["input"] = clip(inp, CAP_INPUT)
+        row["expected_output"] = clip(payload["expected"], CAP_EXPECTED)
+    else:
+        row["input"] = clip(payload["task_input"], CAP_INPUT)
+        row["expected_output"] = clip(payload["expected"], CAP_EXPECTED)
+        row["retrieval_context"] = clip(payload["retrieval"], CAP_RETRIEVAL)
+    row["actual_output"] = clip(payload["actual"], CAP_ACTUAL)
+    return row
 
 
 # ── 输出 ─────────────────────────────────────────────────
 
-def write_outputs(rows, manifest, out_base: Path):
+def write_outputs(rows, manifest, out_base: Path, columns):
     out_base.parent.mkdir(parents=True, exist_ok=True)
 
     csv_path = out_base.with_suffix(".csv")
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=COLUMNS)
+        w = csv.DictWriter(f, fieldnames=columns)
         w.writeheader()
         w.writerows(rows)
 
@@ -259,13 +306,14 @@ def write_outputs(rows, manifest, out_base: Path):
         wb = Workbook()
         ws = wb.active
         ws.title = "eval_import"
-        ws.append(COLUMNS)
+        ws.append(columns)
         for c in ws[1]:
             c.font = Font(bold=True)
         for r in rows:
-            ws.append([r[c] for c in COLUMNS])
-        widths = {"metric_name": 14, "input": 60, "actual_output": 80, "expected_output": 60}
-        for i, col in enumerate(COLUMNS, 1):
+            ws.append([r[c] for c in columns])
+        widths = {"metric_name": 14, "input": 60, "actual_output": 80,
+                  "expected_output": 60, "retrieval_context": 70}
+        for i, col in enumerate(columns, 1):
             ws.column_dimensions[get_column_letter(i)].width = widths.get(col, 12)
         ws.freeze_panes = "A2"
         wb.save(xlsx_path)
@@ -281,44 +329,51 @@ def write_outputs(rows, manifest, out_base: Path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="内网评测平台导入集一键构造器")
+    ap = argparse.ArgumentParser(description="内网评测平台导入集/评估集一键构造器")
     ap.add_argument("--source", choices=["evalsuite", "archive"], default="evalsuite",
                     help="evalsuite=本地试点（cases × 产物档案 join）/ archive=档案直读（内网真实案例）")
+    ap.add_argument("--mode", choices=["quick", "dataset"], default="quick",
+                    help="quick=快速评估导入（行级 metric_name）/ dataset=评估集（无 metric_name + retrieval_context）")
     ap.add_argument("--root", default=None,
-                    help="案例根目录：evalsuite 默认本脚本所在 eval-suite；archive 必填（10_project_deliver）")
+                    help="案例根目录：evalsuite 默认本脚本所在 eval-suite/cases；archive 必填（10_project_deliver）")
     ap.add_argument("--deliver-root", default=None,
                     help="evalsuite 源的产物档案根（默认兄弟目录 10_project_deliver）")
-    ap.add_argument("--out", default=None, help="输出基准路径（默认 out/platform_import[[_source]].xlsx）")
-    ap.add_argument("--metric-name", default=DEFAULT_METRIC_NAME, help="平台评估器名称")
+    ap.add_argument("--out", default=None, help="输出基准路径（默认 out/platform_[import|dataset][_intranet]）")
+    ap.add_argument("--metric-name", default=DEFAULT_METRIC_NAME,
+                    help="评估器名称（仅 quick 模式使用；dataset 模式评估器在评估任务层选）")
     args = ap.parse_args()
 
     here = Path(__file__).resolve().parent
     if args.source == "evalsuite":
         root = Path(args.root) if args.root else here / "cases"
         deliver_root = Path(args.deliver_root) if args.deliver_root else here.parent / "10_project_deliver"
-        iter_case = lambda: sorted(p for p in root.iterdir() if p.is_dir())
-        make_row = lambda d: row_from_evalsuite(d, deliver_root, args.metric_name)
+        make_payload = lambda d: payload_from_evalsuite(d, deliver_root)
     else:
         if not args.root:
             ap.error("--source archive 需要 --root（10_project_deliver 路径）")
         root = Path(args.root)
-        deliver_root = None
-        iter_case = lambda: sorted(p for p in root.iterdir() if p.is_dir())
-        make_row = lambda d: row_from_archive(d, args.metric_name)
+        make_payload = payload_from_archive
 
-    rows, manifest = [], {"generated_at": datetime.now().isoformat(timespec="seconds"),
-                          "metric_name": args.metric_name, "source": args.source, "cases": []}
-    for case_dir in iter_case():
+    rows, manifest = [], {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "mode": args.mode,
+        "metric_name": args.metric_name if args.mode == "quick" else None,
+        "source": args.source,
+        "cases": [],
+    }
+    for case_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         if case_dir.name.startswith("_") or case_dir.name.startswith("."):
             continue
-        row, skip = make_row(case_dir)
+        payload, skip = make_payload(case_dir)
         entry = {"case": case_dir.name}
-        if row:
+        if payload:
+            row = shape_row(payload, args.mode, args.metric_name)
             entry.update({
                 "included": True,
                 "len_input": len(row["input"]),
                 "len_actual": len(row["actual_output"]),
                 "len_expected": len(row["expected_output"]),
+                **({"len_retrieval": len(row["retrieval_context"])} if args.mode == "dataset" else {}),
                 "empty_columns": EMPTY_COLUMNS,
             })
             rows.append(row)
@@ -326,14 +381,18 @@ def main():
             entry.update({"included": False, "skip_reason": skip})
         manifest["cases"].append(entry)
 
-    out_base = Path(args.out) if args.out else here / "out" / (
-        "platform_import" if args.source == "evalsuite" else "platform_import_intranet")
-    csv_path, xlsx_path, manifest_path = write_outputs(rows, manifest, out_base)
+    suffix = "_intranet" if args.source == "archive" else ""
+    mode_name = "import" if args.mode == "quick" else "dataset"
+    out_base = Path(args.out) if args.out else here / "out" / f"platform_{mode_name}{suffix}"
+    columns = QUICK_COLUMNS if args.mode == "quick" else DATASET_COLUMNS
+    csv_path, xlsx_path, manifest_path = write_outputs(rows, manifest, out_base, columns)
 
-    print(f"来源={args.source}  案例目录={root}  入集={len(rows)} 行  指标={args.metric_name}")
+    print(f"来源={args.source}  模式={args.mode}  案例目录={root}  入集={len(rows)} 行"
+          + (f"  指标={args.metric_name}" if args.mode == "quick" else ""))
     for e in manifest["cases"]:
         mark = "✓" if e["included"] else "✗"
-        info = f"in={e['len_input']} actual={e['len_actual']} exp={e['len_expected']}" if e["included"] else e["skip_reason"]
+        info = (f"in={e['len_input']} actual={e['len_actual']} exp={e['len_expected']}"
+                + (f" retr={e['len_retrieval']}" if "len_retrieval" in e else "")) if e["included"] else e["skip_reason"]
         print(f"  {mark} {e['case']:<32} {info}")
     print(f"产物：{xlsx_path or '（xlsx 跳过）'} / {csv_path} / {manifest_path}")
 
