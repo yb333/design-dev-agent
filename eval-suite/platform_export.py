@@ -365,6 +365,8 @@ def main():
     ap.add_argument("--deliver-root", default=None,
                     help="evalsuite 源的产物档案根（默认兄弟目录 10_project_deliver）")
     ap.add_argument("--out", default=None, help="输出基准路径（默认 out/platform_[import|dataset][_intranet]）")
+    ap.add_argument("--case", default=None,
+                    help="只导出指定案例（目录名子串匹配，如 003 / dwb_trade_wide_f）——单案例端到端试点用")
     ap.add_argument("--metric-name", default=DEFAULT_METRIC_NAME,
                     help="评估器名称（仅 quick 模式使用；dataset 模式评估器在评估任务层选）")
     args = ap.parse_args()
@@ -385,10 +387,13 @@ def main():
         "mode": args.mode,
         "metric_name": args.metric_name if args.mode == "quick" else None,
         "source": args.source,
+        "case_filter": args.case,
         "cases": [],
     }
     for case_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         if case_dir.name.startswith("_") or case_dir.name.startswith("."):
+            continue
+        if args.case and args.case not in case_dir.name:
             continue
         payload, skip = make_payload(case_dir)
         entry = {"case": case_dir.name}

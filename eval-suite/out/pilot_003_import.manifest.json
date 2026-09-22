@@ -1,0 +1,22 @@
+{
+ "generated_at": "2026-09-22T14:27:53",
+ "mode": "quick",
+ "metric_name": "任务成功率",
+ "source": "archive",
+ "case_filter": "003",
+ "cases": [
+  {
+   "case": "003_dwb_trade_wide_f",
+   "included": true,
+   "len_input": 127,
+   "len_actual": 5102,
+   "len_expected": 480,
+   "empty_columns": [
+    "trace",
+    "turns",
+    "tools_called",
+    "expected_tools"
+   ]
+  }
+ ]
+}
