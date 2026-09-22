@@ -563,8 +563,7 @@ def main():
             case_log.append(entry)
 
     suffix = "_intranet" if args.source == "archive" else ""
-    mode_name = "import" if args.mode == "quick" else "dataset"
-    out_base = Path(args.out) if args.out else here / "out" / f"platform_{mode_name}{suffix}"
+    out_base = Path(args.out) if args.out else here / "out" / f"platform_{args.mode}{suffix}"
     columns = QUICK_COLUMNS if args.mode == "quick" else DATASET_COLUMNS
     xlsx_path = write_xlsx(rows, out_base, columns)
 
