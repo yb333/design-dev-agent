@@ -1,7 +1,7 @@
 {
- "generated_at": "2026-09-22T12:04:25",
- "mode": "quick",
- "metric_name": "任务成功率",
+ "generated_at": "2026-09-22T12:04:24",
+ "mode": "dataset",
+ "metric_name": null,
  "source": "archive",
  "cases": [
   {
@@ -15,6 +15,7 @@
    "len_input": 102,
    "len_actual": 546,
    "len_expected": 151,
+   "len_retrieval": 410,
    "empty_columns": [
     "trace",
     "turns",
@@ -28,6 +29,7 @@
    "len_input": 127,
    "len_actual": 692,
    "len_expected": 188,
+   "len_retrieval": 737,
    "empty_columns": [
     "trace",
     "turns",
@@ -41,6 +43,7 @@
    "len_input": 134,
    "len_actual": 662,
    "len_expected": 194,
+   "len_retrieval": 987,
    "empty_columns": [
     "trace",
     "turns",
@@ -54,6 +57,7 @@
    "len_input": 134,
    "len_actual": 983,
    "len_expected": 194,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
@@ -67,6 +71,7 @@
    "len_input": 139,
    "len_actual": 922,
    "len_expected": 201,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
@@ -80,6 +85,7 @@
    "len_input": 144,
    "len_actual": 745,
    "len_expected": 211,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
@@ -93,6 +99,7 @@
    "len_input": 143,
    "len_actual": 738,
    "len_expected": 207,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
@@ -106,6 +113,7 @@
    "len_input": 137,
    "len_actual": 912,
    "len_expected": 200,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
@@ -119,6 +127,7 @@
    "len_input": 138,
    "len_actual": 685,
    "len_expected": 199,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
@@ -132,6 +141,7 @@
    "len_input": 139,
    "len_actual": 794,
    "len_expected": 204,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
@@ -145,6 +155,7 @@
    "len_input": 135,
    "len_actual": 1450,
    "len_expected": 195,
+   "len_retrieval": 1005,
    "empty_columns": [
     "trace",
     "turns",
