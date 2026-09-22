@@ -167,3 +167,19 @@ SUM vs 裸列/引用错列/常量变值都 diff）。
 | JOIN表/视图列"全量缺失"但SQL明明有 | ${} 参数占位符曾让 sqlglot 解析失败→提取器空集→误报；已预处理（${}→NULL）+空集守卫（提取失败单独报，不再当缺失） |
 | del_flag未过滤误报 | 检查旧默认开；现已默认关（显式配置才查） |
 | 评测卡死不动（无⚠静默计数） | 大概率子agent发起question没人应答；现已流检测即快速终止+记纪律违规（-10待裁决），非交互声明强化为派发Task必附 |
+
+## 九、平台对接导出（`platform_export.py`，2026-09-22）
+
+> **一句话**：把 10_project_deliver 真实运行档案一键构造为内网评测平台（deepeval 系）的导入
+> xlsx/csv——本地虚拟案例试点 → 平台口径确认 → 内网真实案例，同一条命令。
+
+| 要点 | 说明 |
+|---|---|
+| 数据语义 | input/expected=案例设计侧确定性派生（RS→完成标准清单）；actual=ts.md §1 概述摘录+产物清单+档案来源（可回溯）；**不编造输出** |
+| 本地试点 | `python3 platform_export.py --source archive --root ../10_project_deliver`（当前 11 行） |
+| 内网真实案例 | 同命令换 `--root` 指内网 10_project_deliver（兼容 build/ 新布局与老式平铺） |
+| evalsuite 源 | `--source evalsuite`：cases/ 的 expectations.json × 产物档案 join（存量仅 001 有 expectations，且该案例无产物——基本空跑，留作 cases_real 复用该形态时的入口） |
+| 平台口径收口 | 表头全集/指标合法值集中在脚本顶部常量（`COLUMNS`/`DEFAULT_METRIC_NAME`），平台确认后只改一处 |
+| 预检 | 产出的 csv 可直接喂本地 deepeval `EvaluationDataset.add_test_cases_from_csv_file` 验格式 |
+| 产物 | `out/platform_import[_intranet].{xlsx,csv}` + `.manifest.json`（每案例取料/跳过原因，gitignore） |
+| 评估器选型 | 选**任务成功率**（本地零新增、语义与档案=人审通过记录严丝合缝）；多轮任务完成度本地无 turns 记录不可选 |
