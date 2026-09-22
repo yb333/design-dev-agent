@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-22T12:04:24",
+ "generated_at": "2026-09-22T14:23:59",
  "mode": "dataset",
  "metric_name": null,
  "source": "archive",
@@ -13,7 +13,7 @@
    "case": "002_dwb_trade_order_d",
    "included": true,
    "len_input": 102,
-   "len_actual": 546,
+   "len_actual": 2301,
    "len_expected": 151,
    "len_retrieval": 410,
    "empty_columns": [
@@ -27,7 +27,7 @@
    "case": "003_dwb_trade_wide_f",
    "included": true,
    "len_input": 127,
-   "len_actual": 692,
+   "len_actual": 5102,
    "len_expected": 188,
    "len_retrieval": 737,
    "empty_columns": [
@@ -41,7 +41,7 @@
    "case": "004_dwb_shop_center_f",
    "included": true,
    "len_input": 134,
-   "len_actual": 662,
+   "len_actual": 6001,
    "len_expected": 194,
    "len_retrieval": 987,
    "empty_columns": [
@@ -55,7 +55,7 @@
    "case": "005_dwb_user_center_f",
    "included": true,
    "len_input": 134,
-   "len_actual": 983,
+   "len_actual": 9406,
    "len_expected": 194,
    "len_retrieval": 1005,
    "empty_columns": [
@@ -69,7 +69,7 @@
    "case": "006_dwb_user_behavior_f",
    "included": true,
    "len_input": 139,
-   "len_actual": 922,
+   "len_actual": 16005,
    "len_expected": 201,
    "len_retrieval": 1005,
    "empty_columns": [
@@ -83,7 +83,7 @@
    "case": "007_dwb_supply_chain_f",
    "included": true,
    "len_input": 144,
-   "len_actual": 745,
+   "len_actual": 7453,
    "len_expected": 211,
    "len_retrieval": 1005,
    "empty_columns": [
@@ -97,7 +97,7 @@
    "case": "008_dwb_after_sale_center_f",
    "included": true,
    "len_input": 143,
-   "len_actual": 738,
+   "len_actual": 8665,
    "len_expected": 207,
    "len_retrieval": 1005,
    "empty_columns": [
@@ -111,7 +111,7 @@
    "case": "009_dwb_product_center_f",
    "included": true,
    "len_input": 137,
-   "len_actual": 912,
+   "len_actual": 9493,
    "len_expected": 200,
    "len_retrieval": 1005,
    "empty_columns": [
@@ -125,7 +125,7 @@
    "case": "010_dwb_user_profile_f",
    "included": true,
    "len_input": 138,
-   "len_actual": 685,
+   "len_actual": 16005,
    "len_expected": 199,
    "len_retrieval": 1005,
    "empty_columns": [
@@ -139,7 +139,7 @@
    "case": "011_dwb_marketing_center_f",
    "included": true,
    "len_input": 139,
-   "len_actual": 794,
+   "len_actual": 8856,
    "len_expected": 204,
    "len_retrieval": 1005,
    "empty_columns": [
@@ -153,7 +153,7 @@
    "case": "012_dwb_order_center_f",
    "included": true,
    "len_input": 135,
-   "len_actual": 1450,
+   "len_actual": 16005,
    "len_expected": 195,
    "len_retrieval": 1005,
    "empty_columns": [

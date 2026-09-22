@@ -61,7 +61,8 @@ DEFAULT_METRIC_NAME = "任务成功率"  # ← quick 模式专用，换成平台
 EMPTY_COLUMNS = ["trace", "turns", "tools_called", "expected_tools"]  # 任务成功率评估器不消费，留空
 
 CAP_INPUT = 1200
-CAP_ACTUAL = 2000
+CAP_ACTUAL = 16000   # 平台只认 Excel 这一格——产物原文全量嵌入（Excel 单格硬限 32767，留裕量；judge 上下文未知可调低）
+CAP_PER_FILE = 8000  # 单个产物文件内容上限（超长 SQL 截断封顶）
 CAP_EXPECTED = 900
 CAP_RETRIEVAL = 1000
 CAP_RS_DIGEST = 500
@@ -140,10 +141,19 @@ def list_artifacts(art_root: Path) -> list[str]:
 # ── 取料 → payload（模式无关的核心四元组）──────────────────
 
 def build_actual(art_root: Path, provenance: str) -> str:
+    """actual_output = 设计概述 + 产物文件原文（DDL/ETL SQL 全文嵌入，平台只见 Excel 这格）。"""
     overview = ts_md_overview(art_root)
-    files = list_artifacts(art_root)
-    parts = ["设计摘要（ts.md §1 概述，真实运行档案摘录）：", overview, "", "产物清单："]
-    parts += [f"- {f}" for f in files]
+    parts = [
+        "产物内容（真实运行档案，文件原文）：",
+        "——设计概述（ts.md §1 概述）——",
+        overview,
+    ]
+    for rel in list_artifacts(art_root):
+        try:
+            content = (art_root / rel).read_text(encoding="utf-8").strip()
+        except Exception:
+            content = "（读取失败）"
+        parts += ["", f"——{rel}——", clip(content, CAP_PER_FILE)]
     parts += ["", f"档案来源：{provenance}"]
     return "\n".join(parts)
 

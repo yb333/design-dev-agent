@@ -176,7 +176,7 @@ SUM vs 裸列/引用错列/常量变值都 diff）。
 | 要点 | 说明 |
 |---|---|
 | 双模式 | `--mode quick`（默认）=快速评估导入，行级带 metric_name（8 列）；`--mode dataset`=**评估集**（后续主形态：评估任务固定、资产=评估集），无 metric_name（评估器在评估任务层选）+ `retrieval_context` 列 |
-| 数据语义 | input/expected=案例设计侧确定性派生（RS→完成标准清单）；actual=ts.md §1 概述摘录+产物清单+档案来源（可回溯）；retrieval_context（dataset）=rs_input 映射清单摘要（源→规则→目标）——agent 的"检索上下文"即 RS/mapping 输入材料；**不编造输出** |
+| 数据语义 | input/expected=案例设计侧确定性派生（RS→完成标准清单）；**actual=ts.md §1 概述 + DDL/ETL SQL 文件原文全量嵌入**（平台只见 Excel 这一格，文件名清单喂不了 judge）+档案来源（可回溯），单文件/总量截断封顶（`CAP_PER_FILE`/`CAP_ACTUAL`）；retrieval_context（dataset）=rs_input 映射清单摘要（源→规则→目标）——agent 的"检索上下文"即 RS/mapping 输入材料；**不编造输出** |
 | 本地试点 | `python3 platform_export.py --source archive --root ../10_project_deliver [--mode dataset]`（当前 11 行） |
 | 内网真实案例 | 同命令换 `--root` 指内网 10_project_deliver（兼容 build/ 新布局与老式平铺） |
 | evalsuite 源 | `--source evalsuite`：cases/ 的 expectations.json × 产物档案 join（存量仅 001 有 expectations，且该案例无产物——基本空跑，留作 cases_real 复用该形态时的入口） |
