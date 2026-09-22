@@ -15,12 +15,11 @@
   python3 platform_export.py --source archive --root ../10_project_deliver --mode dataset
   # 内网真实案例：--root 换内网 10_project_deliver（兼容老式平铺与 build/ 新布局）
 
-产物三件（过程可视可回溯）：
-  out/platform_[import|dataset][_intranet].{xlsx,csv}   平台导入文件 + csv 孪生（本地 deepeval 预检）
-  out/...manifest.json                                   每案例取料清单（档案/字符数/跳过原因）
+产物一件（平台只收 Excel）：
+  out/platform_[import|dataset][_intranet].xlsx   平台导入文件
 
-数据语义：input / expected_output = 案例设计侧构造（任务指令 + 完成标准）；
-actual_output = 真实运行档案摘录（ts.md §1 概述 + 产物清单）；
+数据语义：input / expected_output = 案例设计侧构造（任务指令 + 完成标准清单）；
+actual_output = 真实运行档案摘录（ts.md §1 概述 + 产物文件原文）；
 retrieval_context（dataset 模式）= rs_input 映射清单摘要——对 agent 而言"检索到的上下文"
 就是 RS/mapping 输入材料，语义同源。不编造输出。
 """
@@ -28,10 +27,8 @@ retrieval_context（dataset 模式）= rs_input 映射清单摘要——对 agen
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # ── 平台口径（唯一调整点：平台确认表头全集/指标合法值后只改这里）─────────
@@ -58,7 +55,6 @@ DATASET_COLUMNS = [
     "expected_tools",
 ]
 DEFAULT_METRIC_NAME = "任务成功率"  # ← quick 模式专用，换成平台评估器的准确名称
-EMPTY_COLUMNS = ["trace", "turns", "tools_called", "expected_tools"]  # 任务成功率评估器不消费，留空
 
 CAP_INPUT = 1200
 CAP_ACTUAL = 16000   # 平台只认 Excel 这一格——产物原文全量嵌入（Excel 单格硬限 32767，留裕量；judge 上下文未知可调低）
@@ -312,46 +308,34 @@ def shape_row(payload: dict, mode: str, metric: str) -> dict:
     return row
 
 
-# ── 输出 ─────────────────────────────────────────────────
+# ── 输出（平台只收 Excel，单产物）────────────────────────
 
-def write_outputs(rows, manifest, out_base: Path, columns):
+def write_xlsx(rows, out_base: Path, columns) -> Path:
     out_base.parent.mkdir(parents=True, exist_ok=True)
-
-    csv_path = out_base.with_suffix(".csv")
-    with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=columns)
-        w.writeheader()
-        w.writerows(rows)
-
     xlsx_path = out_base.with_suffix(".xlsx")
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font
         from openpyxl.utils import get_column_letter
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "eval_import"
-        ws.append(columns)
-        for c in ws[1]:
-            c.font = Font(bold=True)
-        for r in rows:
-            ws.append([r[c] for c in columns])
-        widths = {"metric_name": 14, "input": 60, "actual_output": 80,
-                  "expected_output": 60, "retrieval_context": 70}
-        for i, col in enumerate(columns, 1):
-            ws.column_dimensions[get_column_letter(i)].width = widths.get(col, 12)
-        ws.freeze_panes = "A2"
-        wb.save(xlsx_path)
     except ImportError:
-        print("⚠ openpyxl 不可用，只产出 csv（平台如只收 xlsx 请先 pip install openpyxl）", file=sys.stderr)
-        xlsx_path = None
+        print("✗ openpyxl 不可用（xlsx 是唯一产物，必装）：pip install openpyxl", file=sys.stderr)
+        sys.exit(1)
 
-    manifest_path = out_base.with_name(out_base.name + ".manifest.json")
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
-    return csv_path, xlsx_path, manifest_path
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "eval_import"
+    ws.append(columns)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for r in rows:
+        ws.append([r[c] for c in columns])
+    widths = {"metric_name": 14, "input": 60, "actual_output": 80,
+              "expected_output": 60, "retrieval_context": 70}
+    for i, col in enumerate(columns, 1):
+        ws.column_dimensions[get_column_letter(i)].width = widths.get(col, 12)
+    ws.freeze_panes = "A2"
+    wb.save(xlsx_path)
+    return xlsx_path
 
 
 def main():
@@ -382,14 +366,7 @@ def main():
         root = Path(args.root)
         make_payload = payload_from_archive
 
-    rows, manifest = [], {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "mode": args.mode,
-        "metric_name": args.metric_name if args.mode == "quick" else None,
-        "source": args.source,
-        "case_filter": args.case,
-        "cases": [],
-    }
+    rows, case_log = [], []
     for case_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         if case_dir.name.startswith("_") or case_dir.name.startswith("."):
             continue
@@ -405,27 +382,26 @@ def main():
                 "len_actual": len(row["actual_output"]),
                 "len_expected": len(row["expected_output"]),
                 **({"len_retrieval": len(row["retrieval_context"])} if args.mode == "dataset" else {}),
-                "empty_columns": EMPTY_COLUMNS,
             })
             rows.append(row)
         else:
             entry.update({"included": False, "skip_reason": skip})
-        manifest["cases"].append(entry)
+        case_log.append(entry)
 
     suffix = "_intranet" if args.source == "archive" else ""
     mode_name = "import" if args.mode == "quick" else "dataset"
     out_base = Path(args.out) if args.out else here / "out" / f"platform_{mode_name}{suffix}"
     columns = QUICK_COLUMNS if args.mode == "quick" else DATASET_COLUMNS
-    csv_path, xlsx_path, manifest_path = write_outputs(rows, manifest, out_base, columns)
+    xlsx_path = write_xlsx(rows, out_base, columns)
 
     print(f"来源={args.source}  模式={args.mode}  案例目录={root}  入集={len(rows)} 行"
           + (f"  指标={args.metric_name}" if args.mode == "quick" else ""))
-    for e in manifest["cases"]:
+    for e in case_log:
         mark = "✓" if e["included"] else "✗"
         info = (f"in={e['len_input']} actual={e['len_actual']} exp={e['len_expected']}"
                 + (f" retr={e['len_retrieval']}" if "len_retrieval" in e else "")) if e["included"] else e["skip_reason"]
         print(f"  {mark} {e['case']:<32} {info}")
-    print(f"产物：{xlsx_path or '（xlsx 跳过）'} / {csv_path} / {manifest_path}")
+    print(f"产物：{xlsx_path}")
 
 
 if __name__ == "__main__":
