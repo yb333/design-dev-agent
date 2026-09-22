@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -330,6 +331,24 @@ def shape_row(payload: dict, mode: str, metric: str) -> dict:
 
 # ── 输出（平台只收 Excel，单产物）────────────────────────
 
+
+def iter_case_roots(root: Path) -> list[Path]:
+    """收集含 ddlc_design_dev 的案例目录——目录名是流程定死的确定性名字，按名收集非通配猜文件。
+
+    兼容两种布局：老式一层平铺（{资产}/ddlc_design_dev）与新布局三层嵌套
+    （{appid}/{schema}/{资产}/ddlc_design_dev）；下划线/点开头目录不入。
+    """
+    found = []
+    for dirpath, dirnames, _ in os.walk(root):
+        parts = Path(dirpath).parts
+        if any(p.startswith("_") or p.startswith(".") for p in parts[len(root.parts) :]):
+            dirnames[:] = []
+            continue
+        if "ddlc_design_dev" in dirnames:
+            found.append(Path(dirpath))
+            dirnames.remove("ddlc_design_dev")  # 档案内部不再下钻
+    return sorted(found)
+
 def write_xlsx(rows, out_base: Path, columns) -> Path:
     out_base.parent.mkdir(parents=True, exist_ok=True)
     xlsx_path = out_base.with_suffix(".xlsx")
@@ -380,14 +399,16 @@ def main():
         root = Path(args.root) if args.root else here / "cases"
         deliver_root = Path(args.deliver_root) if args.deliver_root else here.parent / "10_project_deliver"
         make_payload = lambda d: payload_from_evalsuite(d, deliver_root)
+        iter_cases = lambda: sorted(p for p in root.iterdir() if p.is_dir())
     else:
         if not args.root:
             ap.error("--source archive 需要 --root（10_project_deliver 路径）")
         root = Path(args.root)
         make_payload = payload_from_archive
+        iter_cases = lambda: iter_case_roots(root)
 
     rows, case_log = [], []
-    for case_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+    for case_dir in iter_cases():
         if case_dir.name.startswith("_") or case_dir.name.startswith("."):
             continue
         if args.case and args.case not in case_dir.name:
