@@ -371,7 +371,8 @@ class TestDispatchPlan:
         }
         plan = build_dispatch_plan(ts)
         assert plan["ddl"] is True
-        assert "dq" not in plan  # dq 字段已删（2026-09-14 DQ 拆分——DQ 前置步骤 2.5，不在编码段）
+        assert plan["dq"] == {"required": False, "requirements": 0}
+        # 2026-09-22：dq 行回归（显式 required=false）——此前计划无 dq 行，按清单发起漏 4c
         assert plan["etl_rules"] == ["R0001", "R0002"]  # 按 exec_sequence 排序
         assert plan["init_rules"] == ["INIT_R0001"]
         assert len(plan["groups"]) == 1

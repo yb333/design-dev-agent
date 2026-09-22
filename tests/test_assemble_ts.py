@@ -2777,3 +2777,41 @@ class TestCliMainInlineChecks:
         assert r.returncode == 0, r.stderr + r.stdout
         out = r.stdout + r.stderr
         assert "N_DEAD_FIELD" in out and "orphan_helper_col" in out
+
+
+class TestDqSectionRender:
+    """ts.md §7 条件渲染（2026-09-22）：无 DQ 资产终态文案——不留占位残留
+    （无 DQ 时 assemble_dq 不跑，占位会永远挂着误导评审"还有一节没做"）。"""
+
+    def _md(self, ts_mod):
+        from assemble_ts import render_md
+        ts = {
+            "generated_at": "", "version": "",
+            "meta": {"target": {"f_table": {"schema": "dws", "table": "t_f", "cn": "T"},
+                              "i_view": {"schema": "dws", "table": "t_i", "cn": "T"}},
+                     "dq_required": None, "grain": "", "load_strategy": {"strategy": ""},
+                     "field_count": {"business": 1, "audit": 0, "total": 1},
+                     "source_tables": [], "schedule": {}},
+            "design": {"business_key": ["id"], "design_approach": ""},
+            "rules": {"R0001": {"target_table": "dws.t_f", "source_tables": [], "fields": {},
+                                "load_mode": "truncate_table", "step_type": "full",
+                                "rule_name": "测试规则", "exec_sequence": 1,
+                                "joins": [], "filter": "", "write_condition": ""}},
+            "tables": {"t_f": {"fields": [], "distribute_key": []}},
+        }
+        ts_mod(ts)
+        return render_md(ts)
+
+    def test_no_dq_renders_final_state(self):
+        md = self._md(lambda ts: ts["meta"].update(dq_required=0))
+        assert "本资产无 DQ 需求" in md
+        assert "由 dws-dq-producer 独立设计后经 assemble_dq 追加" not in md   # 占位不残留
+
+    def test_dq_required_keeps_placeholder(self):
+        md = self._md(lambda ts: ts["meta"].update(dq_required=2))
+        assert "由 dws-dq-producer 独立设计后经 assemble_dq 追加" in md
+
+    def test_legacy_dq_rules_fallback_placeholder(self):
+        """旧档无 meta.dq_required 键但有 ts.dq_rules（拆分前形态）——保守走占位。"""
+        md = self._md(lambda ts: ts.update(dq_rules=[{"rule_name": "x"}]))
+        assert "由 dws-dq-producer 独立设计后经 assemble_dq 追加" in md

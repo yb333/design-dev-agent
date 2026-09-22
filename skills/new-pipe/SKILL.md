@@ -285,8 +285,8 @@ question("闸口①设计确认（{资产}）：{gate_summary 摘要}\\n"
 python PIPE_SCRIPTS/dispatch_plan.py --ts {deliver}/ts.json
 ```
 
-输出执行计划 JSON：`ddl` / `etl_rules` / `init_rules` / `groups` / `summary`。
-**发起哪些任务一律以计划为准**——`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder。**先拿完整计划再一次发起。**
+输出执行计划 JSON：`ddl` / `etl_rules` / `init_rules` / `groups` / `dq` / `summary`。
+**发起哪些任务一律以计划为准**——`init_rules` 空不发 init，`etl_rules` 之外的规则（视图步骤）不调 coder，`dq.required=true` 才起 4c（false=显式跳过——计划里明示，不是漏了）。**先拿完整计划再一次发起。**
 
 闸口①确认后，**4a/4b/4c 互不依赖，在同一消息里并行发起**（4d init 等 4b 完成）。DQ 走 4c 与 coder 并行——谁慢等谁，DQ 时间被 coder 链吸收（2026-09-15 复调：此前方案 V 前移 DQ 塞闸口①窗口，人审快于 DQ 时闸口①被完成时间门住，+20min 实测）。
 

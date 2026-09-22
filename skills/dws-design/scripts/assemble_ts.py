@@ -2228,6 +2228,9 @@ def build_meta(rs_input, decisions):
     """组装 meta(从 rs_input 搬确定性数据)。"""
     rs_meta = rs_input.get("meta", {})
     target = rs_meta.get("target", {})
+    # RS DQ 需求数带进 ts（2026-09-22）：ts.md §7 条件渲染与 dispatch_plan 的 dq 行
+    # 单源读它（DQ 拆分后 ts 无 DQ 内容，但"有没有"是渲染/计划要的事实——装配时判定一次）
+    dq_required = len(rs_input.get("dq_requirements") or [])
 
     # rs_input 的 target 已有 f_table 和 i_view（preprocess 从 _i 推导）
     f_table = target.get("f_table", {})
@@ -2392,6 +2395,7 @@ def build_meta(rs_input, decisions):
             "f_table": f_table,
             "i_view": i_view,
         },
+        "dq_required": dq_required,
         "grain": rs_meta.get("grain", ""),
         "load_strategy": {
             "strategy": strategy,
@@ -2874,10 +2878,19 @@ def render_md(ts):
 
     # §7 DQ（占位锚点——正文由 assemble_dq 追加渲染）
     # DQ 设计在 assemble_ts 之后由 dws-dq-producer 独立完成（读 RS+mapping+待审 ts），
-    # 装配时 assemble_dq 定位本标题整段替换为完整章节；RS 无 DQ 需求则替换为无 DQ 说明。
+    # 装配时 assemble_dq 定位本标题整段替换为完整章节。RS 无 DQ 需求（meta.dq_required=0，
+    # 装配时从 rs_input 判定；旧档无该键按 ts.dq_rules 兜底——DQ 拆分前的形态）在这里
+    # 终态渲染——不留占位（2026-09-22：无 DQ 资产 assemble_dq 不跑，占位会永远残留
+    # 误导评审"还有一节没做"）。
+    _dq_required = meta.get("dq_required")
+    if _dq_required is None:
+        _dq_required = len(ts.get("dq_rules") or [])
     lines.append("## 7. 数据质量检查(DQ)")
     lines.append("")
-    lines.append("*(DQ 章节由 dws-dq-producer 独立设计后经 assemble_dq 追加；RS 无 DQ 需求则本资产无 DQ)*")
+    if _dq_required:
+        lines.append("*(DQ 章节由 dws-dq-producer 独立设计后经 assemble_dq 追加；RS 无 DQ 需求则本资产无 DQ)*")
+    else:
+        lines.append("本资产无 DQ 需求（RS dq_requirements 为空）——无 dq.json/无 DQ 调度任务，全程零 DQ。")
     lines.append("")
 
     # §8 增量设计（条件出现：只有有增量规则的资产才显示）

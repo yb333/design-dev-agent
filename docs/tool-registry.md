@@ -32,7 +32,7 @@
 ### 执行计划（编码前，dispatch_plan 住 new-pipe）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
 |------|------|--------------|------------|-------------------|
-| `dispatch_plan.py` | 读 ts.json 输出编码段执行计划（ddl/etl_rules/init_rules/groups；**dq 字段已删**[2026-09-14 DQ 拆分]——DQ 前置步骤 2.5 由 producer 完成，不在编码段），pipe 一次拿全并行发起，不手工解析判断 | 步骤 4-0 | ts.json → 执行计划 JSON（stdout） | **ts.rules + ts.init.rules** + ts.data_flow |
+| `dispatch_plan.py` | 读 ts.json 输出编码段执行计划（ddl/etl_rules/init_rules/groups/**dq 行**[meta.dq_required 装配自 rs_input——required=false 显式跳过，2026-09-22 修计划无 dq 行致按清单发起漏 4c]；**dq 字段已删**[2026-09-14 DQ 拆分]——DQ 前置步骤 2.5 由 producer 完成，不在编码段），pipe 一次拿全并行发起，不手工解析判断 | 步骤 4-0 | ts.json → 执行计划 JSON（stdout） | **ts.rules + ts.init.rules** + ts.data_flow |
 
 ### DQ 装配（2026-09-14 DQ 拆分：producer 产物 → dq.json，**住 dws-dq/scripts——producer 岗位工具，2026-09-21 归位自 new-pipe**；起调时点=闸口①确认后与 coder 同消息并行）
 | 工具 | 干啥 | new-pipe 阶段 | 输入 → 输出 | 读 ts[rules/init] |
