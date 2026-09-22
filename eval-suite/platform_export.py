@@ -60,6 +60,7 @@ CAP_INPUT = 1200
 CAP_ACTUAL = 16000   # 平台只认 Excel 这一格——产物原文全量嵌入（Excel 单格硬限 32767，留裕量；judge 上下文未知可调低）
 CAP_PER_FILE = 8000  # 单个产物文件内容上限（超长 SQL 截断封顶）
 CAP_EXPECTED = 4500  # 完成标准含目标字段/来源表清单（judge 逐项核验的枚举依据；实测最大案例 raw 4117）
+CAP_UT = 2000        # UT 报告摘要上限（任务成功率系 judge 要流程证据——ut_report.md 是对外报告）
 CAP_RETRIEVAL = 1000
 CAP_RS_DIGEST = 500
 
@@ -123,15 +124,26 @@ def ts_md_overview(art_root: Path) -> str:
 
 
 def list_artifacts(art_root: Path) -> list[str]:
-    """产物清单：ddl/ + etl/（老档案 select/ 兜底），规则文件名有序。"""
+    """产物清单：ddl/ + etl/（老档案 select/ 兜底）+ dq/，规则文件名有序。"""
     out = []
-    for sub in ("ddl", "etl", "select"):
+    for sub in ("ddl", "etl", "select", "dq"):
         d = art_root / sub
         if d.is_dir():
             for f in sorted(d.iterdir()):
                 if f.suffix == ".sql":
                     out.append(f"{sub}/{f.name}")
     return out
+
+
+def ut_report_digest(art_root: Path) -> str:
+    """UT 报告摘要（对外报告 ut_report.md，任务成功率的流程证据；无则空串）。"""
+    p = art_root / "ut_report.md"
+    if not p.is_file():
+        return ""
+    try:
+        return clip(p.read_text(encoding="utf-8").strip(), CAP_UT)
+    except Exception:
+        return ""
 
 
 # ── 取料 → payload（模式无关的核心四元组）──────────────────
@@ -150,6 +162,9 @@ def build_actual(art_root: Path, provenance: str) -> str:
         except Exception:
             content = "（读取失败）"
         parts += ["", f"——{rel}——", clip(content, CAP_PER_FILE)]
+    ut = ut_report_digest(art_root)
+    if ut:
+        parts += ["", "——UT 报告（ut_report.md 摘要，测试环节证据）——", ut]
     parts += ["", f"档案来源：{provenance}"]
     return "\n".join(parts)
 
@@ -219,6 +234,9 @@ def payload_from_archive(case_dir: Path):
         f"- 建表 DDL（create_table_{table}.sql）与映射结构一致；ETL 每规则一个 SELECT 文件\n"
         f"- 调度方案：{sched.get('strategy', '')}"
         + (f"；DQ 检查 {len(dq)} 条" if dq else "")
+        # UT 标准只在该案例档案确有 ut_report.md 时提出——标准跟着交付件实际范围走，
+        # 不给无 UT 产出的老档案虚设无法举证的标准
+        + ("\n- 通过 UT：ut_report.md 致命项零失败（报告随产物交付）" if ut_report_digest(art_root) else "")
     )
     return {
         "task_input": task_input,
