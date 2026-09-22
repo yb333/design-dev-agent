@@ -76,10 +76,11 @@ SELECT
 FROM ods.ods_trade_order_di a
 GROUP BY a.""订单ID"", a.""客户ID""
 
-档案来源：../10_project_deliver/002_dwb_trade_order_d","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 ，粒度：每行一个订单
-- 覆盖全部 7 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/002_dwb_trade_order_d","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 ，粒度：每行一个订单
+- 目标字段 7 项：order_id, cust_id, total_amount, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 1 张：ods_trade_order_di
+- 建表 DDL（create_table_.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 7 项（源→规则→目标）：
 ods_trade_order_di.order_id --[直接复制]--> order_id(订单ID)
 ods_trade_order_di.cust_id --[直接复制]--> cust_id(客户ID)
@@ -246,10 +247,11 @@ LEFT JOIN log_agg log
     ON o.""订单ID"" = log.order_id
 WHERE COALESCE(o.del_flag, 'N') = 'N';
 
-档案来源：../10_project_deliver/003_dwb_trade_wide_f","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 dws.dwb_trade_wide_f，粒度：每行一个订单
-- 覆盖全部 15 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_trade_wide_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/003_dwb_trade_wide_f","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 dws.dwb_trade_wide_f，粒度：每行一个订单
+- 目标字段 15 项：order_id, cust_id, product_id, order_amt, order_qty, cust_name, cust_level, product_name, category_code, total_pay_amt, total_ship_fee, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 5 张：ods_trade_order_di, dim_cust_d, dim_product_d, ods_payment_di, ods_logistics_di
+- 建表 DDL（create_table_dwb_trade_wide_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 15 项（源→规则→目标）：
 ods_trade_order_di.订单ID --[直接复制]--> order_id(订单ID)
 ods_trade_order_di.客户ID --[直接复制]--> cust_id(客户ID)
@@ -434,10 +436,11 @@ LEFT JOIN review_agg
     ON dsf.shop_id = review_agg.shop_id
 WHERE dsf.del_flag = 'N';
 
-档案来源：../10_project_deliver/004_dwb_shop_center_f","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slshp.dwb_shop_center_f，粒度：每行一个店铺记录
-- 覆盖全部 20 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_shop_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/004_dwb_shop_center_f","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slshp.dwb_shop_center_f，粒度：每行一个店铺记录
+- 目标字段 20 项：shop_id, shop_name, shop_type_name, shop_status_name, company_name, open_time, open_days, province_code, province_name, shop_score, service_score, logistics_score, total_order_cnt, total_sales_amount, total_buyer_cnt, review_cnt, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 4 张：dim_shop_f, dim_region_f, dwd_order_f, dwd_review_f
+- 建表 DDL（create_table_dwb_shop_center_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 20 项（源→规则→目标）：
 dim_shop_f.shop_id --[直接复制]--> shop_id(店铺ID)
 dim_shop_f.shop_name --[直接复制]--> shop_name(店铺名称)
@@ -687,10 +690,11 @@ FROM sdord.dwd_order_f dof
 WHERE dof.order_status NOT IN ('CANCELLED', 'DELETED')
 GROUP BY dof.user_id;
 
-档案来源：../10_project_deliver/005_dwb_user_center_f","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slusr.dwb_user_center_f，粒度：每行一个用户记录
-- 覆盖全部 46 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_user_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/005_dwb_user_center_f","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slusr.dwb_user_center_f，粒度：每行一个用户记录
+- 目标字段 46 项：user_id, user_name, user_phone_masked, gender_name, birthday, age, register_time, register_days, last_login_time, level_id, level_name, level_min_points, province_code, province_name, city_code, city_name, source_name, member_points, member_balance, user_status_name, total_order_cnt, total_pay_amount, avg_order_amount, last_order_time, first_order_time, rfm_r_score, rfm_f_score, rfm_m_score, rfm_segment, total_pv_cnt, total_collect_cnt, total_cart_cnt, pv_to_order_rate, pv_to_cart_rate, coupon_used_cnt, coupon_total_amount, refund_cnt, refund_rate, cart_product_cnt, cart_total_amount, order_freq_label, consume_level_label, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 9 张：dim_user_f, dim_user_level_f, dim_region_f, dim_user_source_f, dwd_order_f, dwd_user_behavior_f, dwd_coupon_use_f, dwd_refund_f, dwd_cart_f
+- 建表 DDL（create_table_dwb_user_center_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 46 项（源→规则→目标）：
 dim_user_f.user_id --[直接复制]--> user_id(用户ID)
 dim_user_f.user_name --[直接复制]--> user_name(用户姓名)
@@ -988,10 +992,11 @@ SELECT
   oom.payment_method                                                     AS order_payment_method,
   oom.payment_time                                                       AS order_payment_time,
   oom.shipping_fee                                                       AS order_shipping_fee,
-  oom.product_count                                                      AS order_p…（截断）","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slord.dwb_user_behavior_f，粒度：每行一个用户行为记录
-- 覆盖全部 264 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_user_behavior_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+  oom.product_count                                                      AS order_p…（截断）","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slord.dwb_user_behavior_f，粒度：每行一个用户行为记录
+- 目标字段 184 项：user_user_id, user_user_name, user_user_phone, user_gender, user_age, user_birthday, user_province_name, user_city_name, user_user_level, user_user_level_name, user_vip_status, user_register_time, user_register_date, user_user_status, user_user_status_name, user_source_channel, user_source_type, user_first_active_time, user_last_active_time, user_active_days, user_total_score, user_credit_score, user_risk_level, user_device_type, user_os_type, user_app_version, user_ip_address, user_network_type, user_is_real_name, user_verify_status, behavior_id, behavior_time, behavior_date, behavior_hour, behavior_weekday, behavior_month, behavior_quarter, behavior_year, is_weekend, time_period, order_order_id, order_order_no, order_order_status, order_order_status_name, order_order_amount, order_discount_amount, order_actual_amount, order_payment_method, order_payment_time, order_shipping_fee, order_product_count, order_sku_count, order_is_first_order, order_coupon_id, order_coupon_name, order_points_used, order_points_earned, order_complete_time, order_cancel_time, order_cancel_reason, order_merchant_id, order_merchant_name, order_delivery_type, order_delivery_time, order_receive_time, order_receive_status, order_order_source, order_remark, order_invoice_type, order_invoice_title, prod_product_id, prod_product_name, prod_product_code, prod_sku_id, prod_sku_name, prod_brand_id, prod_brand_name, prod_category_id, prod_category_name, prod_category_level1, prod_category_level2, prod_category_level3, prod_price, prod_cost_price, prod_profit_rate, prod_stock_status, prod_sale_status, prod_product_type, prod_is_virtual, prod_supplier_id, content_interaction_id, content_content_id, content_interaction_type, content_interaction_type_name, content_duration_seconds, content_duration_minutes, content_comment_content, content_comment_word_count, content_share_platform, content_share_count, content_like_count, content_comment_count, content_collect_count, content_forward_count, content_is_original, content_source_type, content_browse_depth, content_scroll_percentage, content_click_count, content_stay_time, content_bounce_flag, content_exit_page, content_session_id, content_page_view_count, content_unique_visitor, content_referer_url, content_utm_source, content_utm_medium, content_utm_campaign, content_interaction_device, content_content_title, content_content_type, content_content_category, content_author_id, content_author_name, content_publish_time, content_publish_date, content_content_length, content_word_count, content_read_count, content_content_like_count, content_content_comment_count, content_content_share_count, content_content_collect_count, content_topic_id, content_topic_name, content_is_hot, content_is_recommend, content_content_status, content_content_score, social_relation_id, social_target_user_id, social_relation_type, social_relation_type_name, social_is_mutual, social_interaction_count, social_last_interaction_time, social_relation_status, social_source, social_group_id, social_group_name, social_remark, social_intimacy_level, social_chat_count, social_call_count, social_video_call_count, social_gift_count, social_follow_days, social_interaction_frequency, social_common_friends, social_common_groups, social_social_distance, social_relationship_strength, social_trust_level, social_contact_importance, profile_avatar_url, profile_profession, profile_education, profile_interests, profile_active_level, profile_influence_score, profile_social_value, profile_user_tags, profile_fans_count, profile_follow_count, profile_friend_count, profile_social_activity_score, profile_content_creation_score, profile_engagement_score, profile_social_influence_rank, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 7 张：ods_order_main_f, dim_product_d, dim_user_base_d, ods_content_interaction_f, dim_content_d, ods_social_relation_f, dim_user_profile_d
+- 建表 DDL（create_table_dwb_user_behavior_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 264 项（源→规则→目标）：
 dim_user_base_d.user_id --[直接复制]--> user_user_id(用户ID)
 dim_user_base_d.user_id --[直接复制]--> user_user_id(用户ID)
@@ -1204,10 +1209,11 @@ LEFT JOIN (
     AND inv._rn = 1
 WHERE dpf.del_flag = 'N';
 
-档案来源：../10_project_deliver/007_dwb_supply_chain_f","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slscc.dwb_supply_chain_center_f，粒度：每行一个供应链记录
-- 覆盖全部 23 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_supply_chain_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/007_dwb_supply_chain_f","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slscc.dwb_supply_chain_center_f，粒度：每行一个供应链记录
+- 目标字段 23 项：purchase_id, purchase_no, purchase_status_name, create_time, supplier_id, supplier_name, supplier_level_name, cooperation_years, product_id, product_name, purchase_qty, purchase_price, purchase_amount, warehouse_id, warehouse_name, warehouse_type_name, current_stock_qty, locked_qty, stock_days, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 5 张：dwd_purchase_f, dim_supplier_f, dim_product_f, dim_warehouse_f, dwd_inventory_f
+- 建表 DDL（create_table_dwb_supply_chain_center_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 23 项（源→规则→目标）：
 dwd_purchase_f.purchase_id --[直接复制]--> purchase_id(采购单ID)
 dwd_purchase_f.purchase_no --[直接复制]--> purchase_no(采购单号)
@@ -1420,10 +1426,11 @@ LEFT JOIN (
 ) dst ON drf.refund_id = dst.refund_id AND dst._rn = 1
 WHERE drf.del_flag = 'N';
 
-档案来源：../10_project_deliver/008_dwb_after_sale_center_f","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slas.dwb_after_sale_center_f，粒度：每行一个售后服务记录
-- 覆盖全部 24 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_after_sale_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/008_dwb_after_sale_center_f","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slas.dwb_after_sale_center_f，粒度：每行一个售后服务记录
+- 目标字段 24 项：refund_id, refund_no, refund_type_name, refund_status_name, apply_time, complete_time, process_days, refund_amount, refund_reason, order_id, order_no, order_pay_amount, refund_rate, user_id, user_name, product_id, product_name, ticket_id, ticket_status_name, handler_name, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 5 张：dwd_refund_f, dwd_order_f, dim_user_f, dim_product_f, dwd_service_ticket_f
+- 建表 DDL（create_table_dwb_after_sale_center_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 24 项（源→规则→目标）：
 dwd_refund_f.refund_id --[直接复制]--> refund_id(退款ID)
 dwd_refund_f.refund_no --[直接复制]--> refund_no(退款单号)
@@ -1683,10 +1690,11 @@ FROM sdord.dwd_order_detail_f dod
 WHERE COALESCE(dod.del_flag, 'N') = 'N'
 GROUP BY dod.product_id;
 
-档案来源：../10_project_deliver/009_dwb_product_center_f","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slprd.dwb_product_center_f，粒度：每行一个商品记录
-- 覆盖全部 39 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_product_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/009_dwb_product_center_f","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slprd.dwb_product_center_f，粒度：每行一个商品记录
+- 目标字段 39 项：product_id, product_name, product_code, product_status_name, create_time, on_shelf_time, cost_price, sale_price, market_price, discount_rate, gross_profit, gross_profit_rate, category_id, category_name, category_path, brand_id, brand_name, brand_origin, shop_id, shop_name, stock_qty, locked_qty, available_qty, warning_qty, stock_status, total_sales_qty, total_sales_amount, buyer_cnt, sales_qty_30d, review_cnt, avg_rating, good_review_rate, weight, volume, product_tag, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 7 张：dim_product_f, dim_product_category_f, dim_brand_f, dim_shop_f, dwd_inventory_f, dwd_order_detail_f, dwd_review_f
+- 建表 DDL（create_table_dwb_product_center_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 39 项（源→规则→目标）：
 dim_product_f.product_id --[直接复制]--> product_id(商品ID)
 dim_product_f.product_name --[直接复制]--> product_name(商品名称)
@@ -1985,10 +1993,11 @@ SELECT
         ELSE ROUND(COALESCE(dul.current_level_points, 0)::NUMERIC * 100.0 / dul.upgrade_points, 2)
     END AS progress_percentage,                                                   /* 升级进度百分比(当前等级积分/升级所需积分*100,除0保护) */
     COALESCE(dul.privilege_list, '') AS privilege_list,                           /* 权限列表 */
-    COALESCE(dul.discount_rate, 0) AS discount_…（截断）","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slusr.dwb_user_profile_f，粒度：每行一个用户画像记录
-- 覆盖全部 187 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_user_profile_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+    COALESCE(dul.discount_rate, 0) AS discount_…（截断）","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slusr.dwb_user_profile_f，粒度：每行一个用户画像记录
+- 目标字段 187 项：user_id, user_name, user_phone_processed, user_phone_masked, email, gender_processed, birthday, age_processed, id_card, id_card_masked_processed, real_name, nick_name, avatar_url, user_status, user_status_name_processed, register_time, register_date_processed, register_hour_processed, register_weekday_processed, last_login_time, last_login_date_processed, login_count, province_code, province_name, city_code, city_name, district_code, district_name, address, zip_code, source_id, source_name, source_type, device_type, os_type, app_version, ip_address, longitude, latitude, language, timezone, currency, vip_level, vip_expire_time, is_vip_processed, member_points, balance, credit_score, risk_level, verify_status, level_id, level_name, level_code, level_rank, min_points, max_points, level_icon, level_color, upgrade_points, current_level_points, next_level_points, progress_percentage, privilege_list, discount_rate, points_rate, free_shipping, exclusive_products, priority_support, birthday_bonus, monthly_coupon, annual_gift, vip_service, invite_quota, max_orders_per_day, max_return_days, level_benefits, upgrade_time, downgrade_time, maintain_days, level_status, create_time, update_time, valid_from, valid_to, is_active, level_tier, level_group, level_category, points_required, orders_required, amount_required, days_required, growth_value, experience_value, contribution_value, activity_value, loyalty_score, engagement_score, satisfaction_score, retention_score, region_id, region_code, region_name, parent_id, region_level, region_path, province_id, province_abbr, city_id, city_abbr, district_id, district_abbr, street_id, street_code, street_name, center_longitude, center_latitude, area_size, population, gdp, gdp_per_capita, climate_type, economy_level, development_level, urban_rate, region_type, is_coastal, is_border, is_capital, is_special, postal_code_prefix, phone_area_code, car_plate_prefix, airport_code, railway_station_code, port_code, weather_station_code, customs_code, statistical_code, iso_code, source_code, source_category, channel_id, channel_code, channel_name, channel_type, channel_category, campaign_id, campaign_code, campaign_name, campaign_type, medium_id, medium_code, medium_name, medium_type, term_id, term_keyword, content_id, content_name, referral_url, landing_page, utm_source, utm_medium, utm_campaign, utm_term, utm_content, cost_per_acquisition, conversion_rate, quality_score, retention_rate_7d, retention_rate_30d, lifetime_value, first_order_amount, first_order_days, register_device, register_os, register_browser, register_network, register_location, attribution_model, lookback_days, priority, is_paid, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 4 张：ods_user_basic_f, dim_user_level_d, dim_region_d, dim_user_source_d
+- 建表 DDL（create_table_dwb_user_profile_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 187 项（源→规则→目标）：
 ods_user_basic_f.user_id --[直接复制]--> user_id(用户ID)
 ods_user_basic_f.user_name --[直接复制]--> user_name(用户姓名)
@@ -2226,10 +2235,11 @@ LEFT JOIN (
 WHERE dof.order_status NOT IN ('CANCELLED', 'DELETED')
 GROUP BY dof.activity_id;
 
-档案来源：../10_project_deliver/011_dwb_marketing_center_f","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slmar.dwb_marketing_center_f，粒度：每行一个营销记录
-- 覆盖全部 29 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_marketing_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+档案来源：../10_project_deliver/011_dwb_marketing_center_f","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slmar.dwb_marketing_center_f，粒度：每行一个营销记录
+- 目标字段 29 项：activity_id, activity_name, activity_type_name, activity_type_desc, activity_status_name, start_time, end_time, activity_days, create_time, min_amount, discount_rate, max_discount, coupon_id, coupon_name, coupon_type_name, coupon_total_qty, coupon_used_qty, coupon_use_rate, order_cnt, gmv_amount, participant_cnt, total_discount_amount, avg_order_amount, new_user_rate, activity_roi, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 5 张：dwd_activity_f, dim_activity_type_f, dim_coupon_f, dwd_coupon_use_f, dwd_order_f
+- 建表 DDL（create_table_dwb_marketing_center_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 29 项（源→规则→目标）：
 dwd_activity_f.activity_id --[直接复制]--> activity_id(活动ID)
 dwd_activity_f.activity_name --[直接复制]--> activity_name(活动名称)
@@ -2608,10 +2618,11 @@ order_agg AS (
       AND dof.order_status NOT IN ('CANCELLED', 'DELETED')
     GROUP BY dof.user_id
 ),
-/* CTE 2: 在订单聚合基础上…（截断）","任务完成标准（自 RS 派生）：
-- 产出 TS 设计（ts.md/ts.json），目标表 slord.dwb_order_center_f，粒度：每行一个订单
-- 覆盖全部 150 个映射字段的加工口径，无遗漏无幻觉字段
-- 建表 DDL（create_table_dwb_order_center_f.sql）与结构一致；ETL 每规则一个 SELECT 文件
+/* CTE 2: 在订单聚合基础上…（截断）","任务完成标准（自 RS 派生，逐项可核验）：
+- 目标表 slord.dwb_order_center_f，粒度：每行一个订单
+- 目标字段 150 项：order_id, order_no, order_status, order_status_name, order_time, pay_time, ship_time, receive_time, delivery_days, total_amount, product_amount, pay_amount, discount_amount, freight_amount, product_cnt, product_qty, order_source_name, order_type_name, order_remark, order_date, user_id, user_name, user_phone_masked, user_email_masked, gender_name, user_birthday, user_age, user_register_time, user_level_id, user_level_name, member_points, member_balance, first_order_time, last_order_time, history_order_cnt, history_pay_amount, history_discount_amount, avg_order_amount, rfm_segment, user_tag, user_source_name, user_province_code, user_city_code, user_days, is_repeat_user, product_id, product_name, product_code, sku_code, category_l1_id, category_l1_name, category_l2_id, category_l2_name, category_l3_id, category_l3_name, brand_id, brand_name, brand_origin, product_attr, product_spec, product_weight, product_volume, cost_price, sale_price, real_price, product_tag, product_status_name, product_sales_cnt, product_sales_amount, product_profit, shop_id, shop_name, shop_type_name, shop_level_name, shop_score, company_name, shop_province_code, shop_province_name, shop_city_code, shop_city_name, shop_open_time, shop_history_order_cnt, receiver_name, receiver_phone_masked, receiver_province_code, receiver_province_name, receiver_city_code, receiver_city_name, receiver_district_code, receiver_district_name, receiver_street, receiver_address, full_address, postal_code, address_tag_name, longitude, latitude, pay_id, pay_no, pay_method_code, pay_method_name, pay_channel_name, pay_status_name, bank_card_masked, bank_name, installment_num, pay_service_fee, fav_pay_method, pay_duration_minutes, logistics_id, logistics_no, logistics_company_code, logistics_company_name, logistics_type_name, warehouse_id, warehouse_name, warehouse_address, logistics_status_name, pickup_time, sign_receiver_name, ship_duration_hours, coupon_id, coupon_name, coupon_type_name, coupon_amount, activity_id, activity_name, activity_type_name, activity_discount_rate, full_reduce_amount, points_deduct_amount, points_used, is_marketing_order, total_discount_amount, user_coupon_used_cnt, user_fav_activity_type, refund_id, refund_no, refund_type_name, refund_reason, refund_amount, refund_status_name, refund_apply_time, refund_complete_time, is_refund_order, user_refund_cnt, del_flag, crt_cycle_id, last_upd_cycle_id, dw_last_update_date（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）
+- 来源表 18 张：dwd_order_f, dwd_order_detail_f, dwd_payment_f, dwd_logistics_f, dwd_coupon_use_f, dim_user_f, dim_user_level_f, dim_product_f, dim_product_category_f, dim_brand_f, dim_shop_f, dim_region_f, dim_warehouse_f, dim_payment_method_f, dim_logistics_company_f, dim_coupon_f, dim_activity_f, dwd_refund_f
+- 建表 DDL（create_table_dwb_order_center_f.sql）与映射结构一致；ETL 每规则一个 SELECT 文件
 - 调度方案：全量调度","输入材料：mapping 字段映射 150 项（源→规则→目标）：
 dwd_order_f.order_id --[直接复制]--> order_id(订单ID)
 dwd_order_f.order_no --[直接复制]--> order_no(订单号)

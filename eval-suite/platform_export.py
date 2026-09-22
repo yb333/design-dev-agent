@@ -63,7 +63,7 @@ EMPTY_COLUMNS = ["trace", "turns", "tools_called", "expected_tools"]  # 任务�
 CAP_INPUT = 1200
 CAP_ACTUAL = 16000   # 平台只认 Excel 这一格——产物原文全量嵌入（Excel 单格硬限 32767，留裕量；judge 上下文未知可调低）
 CAP_PER_FILE = 8000  # 单个产物文件内容上限（超长 SQL 截断封顶）
-CAP_EXPECTED = 900
+CAP_EXPECTED = 4500  # 完成标准含目标字段/来源表清单（judge 逐项核验的枚举依据；实测最大案例 raw 4117）
 CAP_RETRIEVAL = 1000
 CAP_RS_DIGEST = 500
 
@@ -200,13 +200,29 @@ def payload_from_archive(case_dir: Path):
         f"表说明：{desc}\n粒度：{grain}\n调度：{sched.get('strategy', '')} / {sched.get('frequency', '')}\n"
         f"映射字段 {len(fields)} 项，来源表 {len(sources)} 张。"
     )
+    # 目标字段/来源表清单：judge 逐项核验的枚举依据（quick 模式无 retrieval_context 列，清单必须进 expected）
+    tgt_fields, seen_f = [], set()
+    for m in fields:
+        tc = m.get("target_column")
+        if tc and tc not in seen_f:
+            seen_f.add(tc)
+            tgt_fields.append(tc)
+    src_tables, seen_t = [], set()
+    for s in sources:
+        name = s.get("source_table") if isinstance(s, dict) else str(s)
+        if name and name not in seen_t:
+            seen_t.add(name)
+            src_tables.append(name)
+
     expected = (
-        "任务完成标准（自 RS 派生）：\n"
-        f"- 产出 TS 设计（ts.md/ts.json），目标表 {full}，粒度：{grain}\n"
-        f"- 覆盖全部 {len(fields)} 个映射字段的加工口径，无遗漏无幻觉字段\n"
-        f"- 建表 DDL（create_table_{table}.sql）与结构一致；ETL 每规则一个 SELECT 文件\n"
+        "任务完成标准（自 RS 派生，逐项可核验）：\n"
+        f"- 目标表 {full}，粒度：{grain}\n"
+        f"- 目标字段 {len(tgt_fields)} 项：{', '.join(tgt_fields)}"
+        "（应全部出现在 DDL 与 SELECT 输出列中，标准审计字段允许另加）\n"
+        f"- 来源表 {len(src_tables)} 张：{', '.join(src_tables)}\n"
+        f"- 建表 DDL（create_table_{table}.sql）与映射结构一致；ETL 每规则一个 SELECT 文件\n"
         f"- 调度方案：{sched.get('strategy', '')}"
-        + (f"；DQ 检查 {len(dq)} 条落地为 dq/*.sql" if dq else "")
+        + (f"；DQ 检查 {len(dq)} 条" if dq else "")
     )
     return {
         "task_input": task_input,

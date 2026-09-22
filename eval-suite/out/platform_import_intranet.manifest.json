@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-22T14:23:58",
+ "generated_at": "2026-09-22T14:27:10",
  "mode": "quick",
  "metric_name": "任务成功率",
  "source": "archive",
@@ -14,7 +14,7 @@
    "included": true,
    "len_input": 102,
    "len_actual": 2301,
-   "len_expected": 151,
+   "len_expected": 279,
    "empty_columns": [
     "trace",
     "turns",
@@ -27,7 +27,7 @@
    "included": true,
    "len_input": 127,
    "len_actual": 5102,
-   "len_expected": 188,
+   "len_expected": 480,
    "empty_columns": [
     "trace",
     "turns",
@@ -40,7 +40,7 @@
    "included": true,
    "len_input": 134,
    "len_actual": 6001,
-   "len_expected": 194,
+   "len_expected": 552,
    "empty_columns": [
     "trace",
     "turns",
@@ -53,7 +53,7 @@
    "included": true,
    "len_input": 134,
    "len_actual": 9406,
-   "len_expected": 194,
+   "len_expected": 1041,
    "empty_columns": [
     "trace",
     "turns",
@@ -66,7 +66,7 @@
    "included": true,
    "len_input": 139,
    "len_actual": 16005,
-   "len_expected": 201,
+   "len_expected": 4117,
    "empty_columns": [
     "trace",
     "turns",
@@ -79,7 +79,7 @@
    "included": true,
    "len_input": 144,
    "len_actual": 7453,
-   "len_expected": 211,
+   "len_expected": 663,
    "empty_columns": [
     "trace",
     "turns",
@@ -92,7 +92,7 @@
    "included": true,
    "len_input": 143,
    "len_actual": 8665,
-   "len_expected": 207,
+   "len_expected": 631,
    "empty_columns": [
     "trace",
     "turns",
@@ -105,7 +105,7 @@
    "included": true,
    "len_input": 137,
    "len_actual": 9493,
-   "len_expected": 200,
+   "len_expected": 863,
    "empty_columns": [
     "trace",
     "turns",
@@ -118,7 +118,7 @@
    "included": true,
    "len_input": 138,
    "len_actual": 16005,
-   "len_expected": 199,
+   "len_expected": 3005,
    "empty_columns": [
     "trace",
     "turns",
@@ -131,7 +131,7 @@
    "included": true,
    "len_input": 139,
    "len_actual": 8856,
-   "len_expected": 204,
+   "len_expected": 746,
    "empty_columns": [
     "trace",
     "turns",
@@ -144,7 +144,7 @@
    "included": true,
    "len_input": 135,
    "len_actual": 16005,
-   "len_expected": 195,
+   "len_expected": 2936,
    "empty_columns": [
     "trace",
     "turns",
