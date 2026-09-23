@@ -779,7 +779,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     <div class="slide-content">
         <div class="page-head">
             <div class="page-num">07 / 分流</div>
-            <div class="page-title">失败按根因分流：<span class="key">数据问题退设计，绝不回 coder</span></div>
+            <div class="page-title">失败按根因找岗：<span class="key">SQL 回 coder，数据质量退设计</span></div>
             <div class="page-claim">分流判定树：每类失败按识别特征路由到唯一归宿，轮次有限——告警不进自动迭代，方案在人手里。</div>
         </div>
         <div class="svg-stage">
@@ -864,90 +864,74 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
         <div class="page-head">
             <div class="page-num">08 / 协同</div>
             <div class="page-title">对外靠 <span class="key">spec 交接</span>，对内靠 <span class="key">直连</span></div>
-            <div class="page-claim">上下游 agent 只交接 spec 不共享上下文；总控 Task 直连编排岗；数据库脚本直连——MCP 全线禁用。</div>
+            <div class="page-claim">对上下游只交接 spec；总控 Task 直连编排岗，数据库脚本直连——MCP 全线禁用；每个平台是制品的目的地。</div>
         </div>
         <div class="svg-stage">
         <svg viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
             <defs>
-                <marker id="p7a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
-                <marker id="p7s" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#f59e0b"/></marker>
-                <linearGradient id="p7ag" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
-                <linearGradient id="p7core" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
-                <linearGradient id="p7spec" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#d97706"/></linearGradient>
+                <marker id="p9a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
             </defs>
-            <!-- 协作图 -->
-            <rect x="30" y="34" width="200" height="60" rx="9" fill="url(#p7ag)" stroke="#3b82f6" stroke-width="1.6"/>
-            <text x="130" y="56" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">需求侧（BA）</text>
-            <text x="130" y="72" text-anchor="middle" font-size="7" fill="#1e3a8a">填《SDD》自动生成两份输入</text>
-            <text x="130" y="85" text-anchor="middle" font-size="6" fill="#64748b">《RS》需求 spec + 《mapping》字段映射</text>
-            <rect x="242" y="52" width="80" height="20" rx="4" fill="url(#p7spec)"/>
-            <text x="282" y="66" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">RS+mapping</text>
-            <rect x="332" y="38" width="240" height="68" rx="10" fill="url(#p7core)" stroke="#1e3a8a" stroke-width="2.4"/>
-            <text x="452" y="60" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">设计开发 Agent 组</text>
-            <text x="452" y="76" text-anchor="middle" font-size="7" fill="#bfdbfe">编排 + designer / producer / coder</text>
-            <text x="452" y="90" text-anchor="middle" font-size="7" fill="#bfdbfe">→《TS》+ 四件套制品</text>
-            <rect x="584" y="52" width="76" height="20" rx="4" fill="url(#p7spec)"/>
-            <text x="622" y="66" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">TS+制品</text>
-            <rect x="672" y="38" width="140" height="60" rx="9" fill="url(#p7ag)" stroke="#3b82f6" stroke-width="1.6" stroke-dasharray="4 2"/>
-            <text x="742" y="60" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">测试 Agent</text>
-            <text x="742" y="76" text-anchor="middle" font-size="7" fill="#64748b">下游 · 跑测试环境</text>
-            <rect x="770" y="108" width="240" height="0" fill="none"/>
-            <text x="860" y="64" text-anchor="middle" font-size="7" fill="#94a3b8">核心理念：不直接调用</text>
-            <text x="860" y="77" text-anchor="middle" font-size="7" fill="#94a3b8">不共享上下文，只交接 spec</text>
-            <!-- 优化补料条 -->
-            <rect x="30" y="108" width="980" height="24" rx="6" fill="#fffbeb" stroke="#fde68a" stroke-width="1" stroke-dasharray="3 2"/>
-            <text x="520" y="124" text-anchor="middle" font-size="7.5" font-weight="700" fill="#92400e">优化时补料：代码理解 Agent（独立工程）产《baseline_v1》现状+改动边界——文件交接，互不调对方脚本，契约校验以 schema 为准</text>
+            <!-- 对外交接带（角色叙事已在「背景」页交代，这里只讲交接物） -->
+            <rect x="30" y="28" width="980" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+            <text x="42" y="49" font-size="8" fill="#334155">对外只交接 spec：上游 BA ──《RS》+《mapping》──→ <tspan font-weight="800" fill="#1e3a8a">设计开发段</tspan> ──《TS》+ 四件套──→ 测试 Agent，不直接调用、不共享上下文</text>
+            <text x="42" y="70" font-size="7" fill="#92400e">优化补料：代码理解 Agent（独立工程）产《baseline_v1》现状+改动边界——文件交接，互不调对方脚本，契约校验以 schema 为准</text>
             <!-- 对内直连 -->
-            <rect x="30" y="142" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
-            <text x="42" y="162" font-size="9" font-weight="800" fill="#1e293b">总控对接：Task 直连</text>
-            <text x="42" y="178" font-size="7.5" fill="#475569">· 直连 dws-engineer，契约参数直传（mode / rs / mapping / baseline）</text>
-            <text x="42" y="194" font-size="7.5" fill="#475569">· 链上不定义中间层（权限收窄点）；契约外 prompt 一律忽略</text>
-            <rect x="530" y="142" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
-            <text x="542" y="162" font-size="9" font-weight="800" fill="#1e293b">数据访问：脚本直连，MCP 禁用</text>
-            <text x="542" y="178" font-size="7.5" fill="#475569">· dws_db.py 直连开发库：admin 建表 / etl 读写分账，按 schema 选源</text>
-            <text x="542" y="194" font-size="7.5" fill="#475569">· MCP 全线禁用——工具面 ≠ 本流程，调用必得错误结论（内网实证）</text>
+            <rect x="30" y="96" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="42" y="117" font-size="9" font-weight="800" fill="#1e293b">总控对接：Task 直连</text>
+            <text x="42" y="134" font-size="7.5" fill="#475569">· 直连 dws-engineer，契约参数直传（mode / rs / mapping / baseline）</text>
+            <text x="42" y="150" font-size="7.5" fill="#475569">· 链上不定义中间层（权限收窄点）；契约外 prompt 一律忽略</text>
+            <rect x="530" y="96" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="542" y="117" font-size="9" font-weight="800" fill="#1e293b">数据访问：脚本直连，MCP 禁用</text>
+            <text x="542" y="134" font-size="7.5" fill="#475569">· dws_db.py 直连开发库：admin 建表 / etl 读写分账，按 schema 选源</text>
+            <text x="542" y="150" font-size="7.5" fill="#475569">· MCP 全线禁用——工具面 ≠ 本流程，调用必得错误结论（内网实证）</text>
             <!-- 平台表 -->
-            <rect x="30" y="216" width="980" height="24" rx="6" fill="#eff6ff"/>
-            <text x="520" y="232" text-anchor="middle" font-size="9" font-weight="800" fill="#1e3a8a">平台协同：每个平台是制品的目的地</text>
-            <rect x="30" y="244" width="980" height="24" fill="#2563eb"/>
-            <text x="100" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">平台</text>
-            <text x="285" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">设计段</text>
-            <text x="480" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">建造段</text>
-            <text x="672" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">UT 与制品</text>
-            <text x="900" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">去向</text>
-            <rect x="30" y="268" width="980" height="24" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
-            <text x="100" y="284" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">开发环境数据库</text>
-            <text x="285" y="284" text-anchor="middle" font-size="7" fill="#1e3a8a">读：查结构·核类型（缓存）</text>
-            <text x="480" y="284" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="672" y="284" text-anchor="middle" font-size="7" fill="#1e3a8a">读写：建表·INSERT·校验全直连</text>
-            <text x="900" y="284" text-anchor="middle" font-size="7" fill="#64748b">DDL→开发环境建表</text>
-            <rect x="30" y="292" width="980" height="24" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
-            <text x="100" y="308" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">术加（执行平台）</text>
-            <text x="285" y="308" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="480" y="308" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="672" y="308" text-anchor="middle" font-size="7" fill="#1e3a8a">ETL 制品产出</text>
-            <text x="900" y="308" text-anchor="middle" font-size="7" fill="#64748b">人推部署；推生产=红线②</text>
-            <rect x="30" y="316" width="980" height="24" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
-            <text x="100" y="332" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">调度（LTS）</text>
-            <text x="285" y="332" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="480" y="332" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="672" y="332" text-anchor="middle" font-size="7" fill="#1e3a8a">调度制品产出</text>
-            <text x="900" y="332" text-anchor="middle" font-size="7" fill="#64748b">开发段配置（待内网核对）</text>
-            <rect x="30" y="340" width="980" height="24" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
-            <text x="100" y="356" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">DQ（质量检查）</text>
-            <text x="285" y="356" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="480" y="356" text-anchor="middle" font-size="7" fill="#1e3a8a">dq.json + 检查 SQL</text>
-            <text x="672" y="356" text-anchor="middle" font-size="7" fill="#1e3a8a">6b DQ 段真跑</text>
-            <text x="900" y="356" text-anchor="middle" font-size="7" fill="#64748b">只产出，运行归下游</text>
-            <rect x="30" y="364" width="980" height="24" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
-            <text x="100" y="380" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">代码仓 / 云链</text>
-            <text x="285" y="380" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="480" y="380" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="672" y="380" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
-            <text x="900" y="380" text-anchor="middle" font-size="7" fill="#64748b">版本管理（人管）· US 关联（暂缓）</text>
+            <rect x="30" y="172" width="980" height="26" rx="6" fill="#eff6ff"/>
+            <text x="520" y="190" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">平台协同：每个平台是制品的目的地</text>
+            <rect x="30" y="202" width="980" height="24" fill="#2563eb"/>
+            <text x="100" y="218" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">平台</text>
+            <text x="285" y="218" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">设计段</text>
+            <text x="480" y="218" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">建造段</text>
+            <text x="672" y="218" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">UT 与制品</text>
+            <text x="900" y="218" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">去向</text>
+            <rect x="30" y="226" width="980" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="245" text-anchor="middle" font-size="8.5" font-weight="700" fill="#1e293b">开发环境数据库</text>
+            <text x="285" y="245" text-anchor="middle" font-size="7" fill="#1e3a8a">读：查结构·核类型（缓存）</text>
+            <text x="480" y="245" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="245" text-anchor="middle" font-size="7" fill="#1e3a8a">读写：建表·INSERT·校验全直连</text>
+            <text x="900" y="245" text-anchor="middle" font-size="7" fill="#64748b">DDL→开发环境建表</text>
+            <rect x="30" y="256" width="980" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="275" text-anchor="middle" font-size="8.5" font-weight="700" fill="#1e293b">术加（执行平台）</text>
+            <text x="285" y="275" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="275" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="275" text-anchor="middle" font-size="7" fill="#1e3a8a">ETL 制品产出</text>
+            <text x="900" y="275" text-anchor="middle" font-size="7" fill="#64748b">人推部署；推生产=红线②</text>
+            <rect x="30" y="286" width="980" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="305" text-anchor="middle" font-size="8.5" font-weight="700" fill="#1e293b">调度（LTS）</text>
+            <text x="285" y="305" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="305" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="305" text-anchor="middle" font-size="7" fill="#1e3a8a">调度制品产出</text>
+            <text x="900" y="305" text-anchor="middle" font-size="7" fill="#64748b">开发段配置（待内网核对）</text>
+            <rect x="30" y="316" width="980" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="335" text-anchor="middle" font-size="8.5" font-weight="700" fill="#1e293b">DQ（质量检查）</text>
+            <text x="285" y="335" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="335" text-anchor="middle" font-size="7" fill="#1e3a8a">dq.json + 检查 SQL</text>
+            <text x="672" y="335" text-anchor="middle" font-size="7" fill="#1e3a8a">6b DQ 段真跑</text>
+            <text x="900" y="335" text-anchor="middle" font-size="7" fill="#64748b">只产出，运行归下游</text>
+            <rect x="30" y="346" width="980" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="365" text-anchor="middle" font-size="8.5" font-weight="700" fill="#1e293b">代码仓</text>
+            <text x="285" y="365" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="365" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="365" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="900" y="365" text-anchor="middle" font-size="7" fill="#64748b">版本管理（提交由人管）</text>
+            <rect x="30" y="376" width="980" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="395" text-anchor="middle" font-size="8.5" font-weight="700" fill="#1e293b">云链（需求）</text>
+            <text x="285" y="395" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="395" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="395" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="900" y="395" text-anchor="middle" font-size="7" fill="#64748b">US 关联（可选·暂缓）</text>
             <!-- 底部总结 -->
-            <rect x="30" y="404" width="980" height="32" rx="7" fill="#1e293b"/>
-            <text x="520" y="425" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Agent 是造车厂不是车队——交付前在开发环境跑到稳定，上线运行是下游段的事</text>
+            <rect x="30" y="418" width="980" height="32" rx="7" fill="#1e293b"/>
+            <text x="520" y="439" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Agent 是造车厂不是车队——交付前在开发环境跑到稳定，上线运行是下游段的事</text>
         </svg>
         </div>
     </div>
@@ -1068,8 +1052,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="377" y="78" font-size="8" fill="#334155">· 内网真实案例实测：Windows+nga 包壳</text>
             <text x="389" y="93" font-size="8" fill="#334155">环境，回路问题连续实报连续收口</text>
             <text x="377" y="118" font-size="8" fill="#334155">· LTS 制品：实现完成，待内网导出核对</text>
-            <text x="377" y="143" font-size="8" fill="#334155">· eval-suite：打磨中，执行覆盖待加厚</text>
-            <text x="377" y="168" font-size="8" fill="#334155">· eval-suite DQ 适配：随新链路对齐</text>
+            <text x="377" y="143" font-size="8" fill="#334155">· 质量评测：按平台评测规范执行，</text>
+            <text x="389" y="158" font-size="8" fill="#334155">独立评测报告另附</text>
             <text x="377" y="205" font-size="7" fill="#94a3b8">判据：真实案例交付一件、核算一件，</text>
             <text x="389" y="220" font-size="7" fill="#94a3b8">回路问题当日修复入回归</text>
             <rect x="696" y="24" width="314" height="316" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
@@ -1079,8 +1063,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="722" y="93" font-size="8" fill="#334155">增量/累积共建场景</text>
             <text x="710" y="118" font-size="8" fill="#334155">· opt 首个真实变更实测，跑通后与</text>
             <text x="722" y="133" font-size="8" fill="#334155">new-pipe 融合归一</text>
-            <text x="710" y="158" font-size="8" fill="#334155">· eval-suite 适配 DQ 新链路（producer</text>
-            <text x="722" y="173" font-size="8" fill="#334155">岗位 / dq.json）</text>
+            <text x="710" y="158" font-size="8" fill="#334155">· 按平台评测结果迭代：评测反馈驱动的</text>
+            <text x="722" y="173" font-size="8" fill="#334155">能力补齐</text>
             <text x="710" y="198" font-size="8" fill="#334155">· 内网魔改版适配项随平台修复退役</text>
             <text x="710" y="235" font-size="7" fill="#94a3b8">原则：场景没覆盖的不硬做——</text>
             <text x="722" y="250" font-size="7" fill="#94a3b8">多用多提，一起变成能力</text>
@@ -1093,7 +1077,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     </div>
 </section>
 
-<!-- ============ 结束页 ============ ============ -->
+<!-- ============ 结束页 ============ -->
   <section class="slide" data-label="结束页">
     <!-- 左：雪坡照片区（矢量复现） -->
     <!-- 结束页左栏：原版照片（12.7cm/33.867cm = 37.5% 页宽 = 720px，高同页 1080px） -->
