@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<!-- deck-studio 构建 v4（技术评审稿）：复用 v3 双模式引擎（浏览=无缝长页滚动 / 放映=全屏 letterbox+reveal 节拍），
+     内容全部重画为当前实现态：9 页 = 封面/形态/编排/校验/场景/分流/协同/成果/进展。
+     汇报场景动画克制：编排层零动画（DECK_STEPS 留空，按 animation.md 申报制，需要时再补），
+     通用层 reveal + 放映步进保留。色板宪法与 data-label 契约同 v3。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据交付 Agent：设计开发段技术方案与架构</title>
+<style>
+:root {
+    --c-info: #3b82f6; --c-exec: #2563eb; --c-guard: #60a5fa;
+    --bg-card: #f8fafc; --border-card: #e2e8f0; --bg-block: #f1f5f9;
+    --text: #1e293b; --text-sub: #64748b; --text-faint: #94a3b8;
+    --c-gate: #f59e0b; --c-gate-bg: #fef3c7; --c-gate-border: #fde68a; --c-gate-text: #92400e;
+    --c-pass: #1d4ed8; --c-pass-bg: #dbeafe;
+    --c-danger: #ef4444; --c-danger-bg: #fee2e2; --c-danger-text: #991b1b;
+    --ease-out-expo: cubic-bezier(.16,1,.3,1);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body { background: #e8eaf0; font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif; color: var(--text); }
+
+/* 舞台：放映=单页居中；浏览=长页滚动容器 */
+.deck-stage { position: fixed; inset: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.deck-fit { width: 1920px; height: 1080px; flex: 0 0 auto; position: relative; overflow: hidden;
+    background: #fff; box-shadow: 0 12px 48px rgba(15,23,42,.18); border-radius: 8px; }
+.slide { width: 1920px; height: 1080px; padding: 56px 90px; display: flex; flex-direction: column;
+    overflow: hidden; background: #fff; flex: 0 0 auto; }
+.reveal { transition: opacity .5s var(--ease-out-expo), transform .5s var(--ease-out-expo); }
+body.presenting .slide.current .reveal:not(.shown) { opacity: 0 !important; transform: translateY(18px) !important; }
+body:not(.browse) .deck-fit { transform-origin: center center; }
+body:not(.browse) .slide { position: absolute; inset: 0; visibility: hidden; opacity: 0;
+    transition: opacity .35s ease, visibility 0s linear .35s; }
+body:not(.browse) .slide.current { visibility: visible; opacity: 1; transition: opacity .35s ease; }
+body.browse .deck-stage { display: block; overflow-y: auto; overflow-x: hidden; padding: 16px 0 40px; }
+body.browse .deck-fit { height: auto; transform-origin: top left; box-shadow: none; border-radius: 0; background: transparent; }
+body.browse .slide { position: relative; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 10px 32px rgba(15,23,42,.12); }
+
+/* 排版刻度（px） */
+.slide-content { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: 14px; }
+.page-head { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.page-num { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 18px; letter-spacing: .2em; color: var(--c-exec); font-weight: 600; }
+.page-title { font-size: 40px; font-weight: 700; color: var(--text); line-height: 1.2; }
+.page-claim { font-size: 21px; color: var(--text-sub); font-weight: 500; line-height: 1.4; }
+.key { font-weight: 700; color: var(--c-exec); }
+.svg-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.svg-stage svg { width: 100%; height: 100%; max-height: 100%; }
+
+/* 封面 */
+.cover { padding: 108px 130px; background: linear-gradient(135deg,#fff 0%, #eff6ff 100%); }
+.cover .slide-content { justify-content: center; }
+.cover .tag { font-family: ui-monospace, monospace; font-size: 18px; color: var(--c-exec); font-weight: 700; letter-spacing: .2em; margin-bottom: 22px; }
+.cover h1 { font-size: 76px; font-weight: 900; line-height: 1.15; color: var(--text); margin-bottom: 28px; }
+.cover h1 .accent { color: var(--c-exec); }
+.cover .sub { font-size: 27px; color: var(--text-sub); font-weight: 500; line-height: 1.5; max-width: 78%; border-left: 6px solid var(--c-exec); padding-left: 24px; }
+.cover .meta { position: absolute; bottom: 40px; left: 130px; right: 130px; display: flex; justify-content: space-between; font-size: 18px; color: var(--text-faint); }
+
+/* ===== 液态玻璃 chrome ===== */
+:root {
+  --glass-bg: rgba(255,255,255,.58);
+  --glass-bg-strong: rgba(248,250,252,.84);
+  --glass-border: rgba(255,255,255,.65);
+  --glass-rim: inset 0 1px 0 rgba(255,255,255,.75), inset 0 0 0 .5px rgba(255,255,255,.35), inset 0 -1px 0 rgba(15,23,42,.05);
+  --glass-shadow: 0 8px 32px rgba(15,23,42,.14), 0 2px 8px rgba(15,23,42,.06);
+  --glass-blur: saturate(180%) blur(20px);
+  --glass-spring: cubic-bezier(.34,1.56,.64,1);
+}
+.deck-progress { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); width: min(42vw, 420px); height: 6px;
+  z-index: 100; border-radius: 999px; background: rgba(15,23,42,.08); border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-rim); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); overflow: hidden; }
+#progressBar { height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--c-info), var(--c-exec));
+  box-shadow: 0 0 12px rgba(59,130,246,.55); transition: width .4s var(--glass-spring); }
+.deck-bar { position: fixed; top: 14px; left: 16px; z-index: 110; display: flex; align-items: center; gap: 4px;
+  border-radius: 999px; padding: 6px 8px; font-size: 13px; color: var(--text-sub, #64748b);
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-rim), var(--glass-shadow);
+  transition: transform .45s var(--glass-spring), opacity .4s ease; }
+.deck-bar:hover { transform: translateY(-1px); }
+.deck-bar::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(135deg, rgba(255,255,255,.45) 0%, rgba(255,255,255,.08) 30%, transparent 55%); }
+.deck-page { font-variant-numeric: tabular-nums; letter-spacing: .06em; padding: 0 6px; }
+.deck-menu { border: none; background: transparent; cursor: pointer; font-size: 15px; line-height: 1;
+  color: var(--text-sub, #64748b); padding: 4px 9px; border-radius: 999px;
+  transition: transform .25s var(--glass-spring), background .2s ease; }
+.deck-menu:hover { background: rgba(37,99,235,.1); transform: scale(1.06); }
+.deck-menu:active { transform: scale(.94); }
+.deck-present-btn { border: 1px solid rgba(255,255,255,.35); cursor: pointer; border-radius: 999px; padding: 6px 14px;
+  font-size: 13px; font-weight: 600; color: #fff;
+  background: linear-gradient(180deg, rgba(59,130,246,.92), rgba(37,99,235,.92));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 2px 10px rgba(37,99,235,.35);
+  transition: transform .25s var(--glass-spring), filter .2s ease; }
+.deck-present-btn:hover { filter: brightness(1.07); transform: scale(1.04); }
+.deck-present-btn:active { transform: scale(.96); }
+.deck-menu:focus-visible, .deck-present-btn:focus-visible { outline: 2px solid var(--c-info, #3b82f6); outline-offset: 2px; }
+
+.deck-sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; width: 320px;
+  display: flex; flex-direction: column;
+  background: var(--glass-bg-strong); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  border-right: 1px solid var(--glass-border);
+  transform: translateX(-100%); transition: transform .4s var(--ease-out-expo, cubic-bezier(.16,1,.3,1)); }
+.deck-sidebar.open { transform: none; }
+.deck-sidebar::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(115deg, rgba(255,255,255,.35) 0%, transparent 30%); }
+.deck-sidebar-head { position: relative; display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; font-size: 15px; font-weight: 700; color: var(--text, #1e293b);
+  border-bottom: 1px solid rgba(15,23,42,.06); }
+.deck-sidebar-close { border: none; background: transparent; font-size: 20px; cursor: pointer;
+  color: var(--text-faint, #94a3b8); line-height: 1; border-radius: 999px; padding: 2px 8px;
+  transition: background .2s ease, transform .25s var(--glass-spring); }
+.deck-sidebar-close:hover { background: rgba(15,23,42,.06); transform: scale(1.1); }
+.deck-thumbs { position: relative; flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.thumb-item { cursor: pointer; border: 2px solid transparent; border-radius: 12px;
+  transition: transform .25s var(--glass-spring), border-color .2s ease; }
+.thumb-item:hover { transform: scale(1.02); }
+.thumb-item.active { border-color: var(--c-exec, #2563eb); }
+.thumb-box { width: 100%; height: 162px; overflow: hidden; border-radius: 10px; position: relative; background: #fff;
+  border: 1px solid rgba(255,255,255,.6); box-shadow: 0 2px 10px rgba(15,23,42,.08), inset 0 1px 0 rgba(255,255,255,.6); }
+.thumb-inner { width: 1920px; height: 1080px; transform: scale(0.15); transform-origin: top left; position: relative; }
+.thumb-page { position: absolute !important; inset: 0 !important; width: 1920px !important; height: 1080px !important;
+  display: flex !important; flex-direction: column; padding: 56px 90px !important;
+  visibility: visible !important; opacity: 1 !important; background: #fff; overflow: hidden;
+  box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; }
+.thumb-page.cover { padding: 108px 130px !important; }
+.thumb-page .reveal { opacity: 1 !important; transform: none !important; }
+.thumb-label { font-size: 12px; color: var(--text-sub, #64748b); padding: 6px 4px; }
+
+.pres-cursor { position: fixed; pointer-events: none; z-index: 9999; width: 0; height: 0; opacity: 0; transition: opacity .4s ease; }
+.pres-cursor.active { opacity: 1; }
+.pres-cursor.fading .pres-spotlight { opacity: .04; }
+.pres-cursor.fading .pres-dot { opacity: .4; }
+.pres-spotlight { position: absolute; width: 220px; height: 220px; top: 50%; left: 50%;
+  transform: translate(-50%,-50%); border-radius: 50%;
+  background: radial-gradient(circle, rgba(59,130,246,.16) 0%, rgba(59,130,246,.09) 35%, rgba(59,130,246,.03) 60%, transparent 80%);
+  opacity: .14; transition: opacity .6s ease; }
+.pres-dot { position: absolute; width: 8px; height: 8px; top: 50%; left: 50%;
+  transform: translate(-50%,-50%); border-radius: 50%; background: var(--c-info, #3b82f6);
+  box-shadow: 0 0 8px rgba(59,130,246,.5); transition: opacity .6s ease; }
+.pres-cursor-hint, .player-hint { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: var(--text-sub, #64748b); padding: 7px 16px; border-radius: 999px;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-rim), var(--glass-shadow);
+  z-index: 9999; opacity: 0; transition: opacity .3s ease; pointer-events: none; white-space: nowrap; }
+.pres-cursor-hint.show, .player-hint.show { opacity: 1; }
+body.presenting { cursor: pointer; }
+body.presenting .deck-bar, body.presenting .deck-menu,
+body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; pointer-events: none; }
+
+/* ===== 动画步进程序 fx 层（当前零申报，机制保留备后用） ===== */
+.fx-layer .fx-veil { fill: #fff; opacity: 0; transition: opacity .45s ease; }
+.fx-layer .fx-veil.on { opacity: .78; }
+.fx-layer .fx-lit { fill: rgba(59,130,246,.3); stroke: rgba(37,99,235,.9); stroke-width: 1.6; }
+.fx-layer .fx-state { fill: rgba(29,78,216,.18); stroke: #1d4ed8; stroke-width: 2; }
+.fx-layer .fx-gate { fill: none; stroke: #f59e0b; stroke-width: 3; animation: fxgate 1s ease-in-out infinite; }
+@keyframes fxgate { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+.fx-layer .fx-pulse { fill: rgba(239,68,68,.16); stroke: #ef4444; stroke-width: 2; animation: fxpulse .9s ease-out 1 forwards; }
+@keyframes fxpulse { 0% { opacity: .85; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .2s !important; }
+}
+</style>
+</head>
+<body class="browse">
+<div class="deck-stage" id="deckStage">
+<div class="deck-fit" id="deckFit">
+
+<!-- ============ P1 封面 ============ -->
+<section class="slide cover" data-label="封面">
+    <div class="slide-content" style="justify-content:center;">
+        <div class="tag">设计开发段 · 技术方案与架构</div>
+        <h1>数据交付 Agent<br><span class="accent">设计开发段：技术实现与架构</span></h1>
+        <p class="sub">RS + mapping 进，TS + 四件套制品出——<br>多 Agent 编排、确定性校验把关、失败按根因分流。<br><span class="key">「做」的活全部干完并自证质量，「判」的权始终在人。</span></p>
+    </div>
+    <div class="meta"><span>技术评审 · 架构设计与成果</span><span>2026-09</span></div>
+</section>
+
+<!-- ============ P2 形态 ============ -->
+<section class="slide" data-label="形态">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">01 / 形态</div>
+            <div class="page-title">一条流水线八道工序，人只在<span class="key">两个闸口</span>出手</div>
+            <div class="page-claim">吃 RS+mapping（需求 spec + 字段映射），吐 TS + 四件套制品。UT 直连开发库两阶段收尾，代码稳定后交付下游。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 396" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="p2a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <marker id="p2y" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#f59e0b"/></marker>
+                <marker id="p2g" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#1d4ed8"/></marker>
+                <linearGradient id="p2m" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
+                <linearGradient id="p2gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+                <linearGradient id="p2agent" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+            </defs>
+            <!-- spec 演化链 -->
+            <text x="30" y="18" font-size="10" font-weight="800" fill="#1e3a8a">spec 演化链：两份输入从头贯穿，形态在演化</text>
+            <rect x="30" y="26" width="250" height="36" rx="7" fill="#1e3a8a"/>
+            <text x="155" y="42" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">《RS》+《mapping》</text>
+            <text x="155" y="56" text-anchor="middle" font-size="7" fill="#bfdbfe">需求 spec（可选）+ 字段映射 · BA 产出</text>
+            <line x1="282" y1="44" x2="316" y2="44" stroke="#2563eb" stroke-width="1.8" marker-end="url(#p2a)"/>
+            <text x="299" y="38" text-anchor="middle" font-size="7" fill="#64748b">预处理</text><text x="299" y="58" text-anchor="middle" font-size="7" fill="#64748b">脚本</text>
+            <rect x="340" y="26" width="290" height="36" rx="7" fill="#2563eb"/>
+            <text x="485" y="42" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">《TS》 ts.json · ts.md</text>
+            <text x="485" y="56" text-anchor="middle" font-size="7" fill="#bfdbfe">技术 spec · agent 生成 + 闸口①人确认</text>
+            <line x1="632" y1="44" x2="666" y2="44" stroke="#2563eb" stroke-width="1.8" marker-end="url(#p2a)"/>
+            <text x="649" y="38" text-anchor="middle" font-size="7" fill="#64748b">建造</text><text x="649" y="58" text-anchor="middle" font-size="7" fill="#64748b">编码+UT</text>
+            <rect x="670" y="26" width="340" height="36" rx="7" fill="#3b82f6"/>
+            <text x="840" y="42" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">四件套制品 + 平台制品包</text>
+            <text x="840" y="56" text-anchor="middle" font-size="7" fill="#dbeafe">《DDL》《术加》《LTS》《DQ》 · export xlsx</text>
+
+            <!-- 人行 -->
+            <rect x="30" y="70" width="980" height="24" rx="6" fill="#fffbeb" opacity="0.5"/>
+            <rect x="30" y="72" width="50" height="20" rx="10" fill="#f59e0b"/>
+            <text x="55" y="86" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">人</text>
+            <rect x="380" y="72" width="140" height="20" rx="5" fill="url(#p2gate)" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2"/>
+            <text x="450" y="86" text-anchor="middle" font-size="7" font-weight="700" fill="#92400e">⏸ 闸口① 审视设计《TS》✅/💬/❌</text>
+            <rect x="680" y="72" width="150" height="20" rx="5" fill="url(#p2gate)" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2"/>
+            <text x="755" y="86" text-anchor="middle" font-size="7" font-weight="700" fill="#92400e">⏸ 闸口② 审视代码+DQ ✅/💬/❌</text>
+
+            <!-- Agent 组大框 -->
+            <rect x="30" y="104" width="980" height="130" rx="12" fill="url(#p2agent)" stroke="#2563eb" stroke-width="2.4"/>
+            <rect x="30" y="104" width="160" height="20" rx="10" fill="#2563eb"/>
+            <text x="110" y="118" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">设计开发 Agent 组</text>
+            <text x="200" y="118" font-size="8" font-weight="700" fill="#1e3a8a">·一个编排岗 + 三个专业岗（Task 直连，详见第 3 页）</text>
+            <!-- 回路标注 -->
+            <path d="M 646 120 Q 646 112, 556 112 Q 470 112, 470 120" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#p2a)"/>
+            <text x="660" y="110" text-anchor="middle" font-size="6.5" font-weight="600" fill="#2563eb">失败三类分流（详见第 6 页）</text>
+
+            <!-- 工位：预处理 -->
+            <rect x="48" y="130" width="84" height="62" rx="7" fill="url(#p2m)" stroke="#2563eb" stroke-width="1.6"/>
+            <text x="90" y="146" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">预处理</text>
+            <text x="90" y="160" text-anchor="middle" font-size="6.5" fill="#1e3a8a">RS+mapping</text>
+            <text x="90" y="171" text-anchor="middle" font-size="6.5" fill="#1e3a8a">→rs_input 双文件</text>
+            <text x="90" y="184" text-anchor="middle" font-size="6" fill="#64748b">脚本 · 确定性</text>
+            <line x1="132" y1="159" x2="142" y2="159" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p2a)"/>
+            <!-- 预检 -->
+            <rect x="144" y="130" width="84" height="62" rx="7" fill="url(#p2m)" stroke="#2563eb" stroke-width="1.6"/>
+            <text x="186" y="146" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">预检</text>
+            <text x="186" y="160" text-anchor="middle" font-size="6.5" fill="#1e3a8a">连库核类型</text>
+            <text x="186" y="171" text-anchor="middle" font-size="6.5" fill="#1e3a8a">值域 · 键类型</text>
+            <text x="186" y="184" text-anchor="middle" font-size="6" fill="#64748b">决策类问人</text>
+            <line x1="228" y1="159" x2="238" y2="159" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p2a)"/>
+            <!-- 设计 -->
+            <rect x="240" y="130" width="116" height="62" rx="7" fill="url(#p2m)" stroke="#2563eb" stroke-width="2"/>
+            <text x="298" y="146" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">设计 · designer</text>
+            <text x="298" y="160" text-anchor="middle" font-size="6.5" fill="#1e3a8a">评估层+五层骨架</text>
+            <text x="298" y="171" text-anchor="middle" font-size="6.5" fill="#1e3a8a">→ design_decisions</text>
+            <text x="298" y="184" text-anchor="middle" font-size="6" fill="#64748b">组装 TS + 50 条校验</text>
+            <line x1="356" y1="159" x2="366" y2="159" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p2a)"/>
+            <!-- 并行建造 -->
+            <rect x="368" y="122" width="196" height="74" rx="8" fill="url(#p2m)" stroke="#2563eb" stroke-width="2.2"/>
+            <text x="466" y="136" text-anchor="middle" font-size="9.5" font-weight="800" fill="#1e3a8a">并行建造（闸口①后同消息发起）</text>
+            <rect x="378" y="142" width="176" height="15" rx="4" fill="#fff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="466" y="153" text-anchor="middle" font-size="6.5" fill="#1e3a8a">DDL：assemble_ddl 脚本直出</text>
+            <rect x="378" y="160" width="176" height="15" rx="4" fill="#fff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="466" y="171" text-anchor="middle" font-size="6.5" fill="#1e3a8a">coder：逐规则 SELECT（TS 切片）</text>
+            <rect x="378" y="178" width="176" height="15" rx="4" fill="#fff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="466" y="189" text-anchor="middle" font-size="6.5" fill="#1e3a8a">producer：dq.json + 检查 SQL</text>
+            <line x1="564" y1="159" x2="574" y2="159" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p2a)"/>
+            <!-- UT -->
+            <rect x="576" y="122" width="140" height="74" rx="8" fill="url(#p2m)" stroke="#2563eb" stroke-width="2.2"/>
+            <text x="646" y="136" text-anchor="middle" font-size="9.5" font-weight="800" fill="#1e3a8a">UT · 直连开发库</text>
+            <rect x="584" y="141" width="124" height="25" rx="4" fill="#fff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="646" y="152" text-anchor="middle" font-size="6.5" font-weight="700" fill="#1e3a8a">6a 预检（秒级）</text>
+            <text x="646" y="162" text-anchor="middle" font-size="6" fill="#64748b">EXPLAIN+列序对账</text>
+            <rect x="584" y="169" width="124" height="25" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+            <text x="646" y="180" text-anchor="middle" font-size="6.5" font-weight="700" fill="#92400e">6b 执行（分钟级）</text>
+            <text x="646" y="190" text-anchor="middle" font-size="6" fill="#92400e">INSERT+质量+DQ</text>
+            <line x1="716" y1="159" x2="740" y2="159" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#p2g)"/>
+            <!-- 闸口箭头下插 -->
+            <line x1="450" y1="92" x2="450" y2="118" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2" marker-end="url(#p2y)"/>
+            <line x1="740" y1="92" x2="740" y2="118" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2" marker-end="url(#p2y)"/>
+            <!-- 制品 -->
+            <rect x="744" y="122" width="140" height="74" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+            <text x="814" y="137" text-anchor="middle" font-size="9.5" font-weight="800" fill="#1e3a8a">制品 · 闸口②后</text>
+            <text x="814" y="153" text-anchor="middle" font-size="6.5" fill="#1e3a8a">export 平台制品包 xlsx</text>
+            <text x="814" y="166" text-anchor="middle" font-size="6.5" fill="#1e3a8a">TS + UT 报告 + DQ 章节</text>
+            <text x="814" y="181" text-anchor="middle" font-size="6" fill="#64748b">确认后 adopt → archive 建档</text>
+            <text x="898" y="155" font-size="7" fill="#94a3b8">→ 下游</text>
+            <text x="898" y="166" font-size="7" fill="#94a3b8">测试 Agent</text>
+
+            <!-- TS 冻结条 -->
+            <rect x="30" y="244" width="980" height="22" rx="5" fill="#fffbeb" opacity="0.5"/>
+            <text x="520" y="259" text-anchor="middle" font-size="8" font-weight="600" fill="#92400e">闸口①前《TS》是可改草稿 · 确认后冻结 = 编码唯一依据 · DQ 与编码并行、不门闸口① · 制品包 UT 通过后才生成</text>
+
+            <!-- 校验五道闸 -->
+            <text x="30" y="290" font-size="10" font-weight="800" fill="#1e293b">确定性校验五道闸（全部脚本把关，详见第 4 页）</text>
+            <rect x="30" y="298" width="190" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="125" y="314" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">预检：连库核类型·值域</text>
+            <rect x="228" y="298" width="190" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="323" y="314" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">TS 组装：50+ 条校验</text>
+            <rect x="426" y="298" width="190" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="521" y="314" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">闸口①：关联质量实测</text>
+            <rect x="624" y="298" width="190" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="719" y="314" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">6a：执行计划+列序对账</text>
+            <rect x="822" y="298" width="188" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="916" y="314" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">6b：主键/空值/行数+DQ</text>
+
+            <!-- 底部总结 -->
+            <rect x="30" y="340" width="980" height="34" rx="7" fill="#1e293b"/>
+            <text x="520" y="362" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">一段流程 · 两份输入 · 两个闸口 · 四件套制品——「做」的活全自动，「判」的权始终在人</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P3 编排 ============ -->
+<section class="slide" data-label="编排">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">02 / 编排</div>
+            <div class="page-title">编排岗加三个专业岗：<span class="key">职责边界写进权限</span>，问题沿路由上交</div>
+            <div class="page-claim">一个编排岗（engineer）起三个专业岗（designer / dq-producer / coder），Task 直连；每个岗只能写自己的产物，越界落不了盘。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 470" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="p3a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <linearGradient id="p3eng" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+            </defs>
+            <!-- engineer 卡 -->
+            <rect x="30" y="36" width="310" height="176" rx="10" fill="url(#p3eng)" stroke="#2563eb" stroke-width="2.4"/>
+            <rect x="30" y="36" width="196" height="22" rx="10" fill="#2563eb"/>
+            <text x="128" y="51" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">dws-engineer · 编排+质检</text>
+            <text x="42" y="76" font-size="8" fill="#1e3a8a">· 加载剧本（new-pipe / opt-pipe）跑管线脚本</text>
+            <text x="42" y="92" font-size="8" fill="#1e3a8a">· 起三个专业岗：Task 直连，身份权限按定义注入</text>
+            <text x="42" y="108" font-size="8" fill="#1e3a8a">· 产质检事实：跑确定性脚本，不自己下结论</text>
+            <text x="42" y="124" font-size="8" fill="#1e3a8a">· 按分流表路由问题，守两个闸口</text>
+            <text x="42" y="140" font-size="8" font-weight="700" fill="#1e3a8a">· 权限 allow-only：deny 一条不写</text>
+            <text x="42" y="158" font-size="7" fill="#64748b">（deny 会沿 Task 链下压毒害子代工具——内网实证）</text>
+            <text x="42" y="178" font-size="7" fill="#64748b">· 恢复旧会话修复，不新开会话</text>
+            <!-- 三张专业岗卡 -->
+            <line x1="340" y1="78" x2="390" y2="66" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p3a)"/>
+            <line x1="340" y1="124" x2="390" y2="127" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p3a)"/>
+            <line x1="340" y1="170" x2="390" y2="188" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p3a)"/>
+            <text x="365" y="58" text-anchor="middle" font-size="7" fill="#64748b">Task 直连</text>
+            <rect x="394" y="40" width="616" height="52" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="408" y="60" font-size="10" font-weight="800" fill="#1e3a8a">dws-designer · 设计判断</text>
+            <text x="408" y="78" font-size="7.5" fill="#64748b">评估层+五层骨架出 decisions → 组装 TS；语义口径判断只在设计层</text>
+            <rect x="852" y="52" width="148" height="26" rx="5" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+            <text x="926" y="69" text-anchor="middle" font-size="7" font-weight="700" fill="#1e3a8a">只写 _internal/decisions.yaml</text>
+            <rect x="394" y="102" width="616" height="52" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="408" y="122" font-size="10" font-weight="800" fill="#1e3a8a">dws-dq-producer · DQ 翻译+独立实现</text>
+            <text x="408" y="140" font-size="7.5" fill="#64748b">RS 需求→violation_condition 翻译+对比式独立重算；输入隔离：不读 design_logic / ETL SQL</text>
+            <rect x="852" y="114" width="148" height="26" rx="5" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+            <text x="926" y="131" text-anchor="middle" font-size="7" font-weight="700" fill="#1e3a8a">只写 dq.json + dq/*.sql</text>
+            <rect x="394" y="164" width="616" height="52" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="408" y="184" font-size="10" font-weight="800" fill="#1e3a8a">dws-coder · 单规则加工</text>
+            <text x="408" y="202" font-size="7.5" fill="#64748b">从 TS 切片逐规则写 SELECT，套规范模板；只接 SQL 语法类问题</text>
+            <rect x="852" y="176" width="148" height="26" rx="5" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+            <text x="926" y="193" text-anchor="middle" font-size="7" font-weight="700" fill="#1e3a8a">只写 etl/*.sql</text>
+
+            <!-- 上报路由 -->
+            <rect x="30" y="226" width="980" height="86" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.2"/>
+            <text x="42" y="246" font-size="9" font-weight="800" fill="#1e293b">上报路由：问题一律沿链上交，第一响应人是 engineer——永不裸转发、不代答语义</text>
+            <rect x="42" y="254" width="200" height="40" rx="6" fill="#fff" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="142" y="270" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">子 agent 上报：回复内结构化</text>
+            <text x="142" y="284" text-anchor="middle" font-size="6.5" fill="#64748b">阻塞=⚠ 首行标记后结束会话</text>
+            <line x1="246" y1="274" x2="260" y2="274" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p3a)"/>
+            <rect x="264" y="254" width="298" height="40" rx="6" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="413" y="270" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">engineer 四步：核实 → 诊断方向</text>
+            <text x="413" y="284" text-anchor="middle" font-size="6.5" fill="#1e40af">→ 影响评估 → 路由</text>
+            <line x1="566" y1="274" x2="580" y2="274" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p3a)"/>
+            <rect x="584" y="254" width="196" height="40" rx="6" fill="#fff" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="682" y="270" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">表内确定性技术回路：</text>
+            <text x="682" y="284" text-anchor="middle" font-size="6.5" fill="#64748b">直接恢复会话修，不问人</text>
+            <line x1="784" y1="274" x2="798" y2="274" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p3a)"/>
+            <rect x="802" y="254" width="196" height="40" rx="6" fill="#fffbeb" stroke="#fde68a" stroke-width="1"/>
+            <text x="900" y="270" text-anchor="middle" font-size="7.5" font-weight="700" fill="#92400e">语义/表外：带四件套给人</text>
+            <text x="900" y="284" text-anchor="middle" font-size="6.5" fill="#92400e">实测事实+根因方向+影响+选项</text>
+
+            <!-- 两个定调带 -->
+            <rect x="30" y="324" width="480" height="86" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="42" y="344" font-size="9" font-weight="800" fill="#1e293b">为什么拆岗</text>
+            <text x="42" y="362" font-size="7.5" fill="#475569">· 构造与验收两种思维互扰——designer 兼职 DQ 曾互相污染</text>
+            <text x="42" y="378" font-size="7.5" fill="#475569">· 审计独立性 = 输入隔离：producer 不看被检对象的自述</text>
+            <text x="42" y="394" font-size="7.5" fill="#475569">· 同一份原料两套理解 = 天然歧义探测器，歧义显式上交</text>
+            <rect x="530" y="324" width="480" height="86" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="542" y="344" font-size="9" font-weight="800" fill="#1e293b">知识三层，防双写漂移</text>
+            <text x="542" y="362" font-size="7.5" fill="#475569">· agent.md = 岗位（身份+权限+指针，不复述工作流）</text>
+            <text x="542" y="378" font-size="7.5" fill="#475569">· SKILL.md = 工作流唯一源；tool-registry = 工具 WHAT</text>
+            <text x="542" y="394" font-size="7.5" fill="#475569">· 改工具/改流程必同步注册表与 SKILL——对账防回归</text>
+
+            <!-- 底部总结 -->
+            <rect x="30" y="424" width="980" height="32" rx="7" fill="#1e293b"/>
+            <text x="520" y="445" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">职责边界不是约定是权限——designer 只写 decisions、coder 只写 etl/、producer 只写 dq/，越界落不了盘</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P4 校验 ============ -->
+<section class="slide" data-label="校验">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">03 / 校验</div>
+            <div class="page-title">AI 生成、脚本把关：<span class="key">五道确定性校验</span>贯穿全程</div>
+            <div class="page-claim">质检独立性来自「生成者 = LLM，把关者 = 确定性脚本」——同一脚本跑两遍结果必然相同，收卷对账即可，不重验。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="p4a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+            </defs>
+            <text x="30" y="20" font-size="10" font-weight="800" fill="#1e293b">从输入到 UT，五道闸门全部脚本：不过不放行，报错带着原文原路带回</text>
+            <!-- 五站点 -->
+            <rect x="30" y="32" width="176" height="130" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4"/>
+            <rect x="30" y="32" width="176" height="24" rx="8" fill="#2563eb"/>
+            <text x="118" y="48" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">① 预检 · precheck</text>
+            <text x="40" y="72" font-size="7" fill="#334155">· 连库核对字段类型（24h 缓存）</text>
+            <text x="40" y="86" font-size="7" fill="#334155">· 值域探测：统计上界 vs 目标精度</text>
+            <text x="40" y="100" font-size="7" fill="#334155">· 关联键类型跨大类比对</text>
+            <text x="40" y="114" font-size="7" fill="#334155">· 决策类 exit 2：带菜单问人</text>
+            <text x="40" y="136" font-size="6.5" fill="#94a3b8">已核结论回写标记，designer 不重查</text>
+            <line x1="208" y1="97" x2="228" y2="97" stroke="#2563eb" stroke-width="1.6" marker-end="url(#p4a)"/>
+            <rect x="230" y="32" width="176" height="130" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4"/>
+            <rect x="230" y="32" width="176" height="24" rx="8" fill="#2563eb"/>
+            <text x="318" y="48" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">② TS 校验 · assemble_ts</text>
+            <text x="240" y="72" font-size="7" fill="#334155">· 50+ 条校验，五层分组报错</text>
+            <text x="240" y="86" font-size="7" fill="#334155">· 硬阻断：结构不可能对</text>
+            <text x="240" y="100" font-size="7" fill="#334155">· 软阻断+豁免：闸口①可见</text>
+            <text x="240" y="114" font-size="7" fill="#334155">· warn：披露不拦</text>
+            <text x="240" y="136" font-size="6.5" fill="#94a3b8">含引用门禁：格式·存在·完整</text>
+            <line x1="408" y1="97" x2="428" y2="97" stroke="#2563eb" stroke-width="1.6" marker-end="url(#p4a)"/>
+            <rect x="430" y="32" width="176" height="130" rx="8" fill="#fff" stroke="#f59e0b" stroke-width="1.8"/>
+            <rect x="430" y="32" width="176" height="24" rx="8" fill="#d97706"/>
+            <text x="518" y="48" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">③ 闸口① 材料</text>
+            <text x="440" y="72" font-size="7" fill="#334155">· gate_summary：确定性摘要</text>
+            <text x="440" y="86" font-size="7" fill="#334155">· diagnose_fanout：键唯一性</text>
+            <text x="440" y="100" font-size="7" fill="#334155">　实测 + 膨胀/丢行试算</text>
+            <text x="440" y="114" font-size="7" fill="#334155">· 关联质量只披露，不阻断</text>
+            <text x="440" y="136" font-size="6.5" fill="#94a3b8">机器验「没变的」，人审「变的」</text>
+            <line x1="608" y1="97" x2="628" y2="97" stroke="#2563eb" stroke-width="1.6" marker-end="url(#p4a)"/>
+            <rect x="630" y="32" width="176" height="130" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4"/>
+            <rect x="630" y="32" width="176" height="24" rx="8" fill="#2563eb"/>
+            <text x="718" y="48" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">④ UT 预检 · 6a</text>
+            <text x="640" y="72" font-size="7" fill="#334155">· EXPLAIN ANALYZE 全量真跑</text>
+            <text x="640" y="86" font-size="7" fill="#334155">· 执行计划两门槛：不下推·STREAM</text>
+            <text x="640" y="100" font-size="7" fill="#334155">· 列序对账：describe vs 结构序</text>
+            <text x="640" y="114" font-size="7" fill="#334155">· DQ 兜底：缺 dq.json 即拦</text>
+            <text x="640" y="136" font-size="6.5" fill="#94a3b8">秒级 · INSERT 前拦住执行类错误</text>
+            <line x1="808" y1="97" x2="828" y2="97" stroke="#2563eb" stroke-width="1.6" marker-end="url(#p4a)"/>
+            <rect x="830" y="32" width="180" height="130" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4"/>
+            <rect x="830" y="32" width="180" height="24" rx="8" fill="#2563eb"/>
+            <text x="920" y="48" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">⑤ UT 执行 · 6b</text>
+            <text x="840" y="72" font-size="7" fill="#334155">· INSERT 装载 + 主键唯一/空值/行数</text>
+            <text x="840" y="86" font-size="7" fill="#334155">· DQ 段真跑（读 dq.json）</text>
+            <text x="840" y="100" font-size="7" fill="#334155">· 失败进三类分流（第 6 页）</text>
+            <text x="840" y="114" font-size="7" fill="#334155">· 发散深查 diagnose_fanout</text>
+            <text x="840" y="136" font-size="6.5" fill="#94a3b8">分钟级 · 结果即闸口②材料</text>
+
+            <!-- 独立性 / 过程可视 -->
+            <rect x="30" y="178" width="480" height="96" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="42" y="198" font-size="10" font-weight="800" fill="#1e293b">独立性：maker 与 checker 分离</text>
+            <text x="42" y="218" font-size="7.5" fill="#475569">· 质检独立性来自「生成者 = LLM，把关者 = 确定性脚本」</text>
+            <text x="42" y="234" font-size="7.5" fill="#475569">· 同一脚本跑两遍结果必然相同——收卷对账数字即可，不重验</text>
+            <text x="42" y="250" font-size="7.5" fill="#475569">· 不设「第二个 LLM 检查者」：检查者同样会被生成者锚定</text>
+            <rect x="530" y="178" width="480" height="96" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="542" y="198" font-size="10" font-weight="800" fill="#1e293b">过程可视：一切检查落盘可回溯</text>
+            <text x="542" y="218" font-size="7.5" fill="#475569">· 报告与原文（含执行计划全文）一律留 _internal/diagnose/</text>
+            <text x="542" y="234" font-size="7.5" fill="#475569">· stdout 只出结论；好坏都留盘，方便人回溯找问题</text>
+            <text x="542" y="250" font-size="7.5" fill="#475569">· 临时分析落盘同一目录，重复出现即提炼为标准脚本</text>
+
+            <!-- 四层判断 -->
+            <rect x="30" y="288" width="980" height="96" rx="10" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.2"/>
+            <text x="42" y="308" font-size="10" font-weight="800" fill="#1e293b">判断分层：脚本定罪结构问题，人定罪语义问题</text>
+            <rect x="42" y="318" width="220" height="34" rx="6" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="152" y="334" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">L0 脚本检查 · 对不对</text>
+            <text x="152" y="346" text-anchor="middle" font-size="6.5" fill="#64748b">校验/对账，机器可复现</text>
+            <line x1="266" y1="335" x2="280" y2="335" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p4a)"/>
+            <rect x="284" y="318" width="220" height="34" rx="6" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="394" y="334" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">L1 脚本定位 · 在哪·为什么</text>
+            <text x="394" y="346" text-anchor="middle" font-size="6.5" fill="#64748b">发散诊断/计划解析，证据落盘</text>
+            <line x1="508" y1="335" x2="522" y2="335" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p4a)"/>
+            <rect x="526" y="318" width="220" height="34" rx="6" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="636" y="334" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">L2 engineer 按分流表路由</text>
+            <text x="636" y="346" text-anchor="middle" font-size="6.5" fill="#64748b">只分流不定罪</text>
+            <line x1="750" y1="335" x2="764" y2="335" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p4a)"/>
+            <rect x="768" y="318" width="222" height="34" rx="6" fill="#fffbeb" stroke="#fde68a" stroke-width="1.2"/>
+            <text x="879" y="334" text-anchor="middle" font-size="8" font-weight="700" fill="#92400e">L3 闸口人定罪 · 语义/取舍</text>
+            <text x="879" y="346" text-anchor="middle" font-size="6.5" fill="#92400e">拿到的是现象+证据+选项</text>
+
+            <!-- 底部总结 -->
+            <rect x="30" y="402" width="980" height="32" rx="7" fill="#1e293b"/>
+            <text x="520" y="423" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">AI 生成、脚本把关、通过才落盘——不通过带着报错原路返回，改完再验</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P5 场景 ============ -->
+<section class="slide" data-label="场景">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">04 / 场景</div>
+            <div class="page-title">新建与优化<span class="key">共用一条主干</span>，优化只精确修改</div>
+            <div class="page-claim">差异只在入口材料。优化场景已建成：档案做底本、围栏守边界、影响分析定重做范围——变更恰好等于声明。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 470" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="p5a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <linearGradient id="p5new" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
+                <linearGradient id="p5opt" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+                <linearGradient id="p5main" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
+            </defs>
+            <text x="30" y="20" font-size="10" font-weight="800" fill="#1e293b">入口不同，主干合一</text>
+            <!-- 新建入口 -->
+            <rect x="30" y="32" width="240" height="48" rx="8" fill="url(#p5new)" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="150" y="51" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">新建入口：《RS》（可选）+《mapping》</text>
+            <text x="150" y="68" text-anchor="middle" font-size="7" fill="#1e3a8a">无 RS 模式：mapping 独立驱动，调度/DQ 默认兜底</text>
+            <!-- 优化入口 -->
+            <text x="30" y="100" font-size="9" font-weight="800" fill="#92400e">优化入口（改既有资产，材料三件）</text>
+            <rect x="30" y="108" width="240" height="44" rx="7" fill="url(#p5opt)" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="150" y="126" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">① 全量《mapping》</text>
+            <text x="150" y="141" text-anchor="middle" font-size="6.5" fill="#92400e">备注列 {YYYYMM}版本{动词} 标记变更</text>
+            <rect x="30" y="158" width="240" height="44" rx="7" fill="url(#p5opt)" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="150" y="176" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">②《RS》3.3 变更记录表</text>
+            <text x="150" y="191" text-anchor="middle" font-size="6.5" fill="#92400e">版本锚点 = 最新「优化」行日期</text>
+            <rect x="30" y="208" width="240" height="44" rx="7" fill="url(#p5opt)" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="150" y="226" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">③ 代码理解 Agent（独立仓）</text>
+            <text x="150" y="241" text-anchor="middle" font-size="6.5" fill="#92400e">存量代码 →《baseline_v1》，文件交接</text>
+            <!-- 合流 -->
+            <line x1="270" y1="56" x2="322" y2="130" stroke="#3b82f6" stroke-width="1.6" marker-end="url(#p5a)"/>
+            <line x1="270" y1="140" x2="318" y2="146" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#p5a)"/>
+            <line x1="270" y1="220" x2="322" y2="162" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#p5a)"/>
+            <circle cx="332" cy="147" r="11" fill="#1e293b"/>
+            <text x="332" y="151" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">合</text>
+            <!-- 共用主干 -->
+            <rect x="356" y="108" width="654" height="90" rx="10" fill="url(#p5main)" stroke="#1e3a8a" stroke-width="2"/>
+            <text x="683" y="132" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">共用主干：同一套五层骨架 · 同一套质检 · 两个闸口</text>
+            <text x="683" y="152" text-anchor="middle" font-size="8" fill="#bfdbfe">设计 → 闸口① → 建造 → UT → 闸口② → 制品（优化走增量设计 / 围栏 / patch 同构站点）</text>
+            <text x="683" y="172" text-anchor="middle" font-size="7.5" fill="#93c5fd">baseline（archive 档案）是唯一底本：I/F 镜像归一定位资产，不验真输入，压力给供方</text>
+            <text x="683" y="188" text-anchor="middle" font-size="7.5" font-weight="700" fill="#fde68a">优化铁律：只精确修改，禁止从零重写</text>
+
+            <!-- 优化已建成 -->
+            <rect x="30" y="266" width="980" height="106" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
+            <text x="42" y="286" font-size="10" font-weight="800" fill="#92400e">优化场景已建成（opt-pipe），四件机制：</text>
+            <rect x="42" y="294" width="232" height="68" rx="7" fill="#fff" stroke="#fde68a" stroke-width="1"/>
+            <text x="52" y="312" font-size="8" font-weight="800" fill="#92400e">两级声明 + 围栏</text>
+            <text x="52" y="326" font-size="6.5" fill="#78350f">change_request（业务）→ ts.change（落位）</text>
+            <text x="52" y="338" font-size="6.5" fill="#78350f">fence + sql_fence：恰好等于双向；</text>
+            <text x="52" y="350" font-size="6.5" fill="#78350f">产物变 → 围栏重跑 → 才进 UT</text>
+            <rect x="286" y="294" width="232" height="68" rx="7" fill="#fff" stroke="#fde68a" stroke-width="1"/>
+            <text x="296" y="312" font-size="8" font-weight="800" fill="#92400e">档案三目录</text>
+            <text x="296" y="326" font-size="6.5" fill="#78350f">archive = 可信基线（git 合入对象）</text>
+            <text x="296" y="338" font-size="6.5" fill="#78350f">build = 增量现场；确认前档案零改动</text>
+            <text x="296" y="350" font-size="6.5" fill="#78350f">确认后 advance 全量替换上位</text>
+            <rect x="530" y="294" width="232" height="68" rx="7" fill="#fff" stroke="#fde68a" stroke-width="1"/>
+            <text x="540" y="312" font-size="8" font-weight="800" fill="#92400e">DQ 影响分析</text>
+            <text x="540" y="326" font-size="6.5" fill="#78350f">变更字段 ∩ 锚定 → 重做清单</text>
+            <text x="540" y="338" font-size="6.5" fill="#78350f">（确定性集合运算），</text>
+            <text x="540" y="350" font-size="6.5" fill="#78350f">producer 只重做受影响条目</text>
+            <rect x="774" y="294" width="226" height="68" rx="7" fill="#fff" stroke="#fde68a" stroke-width="1"/>
+            <text x="784" y="312" font-size="8" font-weight="800" fill="#92400e">严格 patch 制品</text>
+            <text x="784" y="326" font-size="6.5" fill="#78350f">ALTER 变更单 + xlsx/yml 制品 patch</text>
+            <text x="784" y="338" font-size="6.5" fill="#78350f">存量声明漂移不碰；</text>
+            <text x="784" y="350" font-size="6.5" fill="#78350f">DDL 变更单先于 UT（缺失即拦）</text>
+
+            <!-- 三条红线 -->
+            <text x="30" y="394" font-size="10" font-weight="800" fill="#1e293b">能力边界：三条红线</text>
+            <rect x="30" y="402" width="310" height="40" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="45" y="419" font-size="8.5" font-weight="800" fill="#991b1b">红线① 语义判断不自主</text>
+            <text x="45" y="433" font-size="7" fill="#991b1b">数据合理性·模式选择·字段语义 → 给材料，人定</text>
+            <rect x="350" y="402" width="310" height="40" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="365" y="419" font-size="8.5" font-weight="800" fill="#991b1b">红线② 推生产不自主</text>
+            <text x="365" y="433" font-size="7" fill="#991b1b">生成制品，人推——推开发环境正常，推生产不行</text>
+            <rect x="670" y="402" width="340" height="40" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="685" y="419" font-size="8.5" font-weight="800" fill="#991b1b">红线③ 重写不自主</text>
+            <text x="685" y="433" font-size="7" fill="#991b1b">优化只精确修改，想重写走新建</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P6 分流 ============ -->
+<section class="slide" data-label="分流">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">05 / 分流</div>
+            <div class="page-title">失败按根因分流：<span class="key">数据问题退设计，绝不回 coder</span></div>
+            <div class="page-claim">UT 失败不一律回原岗。每类失败有确定归宿和有限轮次；告警零自动回路，攒齐一次交给人判。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="p6a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+            </defs>
+            <!-- 左源 -->
+            <rect x="30" y="36" width="140" height="226" rx="8" fill="url(#p2m)" stroke="#2563eb" stroke-width="1.8"/>
+            <text x="100" y="60" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">UT 执行结果</text>
+            <text x="100" y="80" text-anchor="middle" font-size="7" fill="#1e3a8a">6b 检查 + DQ 段</text>
+            <text x="100" y="96" text-anchor="middle" font-size="7" fill="#1e3a8a">（直连开发库）</text>
+            <rect x="44" y="116" width="112" height="1.5" fill="#93c5fd"/>
+            <text x="100" y="136" text-anchor="middle" font-size="7" fill="#334155">按失败项类型分类</text>
+            <text x="100" y="152" text-anchor="middle" font-size="7" fill="#334155">不按报错找岗</text>
+            <text x="100" y="176" text-anchor="middle" font-size="6.5" fill="#64748b">每类归宿确定</text>
+            <text x="100" y="190" text-anchor="middle" font-size="6.5" fill="#64748b">轮次有限（≤3）</text>
+            <text x="100" y="214" text-anchor="middle" font-size="6.5" fill="#64748b">修复=恢复旧会话</text>
+            <text x="100" y="228" text-anchor="middle" font-size="6.5" fill="#64748b">不新开会话</text>
+            <line x1="170" y1="149" x2="196" y2="149" stroke="#2563eb" stroke-width="1.8" marker-end="url(#p6a)"/>
+            <!-- 分流表 -->
+            <rect x="200" y="36" width="810" height="26" rx="6" fill="#2563eb"/>
+            <text x="325" y="53" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">识别</text>
+            <text x="620" y="53" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">去向</text>
+            <text x="920" y="53" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">约束</text>
+            <rect x="200" y="62" width="810" height="40" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="212" y="79" font-size="7.5" font-weight="700" fill="#1e293b">SQL 语法类</text>
+            <text x="212" y="93" font-size="6.5" fill="#64748b">报错含 COLUMN / TYPE / SYNTAX / 表不存在</text>
+            <text x="450" y="86" font-size="7.5" fill="#1d4ed8" font-weight="700">恢复 coder 旧会话修复</text>
+            <text x="840" y="86" font-size="7" fill="#64748b">限 3 轮</text>
+            <rect x="200" y="102" width="810" height="40" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="212" y="119" font-size="7.5" font-weight="700" fill="#1e293b">DQ FAIL / MISSING</text>
+            <text x="212" y="133" font-size="6.5" fill="#64748b">DQ SQL 执行报错或文件缺失</text>
+            <text x="450" y="126" font-size="7.5" fill="#1d4ed8" font-weight="700">恢复 producer 旧会话</text>
+            <text x="840" y="126" font-size="7" fill="#64748b">只重跑 DQ 段 · 限 3 轮</text>
+            <rect x="200" y="142" width="810" height="40" fill="#fef2f2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="212" y="159" font-size="7.5" font-weight="800" fill="#991b1b">数据质量</text>
+            <text x="212" y="173" font-size="6.5" fill="#991b1b">主键重复 / 空值 / 行数异常</text>
+            <text x="450" y="166" font-size="7.5" fill="#991b1b" font-weight="800">退 designer + 精简依据包</text>
+            <text x="450" y="178" font-size="6.5" fill="#991b1b">失败项+样例+发散诊断+原设计声明</text>
+            <text x="840" y="166" font-size="7" fill="#991b1b">改完必须回</text>
+            <text x="840" y="178" font-size="7" fill="#991b1b">闸口① 人确认</text>
+            <rect x="200" y="182" width="810" height="40" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="212" y="199" font-size="7.5" font-weight="700" fill="#1e293b">DQ ALERT / 对比式 0 行</text>
+            <text x="212" y="213" font-size="6.5" fill="#64748b">非 0 行违规带样例；通过/失效双义</text>
+            <text x="450" y="206" font-size="7.5" fill="#92400e" font-weight="700">闸口② 人判三选一：回改 / 人定口径 / 豁免</text>
+            <text x="450" y="218" font-size="6.5" fill="#92400e">（回改→producer · 照译→producer · waived+理由）</text>
+            <text x="840" y="206" font-size="7" fill="#64748b">零自动回路</text>
+            <rect x="200" y="222" width="810" height="40" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="212" y="239" font-size="7.5" font-weight="700" fill="#1e293b">环境问题</text>
+            <text x="212" y="253" font-size="6.5" fill="#64748b">连接 / 权限 / 源表不存在 / 超时</text>
+            <text x="450" y="246" font-size="7.5" fill="#64748b" font-weight="700">停 + 修复指引报人</text>
+            <!-- callout -->
+            <rect x="200" y="272" width="810" height="42" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="212" y="290" font-size="8" font-weight="800" fill="#991b1b">为什么数据质量绝不回 coder：ROW_NUMBER 去重能「消掉」报错，却掩盖根因（关联发散 / 关联键选错），反而丢数据</text>
+            <text x="212" y="305" font-size="7" fill="#991b1b">根因在设计层——designer 改 joins / join_safety / business_key，改完回闸口①，人确认后才按新设计改 SELECT</text>
+            <!-- 两个定调带 -->
+            <rect x="30" y="326" width="480" height="84" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="42" y="346" font-size="10" font-weight="800" fill="#1e293b">两层分开，两层判</text>
+            <text x="42" y="364" font-size="7.5" fill="#475569">· 代码稳定 = agent 判：跑通·无报错·机械校验过，可自修可喊停</text>
+            <text x="42" y="380" font-size="7.5" fill="#475569">· 数据准确 = 人判：金额 / 状态 / 口径是否符合业务预期</text>
+            <text x="42" y="396" font-size="7.5" fill="#1d4ed8" font-weight="700">· agent 的结束点 = 代码在开发环境稳定 + 数据已摆给人</text>
+            <rect x="530" y="326" width="480" height="84" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="542" y="346" font-size="10" font-weight="800" fill="#1e293b">ALERT 零自动回路</text>
+            <text x="542" y="364" font-size="7.5" fill="#475569">· LLM 改不出「通过」，只会空转——告警不进自动迭代</text>
+            <text x="542" y="380" font-size="7.5" fill="#475569">· 攒齐一次给人三选一，DQ 全生命周期人触点 = 闸口①②各一次</text>
+            <text x="542" y="396" font-size="7.5" fill="#475569">· 数据真脏 → 豁免：dq.json 标 waived + 理由留痕</text>
+            <!-- 底部总结 -->
+            <rect x="30" y="422" width="980" height="32" rx="7" fill="#1e293b"/>
+            <text x="520" y="443" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">分流按根因找岗，不按报错找岗——每类失败都有确定归宿和有限轮次，防线不空转</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P7 协同 ============ -->
+<section class="slide" data-label="协同">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">06 / 协同</div>
+            <div class="page-title">对外靠 <span class="key">spec 交接</span>，对内靠 <span class="key">直连</span></div>
+            <div class="page-claim">上下游 agent 只交接 spec 不共享上下文；总控 Task 直连编排岗；数据库脚本直连——MCP 全线禁用。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="p7a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <marker id="p7s" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#f59e0b"/></marker>
+                <linearGradient id="p7ag" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
+                <linearGradient id="p7core" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
+                <linearGradient id="p7spec" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#d97706"/></linearGradient>
+            </defs>
+            <!-- 协作图 -->
+            <rect x="30" y="34" width="200" height="60" rx="9" fill="url(#p7ag)" stroke="#3b82f6" stroke-width="1.6"/>
+            <text x="130" y="56" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">需求侧（BA）</text>
+            <text x="130" y="72" text-anchor="middle" font-size="7" fill="#1e3a8a">填《SDD》自动生成两份输入</text>
+            <text x="130" y="85" text-anchor="middle" font-size="6" fill="#64748b">《RS》需求 spec + 《mapping》字段映射</text>
+            <rect x="242" y="52" width="80" height="20" rx="4" fill="url(#p7spec)"/>
+            <text x="282" y="66" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">RS+mapping</text>
+            <rect x="332" y="38" width="240" height="68" rx="10" fill="url(#p7core)" stroke="#1e3a8a" stroke-width="2.4"/>
+            <text x="452" y="60" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">设计开发 Agent 组</text>
+            <text x="452" y="76" text-anchor="middle" font-size="7" fill="#bfdbfe">编排 + designer / producer / coder</text>
+            <text x="452" y="90" text-anchor="middle" font-size="7" fill="#bfdbfe">→《TS》+ 四件套制品</text>
+            <rect x="584" y="52" width="76" height="20" rx="4" fill="url(#p7spec)"/>
+            <text x="622" y="66" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">TS+制品</text>
+            <rect x="672" y="38" width="140" height="60" rx="9" fill="url(#p7ag)" stroke="#3b82f6" stroke-width="1.6" stroke-dasharray="4 2"/>
+            <text x="742" y="60" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">测试 Agent</text>
+            <text x="742" y="76" text-anchor="middle" font-size="7" fill="#64748b">下游 · 跑测试环境</text>
+            <rect x="770" y="108" width="240" height="0" fill="none"/>
+            <text x="860" y="64" text-anchor="middle" font-size="7" fill="#94a3b8">核心理念：不直接调用</text>
+            <text x="860" y="77" text-anchor="middle" font-size="7" fill="#94a3b8">不共享上下文，只交接 spec</text>
+            <!-- 优化补料条 -->
+            <rect x="30" y="108" width="980" height="24" rx="6" fill="#fffbeb" stroke="#fde68a" stroke-width="1" stroke-dasharray="3 2"/>
+            <text x="520" y="124" text-anchor="middle" font-size="7.5" font-weight="700" fill="#92400e">优化时补料：代码理解 Agent（独立工程）产《baseline_v1》现状+改动边界——文件交接，互不调对方脚本，契约校验以 schema 为准</text>
+            <!-- 对内直连 -->
+            <rect x="30" y="142" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="42" y="162" font-size="9" font-weight="800" fill="#1e293b">总控对接：Task 直连</text>
+            <text x="42" y="178" font-size="7.5" fill="#475569">· 直连 dws-engineer，契约参数直传（mode / rs / mapping / baseline）</text>
+            <text x="42" y="194" font-size="7.5" fill="#475569">· 链上不定义中间层（权限收窄点）；契约外 prompt 一律忽略</text>
+            <rect x="530" y="142" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="542" y="162" font-size="9" font-weight="800" fill="#1e293b">数据访问：脚本直连，MCP 禁用</text>
+            <text x="542" y="178" font-size="7.5" fill="#475569">· dws_db.py 直连开发库：admin 建表 / etl 读写分账，按 schema 选源</text>
+            <text x="542" y="194" font-size="7.5" fill="#475569">· MCP 全线禁用——工具面 ≠ 本流程，调用必得错误结论（内网实证）</text>
+            <!-- 平台表 -->
+            <rect x="30" y="216" width="980" height="24" rx="6" fill="#eff6ff"/>
+            <text x="520" y="232" text-anchor="middle" font-size="9" font-weight="800" fill="#1e3a8a">平台协同：每个平台是制品的目的地</text>
+            <rect x="30" y="244" width="980" height="24" fill="#2563eb"/>
+            <text x="100" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">平台</text>
+            <text x="285" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">设计段</text>
+            <text x="480" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">建造段</text>
+            <text x="672" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">UT 与制品</text>
+            <text x="900" y="260" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">去向</text>
+            <rect x="30" y="268" width="980" height="24" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="284" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">开发环境数据库</text>
+            <text x="285" y="284" text-anchor="middle" font-size="7" fill="#1e3a8a">读：查结构·核类型（缓存）</text>
+            <text x="480" y="284" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="284" text-anchor="middle" font-size="7" fill="#1e3a8a">读写：建表·INSERT·校验全直连</text>
+            <text x="900" y="284" text-anchor="middle" font-size="7" fill="#64748b">DDL→开发环境建表</text>
+            <rect x="30" y="292" width="980" height="24" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="308" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">术加（执行平台）</text>
+            <text x="285" y="308" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="308" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="308" text-anchor="middle" font-size="7" fill="#1e3a8a">ETL 制品产出</text>
+            <text x="900" y="308" text-anchor="middle" font-size="7" fill="#64748b">人推部署；推生产=红线②</text>
+            <rect x="30" y="316" width="980" height="24" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="332" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">调度（LTS）</text>
+            <text x="285" y="332" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="332" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="332" text-anchor="middle" font-size="7" fill="#1e3a8a">调度制品产出</text>
+            <text x="900" y="332" text-anchor="middle" font-size="7" fill="#64748b">开发段配置（待内网核对）</text>
+            <rect x="30" y="340" width="980" height="24" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="356" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">DQ（质量检查）</text>
+            <text x="285" y="356" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="356" text-anchor="middle" font-size="7" fill="#1e3a8a">dq.json + 检查 SQL</text>
+            <text x="672" y="356" text-anchor="middle" font-size="7" fill="#1e3a8a">6b DQ 段真跑</text>
+            <text x="900" y="356" text-anchor="middle" font-size="7" fill="#64748b">只产出，运行归下游</text>
+            <rect x="30" y="364" width="980" height="24" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="100" y="380" text-anchor="middle" font-size="8" font-weight="700" fill="#1e293b">代码仓 / 云链</text>
+            <text x="285" y="380" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="480" y="380" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="672" y="380" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
+            <text x="900" y="380" text-anchor="middle" font-size="7" fill="#64748b">版本管理（人管）· US 关联（暂缓）</text>
+            <!-- 底部总结 -->
+            <rect x="30" y="404" width="980" height="32" rx="7" fill="#1e293b"/>
+            <text x="520" y="425" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Agent 是造车厂不是车队——交付前在开发环境跑到稳定，上线运行是下游段的事</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P8 成果 ============ -->
+<section class="slide" data-label="成果">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">07 / 成果</div>
+            <div class="page-title">概念稿的「未干 / 阻塞」项<span class="key">全部落地</span>，家底如下</div>
+            <div class="page-claim">五层实现：编排剧本、agent 岗位、知识包、确定性脚本、公共设施——每一件都在工具注册表和测试守护下。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 470" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <!-- 数字卡 3×2 -->
+            <rect x="30" y="30" width="190" height="72" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="52" y="66" font-size="26" font-weight="900" fill="#2563eb">8</text>
+            <text x="52" y="84" font-size="8" font-weight="700" fill="#1e293b">Skill 知识包</text>
+            <text x="130" y="84" font-size="6.5" fill="#64748b">设计/编码/DQ/优化×2</text>
+            <rect x="230" y="30" width="190" height="72" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="252" y="66" font-size="26" font-weight="900" fill="#2563eb">4</text>
+            <text x="252" y="84" font-size="8" font-weight="700" fill="#1e293b">Agent 岗位</text>
+            <text x="330" y="84" font-size="6.5" fill="#64748b">编排+三专业岗</text>
+            <rect x="30" y="112" width="190" height="72" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="52" y="148" font-size="26" font-weight="900" fill="#2563eb">2</text>
+            <text x="52" y="166" font-size="8" font-weight="700" fill="#1e293b">编排剧本</text>
+            <text x="130" y="166" font-size="6.5" fill="#64748b">new-pipe / opt-pipe</text>
+            <rect x="230" y="112" width="190" height="72" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="252" y="148" font-size="26" font-weight="900" fill="#2563eb">53</text>
+            <text x="252" y="166" font-size="8" font-weight="700" fill="#1e293b">管线脚本</text>
+            <text x="330" y="166" font-size="6.5" fill="#64748b">注册表统一管理</text>
+            <rect x="30" y="194" width="190" height="72" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="52" y="230" font-size="26" font-weight="900" fill="#2563eb">50+</text>
+            <text x="52" y="248" font-size="8" font-weight="700" fill="#1e293b">TS 校验条目</text>
+            <text x="130" y="248" font-size="6.5" fill="#64748b">五层分组报错</text>
+            <rect x="230" y="194" width="190" height="72" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="252" y="230" font-size="26" font-weight="900" fill="#2563eb">1527</text>
+            <text x="252" y="248" font-size="8" font-weight="700" fill="#1e293b">测试用例</text>
+            <text x="330" y="248" font-size="6.5" fill="#64748b">61 个测试文件</text>
+            <!-- 右侧分层清单 -->
+            <rect x="440" y="30" width="570" height="42" rx="7" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <rect x="450" y="38" width="64" height="26" rx="5" fill="#2563eb"/>
+            <text x="482" y="55" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">编排层</text>
+            <text x="526" y="56" font-size="7.5" fill="#334155">new-pipe / opt-pipe 剧本 + 步骤 0 环境探针（指纹/文件/依赖对账）</text>
+            <rect x="440" y="78" width="570" height="42" rx="7" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <rect x="450" y="86" width="64" height="26" rx="5" fill="#2563eb"/>
+            <text x="482" y="103" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">岗位层</text>
+            <text x="526" y="104" font-size="7.5" fill="#334155">4 个 agent 定义——身份·权限白名单·上报协议，Task 直连注入</text>
+            <rect x="440" y="126" width="570" height="42" rx="7" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <rect x="450" y="134" width="64" height="26" rx="5" fill="#2563eb"/>
+            <text x="482" y="151" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">知识层</text>
+            <text x="526" y="152" font-size="7.5" fill="#334155">五层设计骨架+增量/复杂度 playbook · ETL 模板 · DQ 断言式+对比式</text>
+            <rect x="440" y="174" width="570" height="42" rx="7" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <rect x="450" y="182" width="64" height="26" rx="5" fill="#2563eb"/>
+            <text x="482" y="199" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">脚本层</text>
+            <text x="526" y="200" font-size="7.5" fill="#334155">预处理/校验/装配/UT/围栏/档案 53 个脚本；分层 AST 守护依赖方向</text>
+            <rect x="440" y="222" width="570" height="42" rx="7" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <rect x="450" y="230" width="64" height="26" rx="5" fill="#2563eb"/>
+            <text x="482" y="247" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">设施层</text>
+            <text x="526" y="248" font-size="7.5" fill="#334155">开发库直连（分账/超时保护）· config 集中 · schema 缓存 · 档案目录模型</text>
+            <!-- 销账对照 -->
+            <text x="30" y="292" font-size="10" font-weight="800" fill="#1e293b">概念稿 → 现在：遗留项逐条销账</text>
+            <rect x="30" y="302" width="313" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="42" y="320" font-size="7.5" fill="#94a3b8">⚠ UT 机械校验未干</text>
+            <text x="42" y="336" font-size="7.5" font-weight="700" fill="#1d4ed8">✓ 6a/6b 两阶段 + 分流回路</text>
+            <rect x="353" y="302" width="313" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="365" y="320" font-size="7.5" fill="#94a3b8">⚠ DQ 制品未干</text>
+            <text x="365" y="336" font-size="7.5" font-weight="700" fill="#1d4ed8">✓ producer 岗位 + dq.json 唯一源</text>
+            <rect x="676" y="302" width="334" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="688" y="320" font-size="7.5" fill="#94a3b8">⚠ LTS 调度制品未干</text>
+            <text x="688" y="336" font-size="7.5" font-weight="700" fill="#1d4ed8">✓ 已实现，待内网导出核对</text>
+            <rect x="30" y="354" width="313" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="42" y="372" font-size="7.5" fill="#94a3b8">代码理解 = 未建壁垒</text>
+            <text x="42" y="388" font-size="7.5" font-weight="700" fill="#1d4ed8">✓ 独立 analyzer 仓，文件交接已通</text>
+            <rect x="353" y="354" width="313" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="365" y="372" font-size="7.5" fill="#94a3b8">⚡ 三接点阻塞，螺旋转不起来</text>
+            <text x="365" y="388" font-size="7.5" font-weight="700" fill="#1d4ed8">✓ 直连开发库，UT 秒级起步分钟级收尾</text>
+            <rect x="676" y="354" width="334" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="688" y="372" font-size="7.5" fill="#94a3b8">读库靠 MCP 连接</text>
+            <text x="688" y="388" font-size="7.5" font-weight="700" fill="#1d4ed8">✓ MCP 禁用，dws_db 直连（分账/选源）</text>
+            <!-- 底部总结 -->
+            <rect x="30" y="414" width="980" height="32" rx="7" fill="#1e293b"/>
+            <text x="520" y="435" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">从概念到落地：跑得通的流水线 + 守得住的质量闸 + 查得到的家底</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P9 进展 ============ -->
+<section class="slide" data-label="进展">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">08 / 进展</div>
+            <div class="page-title">主干已在内网<span class="key">真实案例</span>运行，验证与扩充在继续</div>
+            <div class="page-claim">三栏看状态：建成即用、真环境验证、下一步清单——每项都有明确判据，不写愿景。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 440" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <!-- 三栏 -->
+            <rect x="30" y="24" width="313" height="316" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <rect x="30" y="24" width="313" height="30" rx="10" fill="#2563eb"/>
+            <text x="186" y="44" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">已建成 · 端到端跑通</text>
+            <text x="44" y="78" font-size="8" fill="#334155">· new-pipe 全链路：预处理→设计→闸口①</text>
+            <text x="56" y="93" font-size="8" fill="#334155">→建造→UT→闸口②→制品</text>
+            <text x="44" y="118" font-size="8" fill="#334155">· 质检体系落地：评估层 --eval / 发散定位</text>
+            <text x="56" y="133" font-size="8" fill="#334155">--edge / engineer 回路实报收口</text>
+            <text x="44" y="158" font-size="8" fill="#334155">· DQ 拆分：producer 岗位 + dq.json 唯一源</text>
+            <text x="56" y="173" font-size="8" fill="#334155">+ 闸口② ALERT 判读</text>
+            <text x="44" y="198" font-size="8" fill="#334155">· 四件套制品导出：DDL/术加/LTS/DQ</text>
+            <text x="56" y="213" font-size="8" fill="#334155">+ 平台制品包 xlsx</text>
+            <text x="44" y="238" font-size="8" fill="#334155">· 优化链路 opt-pipe：围栏/档案/影响分析</text>
+            <text x="44" y="253" font-size="8" fill="#334155">机制全部就绪</text>
+            <text x="44" y="290" font-size="7" fill="#94a3b8">判据：虚拟案例全绿，1527 用例守护</text>
+            <rect x="363" y="24" width="313" height="316" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <rect x="363" y="24" width="313" height="30" rx="10" fill="#d97706"/>
+            <text x="519" y="44" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">进行中 · 真实环境验证</text>
+            <text x="377" y="78" font-size="8" fill="#334155">· 内网真实案例实测：Windows+nga 包壳</text>
+            <text x="389" y="93" font-size="8" fill="#334155">环境，回路问题连续实报连续收口</text>
+            <text x="377" y="118" font-size="8" fill="#334155">· LTS 制品：实现完成，待内网导出核对</text>
+            <text x="377" y="143" font-size="8" fill="#334155">· eval-suite：打磨中，执行覆盖待加厚</text>
+            <text x="377" y="168" font-size="8" fill="#334155">· eval-suite DQ 适配：随新链路对齐</text>
+            <text x="377" y="205" font-size="7" fill="#94a3b8">判据：真实案例交付一件、核算一件，</text>
+            <text x="389" y="220" font-size="7" fill="#94a3b8">回路问题当日修复入回归</text>
+            <rect x="696" y="24" width="314" height="316" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <rect x="696" y="24" width="314" height="30" rx="10" fill="#475569"/>
+            <text x="853" y="44" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">下一步</text>
+            <text x="710" y="78" font-size="8" fill="#334155">· 内网实测覆盖扩充：更多资产类型与</text>
+            <text x="722" y="93" font-size="8" fill="#334155">增量/累积共建场景</text>
+            <text x="710" y="118" font-size="8" fill="#334155">· opt 首个真实变更实测，跑通后与</text>
+            <text x="722" y="133" font-size="8" fill="#334155">new-pipe 融合归一</text>
+            <text x="710" y="158" font-size="8" fill="#334155">· eval-suite 适配 DQ 新链路（producer</text>
+            <text x="722" y="173" font-size="8" fill="#334155">岗位 / dq.json）</text>
+            <text x="710" y="198" font-size="8" fill="#334155">· 内网魔改版适配项随平台修复退役</text>
+            <text x="710" y="235" font-size="7" fill="#94a3b8">原则：场景没覆盖的不硬做——</text>
+            <text x="722" y="250" font-size="7" fill="#94a3b8">多用多提，一起变成能力</text>
+            <!-- 底部收束 -->
+            <rect x="30" y="356" width="980" height="60" rx="8" fill="#1e293b"/>
+            <text x="520" y="382" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">三条红线不变：语义判断不自主 · 推生产不自主 · 重写不自主</text>
+            <text x="520" y="402" text-anchor="middle" font-size="8" fill="#93c5fd">该自动的彻底自动，该交还人的明确交还——每一步产物落盘可回溯</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+</div>
+</div>
+
+<div class="deck-progress"><div id="progressBar"></div></div>
+<header class="deck-bar">
+    <button class="deck-menu" id="deckMenu" title="页面目录">☰</button>
+    <span class="deck-page" id="deckPage">1 / 9</span>
+    <button class="deck-present-btn" id="presentBtn" title="放映模式 (F)">▶ 放映</button></header>
+<aside class="deck-sidebar" id="deckSidebar" aria-label="页面目录">
+    <div class="deck-sidebar-head"><span>页面目录</span><button class="deck-sidebar-close" id="tocClose" title="关闭 (Esc)">×</button></div>
+    <div class="deck-thumbs" id="deckThumbs"></div>
+</aside>
+<div class="pres-cursor" id="presCursor">
+    <div class="pres-spotlight"></div>
+    <div class="pres-dot"></div>
+</div>
+<div class="pres-cursor-hint" id="presCursorHint">按 P 开关演示光标</div>
+<div class="player-hint" id="playerHint">滚动浏览 · F 放映 · P 聚光灯</div>
+
+<script>
+const DECK_GAP = 24;
+class DeckPlayer {
+    constructor() {
+        this.stageEl = document.getElementById('deckStage');
+        this.fitEl = document.getElementById('deckFit');
+        this.slides = [...this.fitEl.querySelectorAll('section.slide')];
+        this.current = 0; this.mode = 'browse'; this.presenting = false; this.cursorOn = false;
+        this.endArm = false; this.scale = 1;
+        this.wheelAcc = 0; this.wheelQuiet = null; this.scrollRaf = null;
+        this.hideTimer = null; this.rafId = null;
+        this.mx = -200; this.my = -200; this.cx = -200; this.cy = -200;
+        this.buildThumbs(); this.applyMode(); this.applyCurrent(0); this.syncChrome();
+        addEventListener('resize', () => this.fit());
+        this.bindKeys(); this.bindWheel(); this.bindScroll(); this.bindClick(); this.bindPresent(); this.bindCursor();
+        document.getElementById('deckMenu').addEventListener('click', () => this.toggleToc());
+        document.getElementById('tocClose').addEventListener('click', () => this.closeToc());
+        this.flashHint('playerHint', '滚动浏览 · ←→ 定位 · F 放映 · P 聚光灯', 4000);
+    }
+    pitch() { return 1080 * this.scale + DECK_GAP; }
+    fit() {
+        this.scale = Math.min(innerWidth / 1920, innerHeight / 1080);
+        this.fitEl.style.transform = `scale(${this.scale})`;
+        if (this.mode === 'browse') {
+            this.fitEl.style.transformOrigin = 'top left';
+            this.fitEl.style.marginLeft = Math.max(0, (innerWidth - 1920 * this.scale) / 2) + 'px';
+            const flowH = this.slides.length * 1080 + (this.slides.length - 1) * DECK_GAP;
+            this.fitEl.style.marginBottom = (flowH * this.scale - flowH) + 'px';
+            this.stageEl.scrollTop = this.current * this.pitch();
+        } else {
+            this.fitEl.style.transformOrigin = 'center center';
+            this.fitEl.style.marginLeft = '';
+            this.fitEl.style.marginBottom = '';
+        }
+    }
+    applyMode() {
+        document.body.classList.toggle('browse', this.mode === 'browse');
+        document.body.classList.toggle('presenting', this.mode === 'present');
+        this.fit();
+        if (this.mode === 'browse') this.stageEl.scrollTop = this.current * this.pitch();
+    }
+    applyCurrent(i) { this.slides.forEach((s, k) => s.classList.toggle('current', k === i)); }
+    syncChrome() {
+        document.dispatchEvent(new CustomEvent('deckpage'));
+        document.getElementById('progressBar').style.width = ((this.current + 1) / this.slides.length * 100) + '%';
+        document.getElementById('deckPage').textContent = `${this.current + 1} / ${this.slides.length}`;
+        this.thumbs?.forEach((t, k) => t.classList.toggle('active', k === this.current));
+    }
+    buildThumbs() {
+        const wrap = document.getElementById('deckThumbs');
+        this.thumbs = this.slides.map((s, i) => {
+            const item = document.createElement('div');
+            item.className = 'thumb-item';
+            const clone = s.cloneNode(true);
+            clone.classList.remove('slide');
+            clone.classList.add('thumb-page');
+            clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+            const box = document.createElement('div');
+            box.className = 'thumb-box';
+            const inner = document.createElement('div');
+            inner.className = 'thumb-inner';
+            inner.appendChild(clone);
+            box.appendChild(inner);
+            const label = document.createElement('div');
+            label.className = 'thumb-label';
+            label.textContent = `${i + 1}. ${s.dataset.label || ''}`;
+            item.append(box, label);
+            item.addEventListener('click', () => this.show(i));   // 跳页但保持侧栏打开，便于连续预览
+            wrap.appendChild(item);
+            return item;
+        });
+    }
+    toggleToc() {
+        const sb = document.getElementById('deckSidebar');
+        sb.classList.toggle('open');
+        if (sb.classList.contains('open')) this.thumbs[this.current]?.scrollIntoView({ block: 'nearest' });
+        this.thumbs.forEach((t, k) => t.classList.toggle('active', k === this.current));
+    }
+    closeToc() { document.getElementById('deckSidebar').classList.remove('open'); }
+    show(i) {
+        i = Math.max(0, Math.min(this.slides.length - 1, i));
+        if (this.mode === 'present') {
+            if (i === this.current && this.slides[i].classList.contains('current')) return;
+            this.current = i;
+            this.applyCurrent(i);
+            if (this.initProgram) this.initProgram();
+            if (this.presenting) this.slides[i].querySelectorAll('.shown').forEach(e => e.classList.remove('shown'));
+        } else {
+            this.current = i;
+            this.stageEl.scrollTo({ top: i * this.pitch(), behavior: 'smooth' });
+        }
+        this.syncChrome();
+    }
+    step() {
+        if (this.presenting) {
+            if (this.programStep && this.programStep()) return;  // 申报程序优先（animation.md）
+            const hidden = this.slides[this.current].querySelectorAll('.reveal:not(.shown)');
+            if (hidden.length) { hidden[0].classList.add('shown'); this.endArm = false; return; }
+            if (this.current < this.slides.length - 1) { this.show(this.current + 1); this.endArm = false; return; }
+            if (!this.endArm) { this.endArm = true; this.flashHint('playerHint', '已是最后一页 · 再按一次结束放映', 2600); return; }
+            this.endArm = false;
+            this.endPresent();
+            this.flashHint('playerHint', '放映结束', 2200);
+            return;
+        }
+        if (this.current < this.slides.length - 1) { this.show(this.current + 1); this.endArm = false; }
+        else this.flashHint('playerHint', '已是最后一页', 1800);
+    }
+    back() {
+        this.endArm = false;
+        if (this.presenting) {
+            const shown = this.slides[this.current].querySelectorAll('.shown');
+            if (shown.length) { shown[shown.length - 1].classList.remove('shown'); return; }
+            if (this.current > 0) { this.show(this.current - 1); return; }
+            this.flashHint('playerHint', '已是第一页', 1800);
+            return;
+        }
+        if (this.current > 0) this.show(this.current - 1);
+        else this.flashHint('playerHint', '已是第一页', 1800);
+    }
+    bindKeys() {
+        document.addEventListener('keydown', e => {
+            if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+            if (e.key === 'Escape') { this.closeToc(); return; }
+            if (e.key === 'f' || e.key === 'F') { this.togglePresent(); return; }
+            if (e.key === 'p' || e.key === 'P') { this.toggleCursor(); return; }
+            if (['ArrowRight','ArrowDown','PageDown',' '].includes(e.key)) { e.preventDefault(); this.step(); }
+            else if (['ArrowLeft','ArrowUp','PageUp'].includes(e.key)) { e.preventDefault(); this.back(); }
+            else if (e.key === 'Home') { e.preventDefault(); this.show(0); }
+            else if (e.key === 'End') { e.preventDefault(); this.show(this.slides.length - 1); }
+        });
+    }
+    bindWheel() {
+        addEventListener('wheel', e => {
+            if (!this.presenting || e.ctrlKey || e.metaKey) return;
+            e.preventDefault();
+            clearTimeout(this.wheelQuiet);
+            this.wheelAcc += e.deltaY;
+            this.wheelQuiet = setTimeout(() => {
+                if (Math.abs(this.wheelAcc) >= 48) this.wheelAcc > 0 ? this.step() : this.back();
+                this.wheelAcc = 0;
+            }, 180);
+        }, { passive: false });
+    }
+    bindScroll() {
+        this.stageEl.addEventListener('scroll', () => {
+            if (this.mode !== 'browse' || this.scrollRaf) return;
+            this.scrollRaf = requestAnimationFrame(() => {
+                this.scrollRaf = null;
+                const i = Math.max(0, Math.min(this.slides.length - 1, Math.round(this.stageEl.scrollTop / this.pitch())));
+                if (i !== this.current) { this.current = i; this.applyCurrent(i); this.syncChrome(); }
+            });
+        }, { passive: true });
+    }
+    bindClick() {
+        document.addEventListener('click', e => {
+            const sb = document.getElementById('deckSidebar');
+            if (sb?.classList.contains('open') && !e.target.closest('.deck-sidebar, .deck-menu')) { this.closeToc(); return; } // 点侧栏外即关闭
+            if (!this.presenting) return;
+            if (e.target.closest('a,button,input,textarea,select,.deck-bar,.deck-menu,.nav-dots,.deck-sidebar')) return;
+            this.step();
+        });
+    }
+    togglePresent() {
+        if (this.presenting) { this.endPresent(); return; }
+        this.mode = 'present'; this.presenting = true; this.endArm = false;
+        this.applyMode();
+        this.applyCurrent(this.current);
+        if (this.initProgram) this.initProgram();
+        this.slides[this.current].querySelectorAll('.shown').forEach(el => el.classList.remove('shown'));
+        document.documentElement.requestFullscreen?.().catch(() => {})
+        this.flashHint('playerHint', '放映中 · →/单击 逐条推进 · F 退出', 3000);
+    }
+    endPresent() {
+        this.mode = 'browse'; this.presenting = false; this.endArm = false;
+        document.body.classList.remove('presenting');
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        this.applyMode();
+        if (this.initProgram) this.initProgram();
+    }
+    bindPresent() {
+        document.getElementById('presentBtn').addEventListener('click', () => this.togglePresent());
+    }
+    bindCursor() {
+        this.cursor = document.getElementById('presCursor');
+        document.addEventListener('mousemove', e => {
+            this.mx = e.clientX; this.my = e.clientY;
+            if (!this.cursorOn) return;
+            this.cursor.classList.add('active');
+            this.cursor.classList.remove('fading');
+            clearTimeout(this.hideTimer);
+            this.hideTimer = setTimeout(() => this.cursor.classList.add('fading'), 2000);
+        });
+    }
+    toggleCursor() {
+        this.cursorOn = !this.cursorOn;
+        if (this.cursorOn) {
+            document.body.style.cursor = 'none';
+            this.cursor.classList.add('active');
+            this.cursor.classList.remove('fading');
+            this.rafId = requestAnimationFrame(() => this.cursorLoop());
+            this.flashHint('presCursorHint', '演示光标已开启 · 按 P 关闭', 2000);
+        } else {
+            document.body.style.cursor = '';
+            this.cursor.classList.remove('active', 'fading');
+            cancelAnimationFrame(this.rafId);
+            this.flashHint('presCursorHint', '演示光标已关闭', 1500);
+        }
+    }
+    cursorLoop() {
+        this.cx += (this.mx - this.cx) * .25;
+        this.cy += (this.my - this.cy) * .25;
+        this.cursor.style.left = this.cx + 'px';
+        this.cursor.style.top = this.cy + 'px';
+        if (this.cursorOn) this.rafId = requestAnimationFrame(() => this.cursorLoop());
+    }
+    flashHint(id, text, dur) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = text; el.classList.add('show');
+        setTimeout(() => el.classList.remove('show'), dur || 2000);
+    }
+}
+
+/* 编排层动画申报表：本稿为零（汇报场景，animation.md 申报制）——需要时按页补 DECK_STEPS */
+const DECK_STEPS_DATA = {};
+const DECK_STEPS = DECK_STEPS_DATA;
+window.DECK_STEPS = DECK_STEPS;
+window.__deck = new DeckPlayer();
+</script>
+</body>
+</html>
