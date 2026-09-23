@@ -206,7 +206,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
         <div class="page-head">
             <div class="page-num">01 / 背景</div>
             <div class="page-title">设计开发段：重做功、重经验，<span class="key">agent 接管「做」，人守住「判」</span></div>
-            <div class="page-claim">接 BA 的《RS》+《mapping》，交设计文档与四件套制品。今天这段靠人肉一段段扛，是我们选它做 agent 化的原因。</div>
+            <div class="page-claim">整套体系基于公司 codeagent 平台（agent 运行环境）搭建：接 BA 的《RS》+《mapping》，交设计文档与四件套制品——替代今天一段段的人肉工序。</div>
         </div>
         <div class="svg-stage">
         <svg viewBox="0 0 1040 410" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
@@ -261,7 +261,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="542" y="252" font-size="8" font-weight="700" fill="#1e3a8a">失败有归宿，防线不空转</text>
             <text x="542" y="269" font-size="7" fill="#475569">按根因分流回岗修复、轮次有限；告警不进自动迭代，</text>
             <text x="542" y="283" font-size="7" fill="#475569">攒齐一次给人判——LLM 改不出「通过」，只会空转</text>
-            <text x="542" y="308" font-size="7" fill="#1d4ed8" font-weight="700">下游视角不变：制品长相、交接方式与今天完全一致</text>
+            <text x="542" y="308" font-size="7" fill="#1d4ed8" font-weight="700">运行载体：公司 codeagent 平台——agent 编排 / 权限 / 工具调用复用平台能力</text>
 
             <!-- 三条红线 -->
             <rect x="30" y="344" width="980" height="40" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
@@ -524,11 +524,11 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <rect x="30" y="36" width="196" height="22" rx="10" fill="#2563eb"/>
             <text x="128" y="51" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">dws-engineer · 编排+质检</text>
             <text x="42" y="76" font-size="8" fill="#1e3a8a">· 加载剧本（new-pipe / opt-pipe）跑管线脚本</text>
-            <text x="42" y="92" font-size="8" fill="#1e3a8a">· 起三个专业岗：Task 直连，身份权限按定义注入</text>
+            <text x="42" y="92" font-size="8" fill="#1e3a8a">· 起三个专业岗：codeagent 平台 Task 直连注入身份权限</text>
             <text x="42" y="108" font-size="8" fill="#1e3a8a">· 产质检事实：跑确定性脚本，不自己下结论</text>
             <text x="42" y="124" font-size="8" fill="#1e3a8a">· 按分流表路由问题，守两个闸口</text>
             <text x="42" y="140" font-size="8" font-weight="700" fill="#1e3a8a">· 权限 allow-only：deny 一条不写</text>
-            <text x="42" y="158" font-size="7" fill="#64748b">（deny 会沿 Task 链下压毒害子代工具——内网实证）</text>
+            <text x="42" y="158" font-size="7" fill="#64748b">（deny 会沿 Task 链下压毒害子代工具——实测教训）</text>
             <text x="42" y="178" font-size="7" fill="#64748b">· 恢复旧会话修复，不新开会话</text>
             <!-- 三张专业岗卡 -->
             <line x1="340" y1="78" x2="390" y2="66" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p3a)"/>
@@ -877,13 +877,13 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="42" y="70" font-size="7" fill="#92400e">优化补料：代码理解 Agent（独立工程）产《baseline_v1》现状+改动边界——文件交接，互不调对方脚本，契约校验以 schema 为准</text>
             <!-- 对内直连 -->
             <rect x="30" y="96" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
-            <text x="42" y="117" font-size="9" font-weight="800" fill="#1e293b">总控对接：Task 直连</text>
+            <text x="42" y="117" font-size="9" font-weight="800" fill="#1e293b">总控对接：codeagent 平台 Task 直连</text>
             <text x="42" y="134" font-size="7.5" fill="#475569">· 直连 dws-engineer，契约参数直传（mode / rs / mapping / baseline）</text>
             <text x="42" y="150" font-size="7.5" fill="#475569">· 链上不定义中间层（权限收窄点）；契约外 prompt 一律忽略</text>
             <rect x="530" y="96" width="480" height="62" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
             <text x="542" y="117" font-size="9" font-weight="800" fill="#1e293b">数据访问：脚本直连，MCP 禁用</text>
             <text x="542" y="134" font-size="7.5" fill="#475569">· dws_db.py 直连开发库：admin 建表 / etl 读写分账，按 schema 选源</text>
-            <text x="542" y="150" font-size="7.5" fill="#475569">· MCP 全线禁用——工具面 ≠ 本流程，调用必得错误结论（内网实证）</text>
+            <text x="542" y="150" font-size="7.5" fill="#475569">· MCP 全线禁用——工具面 ≠ 本流程，调用必得错误结论（实测教训）</text>
             <!-- 平台表 -->
             <rect x="30" y="172" width="980" height="26" rx="6" fill="#eff6ff"/>
             <text x="520" y="190" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">平台协同：每个平台是制品的目的地</text>
@@ -910,7 +910,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="285" y="305" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
             <text x="480" y="305" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
             <text x="672" y="305" text-anchor="middle" font-size="7" fill="#1e3a8a">调度制品产出</text>
-            <text x="900" y="305" text-anchor="middle" font-size="7" fill="#64748b">开发段配置（待内网核对）</text>
+            <text x="900" y="305" text-anchor="middle" font-size="7" fill="#64748b">开发段配置（待实际环境核对）</text>
             <rect x="30" y="316" width="980" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
             <text x="100" y="335" text-anchor="middle" font-size="8.5" font-weight="700" fill="#1e293b">DQ（质量检查）</text>
             <text x="285" y="335" text-anchor="middle" font-size="7" fill="#94a3b8">—</text>
@@ -1003,7 +1003,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="365" y="336" font-size="7.5" font-weight="700" fill="#1d4ed8">producer 岗位 + dq.json 唯一源</text>
             <rect x="676" y="302" width="334" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
             <text x="688" y="320" font-size="8" font-weight="800" fill="#1e293b">LTS 调度制品</text>
-            <text x="688" y="336" font-size="7.5" font-weight="700" fill="#1d4ed8">已实现，待内网导出核对</text>
+            <text x="688" y="336" font-size="7.5" font-weight="700" fill="#1d4ed8">已实现，待实际环境导出核对</text>
             <rect x="30" y="354" width="313" height="44" rx="7" fill="#fff" stroke="#bfdbfe" stroke-width="1.2"/>
             <text x="42" y="372" font-size="8" font-weight="800" fill="#1e293b">存量代码理解</text>
             <text x="42" y="388" font-size="7.5" font-weight="700" fill="#1d4ed8">独立 analyzer 仓，文件交接已通</text>
@@ -1026,7 +1026,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     <div class="slide-content">
         <div class="page-head">
             <div class="page-num">10 / 进展</div>
-            <div class="page-title">主干已在内网<span class="key">真实案例</span>运行，验证与扩充在继续</div>
+            <div class="page-title">主干已在<span class="key">codeagent 平台</span>真实案例运行，验证与扩充在继续</div>
             <div class="page-claim">三栏看状态：建成即用、真环境验证、下一步清单——每项都有明确判据，不写愿景。</div>
         </div>
         <div class="svg-stage">
@@ -1037,21 +1037,21 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="186" y="44" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">已建成 · 端到端跑通</text>
             <text x="44" y="78" font-size="8" fill="#334155">· new-pipe 全链路：预处理→设计→闸口①</text>
             <text x="56" y="93" font-size="8" fill="#334155">→建造→UT→闸口②→制品</text>
-            <text x="44" y="118" font-size="8" fill="#334155">· 质检体系落地：评估层 --eval / 发散定位</text>
-            <text x="56" y="133" font-size="8" fill="#334155">--edge / engineer 回路实报收口</text>
+            <text x="44" y="118" font-size="8" fill="#334155">· 质检体系落地：设计评估层实测 / 发散</text>
+            <text x="56" y="133" font-size="8" fill="#334155">定位 / engineer 回路实报收口</text>
             <text x="44" y="158" font-size="8" fill="#334155">· DQ 拆分：producer 岗位 + dq.json 唯一源</text>
             <text x="56" y="173" font-size="8" fill="#334155">+ 闸口② ALERT 判读</text>
             <text x="44" y="198" font-size="8" fill="#334155">· 四件套制品导出：DDL/术加/LTS/DQ</text>
             <text x="56" y="213" font-size="8" fill="#334155">+ 平台制品包 xlsx</text>
             <text x="44" y="238" font-size="8" fill="#334155">· 优化链路 opt-pipe：围栏/档案/影响分析</text>
             <text x="44" y="253" font-size="8" fill="#334155">机制全部就绪</text>
-            <text x="44" y="290" font-size="7" fill="#94a3b8">判据：虚拟案例全绿，1527 用例守护</text>
+            <text x="44" y="290" font-size="7" fill="#94a3b8">判据：端到端案例全绿，1527 用例守护</text>
             <rect x="363" y="24" width="313" height="316" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
             <rect x="363" y="24" width="313" height="30" rx="10" fill="#d97706"/>
             <text x="519" y="44" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">进行中 · 真实环境验证</text>
-            <text x="377" y="78" font-size="8" fill="#334155">· 内网真实案例实测：Windows+nga 包壳</text>
-            <text x="389" y="93" font-size="8" fill="#334155">环境，回路问题连续实报连续收口</text>
-            <text x="377" y="118" font-size="8" fill="#334155">· LTS 制品：实现完成，待内网导出核对</text>
+            <text x="377" y="78" font-size="8" fill="#334155">· codeagent 平台真实案例实测：回路</text>
+            <text x="389" y="93" font-size="8" fill="#334155">问题连续实报、连续收口</text>
+            <text x="377" y="118" font-size="8" fill="#334155">· LTS 制品：实现完成，待实际环境导出核对</text>
             <text x="377" y="143" font-size="8" fill="#334155">· 质量评测：按平台评测规范执行，</text>
             <text x="389" y="158" font-size="8" fill="#334155">独立评测报告另附</text>
             <text x="377" y="205" font-size="7" fill="#94a3b8">判据：真实案例交付一件、核算一件，</text>
@@ -1059,13 +1059,13 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <rect x="696" y="24" width="314" height="316" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
             <rect x="696" y="24" width="314" height="30" rx="10" fill="#475569"/>
             <text x="853" y="44" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">下一步</text>
-            <text x="710" y="78" font-size="8" fill="#334155">· 内网实测覆盖扩充：更多资产类型与</text>
+            <text x="710" y="78" font-size="8" fill="#334155">· 实测覆盖扩充：更多资产类型与</text>
             <text x="722" y="93" font-size="8" fill="#334155">增量/累积共建场景</text>
             <text x="710" y="118" font-size="8" fill="#334155">· opt 首个真实变更实测，跑通后与</text>
             <text x="722" y="133" font-size="8" fill="#334155">new-pipe 融合归一</text>
             <text x="710" y="158" font-size="8" fill="#334155">· 按平台评测结果迭代：评测反馈驱动的</text>
             <text x="722" y="173" font-size="8" fill="#334155">能力补齐</text>
-            <text x="710" y="198" font-size="8" fill="#334155">· 内网魔改版适配项随平台修复退役</text>
+            <text x="710" y="198" font-size="8" fill="#334155">· 与平台版本演进保持对齐</text>
             <text x="710" y="235" font-size="7" fill="#94a3b8">原则：场景没覆盖的不硬做——</text>
             <text x="722" y="250" font-size="7" fill="#94a3b8">多用多提，一起变成能力</text>
             <!-- 底部收束 -->
