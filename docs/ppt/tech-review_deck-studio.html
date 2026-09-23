@@ -1021,11 +1021,76 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     </div>
 </section>
 
-<!-- ============ P11 进展 ============ -->
+<!-- ============ P11 价值 ============ -->
+<section class="slide" data-label="价值">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">10 / 价值</div>
+            <div class="page-title">价值收益：<span class="key">一周多的设计开发，1~2 天交付</span></div>
+            <div class="page-claim">内部口径（试点观察）：机器产出 ≤1 小时，端到端 1~2 天——含 SE 需求口径对接、开发评审与测试；量化评测以平台独立报告为准。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 430" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <linearGradient id="pVnow" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
+            </defs>
+            <!-- 周期对比 -->
+            <text x="30" y="44" font-size="10" font-weight="800" fill="#1e293b">交付周期对比（内部口径 · 试点观察）</text>
+            <text x="30" y="64" font-size="8" font-weight="700" fill="#475569">过去 · 全人工</text>
+            <rect x="30" y="70" width="980" height="28" rx="6" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="520" y="88" text-anchor="middle" font-size="7.5" fill="#475569">一周多：设计文档 · 逐字段加工 SQL · 自测 · 质量检查 · 调度配置——全程人工在场</text>
+            <text x="30" y="116" font-size="8" font-weight="700" fill="#1e3a8a">现在 · agent 流水线</text>
+            <rect x="30" y="122" width="250" height="28" rx="6" fill="url(#pVnow)"/>
+            <text x="155" y="140" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">1~2 天（端到端）</text>
+            <text x="292" y="140" font-size="7" fill="#64748b">其中机器产出 ≤1 小时；其余为 SE 需求口径对接 · 开发评审 · 测试等人机协作环节</text>
+            <rect x="830" y="108" width="180" height="52" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+            <text x="920" y="132" text-anchor="middle" font-size="24" font-weight="900" fill="#2563eb">≈3~5×</text>
+            <text x="920" y="150" text-anchor="middle" font-size="7" fill="#475569">端到端提效（按周折算）</text>
+
+            <!-- 提效从哪来 -->
+            <text x="30" y="176" font-size="10" font-weight="800" fill="#1e293b">提效从哪来：四个机制托底的收益点</text>
+            <rect x="30" y="186" width="235" height="140" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="44" y="210" font-size="9" font-weight="800" fill="#1e3a8a">人在场只剩两闸口</text>
+            <line x1="44" y1="220" x2="251" y2="220" stroke="#f1f5f9" stroke-width="1.5"/>
+            <text x="44" y="240" font-size="7" fill="#475569">· 全流程人触点 = 闸口①②</text>
+            <text x="44" y="258" font-size="7" fill="#475569">· 其余环节机器自动流转</text>
+            <text x="44" y="276" font-size="7" fill="#475569">· SE 精力还给口径与判断</text>
+            <rect x="278" y="186" width="235" height="140" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="292" y="210" font-size="9" font-weight="800" fill="#1e3a8a">一次流程全齐套</text>
+            <line x1="292" y1="220" x2="499" y2="220" stroke="#f1f5f9" stroke-width="1.5"/>
+            <text x="292" y="240" font-size="7" fill="#475569">· TS + 四件套 + 平台制品包</text>
+            <text x="292" y="258" font-size="7" fill="#475569">· + UT 报告一次产出</text>
+            <text x="292" y="276" font-size="7" fill="#475569">· 无需分头制作多份交付物</text>
+            <rect x="526" y="186" width="235" height="140" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="540" y="210" font-size="9" font-weight="800" fill="#1e3a8a">质量机制托底</text>
+            <line x1="540" y1="220" x2="747" y2="220" stroke="#f1f5f9" stroke-width="1.5"/>
+            <text x="540" y="240" font-size="7" fill="#475569">· 50+ 条校验 + 两阶段 UT</text>
+            <text x="540" y="258" font-size="7" fill="#475569">· 问题交付前拦截</text>
+            <text x="540" y="276" font-size="7" fill="#475569">· 而非下游打回返工</text>
+            <rect x="774" y="186" width="236" height="140" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="788" y="210" font-size="9" font-weight="800" fill="#1e3a8a">全程可回溯</text>
+            <line x1="788" y1="220" x2="996" y2="220" stroke="#f1f5f9" stroke-width="1.5"/>
+            <text x="788" y="240" font-size="7" fill="#475569">· 每步产物落盘留痕</text>
+            <text x="788" y="258" font-size="7" fill="#475569">· 结论可查证</text>
+            <text x="788" y="276" font-size="7" fill="#475569">· 审查与审计成本同步下降</text>
+            <text x="30" y="344" font-size="7" fill="#94a3b8">收益的可信度来自机制而非个例：四个收益点分别由闸口机制 / 装配管线 / 校验契约 / 落盘纪律托底，换人换资产可复现</text>
+
+            <!-- 口径说明 -->
+            <rect x="30" y="352" width="980" height="26" rx="6" fill="#fffbeb" stroke="#fde68a" stroke-width="1.2"/>
+            <text x="42" y="369" font-size="7" fill="#92400e">口径说明：本页数字为内部口径（试点观察）；提效倍数按「一周多 ≈ 5~7 天、端到端 1~2 天」折算；量化评测由平台按其规范执行，独立评测报告另附。</text>
+            <!-- 底部总结 -->
+            <rect x="30" y="390" width="980" height="32" rx="7" fill="#1e293b"/>
+            <text x="520" y="411" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">提效不是少做事——是把人从重做功里拿出来，时间还给口径、判断与把关</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ P12 进展 ============ -->
 <section class="slide" data-label="进展">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">10 / 进展</div>
+            <div class="page-num">11 / 进展</div>
             <div class="page-title">主干已在<span class="key">codeagent 平台</span>真实案例运行，验证与扩充在继续</div>
             <div class="page-claim">三栏看状态：建成即用、真环境验证、下一步清单——每项都有明确判据，不写愿景。</div>
         </div>
@@ -1100,7 +1165,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <div class="deck-progress"><div id="progressBar"></div></div>
 <header class="deck-bar">
     <button class="deck-menu" id="deckMenu" title="页面目录">☰</button>
-    <span class="deck-page" id="deckPage">1 / 12</span>
+    <span class="deck-page" id="deckPage">1 / 13</span>
     <button class="deck-present-btn" id="presentBtn" title="放映模式 (F)">▶ 放映</button></header>
 <aside class="deck-sidebar" id="deckSidebar" aria-label="页面目录">
     <div class="deck-sidebar-head"><span>页面目录</span><button class="deck-sidebar-close" id="tocClose" title="关闭 (Esc)">×</button></div>
