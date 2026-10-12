@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<!-- deck-studio 构建 v4（技术评审稿）：复用 v3 双模式引擎（浏览=无缝长页滚动 / 放映=全屏 letterbox+reveal 节拍），
-     内容全部重画为当前实现态：9 页 = 封面/形态/编排/校验/场景/分流/协同/成果/进展。
-     汇报场景动画克制：编排层零动画（DECK_STEPS 留空，按 animation.md 申报制，需要时再补），
-     通用层 reveal + 放映步进保留。色板宪法与 data-label 契约同 v3。 -->
+<!-- deck-studio 构建（AI for IT 质量保障分享稿，7 页）：yunshan 品牌模板 + 蓝色三层主题，
+     三层质量防线主线（能算的脚本算 / 能修的 AI 修 / 该裁的让人裁）。
+     动画申报（animation.md 申报制）：防线一/二 = A 型流线（管线逐站/判定树扇出，进页演一遍）；
+     防线三 = 常驻流转（单光点轮巡三圈，演示三种自治节奏：站站停/不停/只停两闸口）；
+     实效边界 = 底座数字滚动。reduced-motion 全部静态。 -->
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -340,13 +341,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <div class="page-title">AI 生成、脚本把关：<span class="key">五道闸门贯穿管线，不过不放行</span></div>
             <div class="page-claim">质检独立性不靠「再叫一个 LLM 复查」——生成者是 LLM，把关者是确定性脚本：规则固定、结果可复现、全程留痕。</div>
         </div>
-        <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 1 层">
-            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
-                <rect x="2" y="24" width="26" height="10" rx="2" fill="#2563eb"/>
-                <rect x="35" y="15" width="26" height="19" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-                <rect x="68" y="4" width="26" height="30" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-            </svg>
-        </div>
+
         <div class="svg-stage">
         <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
             <defs>
@@ -455,6 +450,13 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="520" y="460" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">AI 生成、脚本把关：机器判「对不对」，人才判「该不该」——分界清楚，互不越位</text>
         </svg>
         </div>
+        <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 1 层">
+            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
+                <rect x="2" y="24" width="26" height="10" rx="2" fill="#2563eb"/>
+                <rect x="35" y="15" width="26" height="19" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+                <rect x="68" y="4" width="26" height="30" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+            </svg>
+        </div>
     </div>
 </section>
 
@@ -466,13 +468,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <div class="page-title">自愈有边界：<span class="key">先定位、有限修、不越权</span></div>
             <div class="page-claim">失败不裸报也不空转：证据由脚本定位，确定性技术问题 AI 有限自愈，语义与数据问题带证据上交人工。</div>
         </div>
-        <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 2 层">
-            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
-                <rect x="2" y="24" width="26" height="10" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-                <rect x="35" y="15" width="26" height="19" rx="2" fill="#2563eb"/>
-                <rect x="68" y="4" width="26" height="30" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-            </svg>
-        </div>
+
         <div class="svg-stage">
         <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
             <defs>
@@ -571,6 +567,13 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="520" y="451" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">自治是设计出来的权限：触发条件 · 动作边界 · 停止条件三齐全才自动——防过度靠结构限位（轮次上限 / 职责白名单 / 变更必回确认 / 告警零迭代），不靠提示词</text>
         </svg>
         </div>
+        <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 2 层">
+            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
+                <rect x="2" y="24" width="26" height="10" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+                <rect x="35" y="15" width="26" height="19" rx="2" fill="#2563eb"/>
+                <rect x="68" y="4" width="26" height="30" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+            </svg>
+        </div>
     </div>
 </section>
 
@@ -582,13 +585,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <div class="page-title">人守两个闸口：<span class="key">自动化的是「做」，不自动的是「判」</span></div>
             <div class="page-claim">人在指挥位：定边界＝三条红线，守终裁＝两个闸口。拒绝两种失败形态——步步请示人成瓶颈，全程盯梢盯不住等于没人盯。</div>
         </div>
-        <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 3 层">
-            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
-                <rect x="2" y="24" width="26" height="10" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-                <rect x="35" y="15" width="26" height="19" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-                <rect x="68" y="4" width="26" height="30" rx="2" fill="#d97706"/>
-            </svg>
-        </div>
+
         <div class="svg-stage">
         <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
             <defs>
@@ -696,6 +693,13 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <rect x="30" y="440" width="980" height="30" rx="7" fill="#1e293b"/>
             <text x="520" y="460" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">自动的是活，不自动的是裁决权——人不在旁边盯，人只在闸口裁；每个决策留痕可回溯</text>
         </svg>
+        </div>
+        <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 3 层">
+            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
+                <rect x="2" y="24" width="26" height="10" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+                <rect x="35" y="15" width="26" height="19" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+                <rect x="68" y="4" width="26" height="30" rx="2" fill="#d97706"/>
+            </svg>
         </div>
     </div>
 </section>
@@ -811,8 +815,45 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 
 <script>
 /* ═══════ 数据区：deck 作者只动这里（引擎块勿改） ═══════
-   本稿零动画申报（汇报克制）：无 DECK_STEPS / DECK_AUTO / DECK_AMBIENT */
+   动画申报（A 型自动 + 常驻流转 + 数字滚动；点击=快进；reduced-motion 全静态）：
+   - 防线一：流线沿质量管线逐段推进、五道闸门到站脉冲（顺序关卡判例）
+   - 防线二：判定树五路扇出流线（数据质量红/告警琥珀）+ 五分支到站脉冲
+   - 防线三：常驻流转——单光点轮巡三圈演示三种自治节奏：
+       ①步步请示圈：三个环节站站停（琥珀闸口环）②全自动圈：全程不停留
+       ③人守闸口圈：只在两个菱形闸口停等；走完一圈休息后循环
+   - 实效边界：三个底座数字进页 0→真值滚动（终帧=原文） */
 const DECK_GAP = 24;
+
+window.DECK_AUTO = {
+    '防线一': [
+        ['flow', 105, 152, 360, 152, 450], ['pulses', [[196, 138, 28, 28], [346, 138, 28, 28]]],
+        ['flow', 360, 152, 645, 152, 450], ['pulses', [[476, 138, 28, 28], [631, 138, 28, 28]]],
+        ['flow', 645, 152, 950, 152, 450], ['pulses', [[796, 138, 28, 28], [916, 138, 68, 28]]],
+    ],
+    '防线二': [
+        ['flows', [[180, 220, 246, 107], [180, 220, 246, 170], [180, 220, 246, 233, '#ef4444'],
+                   [180, 220, 246, 296, '#f59e0b'], [180, 220, 246, 359]], 900],
+        ['pulses', [[250, 84, 240, 46], [250, 147, 240, 46], [250, 210, 240, 46],
+                    [250, 273, 240, 46], [250, 336, 240, 46]]],
+    ],
+};
+window.DECK_AMBIENT = {
+    pageLabel: '防线三',
+    speed: 150,
+    restMs: 1800,
+    routes: [
+        { kind: 'stepwise',
+          decides: { 1: { ms: 850, gate: true, then: 'blue' }, 3: { ms: 850, gate: true, then: 'blue' }, 5: { ms: 850, gate: true, then: 'blue' } },
+          wp: [[43, 32], [60, 26], [75, 33], [84, 51], [75, 68], [57, 74], [40, 66], [36, 50], [43, 32]] },
+        { kind: 'free',
+          wp: [[400, 26], [417, 33], [424, 50], [417, 67], [400, 74], [383, 67], [376, 50], [383, 33], [400, 26]] },
+        { kind: 'pass',
+          decides: { 2: { ms: 950, gate: true, then: 'blue' }, 6: { ms: 950, gate: true, then: 'blue' } },
+          wp: [[742, 74], [725, 67], [709, 50], [725, 33], [742, 26], [759, 33], [775, 50], [759, 67], [742, 74]] },
+    ],
+    nodes: { n1: [52, 19, 16, 14], n2: [77, 44, 15, 14], n3: [49, 66, 16, 14], g1: [698, 39, 22, 22], g2: [764, 39, 22, 22] },
+};
+window.DECK_COUNTUP = { '实效边界': { ms: 1200, items: [[520, 252], [722, 252], [942, 252]] } };
 
 /* ═══ DECK ENGINE:BEGIN — 唯一源 deck-studio/assets/effects/ 四件套，勿手改；同步: node deck-studio/scripts/sync-engine.mjs ═══ */
 
@@ -935,6 +976,9 @@ class DeckPlayer {
             if (this.presenting) this.slides[i].querySelectorAll('.shown').forEach(e => e.classList.remove('shown'));
         } else {
             this.current = i;
+            this.applyCurrent(i);                       // 目标页即时生效：不依赖滚动事件补给（env 可能不派发）
+            this._scrollTarget = i * this.pitch();      // 跨页平滑滚动：途中中间位置不是用户意图，
+            this._scrollSetAt = performance.now();      // bindScroll 在到站/超时前不改 current（否则 auto 序列被 stale 误杀）
             this.stageEl.scrollTo({ top: i * this.pitch(), behavior: 'smooth' });
         }
         this.syncChrome();
@@ -995,6 +1039,11 @@ class DeckPlayer {
             if (this.mode !== 'browse' || this.scrollRaf) return;
             this.scrollRaf = requestAnimationFrame(() => {
                 this.scrollRaf = null;
+                if (this._scrollTarget != null) {        // 程序触发的平滑滚动途中：忽略中间位置
+                    const settled = Math.abs(this.stageEl.scrollTop - this._scrollTarget) < 4;
+                    if (!settled && performance.now() - this._scrollSetAt < 1200) return;
+                    if (settled) this._scrollTarget = null;   // 超时则恢复跟随（用户手动滚动打断的情形）
+                }
                 const i = Math.max(0, Math.min(this.slides.length - 1, Math.round(this.stageEl.scrollTop / this.pitch())));
                 if (i !== this.current) { this.current = i; this.applyCurrent(i); this.syncChrome(); }
             });
