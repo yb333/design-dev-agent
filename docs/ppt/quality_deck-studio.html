@@ -818,9 +818,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
    动画申报（A 型自动 + 常驻流转 + 数字滚动；点击=快进；reduced-motion 全静态）：
    - 防线一：流线沿质量管线逐段推进、五道闸门到站脉冲（顺序关卡判例）
    - 防线二：判定树五路扇出流线（数据质量红/告警琥珀）+ 五分支到站脉冲
-   - 防线三：常驻流转——单光点轮巡三圈演示三种自治节奏：
-       ①步步请示圈：三个环节站站停（琥珀闸口环）②全自动圈：全程不停留
-       ③人守闸口圈：只在两个菱形闸口停等；走完一圈休息后循环
+   - 防线三：常驻流转（并行模式）——三个光点同屏各转各的，节奏即论点：
+       ①步步请示圈站站停（琥珀闸口环）②全自动圈不停留 ③人守闸口圈只停两菱形
    - 实效边界：三个底座数字进页 0→真值滚动（终帧=原文） */
 const DECK_GAP = 24;
 
@@ -839,16 +838,13 @@ window.DECK_AUTO = {
 };
 window.DECK_AMBIENT = {
     pageLabel: '防线三',
+    mode: 'parallel',
     speed: 150,
-    restMs: 1800,
-    routes: [
-        { kind: 'stepwise',
-          decides: { 1: { ms: 850, gate: true, then: 'blue' }, 3: { ms: 850, gate: true, then: 'blue' }, 5: { ms: 850, gate: true, then: 'blue' } },
+    loops: [
+        { decides: { 1: { ms: 850, gate: true, then: 'blue' }, 3: { ms: 850, gate: true, then: 'blue' }, 5: { ms: 850, gate: true, then: 'blue' } },
           wp: [[43, 32], [60, 26], [75, 33], [84, 51], [75, 68], [57, 74], [40, 66], [36, 50], [43, 32]] },
-        { kind: 'free',
-          wp: [[400, 26], [417, 33], [424, 50], [417, 67], [400, 74], [383, 67], [376, 50], [383, 33], [400, 26]] },
-        { kind: 'pass',
-          decides: { 2: { ms: 950, gate: true, then: 'blue' }, 6: { ms: 950, gate: true, then: 'blue' } },
+        { wp: [[400, 26], [417, 33], [424, 50], [417, 67], [400, 74], [383, 67], [376, 50], [383, 33], [400, 26]] },
+        { decides: { 2: { ms: 950, gate: true, then: 'blue' }, 6: { ms: 950, gate: true, then: 'blue' } },
           wp: [[742, 74], [725, 67], [709, 50], [725, 33], [742, 26], [759, 33], [775, 50], [759, 67], [742, 74]] },
     ],
     nodes: { n1: [52, 19, 16, 14], n2: [77, 44, 15, 14], n3: [49, 66, 16, 14], g1: [698, 39, 22, 22], g2: [764, 39, 22, 22] },
@@ -876,7 +872,7 @@ window.DECK_COUNTUP = { '实效边界': { ms: 1200, items: [[520, 252], [722, 25
    混合层（stepfx.js/auto.js/ambient.js）依赖：window.__deck、syncChrome
    内派发 deckpage 事件、data-label 页标识。本文件声明版本号供门禁断言。
    ===================================================================== */
-window.DECK_ENGINE_VERSION = '1.0.0';
+window.DECK_ENGINE_VERSION = '1.1.0';
 
 class DeckPlayer {
     constructor() {
@@ -886,6 +882,7 @@ class DeckPlayer {
         this.current = 0; this.mode = 'browse'; this.presenting = false; this.cursorOn = false;
         this.endArm = false; this.scale = 1;
         this.wheelAcc = 0; this.wheelQuiet = null; this.scrollRaf = null;
+        this._scrollTarget = null; this._scrollSetAt = 0;   // 程序触发的平滑滚动守卫（见 bindScroll）
         this.hideTimer = null; this.rafId = null;
         this.mx = -200; this.my = -200; this.cx = -200; this.cy = -200;
         this.buildThumbs(); this.applyMode(); this.applyCurrent(0); this.syncChrome();
@@ -919,6 +916,7 @@ class DeckPlayer {
         }
     }
     applyMode() {
+        this._scrollTarget = null;                      // 模式切换：滚动守卫失效
         document.body.classList.toggle('browse', this.mode === 'browse');
         document.body.classList.toggle('presenting', this.mode === 'present');
         this.fit();
@@ -976,7 +974,7 @@ class DeckPlayer {
             if (this.presenting) this.slides[i].querySelectorAll('.shown').forEach(e => e.classList.remove('shown'));
         } else {
             this.current = i;
-            this.applyCurrent(i);                       // 目标页即时生效：不依赖滚动事件补给（env 可能不派发）
+            this.applyCurrent(i);                       // 目标页即时生效：不依赖滚动事件补给（无头/节流环境可能不派发）
             this._scrollTarget = i * this.pitch();      // 跨页平滑滚动：途中中间位置不是用户意图，
             this._scrollSetAt = performance.now();      // bindScroll 在到站/超时前不改 current（否则 auto 序列被 stale 误杀）
             this.stageEl.scrollTo({ top: i * this.pitch(), behavior: 'smooth' });
@@ -1039,7 +1037,7 @@ class DeckPlayer {
             if (this.mode !== 'browse' || this.scrollRaf) return;
             this.scrollRaf = requestAnimationFrame(() => {
                 this.scrollRaf = null;
-                if (this._scrollTarget != null) {        // 程序触发的平滑滚动途中：忽略中间位置
+                if (this._scrollTarget != null) {        // 程序触发的平滑滚动途中：忽略中间位置（目录远跳防串页）
                     const settled = Math.abs(this.stageEl.scrollTop - this._scrollTarget) < 4;
                     if (!settled && performance.now() - this._scrollSetAt < 1200) return;
                     if (settled) this._scrollTarget = null;   // 超时则恢复跟随（用户手动滚动打断的情形）
@@ -1508,6 +1506,8 @@ Object.assign(DeckPlayer.prototype, {
    作者只声明数据（deck 数据区，勿改本文件）：
      window.DECK_AMBIENT = {
        pageLabel: '机制',        // 常驻流转所在页的 data-label（无此页则不装配）
+       mode: 'parallel',         // 可选：并行模式——每条 loop 一个光点独立循环（同屏多节奏对比）；
+                                 //   loops: [ { wp, decides?, speed? }, ... ]，nodes 共用；无 routes/stateAt/rest
        speed: 200,               // 光点速度（viewBox 单位/秒）：平滑追踪舒适区 ~30°/s 视角，沿线需读标签
        decideMs: 500,            // 判定菱形停留：标签识读 ≥400ms
        gateMs: 950,              // 闸口停留：语义"等人"，需明显长于判定
@@ -1553,6 +1553,90 @@ Object.assign(DeckPlayer.prototype, {
             layer.appendChild(n);
             return n;
         }
+
+        /* ==================== 并行模式（mode:'parallel'）：每条 loop 一个光点独立循环 ====================
+           同屏多节奏对比（如三种自治模式并排各转各的）；声明：
+             mode: 'parallel', speed: 150,
+             loops: [ { wp, decides?, speed? }, ... ],   // 每圈独立光点；decides 同单光点格式
+             nodes: { ... }                              // 脉冲框表共用
+           闭环语义：走到末路点即回 wp[0] 开新一轮，无全局休息节拍 */
+        function machineParallel() {
+            const svg = deck.slides[IDX].querySelector('svg');
+            layer = document.createElementNS(NS, 'g');
+            layer.setAttribute('class', 'ambient-layer');
+            svg.appendChild(layer);
+            const pulse = pt => {
+                for (const k in NODES) {
+                    const r = NODES[k];
+                    if (pt[0] >= r[0] && pt[0] <= r[0] + r[2] && pt[1] >= r[1] && pt[1] <= r[1] + r[3]) {
+                        const c = el('circle', { cx: r[0] + r[2] / 2, cy: r[1] + r[3] / 2, r: 12 }, 'fpulse');
+                        setTimeout(() => c.remove(), 750);
+                        return;
+                    }
+                }
+            };
+            const runners = CFG.loops.map(loop => {
+                const token = el('circle', { cx: loop.wp[0][0], cy: loop.wp[0][1], r: 8 }, 'ftoken');
+                token.setAttribute('fill', '#2563eb');
+                token.setAttribute('stroke', '#fff');
+                token.setAttribute('stroke-width', 2);
+                return { wp: loop.wp, decides: loop.decides || null, speed: loop.speed || SPEED,
+                         ri: 0, segT: 0, phase: 'move', phaseT: 0, after: null, token, gateEl: null };
+            });
+            const arrive = (r, i) => {
+                pulse(r.wp[i]);
+                const d = r.decides && r.decides[i];
+                if (d) {
+                    r.token.setAttribute('fill', d.gate ? '#f59e0b' : '#ef4444');
+                    if (d.gate) {
+                        if (!r.gateEl) r.gateEl = el('circle', { cx: r.wp[i][0], cy: r.wp[i][1], r: 16 }, 'fgate');
+                        r.gateEl.style.opacity = 1;
+                    }
+                    r.ri++;
+                    r.phase = 'pause'; r.phaseT = d.ms;
+                    r.after = () => {
+                        if (r.gateEl) { r.gateEl.remove(); r.gateEl = null; }   // 内联 opacity 压不过无限动画，须移除
+                        r.token.setAttribute('fill', d.then === 'red' ? '#ef4444' : '#2563eb');
+                    };
+                    return;
+                }
+                r.ri++;
+                if (r.ri >= r.wp.length - 1) {          // 闭环：回起点开新一轮
+                    r.ri = 0; r.segT = 0;
+                    r.token.setAttribute('cx', r.wp[0][0]);
+                    r.token.setAttribute('cy', r.wp[0][1]);
+                }
+            };
+            const frame = now => {
+                if (!active()) { raf = 0; poll = setTimeout(schedule, 400); return; }
+                if (!last) last = now;
+                const dt = Math.min(50, now - last); last = now;
+                for (const r of runners) {
+                    if (r.phase !== 'move') {
+                        r.phaseT -= dt;
+                        if (r.phaseT <= 0) { const f = r.after; r.after = null; r.phase = 'move'; if (f) f(); }
+                        continue;
+                    }
+                    const A = r.wp[r.ri], B = r.wp[r.ri + 1];
+                    const len = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+                    r.segT += dt / 1000 * r.speed;
+                    const k = Math.min(1, r.segT / len);
+                    r.token.setAttribute('cx', A[0] + (B[0] - A[0]) * k);
+                    r.token.setAttribute('cy', A[1] + (B[1] - A[1]) * k);
+                    if (k >= 1) { r.segT = 0; arrive(r, r.ri + 1); }
+                }
+                raf = requestAnimationFrame(frame);
+            };
+            const schedule = () => {
+                cancelAnimationFrame(raf); clearTimeout(poll);
+                if (active()) { last = 0; raf = requestAnimationFrame(frame); }
+                else poll = setTimeout(schedule, 400);
+            };
+            document.addEventListener('deckpage', schedule);
+            schedule();
+        }
+        if (CFG.mode === 'parallel' && Array.isArray(CFG.loops)) { machineParallel(); return; }
+
         function build() {
             const svg = deck.slides[IDX].querySelector('svg');
             layer = document.createElementNS(NS, 'g');
