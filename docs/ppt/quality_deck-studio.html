@@ -579,8 +579,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     <div class="slide-content">
         <div class="page-head">
             <div class="page-num">04 / 防线③ · 人守闸口</div>
-            <div class="page-title">人守两个闸口：<span class="key">AI 干 90% 的活，人做 10% 的关键判断</span></div>
-            <div class="page-claim">人工触点收敛到两个确认点：人看的是确定性摘要与实测证据——机器验「没变的」、人审「变的」；人拿到的永远是选择题。</div>
+            <div class="page-title">人守两个闸口：<span class="key">自动化的是「做」，不自动的是「判」</span></div>
+            <div class="page-claim">人在指挥位：定边界＝三条红线，守终裁＝两个闸口。拒绝两种失败形态——步步请示人成瓶颈，全程盯梢盯不住等于没人盯。</div>
         </div>
         <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 3 层">
             <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
@@ -595,74 +595,108 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
                 <marker id="p5a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
                 <linearGradient id="p5gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
             </defs>
-            <!-- 三红线围栏 -->
-            <line x1="30" y1="30" x2="1010" y2="30" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="7 4"/>
-            <rect x="180" y="16" width="200" height="26" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
-            <text x="280" y="33" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">红线一 · 语义判断不自主</text>
-            <rect x="420" y="16" width="200" height="26" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
-            <text x="520" y="33" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">红线二 · 推生产不自主</text>
-            <rect x="660" y="16" width="200" height="26" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
-            <text x="760" y="33" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">红线三 · 重写不自主</text>
-            <text x="30" y="60" font-size="7" font-weight="700" fill="#92400e">红线内 AI 全自动，红线处必须人——「做」的活全自动，「判」的权始终在人</text>
+            <!-- 层1：三种人机关系定位 -->
+            <text x="30" y="16" font-size="9.5" font-weight="800" fill="#1e293b">先把人机关系说清——前两种常见形态都不对，我们选第三种</text>
+            <!-- ❶ 步步请示 -->
+            <circle cx="60" cy="50" r="24" fill="none" stroke="#cbd5e1" stroke-width="1.6"/>
+            <rect x="56" y="23" width="8" height="7" rx="1.5" fill="#94a3b8"/>
+            <rect x="53" y="70" width="8" height="7" rx="1.5" fill="#94a3b8"/>
+            <rect x="81" y="47" width="7" height="8" rx="1.5" fill="#94a3b8"/>
+            <circle cx="60" cy="12" r="3" fill="#fee2e2" stroke="#ef4444" stroke-width="1.2"/>
+            <rect x="56.5" y="16" width="7" height="10" rx="3" fill="#fee2e2" stroke="#ef4444" stroke-width="1.2"/>
+            <circle cx="97" cy="38" r="3" fill="#fee2e2" stroke="#ef4444" stroke-width="1.2"/>
+            <rect x="93.5" y="42" width="7" height="10" rx="3" fill="#fee2e2" stroke="#ef4444" stroke-width="1.2"/>
+            <text x="112" y="46" font-size="7.5" font-weight="800" fill="#1e293b">① 步步请示——人是流程环节</text>
+            <text x="112" y="62" font-size="6.8" font-weight="700" fill="#991b1b">✗ 每步停等人批，人成瓶颈</text>
+            <!-- ❷ 全自动+人盯梢 -->
+            <circle cx="400" cy="50" r="24" fill="none" stroke="#cbd5e1" stroke-width="1.6"/>
+            <polygon points="415,29 422,31 416,36" fill="#94a3b8"/>
+            <polygon points="385,71 378,69 384,64" fill="#94a3b8"/>
+            <circle cx="446" cy="30" r="3" fill="#eff6ff" stroke="#2563eb" stroke-width="1.2"/>
+            <rect x="442.5" y="34" width="7" height="10" rx="3" fill="#eff6ff" stroke="#2563eb" stroke-width="1.2"/>
+            <line x1="441" y1="42" x2="424" y2="48" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 2"/>
+            <text x="462" y="46" font-size="7.5" font-weight="800" fill="#1e293b">② AI 全自动——人在旁边盯</text>
+            <text x="462" y="62" font-size="6.8" font-weight="700" fill="#991b1b">✗ 确认疲劳盯不住＝没人盯</text>
+            <!-- ③ 人守两个闸口 -->
+            <rect x="700" y="20" width="310" height="58" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+            <circle cx="742" cy="50" r="24" fill="none" stroke="#d97706" stroke-width="1.8"/>
+            <polygon points="702,50 709,44 716,50 709,56" fill="#d97706"/>
+            <polygon points="768,50 775,44 782,50 775,56" fill="#d97706"/>
+            <circle cx="709" cy="31" r="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
+            <rect x="705.5" y="35" width="7" height="10" rx="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
+            <circle cx="775" cy="31" r="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
+            <rect x="771.5" y="35" width="7" height="10" rx="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
+            <text x="792" y="42" font-size="7.5" font-weight="800" fill="#92400e">③ 人守两个闸口（本方案）</text>
+            <text x="792" y="58" font-size="6.8" font-weight="800" fill="#1d4ed8">✓ 定边界 · 守终裁 · 最小停等</text>
+            <text x="812" y="92" font-size="6.5" fill="#94a3b8">闸口＝刻意最小化的必经停等点：全流程只此两处必须人</text>
 
-            <!-- 主流程 -->
-            <rect x="60" y="136" width="100" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="110" y="154" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">设计产物</text>
-            <line x1="160" y1="150" x2="219" y2="150" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <polygon points="225,150 270,122 315,150 270,178" fill="url(#p5gate)" stroke="#d97706" stroke-width="2"/>
-            <text x="270" y="147" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">闸口①</text>
-            <text x="270" y="160" text-anchor="middle" font-size="6.5" font-weight="700" fill="#92400e">设计确认 · 人判</text>
-            <line x1="315" y1="150" x2="394" y2="150" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <rect x="398" y="136" width="132" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="464" y="154" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">建造：编码＋质检并行</text>
-            <line x1="530" y1="150" x2="574" y2="150" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <rect x="578" y="136" width="90" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="623" y="154" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">自测（UT）</text>
-            <line x1="668" y1="150" x2="709" y2="150" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <polygon points="715,150 760,122 805,150 760,178" fill="url(#p5gate)" stroke="#d97706" stroke-width="2"/>
-            <text x="760" y="147" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">闸口②</text>
-            <text x="760" y="160" text-anchor="middle" font-size="6.5" font-weight="700" fill="#92400e">交付确认 · 人判</text>
-            <line x1="805" y1="150" x2="894" y2="150" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <rect x="898" y="136" width="112" height="28" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-            <text x="954" y="154" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">交付归档</text>
+            <!-- 层2：红线围栏 -->
+            <line x1="30" y1="106" x2="1010" y2="106" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="7 4"/>
+            <rect x="150" y="94" width="200" height="24" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
+            <text x="250" y="110" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">红线一 · 语义判断不自主</text>
+            <rect x="370" y="94" width="200" height="24" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
+            <text x="470" y="110" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">红线二 · 推生产不自主</text>
+            <rect x="590" y="94" width="200" height="24" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
+            <text x="690" y="110" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">红线三 · 重写不自主</text>
+            <text x="810" y="122" font-size="6.5" font-weight="700" fill="#92400e">红线内 AI 全自动</text>
+            <text x="810" y="135" font-size="6.5" font-weight="700" fill="#92400e">红线处必须人</text>
 
             <!-- 闸口① 上挂 -->
-            <line x1="270" y1="120" x2="270" y2="112" stroke="#f59e0b" stroke-width="1.2"/>
-            <text x="270" y="82" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">人看：确定性摘要＋关联实测证据</text>
-            <text x="270" y="98" text-anchor="middle" font-size="6.8" fill="#475569">机器验「没变的」，人审「变的」</text>
-            <text x="270" y="110" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1d4ed8">人判：粒度 · 口径 · 关联安全——确认后设计冻结＝编码唯一依据</text>
+            <text x="270" y="130" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">人看：确定性摘要＋关联实测证据</text>
+            <text x="270" y="145" text-anchor="middle" font-size="6.8" fill="#475569">机器验「没变的」，人审「变的」——人判：粒度 · 口径 · 关联安全</text>
+            <text x="270" y="159" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1d4ed8">确认后设计冻结＝编码唯一依据</text>
+            <line x1="270" y1="164" x2="270" y2="172" stroke="#f59e0b" stroke-width="1.2"/>
+            <!-- 主流程 -->
+            <rect x="60" y="182" width="100" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="110" y="200" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">设计产物</text>
+            <line x1="160" y1="196" x2="219" y2="196" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
+            <polygon points="225,196 270,168 315,196 270,224" fill="url(#p5gate)" stroke="#d97706" stroke-width="2"/>
+            <text x="270" y="193" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">闸口①</text>
+            <text x="270" y="206" text-anchor="middle" font-size="6.5" font-weight="700" fill="#92400e">设计确认 · 人判</text>
+            <line x1="315" y1="196" x2="394" y2="196" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
+            <rect x="398" y="182" width="132" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="464" y="200" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">建造：编码＋质检并行</text>
+            <line x1="530" y1="196" x2="574" y2="196" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
+            <rect x="578" y="182" width="90" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="623" y="200" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">自测（UT）</text>
+            <line x1="668" y1="196" x2="709" y2="196" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
+            <polygon points="715,196 760,168 805,196 760,224" fill="url(#p5gate)" stroke="#d97706" stroke-width="2"/>
+            <text x="760" y="193" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">闸口②</text>
+            <text x="760" y="206" text-anchor="middle" font-size="6.5" font-weight="700" fill="#92400e">交付确认 · 人判</text>
+            <line x1="805" y1="196" x2="894" y2="196" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
+            <rect x="898" y="182" width="112" height="28" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+            <text x="954" y="200" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">交付归档</text>
             <!-- 闸口② 下挂 -->
-            <line x1="760" y1="180" x2="760" y2="192" stroke="#f59e0b" stroke-width="1.2"/>
-            <text x="760" y="206" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">人看：自测报告＋质检结果（告警带样例）</text>
-            <text x="760" y="222" text-anchor="middle" font-size="6.8" fill="#475569">人判三选一：回改 · 人定口径 · 数据真脏豁免留痕</text>
-            <text x="760" y="238" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1d4ed8">AI 摆事实给选项，人拍板——审口径时直接看跑出来的数字</text>
+            <line x1="760" y1="226" x2="760" y2="234" stroke="#f59e0b" stroke-width="1.2"/>
+            <text x="760" y="248" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">人看：自测报告＋质检结果（告警带样例）</text>
+            <text x="760" y="263" text-anchor="middle" font-size="6.8" fill="#475569">人判三选一：回改 · 人定口径 · 数据真脏豁免留痕</text>
+            <text x="760" y="278" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1d4ed8">AI 摆事实给选项，人拍板——审口径时直接看跑出来的数字</text>
 
-            <!-- 同料两读 -->
-            <text x="30" y="300" font-size="9.5" font-weight="800" fill="#1e293b">岗位隔离：同一份原料，两套独立理解——天然的歧义探测器</text>
-            <rect x="30" y="340" width="130" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
-            <text x="95" y="358" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">同一份输入原料</text>
-            <text x="95" y="373" text-anchor="middle" font-size="6.5" fill="#64748b">需求＋字段映射</text>
-            <line x1="160" y1="352" x2="224" y2="336" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
-            <line x1="160" y1="372" x2="224" y2="388" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
-            <rect x="228" y="316" width="210" height="40" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
-            <text x="333" y="333" text-anchor="middle" font-size="7.5" font-weight="800" fill="#1e3a8a">设计岗的理解</text>
-            <text x="333" y="348" text-anchor="middle" font-size="6.5" fill="#1d4ed8">口径 · 加工逻辑 · 关联声明</text>
-            <rect x="228" y="368" width="210" height="40" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4" stroke-dasharray="4 2"/>
-            <text x="333" y="385" text-anchor="middle" font-size="7.5" font-weight="800" fill="#1e3a8a">质检岗的独立理解</text>
-            <text x="333" y="400" text-anchor="middle" font-size="6.5" fill="#1d4ed8">输入隔离：不读实现 SQL</text>
-            <line x1="438" y1="336" x2="504" y2="354" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
-            <line x1="438" y1="388" x2="504" y2="370" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
-            <rect x="508" y="340" width="240" height="44" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6"/>
-            <text x="628" y="358" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">两读不一致＝歧义自动暴露</text>
-            <text x="628" y="373" text-anchor="middle" font-size="6.5" fill="#92400e">显式上交人工，不静默拍板</text>
-            <text x="790" y="336" font-size="6.8" font-weight="700" fill="#334155">为什么隔离：</text>
-            <text x="790" y="352" font-size="6.8" fill="#475569">构造与验收两种思维互扰——设计岗</text>
-            <text x="790" y="368" font-size="6.8" fill="#475569">兼职质检曾互相污染（实测教训）</text>
-            <text x="790" y="384" font-size="6.8" fill="#475569">审计独立性＝不信任被检对象的自述</text>
-            <text x="790" y="400" font-size="6.8" fill="#475569">干净会话 · 短回路：问题分钟级修复</text>
+            <!-- 层3：同料两读 -->
+            <text x="30" y="308" font-size="9.5" font-weight="800" fill="#1e293b">岗位隔离：同一份原料，两套独立理解——天然的歧义探测器</text>
+            <rect x="30" y="346" width="130" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
+            <text x="95" y="364" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">同一份输入原料</text>
+            <text x="95" y="379" text-anchor="middle" font-size="6.5" fill="#64748b">需求＋字段映射</text>
+            <line x1="160" y1="358" x2="224" y2="342" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
+            <line x1="160" y1="378" x2="224" y2="394" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
+            <rect x="228" y="322" width="210" height="40" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
+            <text x="333" y="339" text-anchor="middle" font-size="7.5" font-weight="800" fill="#1e3a8a">设计岗的理解</text>
+            <text x="333" y="354" text-anchor="middle" font-size="6.5" fill="#1d4ed8">口径 · 加工逻辑 · 关联声明</text>
+            <rect x="228" y="374" width="210" height="40" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4" stroke-dasharray="4 2"/>
+            <text x="333" y="391" text-anchor="middle" font-size="7.5" font-weight="800" fill="#1e3a8a">质检岗的独立理解</text>
+            <text x="333" y="406" text-anchor="middle" font-size="6.5" fill="#1d4ed8">输入隔离：不读实现 SQL</text>
+            <line x1="438" y1="342" x2="504" y2="360" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
+            <line x1="438" y1="394" x2="504" y2="376" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p5a)"/>
+            <rect x="508" y="346" width="240" height="44" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6"/>
+            <text x="628" y="364" text-anchor="middle" font-size="7.5" font-weight="800" fill="#92400e">两读不一致＝歧义自动暴露</text>
+            <text x="628" y="379" text-anchor="middle" font-size="6.5" fill="#92400e">显式上交人工，不静默拍板</text>
+            <text x="790" y="342" font-size="6.8" font-weight="700" fill="#334155">为什么隔离：</text>
+            <text x="790" y="358" font-size="6.8" fill="#475569">构造与验收两种思维互扰——设计岗</text>
+            <text x="790" y="374" font-size="6.8" fill="#475569">兼职质检曾互相污染（实测教训）</text>
+            <text x="790" y="390" font-size="6.8" fill="#475569">审计独立性＝不信任被检对象的自述</text>
 
             <rect x="30" y="440" width="980" height="30" rx="7" fill="#1e293b"/>
-            <text x="520" y="460" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">人工触点只有两个闸口，其余全自动——该自动的彻底自动，该交还人的明确交还，每个决策留痕可回溯</text>
+            <text x="520" y="460" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">自动的是活，不自动的是裁决权——人不在旁边盯，人只在闸口裁；每个决策留痕可回溯</text>
         </svg>
         </div>
     </div>
