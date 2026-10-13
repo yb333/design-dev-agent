@@ -103,6 +103,9 @@ body.browse .slide { position: relative; margin-bottom: 24px; border-radius: 8px
   transition: transform .25s var(--glass-spring), filter .2s ease; }
 .deck-present-btn:hover { filter: brightness(1.07); transform: scale(1.04); }
 .deck-present-btn:active { transform: scale(.96); }
+.deck-pptx-btn { border: none; cursor: pointer; border-radius: 999px; padding: 6px 10px;
+  background: rgba(37,99,235,.08); color: var(--c-exec, #2563eb); font-size: 12px; font-weight: 600; }
+.deck-pptx-btn:hover { background: rgba(37,99,235,.16); }
 .deck-menu:focus-visible, .deck-present-btn:focus-visible { outline: 2px solid var(--c-info, #3b82f6); outline-offset: 2px; }
 
 .deck-sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; width: 320px;
@@ -900,7 +903,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <header class="deck-bar">
     <button class="deck-menu" id="deckMenu" title="页面目录">☰</button>
     <span class="deck-page" id="deckPage">1 / 13</span>
-    <button class="deck-present-btn" id="presentBtn" title="放映模式 (F)">▶ 放映</button></header>
+  <button class="deck-pptx-btn" id="pptxBtn" title="导出 PPTX（快照版：每页一张最终态图）">⤓ PPT</button>
+  <button class="deck-present-btn" id="presentBtn" title="放映模式 (F)">▶ 放映</button></header>
 <aside class="deck-sidebar" id="deckSidebar" aria-label="页面目录">
     <div class="deck-sidebar-head"><span>页面目录</span><button class="deck-sidebar-close" id="tocClose" title="关闭 (Esc)">×</button></div>
     <div class="deck-thumbs" id="deckThumbs"></div>
