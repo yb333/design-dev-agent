@@ -942,14 +942,14 @@ window.DECK_AUTO = {
 window.DECK_AMBIENT = {
     pageLabel: '防线三',
     speed: 150,
-    staggerMs: 0,
-    loops: [
+    routes: [
         { decides: { 1: { ms: 850, gate: true, then: 'blue' }, 3: { ms: 850, gate: true, then: 'blue' }, 5: { ms: 850, gate: true, then: 'blue' } },
           wp: [[43, 32], [60, 26], [75, 33], [84, 51], [75, 68], [57, 74], [40, 66], [36, 50], [43, 32]] },
         { wp: [[400, 26], [417, 33], [424, 50], [417, 67], [400, 74], [383, 67], [376, 50], [383, 33], [400, 26]] },
         { decides: { 2: { ms: 950, gate: true, then: 'blue' }, 6: { ms: 950, gate: true, then: 'blue' } },
           wp: [[742, 74], [725, 67], [709, 50], [725, 33], [742, 26], [759, 33], [775, 50], [759, 67], [742, 74]] },
     ],
+    lanes: [ { route: 0, delay: 0 }, { route: 1, delay: 0 }, { route: 2, delay: 0 } ],
     nodes: { n1: [52, 19, 16, 14], n2: [77, 44, 15, 14], n3: [49, 66, 16, 14], g1: [698, 39, 22, 22], g2: [764, 39, 22, 22] },
 };
 window.DECK_COUNTUP = { '实效边界': { ms: 1200, items: [[520, 252], [722, 252], [942, 252]] } };
@@ -975,7 +975,7 @@ window.DECK_COUNTUP = { '实效边界': { ms: 1200, items: [[520, 252], [722, 25
    混合层（stepfx.js/auto.js/ambient.js）依赖：window.__deck、syncChrome
    内派发 deckpage 事件、data-label 页标识。本文件声明版本号供门禁断言。
    ===================================================================== */
-window.DECK_ENGINE_VERSION = '1.2.0';
+window.DECK_ENGINE_VERSION = '1.4.0';
 
 class DeckPlayer {
     constructor() {
@@ -1603,7 +1603,7 @@ Object.assign(DeckPlayer.prototype, {
 /* =====================================================================
    deck-studio 效果基建 · ambient.js — 常驻流转控制器（唯一源）
    ---------------------------------------------------------------------
-   闭环/迭代机制页的"活流程"——光点循环巡航，每周期走完全部回路（打回
+   闭环/迭代机制页的"活流程"——光点沿航线循环巡航，走完全部回路（打回
    分支逐一出演）后到达产出节点，休息后开新周期。离页自动暂停；
    prefers-reduced-motion 静态；每 deck 至多一处（animation.md 限定）。
    作者只声明数据（deck 数据区，勿改本文件）：
@@ -1613,12 +1613,12 @@ Object.assign(DeckPlayer.prototype, {
        decideMs: 500,            // 判定菱形停留：标签识读 ≥400ms
        gateMs: 950,              // 闸口停留：语义"等人"，需明显长于判定
        restMs: 1800,             // 整周期交付后的呼吸停顿
-       count: 2,                 // 并行光点数（缺省 1 = 单光点）：多光点沿同一航线错拍巡航，
-                                 // 各自独立判定/停泊/交付——表达流水线的并行语义
-       staggerMs: 1500,          // 光点错拍启动间隔（缺省 1500ms）
-       loops: [                  // 分圈常驻模式（声明后 count 取 loops.length）：每圈一个光点钉在自己的
-                                 // 航线上永续循环、互不串线——同屏多节奏对比（如三种自治模式并排各转各的）
-         { wp: [...], decides?: {...}, speed? }, // decides 同 routes 格式；speed 缺省随全局 speed
+       —— 航线模型（二选一）：——
+       count: 2,                 // 简写：count 个光点沿 routes[0] 错拍巡航（吞吐/并行语义）
+       staggerMs: 1500,          //   错拍启动间隔（缺省 1500ms）
+       lanes: [                  // 完整形式：每条光道独立路线/延迟/目标 svg，条数不限（对比/多图/多线并行语义）
+         { route: 0, delay: 0,   svg: 0 },   // route=routes 索引；svg=页内第几个 svg（缺省 0）
+         { route: 1, delay: 600, svg: 1 },   // 例：左右两图各一光点；三图对比就再补第三条
        ],
        routes: [                 // 回路路线：按演示顺序排列，全部走完回起点开新周期
          { kind: 'fail1', backFrom: 4, decide: { at: 4, ms: decideMs, then: 'red' },
@@ -1627,8 +1627,8 @@ Object.assign(DeckPlayer.prototype, {
            decides: { 3: { ms: 950, gate: true, then: 'red' }, 7: { ms: 500, then: 'blue' } },
            wp: [...] },                      // decides=多点判定（序号→{ms,gate,then}），色彩只由判定驱动，
        ],                                    // 表达"一条路线走满全部回路"；与单判定 decide 互斥
-       nodes: { 0:[x,y,w,h], ... },          // 节点脉冲框（按光点坐标命中，无则只过光点）
-       stateAt: 6, stateRect: [x,y,w,h],     // 可选：到达该序号点亮状态区，周期结束熄灭；不需要设 null
+       nodes: { 0:[x,y,w,h], ... },          // 节点脉冲框（按光点坐标命中；坐标系随各自 svg）
+       stateAt: 6, stateRect: [x,y,w,h],     // 可选：到达该序号点亮状态区，周期结束熄灭（坐标随 lanes[0] 的 svg）
      };
    依赖：player.js（window.__deck + deckpage 事件）+ effects.css（ambient-layer 样式）。
    ===================================================================== */
@@ -1641,153 +1641,344 @@ Object.assign(DeckPlayer.prototype, {
         if (IDX < 0) return;
         const SPEED = CFG.speed || 200, DECIDE_MS = CFG.decideMs || 500,
               GATE_MS = CFG.gateMs || 950, REST_MS = CFG.restMs || 1800;
-        const LOOPS = Array.isArray(CFG.loops) ? CFG.loops : null;   // 分圈常驻：每 token 钉一条航线
-        const COUNT = LOOPS ? LOOPS.length : Math.max(1, CFG.count || 1);
+        const COUNT = Math.max(1, CFG.count || 1);
         const STAGGER_MS = CFG.staggerMs != null ? CFG.staggerMs : 1500;
-        const ROUTES = LOOPS ? LOOPS.map(l => ({ kind: 'pass', decides: l.decides || null, wp: l.wp }))
-                             : (CFG.routes || []),
-              NODES = CFG.nodes || {},
+        const ROUTES = CFG.routes || [], NODES = CFG.nodes || {},
               STATE_AT = (CFG.stateAt == null ? null : CFG.stateAt),
               STATE_RECT = CFG.stateRect || null;
+        /* 航线模型：lanes 完整形式优先；count/staggerMs 是"同航线错拍"简写 */
+        const LANES = (CFG.lanes && CFG.lanes.length)
+            ? CFG.lanes.map(l => ({ routeIdx: l.route || 0, delayMs: l.delay || 0, svgIdx: l.svg || 0 }))
+            : Array.from({ length: COUNT }, (_, i) => ({ routeIdx: 0, delayMs: i * STAGGER_MS, svgIdx: 0 }));
 
         /* ==================== 引擎区（作者勿改） ==================== */
         const NS = 'http://www.w3.org/2000/svg';
-        let layer = null, stateEl = null, tokens = [];
+        let lanes = [];                                     // 每条光道一份独立运行态
         let raf = 0, poll = 0, last = 0;
 
-        const kind = tk => ROUTES[tk.cycleIdx].kind;
-        const route = tk => ROUTES[tk.cycleIdx].wp;
+        const kind = ln => ROUTES[ln.cycleIdx].kind;
+        const route = ln => ROUTES[ln.cycleIdx].wp;
         const active = () => deck.current === IDX && !document.hidden;
-        function el(tag, attrs, cls) {
+        function el(ln, tag, attrs, cls) {
             const n = document.createElementNS(NS, tag);
             for (const k in attrs) n.setAttribute(k, attrs[k]);
             if (cls) n.setAttribute('class', cls);
-            layer.appendChild(n);
+            ln.layer.appendChild(n);
             return n;
         }
         function build() {
-            const svg = deck.slides[IDX].querySelector('svg');
-            layer = document.createElementNS(NS, 'g');
-            layer.setAttribute('class', 'ambient-layer');
-            svg.appendChild(layer);
+            const svgs = deck.slides[IDX].querySelectorAll('svg');
+            lanes = LANES.map(L => {
+                const svg = svgs[L.svgIdx];
+                if (!svg) return null;                      // 声明的 svg 序号不存在 → 该光道跳过
+                const layer = document.createElementNS(NS, 'g');
+                layer.setAttribute('class', 'ambient-layer');
+                svg.appendChild(layer);
+                return { L, layer, token: null, gateEl: null,
+                         cycleIdx: L.routeIdx, ri: 0, segT: 0, born: false,
+                         phase: 'wait', phaseT: L.delayMs, afterPhase: null };
+            }).filter(Boolean);
+            if (!lanes.length) return;
+            const l0 = lanes[0];                            // 状态区归属第一条光道的坐标系
             if (STATE_AT != null && STATE_RECT) {
-                stateEl = el('rect', { x: STATE_RECT[0], y: STATE_RECT[1], width: STATE_RECT[2], height: STATE_RECT[3], rx: 8 }, 'fstate');
+                const n = document.createElementNS(NS, 'rect');
+                for (const k of ['x', 'y']) n.setAttribute(k, STATE_RECT[k == 'x' ? 0 : 1]);
+                n.setAttribute('width', STATE_RECT[2]); n.setAttribute('height', STATE_RECT[3]);
+                n.setAttribute('rx', 8); n.setAttribute('class', 'fstate');
+                l0.layer.appendChild(n);
+                l0.stateEl = n;
             }
-            tokens = Array.from({ length: COUNT }, (_, i) => ({
-                el: null, gateEl: null,
-                cycleIdx: LOOPS ? i % ROUTES.length : 0, ri: 0, segT: 0, born: false,
-                pinned: !!LOOPS, speed: LOOPS ? (LOOPS[i].speed || SPEED) : SPEED,
-                phase: 'wait', phaseT: i * STAGGER_MS, afterPhase: null,   // 错拍：wait 相位倒数
-            }));
         }
-        function spawn(tk) {                                    // 错拍到点：光点现身于航线起点
-            tk.el = el('circle', { cx: route(tk)[0][0], cy: route(tk)[0][1], r: 8 }, 'ftoken');
-            tk.el.setAttribute('fill', '#2563eb');
-            tk.el.setAttribute('stroke', '#fff');
-            tk.el.setAttribute('stroke-width', 2);
-            tk.born = true;
+        function stateEl(ln) { return ln.stateEl || (lanes[0] && lanes[0].stateEl) || null; }
+        function spawn(ln) {                                    // 错拍到点：光点现身于航线起点
+            ln.token = el(ln, 'circle', { cx: route(ln)[0][0], cy: route(ln)[0][1], r: 8 }, 'ftoken');
+            ln.token.setAttribute('fill', '#2563eb');
+            ln.token.setAttribute('stroke', '#fff');
+            ln.token.setAttribute('stroke-width', 2);
+            ln.born = true;
         }
-        function nodePulse(tk, i) {
+        function nodePulse(ln, i) {
             /* 按光点当前坐标命中节点框（不同路线的 waypoint 序号语义不同，不能按序号查表） */
-            const pt = route(tk)[i];
+            const pt = route(ln)[i];
             if (!pt) return;
             for (const k in NODES) {
                 const r = NODES[k];
                 if (pt[0] >= r[0] && pt[0] <= r[0] + r[2] && pt[1] >= r[1] && pt[1] <= r[1] + r[3]) {
-                    const c = el('circle', { cx: r[0] + r[2] / 2, cy: r[1] + r[3] / 2, r: 12 }, 'fpulse');
+                    const c = el(ln, 'circle', { cx: r[0] + r[2] / 2, cy: r[1] + r[3] / 2, r: 12 }, 'fpulse');
                     setTimeout(() => c.remove(), 750);
                     return;
                 }
             }
         }
-        function setPos(tk, pt) { tk.el.setAttribute('cx', pt[0]); tk.el.setAttribute('cy', pt[1]); }
-        function setToken(tk, fill) { tk.el.setAttribute('fill', fill); }
-        function pause(tk, ms, after) { tk.phase = 'pause'; tk.phaseT = ms; tk.afterPhase = after || null; }
-        function arrive(tk, i) {
-            nodePulse(tk, i);
-            const R = ROUTES[tk.cycleIdx];
+        function setPos(ln, pt) { ln.token.setAttribute('cx', pt[0]); ln.token.setAttribute('cy', pt[1]); }
+        function setToken(ln, fill) { ln.token.setAttribute('fill', fill); }
+        function pause(ln, ms, after) { ln.phase = 'pause'; ln.phaseT = ms; ln.afterPhase = after || null; }
+        function arrive(ln, i) {
+            nodePulse(ln, i);
+            const R = ROUTES[ln.cycleIdx];
             if (R.decides) {                                           // 多点判定路线：色彩由各判定驱动
                 const d = R.decides[i];
                 if (d) {
-                    setToken(tk, d.gate ? '#f59e0b' : '#ef4444');
-                    if (d.gate) { if (!tk.gateEl) tk.gateEl = el('circle', { cx: route(tk)[i][0], cy: route(tk)[i][1], r: 16 }, 'fgate'); tk.gateEl.style.opacity = 1; }
-                    tk.ri++;
-                    return pause(tk, d.ms, () => {
-                        if (tk.gateEl) { tk.gateEl.remove(); tk.gateEl = null; }    // 移除元素（内联 opacity 压不过无限动画）
-                        setToken(tk, d.then === 'red' ? '#ef4444' : '#2563eb');
-                        if (d.then === 'red' && stateEl) stateEl.classList.remove('on');
+                    setToken(ln, d.gate ? '#f59e0b' : '#ef4444');
+                    if (d.gate) { if (!ln.gateEl) ln.gateEl = el(ln, 'circle', { cx: route(ln)[i][0], cy: route(ln)[i][1], r: 16 }, 'fgate'); ln.gateEl.style.opacity = 1; }
+                    ln.ri++;
+                    return pause(ln, d.ms, () => {
+                        if (ln.gateEl) { ln.gateEl.remove(); ln.gateEl = null; }    // 移除元素（内联 opacity 压不过无限动画）
+                        setToken(ln, d.then === 'red' ? '#ef4444' : '#2563eb');
+                        if (d.then === 'red') { const se = stateEl(ln); if (se) se.classList.remove('on'); }
                     });
                 }
             } else {
-            setToken(tk, i >= R.backFrom ? '#ef4444' : '#2563eb');
+            setToken(ln, i >= R.backFrom ? '#ef4444' : '#2563eb');
             const d = R.decide;
             if (d && i === d.at) {                                     // 判定停顿：先推进索引再停（杜绝折返卡死）
-                setToken(tk, d.gate ? '#f59e0b' : '#ef4444');
-                if (!tk.gateEl) tk.gateEl = el('circle', { cx: route(tk)[i][0], cy: route(tk)[i][1], r: 16 }, 'fgate');
-                tk.gateEl.style.opacity = 1;
-                tk.ri++;
-                return pause(tk, d.ms, () => {
-                    if (tk.gateEl) { tk.gateEl.remove(); tk.gateEl = null; }
-                    if (d.then === 'red') { setToken(tk, '#ef4444'); if (stateEl) stateEl.classList.remove('on'); }
-                    else setToken(tk, '#2563eb');
+                setToken(ln, d.gate ? '#f59e0b' : '#ef4444');
+                if (!ln.gateEl) ln.gateEl = el(ln, 'circle', { cx: route(ln)[i][0], cy: route(ln)[i][1], r: 16 }, 'fgate');
+                ln.gateEl.style.opacity = 1;
+                ln.ri++;
+                return pause(ln, d.ms, () => {
+                    if (ln.gateEl) { ln.gateEl.remove(); ln.gateEl = null; }
+                    if (d.then === 'red') { setToken(ln, '#ef4444'); const se = stateEl(ln); if (se) se.classList.remove('on'); }
+                    else setToken(ln, '#2563eb');
                 });
             }
             }
-            if (kind(tk) === 'pass' && i === STATE_AT && stateEl) stateEl.classList.add('on');
-            tk.ri++;
-            if (tk.ri >= route(tk).length - 1) endRoute(tk);
+            if (kind(ln) === 'pass' && i === STATE_AT) { const se = stateEl(ln); if (se) se.classList.add('on'); }
+            ln.ri++;
+            if (ln.ri >= route(ln).length - 1) endRoute(ln);
         }
-        function endRoute(tk) {
-            const k = kind(tk);
+        function endRoute(ln) {
+            const k = kind(ln);
             if (k === 'pass') {                                        // 全回路走完 → 交付产出，休息后开新周期
-                tk.phase = 'rest'; tk.phaseT = REST_MS;
-                tk.el.setAttribute('opacity', 0);
-                tk.afterPhase = () => { if (stateEl) stateEl.classList.remove('on'); nextRoute(tk); setPos(tk, route(tk)[0]); setToken(tk, '#2563eb'); tk.el.setAttribute('opacity', .95); };
+                ln.phase = 'rest'; ln.phaseT = REST_MS;
+                ln.token.setAttribute('opacity', 0);
+                ln.afterPhase = () => {
+                    const se = stateEl(ln); if (se) se.classList.remove('on');
+                    nextRoute(ln); setPos(ln, route(ln)[0]); setToken(ln, '#2563eb'); ln.token.setAttribute('opacity', .95);
+                };
             } else {                                                   // 打回路线走完：改代码处重启脉冲
-                nodePulse(tk, 0);
-                tk.phase = 'pause'; tk.phaseT = 450;
-                tk.afterPhase = () => { nextRoute(tk); setToken(tk, '#2563eb'); };
+                nodePulse(ln, 0);
+                ln.phase = 'pause'; ln.phaseT = 450;
+                ln.afterPhase = () => { nextRoute(ln); setToken(ln, '#2563eb'); };
             }
         }
-        function nextRoute(tk) {
-            if (tk.pinned) { tk.ri = 0; tk.segT = 0; return; }         // 分圈常驻：永在自己那条航线上
-            tk.cycleIdx = (tk.cycleIdx + 1) % ROUTES.length; tk.ri = 0; tk.segT = 0;
-        }
-        function stepToken(dt, tk) {
-            if (!tk.born) {                                            // 错拍等待
-                tk.phaseT -= dt;
-                if (tk.phaseT <= 0) spawn(tk);
+        function nextRoute(ln) { ln.cycleIdx = (ln.cycleIdx + 1) % ROUTES.length; ln.ri = 0; ln.segT = 0; }
+        function stepLane(dt, ln) {
+            if (!ln.born) {                                            // 错拍等待
+                ln.phaseT -= dt;
+                if (ln.phaseT <= 0) spawn(ln);
                 return;
             }
-            if (tk.phase !== 'move') {
-                tk.phaseT -= dt;
-                if (tk.phaseT <= 0) { const f = tk.afterPhase; tk.afterPhase = null; tk.phase = 'move'; if (f) f(); }
+            if (ln.phase !== 'move') {
+                ln.phaseT -= dt;
+                if (ln.phaseT <= 0) { const f = ln.afterPhase; ln.afterPhase = null; ln.phase = 'move'; if (f) f(); }
                 return;
             }
-            const wp = route(tk);
-            const A = wp[tk.ri], B = wp[tk.ri + 1];
+            const wp = route(ln);
+            const A = wp[ln.ri], B = wp[ln.ri + 1];
             const len = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
-            tk.segT += dt / 1000 * tk.speed;
-            const k = Math.min(1, tk.segT / len);
-            setPos(tk, [A[0] + (B[0] - A[0]) * k, A[1] + (B[1] - A[1]) * k]);
-            if (k >= 1) { tk.segT = 0; arrive(tk, tk.ri + 1); }
+            ln.segT += dt / 1000 * SPEED;
+            const k = Math.min(1, ln.segT / len);
+            setPos(ln, [A[0] + (B[0] - A[0]) * k, A[1] + (B[1] - A[1]) * k]);
+            if (k >= 1) { ln.segT = 0; arrive(ln, ln.ri + 1); }
         }
         function frame(now) {
             if (!active()) { raf = 0; poll = setTimeout(schedule, 400); return; }
             if (!last) last = now;
             const dt = Math.min(50, now - last);
-            for (const tk of tokens) stepToken(dt, tk);
+            for (const ln of lanes) stepLane(dt, ln);
             last = now;
             raf = requestAnimationFrame(frame);
         }
         function schedule() {
             cancelAnimationFrame(raf); clearTimeout(poll);
-            if (active()) { if (!layer) build(); last = 0; raf = requestAnimationFrame(frame); }
+            if (active()) { if (!lanes.length) build(); last = 0; raf = requestAnimationFrame(frame); }
             else poll = setTimeout(schedule, 400);
         }
         document.addEventListener('deckpage', schedule);
         schedule();
     };
+    if (window.__deck) boot(); else addEventListener('load', boot, { once: true });
+})();
+
+/* =====================================================================
+   deck-studio 效果基建 · exporter.js — 一键导出 PPTX（唯一源）
+   ---------------------------------------------------------------------
+   deck 内 ═══ DECK ENGINE ═══ 标记块的一部分（sync-engine 写入）。
+   页面有 #pptxBtn 按钮时自动绑定：点击后浏览器本地把每页渲染为高清图
+   （SVG foreignObject + Canvas），按 build_pptx 同构的 OOXML 现场组装
+   16:9 PPTX 并下载。零服务器、零外部依赖（zip 为 store 模式手写实现）。
+   快照语义（宪法 2）：每页 = 最终态，不含动画元素与播放器杂物。
+   限制：webfont 在导出图中回退系统字体（本地 convert.py 管线无此限制）；
+   editable（可编辑文字）导出不在本模块范围。
+   ===================================================================== */
+window.DeckExport = (function () {
+    const W = 1920, H = 1080, SCALE = 2, QUALITY = 0.92;
+    const P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+    const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+    const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const WIDTH = 12192000, HEIGHT = 6858000;                       // EMU，精确 16:9
+    const TPL_MASTER = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<!-- \u7a7a\u767d\u6bcd\u7248\u3001\u7248\u5f0f\u4e0e\u4e3b\u9898\u53d6\u81ea python-pptx 1.0.2 \u7684\u9ed8\u8ba4\u6709\u6548\u6587\u7a3f\uff1b\u6bcd\u7248\u53ea\u4fdd\u7559\u7a7a\u767d\u7248\u5f0f\u3002 -->\n<p:sldMaster xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:ns2=\"http://schemas.microsoft.com/office/powerpoint/2010/main\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><p:cSld><p:bg><p:bgRef idx=\"1001\"><a:schemeClr val=\"bg1\" /></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\" /><p:cNvGrpSpPr /><p:nvPr /></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\" /><a:ext cx=\"0\" cy=\"0\" /><a:chOff x=\"0\" y=\"0\" /><a:chExt cx=\"0\" cy=\"0\" /></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Title Placeholder 1\" /><p:cNvSpPr><a:spLocks noGrp=\"1\" /></p:cNvSpPr><p:nvPr><p:ph type=\"title\" /></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"457200\" y=\"274638\" /><a:ext cx=\"8229600\" cy=\"1143000\" /></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst /></a:prstGeom></p:spPr><p:txBody><a:bodyPr vert=\"horz\" lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\" rtlCol=\"0\" anchor=\"ctr\"><a:normAutofit /></a:bodyPr><a:lstStyle /><a:p><a:r><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>Click to edit Master title style</a:t></a:r><a:endParaRPr lang=\"en-US\" /></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" name=\"Text Placeholder 2\" /><p:cNvSpPr><a:spLocks noGrp=\"1\" /></p:cNvSpPr><p:nvPr><p:ph type=\"body\" idx=\"1\" /></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"457200\" y=\"1600200\" /><a:ext cx=\"8229600\" cy=\"4525963\" /></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst /></a:prstGeom></p:spPr><p:txBody><a:bodyPr vert=\"horz\" lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\" rtlCol=\"0\"><a:normAutofit /></a:bodyPr><a:lstStyle /><a:p><a:pPr lvl=\"0\" /><a:r><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>Click to edit Master text styles</a:t></a:r></a:p><a:p><a:pPr lvl=\"1\" /><a:r><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>Second level</a:t></a:r></a:p><a:p><a:pPr lvl=\"2\" /><a:r><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>Third level</a:t></a:r></a:p><a:p><a:pPr lvl=\"3\" /><a:r><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>Fourth level</a:t></a:r></a:p><a:p><a:pPr lvl=\"4\" /><a:r><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>Fifth level</a:t></a:r><a:endParaRPr lang=\"en-US\" /></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"4\" name=\"Date Placeholder 3\" /><p:cNvSpPr><a:spLocks noGrp=\"1\" /></p:cNvSpPr><p:nvPr><p:ph type=\"dt\" sz=\"half\" idx=\"2\" /></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"457200\" y=\"6356350\" /><a:ext cx=\"2133600\" cy=\"365125\" /></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst /></a:prstGeom></p:spPr><p:txBody><a:bodyPr vert=\"horz\" lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\" rtlCol=\"0\" anchor=\"ctr\" /><a:lstStyle><a:lvl1pPr algn=\"l\"><a:defRPr sz=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\"><a:tint val=\"75000\" /></a:schemeClr></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle><a:p><a:fld id=\"{5BCAD085-E8A6-8845-BD4E-CB4CCA059FC4}\" type=\"datetimeFigureOut\"><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>1/27/13</a:t></a:fld><a:endParaRPr lang=\"en-US\" /></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"5\" name=\"Footer Placeholder 4\" /><p:cNvSpPr><a:spLocks noGrp=\"1\" /></p:cNvSpPr><p:nvPr><p:ph type=\"ftr\" sz=\"quarter\" idx=\"3\" /></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"3124200\" y=\"6356350\" /><a:ext cx=\"2895600\" cy=\"365125\" /></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst /></a:prstGeom></p:spPr><p:txBody><a:bodyPr vert=\"horz\" lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\" rtlCol=\"0\" anchor=\"ctr\" /><a:lstStyle><a:lvl1pPr algn=\"ctr\"><a:defRPr sz=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\"><a:tint val=\"75000\" /></a:schemeClr></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle><a:p><a:endParaRPr lang=\"en-US\" /></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"6\" name=\"Slide Number Placeholder 5\" /><p:cNvSpPr><a:spLocks noGrp=\"1\" /></p:cNvSpPr><p:nvPr><p:ph type=\"sldNum\" sz=\"quarter\" idx=\"4\" /></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"6553200\" y=\"6356350\" /><a:ext cx=\"2133600\" cy=\"365125\" /></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst /></a:prstGeom></p:spPr><p:txBody><a:bodyPr vert=\"horz\" lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\" rtlCol=\"0\" anchor=\"ctr\" /><a:lstStyle><a:lvl1pPr algn=\"r\"><a:defRPr sz=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\"><a:tint val=\"75000\" /></a:schemeClr></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle><a:p><a:fld id=\"{C1FF6DA9-008F-8B48-92A6-B652298478BF}\" type=\"slidenum\"><a:rPr lang=\"en-US\" smtClean=\"0\" /><a:t>\u2039#\u203a</a:t></a:fld><a:endParaRPr lang=\"en-US\" /></a:p></p:txBody></p:sp></p:spTree><p:extLst><p:ext uri=\"{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}\"><ns2:creationId val=\"2209977519\" /></p:ext></p:extLst></p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\" /><p:sldLayoutIdLst><p:sldLayoutId id=\"2147483655\" r:id=\"rId1\" /></p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr algn=\"ctr\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"0\" /></a:spcBef><a:buNone /><a:defRPr sz=\"4400\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mj-lt\" /><a:ea typeface=\"+mj-ea\" /><a:cs typeface=\"+mj-cs\" /></a:defRPr></a:lvl1pPr></p:titleStyle><p:bodyStyle><a:lvl1pPr marL=\"342900\" indent=\"-342900\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2022\" /><a:defRPr sz=\"3200\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl1pPr><a:lvl2pPr marL=\"742950\" indent=\"-285750\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2013\" /><a:defRPr sz=\"2800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl2pPr><a:lvl3pPr marL=\"1143000\" indent=\"-228600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2022\" /><a:defRPr sz=\"2400\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl3pPr><a:lvl4pPr marL=\"1600200\" indent=\"-228600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2013\" /><a:defRPr sz=\"2000\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl4pPr><a:lvl5pPr marL=\"2057400\" indent=\"-228600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u00bb\" /><a:defRPr sz=\"2000\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl5pPr><a:lvl6pPr marL=\"2514600\" indent=\"-228600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2022\" /><a:defRPr sz=\"2000\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl6pPr><a:lvl7pPr marL=\"2971800\" indent=\"-228600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2022\" /><a:defRPr sz=\"2000\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl7pPr><a:lvl8pPr marL=\"3429000\" indent=\"-228600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2022\" /><a:defRPr sz=\"2000\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl8pPr><a:lvl9pPr marL=\"3886200\" indent=\"-228600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:spcBef><a:spcPct val=\"20000\" /></a:spcBef><a:buFont typeface=\"Arial\" /><a:buChar char=\"\u2022\" /><a:defRPr sz=\"2000\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl9pPr></p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang=\"en-US\" /></a:defPPr><a:lvl1pPr marL=\"0\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl1pPr><a:lvl2pPr marL=\"457200\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl2pPr><a:lvl3pPr marL=\"914400\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl3pPr><a:lvl4pPr marL=\"1371600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl4pPr><a:lvl5pPr marL=\"1828800\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl5pPr><a:lvl6pPr marL=\"2286000\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl6pPr><a:lvl7pPr marL=\"2743200\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl7pPr><a:lvl8pPr marL=\"3200400\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl8pPr><a:lvl9pPr marL=\"3657600\" algn=\"l\" defTabSz=\"457200\" rtl=\"0\" eaLnBrk=\"1\" latinLnBrk=\"0\" hangingPunct=\"1\"><a:defRPr sz=\"1800\" kern=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\" /></a:solidFill><a:latin typeface=\"+mn-lt\" /><a:ea typeface=\"+mn-ea\" /><a:cs typeface=\"+mn-cs\" /></a:defRPr></a:lvl9pPr></p:otherStyle></p:txStyles></p:sldMaster>\n";
+    const TPL_LAYOUT = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<!-- \u7a7a\u767d\u6bcd\u7248\u3001\u7248\u5f0f\u4e0e\u4e3b\u9898\u53d6\u81ea python-pptx 1.0.2 \u7684\u9ed8\u8ba4\u6709\u6548\u6587\u7a3f\uff1b\u6bcd\u7248\u53ea\u4fdd\u7559\u7a7a\u767d\u7248\u5f0f\u3002 -->\n<p:sldLayout xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" type=\"blank\" preserve=\"1\"><p:cSld name=\"Blank\"><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Date Placeholder 1\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"dt\" sz=\"half\" idx=\"10\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id=\"{5BCAD085-E8A6-8845-BD4E-CB4CCA059FC4}\" type=\"datetimeFigureOut\"><a:rPr lang=\"en-US\" smtClean=\"0\"/><a:t>1/27/13</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" name=\"Footer Placeholder 2\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"ftr\" sz=\"quarter\" idx=\"11\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang=\"en-US\"/></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"4\" name=\"Slide Number Placeholder 3\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"sldNum\" sz=\"quarter\" idx=\"12\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id=\"{C1FF6DA9-008F-8B48-92A6-B652298478BF}\" type=\"slidenum\"><a:rPr lang=\"en-US\" smtClean=\"0\"/><a:t>\u2039#\u203a</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p></p:txBody></p:sp></p:spTree><p:extLst><p:ext uri=\"{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}\"><p14:creationId xmlns:p14=\"http://schemas.microsoft.com/office/powerpoint/2010/main\" val=\"1212999818\"/></p:ext></p:extLst></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>\n";
+    const TPL_THEME = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<!-- \u7a7a\u767d\u6bcd\u7248\u3001\u7248\u5f0f\u4e0e\u4e3b\u9898\u53d6\u81ea python-pptx 1.0.2 \u7684\u9ed8\u8ba4\u6709\u6548\u6587\u7a3f\uff1b\u6bcd\u7248\u53ea\u4fdd\u7559\u7a7a\u767d\u7248\u5f0f\u3002 -->\n<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office Theme\"><a:themeElements><a:clrScheme name=\"Office\"><a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1><a:lt1><a:sysClr val=\"window\" lastClr=\"FFFFFF\"/></a:lt1><a:dk2><a:srgbClr val=\"1F497D\"/></a:dk2><a:lt2><a:srgbClr val=\"EEECE1\"/></a:lt2><a:accent1><a:srgbClr val=\"4F81BD\"/></a:accent1><a:accent2><a:srgbClr val=\"C0504D\"/></a:accent2><a:accent3><a:srgbClr val=\"9BBB59\"/></a:accent3><a:accent4><a:srgbClr val=\"8064A2\"/></a:accent4><a:accent5><a:srgbClr val=\"4BACC6\"/></a:accent5><a:accent6><a:srgbClr val=\"F79646\"/></a:accent6><a:hlink><a:srgbClr val=\"0000FF\"/></a:hlink><a:folHlink><a:srgbClr val=\"800080\"/></a:folHlink></a:clrScheme><a:fontScheme name=\"Office\"><a:majorFont><a:latin typeface=\"Calibri\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/><a:font script=\"Jpan\" typeface=\"\uff2d\uff33 \uff30\u30b4\u30b7\u30c3\u30af\"/><a:font script=\"Hang\" typeface=\"\ub9d1\uc740 \uace0\ub515\"/><a:font script=\"Hans\" typeface=\"\u5b8b\u4f53\"/><a:font script=\"Hant\" typeface=\"\u65b0\u7d30\u660e\u9ad4\"/><a:font script=\"Arab\" typeface=\"Times New Roman\"/><a:font script=\"Hebr\" typeface=\"Times New Roman\"/><a:font script=\"Thai\" typeface=\"Angsana New\"/><a:font script=\"Ethi\" typeface=\"Nyala\"/><a:font script=\"Beng\" typeface=\"Vrinda\"/><a:font script=\"Gujr\" typeface=\"Shruti\"/><a:font script=\"Khmr\" typeface=\"MoolBoran\"/><a:font script=\"Knda\" typeface=\"Tunga\"/><a:font script=\"Guru\" typeface=\"Raavi\"/><a:font script=\"Cans\" typeface=\"Euphemia\"/><a:font script=\"Cher\" typeface=\"Plantagenet Cherokee\"/><a:font script=\"Yiii\" typeface=\"Microsoft Yi Baiti\"/><a:font script=\"Tibt\" typeface=\"Microsoft Himalaya\"/><a:font script=\"Thaa\" typeface=\"MV Boli\"/><a:font script=\"Deva\" typeface=\"Mangal\"/><a:font script=\"Telu\" typeface=\"Gautami\"/><a:font script=\"Taml\" typeface=\"Latha\"/><a:font script=\"Syrc\" typeface=\"Estrangelo Edessa\"/><a:font script=\"Orya\" typeface=\"Kalinga\"/><a:font script=\"Mlym\" typeface=\"Kartika\"/><a:font script=\"Laoo\" typeface=\"DokChampa\"/><a:font script=\"Sinh\" typeface=\"Iskoola Pota\"/><a:font script=\"Mong\" typeface=\"Mongolian Baiti\"/><a:font script=\"Viet\" typeface=\"Times New Roman\"/><a:font script=\"Uigh\" typeface=\"Microsoft Uighur\"/><a:font script=\"Geor\" typeface=\"Sylfaen\"/></a:majorFont><a:minorFont><a:latin typeface=\"Calibri\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/><a:font script=\"Jpan\" typeface=\"\uff2d\uff33 \uff30\u30b4\u30b7\u30c3\u30af\"/><a:font script=\"Hang\" typeface=\"\ub9d1\uc740 \uace0\ub515\"/><a:font script=\"Hans\" typeface=\"\u5b8b\u4f53\"/><a:font script=\"Hant\" typeface=\"\u65b0\u7d30\u660e\u9ad4\"/><a:font script=\"Arab\" typeface=\"Arial\"/><a:font script=\"Hebr\" typeface=\"Arial\"/><a:font script=\"Thai\" typeface=\"Cordia New\"/><a:font script=\"Ethi\" typeface=\"Nyala\"/><a:font script=\"Beng\" typeface=\"Vrinda\"/><a:font script=\"Gujr\" typeface=\"Shruti\"/><a:font script=\"Khmr\" typeface=\"DaunPenh\"/><a:font script=\"Knda\" typeface=\"Tunga\"/><a:font script=\"Guru\" typeface=\"Raavi\"/><a:font script=\"Cans\" typeface=\"Euphemia\"/><a:font script=\"Cher\" typeface=\"Plantagenet Cherokee\"/><a:font script=\"Yiii\" typeface=\"Microsoft Yi Baiti\"/><a:font script=\"Tibt\" typeface=\"Microsoft Himalaya\"/><a:font script=\"Thaa\" typeface=\"MV Boli\"/><a:font script=\"Deva\" typeface=\"Mangal\"/><a:font script=\"Telu\" typeface=\"Gautami\"/><a:font script=\"Taml\" typeface=\"Latha\"/><a:font script=\"Syrc\" typeface=\"Estrangelo Edessa\"/><a:font script=\"Orya\" typeface=\"Kalinga\"/><a:font script=\"Mlym\" typeface=\"Kartika\"/><a:font script=\"Laoo\" typeface=\"DokChampa\"/><a:font script=\"Sinh\" typeface=\"Iskoola Pota\"/><a:font script=\"Mong\" typeface=\"Mongolian Baiti\"/><a:font script=\"Viet\" typeface=\"Arial\"/><a:font script=\"Uigh\" typeface=\"Microsoft Uighur\"/><a:font script=\"Geor\" typeface=\"Sylfaen\"/></a:minorFont></a:fontScheme><a:fmtScheme name=\"Office\"><a:fillStyleLst><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:gradFill rotWithShape=\"1\"><a:gsLst><a:gs pos=\"0\"><a:schemeClr val=\"phClr\"><a:tint val=\"50000\"/><a:satMod val=\"300000\"/></a:schemeClr></a:gs><a:gs pos=\"35000\"><a:schemeClr val=\"phClr\"><a:tint val=\"37000\"/><a:satMod val=\"300000\"/></a:schemeClr></a:gs><a:gs pos=\"100000\"><a:schemeClr val=\"phClr\"><a:tint val=\"15000\"/><a:satMod val=\"350000\"/></a:schemeClr></a:gs></a:gsLst><a:lin ang=\"16200000\" scaled=\"1\"/></a:gradFill><a:gradFill rotWithShape=\"1\"><a:gsLst><a:gs pos=\"0\"><a:schemeClr val=\"phClr\"><a:tint val=\"100000\"/><a:shade val=\"100000\"/><a:satMod val=\"130000\"/></a:schemeClr></a:gs><a:gs pos=\"100000\"><a:schemeClr val=\"phClr\"><a:tint val=\"50000\"/><a:shade val=\"100000\"/><a:satMod val=\"350000\"/></a:schemeClr></a:gs></a:gsLst><a:lin ang=\"16200000\" scaled=\"0\"/></a:gradFill></a:fillStyleLst><a:lnStyleLst><a:ln w=\"9525\" cap=\"flat\" cmpd=\"sng\" algn=\"ctr\"><a:solidFill><a:schemeClr val=\"phClr\"><a:shade val=\"95000\"/><a:satMod val=\"105000\"/></a:schemeClr></a:solidFill><a:prstDash val=\"solid\"/></a:ln><a:ln w=\"25400\" cap=\"flat\" cmpd=\"sng\" algn=\"ctr\"><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:prstDash val=\"solid\"/></a:ln><a:ln w=\"38100\" cap=\"flat\" cmpd=\"sng\" algn=\"ctr\"><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:prstDash val=\"solid\"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst><a:outerShdw blurRad=\"40000\" dist=\"20000\" dir=\"5400000\" rotWithShape=\"0\"><a:srgbClr val=\"000000\"><a:alpha val=\"38000\"/></a:srgbClr></a:outerShdw></a:effectLst></a:effectStyle><a:effectStyle><a:effectLst><a:outerShdw blurRad=\"40000\" dist=\"23000\" dir=\"5400000\" rotWithShape=\"0\"><a:srgbClr val=\"000000\"><a:alpha val=\"35000\"/></a:srgbClr></a:outerShdw></a:effectLst></a:effectStyle><a:effectStyle><a:effectLst><a:outerShdw blurRad=\"40000\" dist=\"23000\" dir=\"5400000\" rotWithShape=\"0\"><a:srgbClr val=\"000000\"><a:alpha val=\"35000\"/></a:srgbClr></a:outerShdw></a:effectLst><a:scene3d><a:camera prst=\"orthographicFront\"><a:rot lat=\"0\" lon=\"0\" rev=\"0\"/></a:camera><a:lightRig rig=\"threePt\" dir=\"t\"><a:rot lat=\"0\" lon=\"0\" rev=\"1200000\"/></a:lightRig></a:scene3d><a:sp3d><a:bevelT w=\"63500\" h=\"25400\"/></a:sp3d></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:gradFill rotWithShape=\"1\"><a:gsLst><a:gs pos=\"0\"><a:schemeClr val=\"phClr\"><a:tint val=\"40000\"/><a:satMod val=\"350000\"/></a:schemeClr></a:gs><a:gs pos=\"40000\"><a:schemeClr val=\"phClr\"><a:tint val=\"45000\"/><a:shade val=\"99000\"/><a:satMod val=\"350000\"/></a:schemeClr></a:gs><a:gs pos=\"100000\"><a:schemeClr val=\"phClr\"><a:shade val=\"20000\"/><a:satMod val=\"255000\"/></a:schemeClr></a:gs></a:gsLst><a:path path=\"circle\"><a:fillToRect l=\"50000\" t=\"-80000\" r=\"50000\" b=\"180000\"/></a:path></a:gradFill><a:gradFill rotWithShape=\"1\"><a:gsLst><a:gs pos=\"0\"><a:schemeClr val=\"phClr\"><a:tint val=\"80000\"/><a:satMod val=\"300000\"/></a:schemeClr></a:gs><a:gs pos=\"100000\"><a:schemeClr val=\"phClr\"><a:shade val=\"30000\"/><a:satMod val=\"200000\"/></a:schemeClr></a:gs></a:gsLst><a:path path=\"circle\"><a:fillToRect l=\"50000\" t=\"50000\" r=\"50000\" b=\"50000\"/></a:path></a:gradFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults><a:spDef><a:spPr/><a:bodyPr/><a:lstStyle/><a:style><a:lnRef idx=\"1\"><a:schemeClr val=\"accent1\"/></a:lnRef><a:fillRef idx=\"3\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"2\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"lt1\"/></a:fontRef></a:style></a:spDef><a:lnDef><a:spPr/><a:bodyPr/><a:lstStyle/><a:style><a:lnRef idx=\"2\"><a:schemeClr val=\"accent1\"/></a:lnRef><a:fillRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"1\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"tx1\"/></a:fontRef></a:style></a:lnDef></a:objectDefaults><a:extraClrSchemeLst/></a:theme>\n";
+    const xml = body => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + body;
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const relationships = items => xml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + items.map(([id, kind, target]) => `<Relationship Id="rId${id}" Type="${R}/${kind}" Target="${esc(target)}"/>`).join('') + '</Relationships>');
+    const picture = (id, name, rel) =>
+        `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(name)}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>`
+        + `<p:blipFill><a:blip r:embed="rId${rel}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>`
+        + `<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${WIDTH}" cy="${HEIGHT}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+    const slideXml = name => xml(
+        `<p:sld xmlns:p="${P}" xmlns:a="${A}" xmlns:r="${R}"><p:cSld><p:spTree>`
+        + '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
+        + picture(2, name, 2)
+        + '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>');
+    const contentTypes = n => xml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        + '<Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/>'
+        + '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
+        + '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>'
+        + '<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>'
+        + '<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'
+        + Array.from({ length: n }, (_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('')
+        + '</Types>');
+
+    /* —— store 模式 zip（PPTX 不要求压缩；JPEG 本身已压缩） —— */
+    const CRC_TABLE = (() => {
+        const t = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; }
+        return t;
+    })();
+    function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+    function zipStore(files) {
+        const enc = new TextEncoder(), parts = [], central = [];
+        let offset = 0;
+        const u16 = v => [v & 255, (v >> 8) & 255], u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+        const DOS_TIME = 12 << 11, DOS_DATE = ((2026 - 1980) << 9) | (9 << 5) | 24;
+        for (const f of files) {
+            const data = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+            const nameB = enc.encode(f.name), crc = crc32(data);
+            const local = new Uint8Array(30 + nameB.length);
+            local.set([0x50, 0x4b, 3, 4, ...u16(20), ...u16(0), ...u16(0), ...u16(DOS_TIME), ...u16(DOS_DATE), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nameB.length), ...u16(0)]);
+            local.set(nameB, 30);
+            parts.push(local, data);
+            central.push({ nameB, crc, size: data.length, offset });
+            offset += local.length + data.length;
+        }
+        const cdStart = offset;
+        for (const c of central) {
+            const cd = new Uint8Array(46 + c.nameB.length);
+            cd.set([0x50, 0x4b, 1, 2, ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(DOS_TIME), ...u16(DOS_DATE), ...u32(c.crc), ...u32(c.size), ...u32(c.size), ...u16(c.nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(c.offset)]);
+            cd.set(c.nameB, 46);
+            parts.push(cd);
+            offset += cd.length;
+        }
+        const end = new Uint8Array(22);
+        end.set([0x50, 0x4b, 5, 6, ...u16(0), ...u16(0), ...u16(central.length), ...u16(central.length), ...u32(offset - cdStart), ...u32(cdStart), ...u16(0)]);
+        parts.push(end);
+        const out = new Uint8Array(offset + 22);
+        let pos = 0;
+        for (const c of parts) { out.set(c, pos); pos += c.length; }
+        return out;
+    }
+
+    /* —— 单页渲染：foreignObject + Canvas（系统字体；webfont 回退为已知限制） —— */
+    const EXPORT_CSS = `
+        section.slide{visibility:visible!important;opacity:1!important;position:relative!important;inset:auto!important;
+            margin:0!important;border-radius:0!important;box-shadow:none!important;width:1920px!important;height:1080px!important}
+        .slide .reveal{opacity:1!important;transform:none!important;filter:none!important;transition:none!important}
+        .fx-layer,.ambient-layer{display:none!important}
+        *{animation:none!important;transition:none!important}`;
+    function slideImage(slide, deckCss) {
+        const clone = slide.cloneNode(true);
+        clone.querySelectorAll('.fx-layer,.ambient-layer').forEach(n => n.remove());
+        clone.querySelectorAll('.reveal').forEach(n => n.classList.add('shown'));
+        const wrap = document.createElement('div');
+        wrap.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+        const style = document.createElement('style');
+        style.textContent = deckCss + '\n' + EXPORT_CSS;
+        wrap.appendChild(style);
+        wrap.appendChild(clone);
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        svg.setAttribute('width', W); svg.setAttribute('height', H);
+        const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+        fo.setAttribute('width', '100%'); fo.setAttribute('height', '100%');
+        fo.appendChild(wrap);
+        svg.appendChild(fo);
+        return new Promise((res, rej) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = W * SCALE; canvas.height = H * SCALE;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob(b => b ? res(b) : rej(new Error('canvas.toBlob 失败')), 'image/jpeg', QUALITY);
+            };
+            img.onerror = () => rej(new Error('页渲染失败（foreignObject 光栅化）'));
+            img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+        });
+    }
+
+    async function exportPptx(deck) {
+        const slides = deck.slides;
+        const deckCss = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n');
+        const hint = t => deck.flashHint('playerHint', t, 2500);
+        const files = [];
+        const images = [];
+        for (let i = 0; i < slides.length; i++) {
+            hint(`导出 PPTX ${i + 1}/${slides.length}…`);
+            const blob = await slideImage(slides[i], deckCss);
+            const u8 = new Uint8Array(await blob.arrayBuffer());
+            const name = `image${i + 1}.jpg`;
+            images.push(name); files.push({ name: `ppt/media/${name}`, data: u8 });
+        }
+        hint('组装 PPTX…');
+        files.push({ name: '[Content_Types].xml', data: contentTypes(slides.length) });
+        files.push({ name: '_rels/.rels', data: relationships([[1, 'officeDocument', 'ppt/presentation.xml']]) });
+        const slideIds = Array.from({ length: slides.length }, (_, i) => `<p:sldId id="${255 + i + 1}" r:id="rId${i + 2}"/>`).join('');
+        files.push({ name: 'ppt/presentation.xml', data: xml(
+            `<p:presentation xmlns:p="${P}" xmlns:a="${A}" xmlns:r="${R}" autoCompressPictures="0">`
+            + '<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>'
+            + `<p:sldIdLst>${slideIds}</p:sldIdLst><p:sldSz cx="${WIDTH}" cy="${HEIGHT}"/>`
+            + '<p:notesSz cx="6858000" cy="9144000"/></p:presentation>') });
+        files.push({ name: 'ppt/_rels/presentation.xml.rels', data: relationships(
+            [[1, 'slideMaster', 'slideMasters/slideMaster1.xml']]
+            .concat(Array.from({ length: slides.length }, (_, i) => [i + 2, 'slide', `slides/slide${i + 1}.xml`]))) });
+        files.push({ name: 'ppt/slideMasters/slideMaster1.xml', data: TPL_MASTER });
+        files.push({ name: 'ppt/slideMasters/_rels/slideMaster1.xml.rels', data: relationships([[1, 'slideLayout', '../slideLayouts/slideLayout1.xml'], [2, 'theme', '../theme/theme1.xml']]) });
+        files.push({ name: 'ppt/slideLayouts/slideLayout1.xml', data: TPL_LAYOUT });
+        files.push({ name: 'ppt/slideLayouts/_rels/slideLayout1.xml.rels', data: relationships([[1, 'slideMaster', '../slideMasters/slideMaster1.xml']]) });
+        files.push({ name: 'ppt/theme/theme1.xml', data: TPL_THEME });
+        for (let i = 0; i < slides.length; i++) {
+            files.push({ name: `ppt/slides/slide${i + 1}.xml`, data: slideXml(images[i]) });
+            files.push({ name: `ppt/slides/_rels/slide${i + 1}.xml.rels`, data: relationships([[1, 'slideLayout', '../slideLayouts/slideLayout1.xml'], [2, 'image', `../media/${images[i]}`]]) });
+        }
+        const blob = new Blob([zipStore(files)], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (document.title || 'deck') + '.pptx';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        hint('PPTX 已下载 ✓（快照版：每页一张最终态图）');
+    }
+
+    function bind(deck) {
+        const btn = document.getElementById('pptxBtn');
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            if (btn.dataset.busy) return;
+            btn.dataset.busy = '1'; btn.textContent = '⤓ 导出中…';
+            try { await exportPptx(deck); } catch (e) { deck.flashHint('playerHint', '导出失败：' + e.message, 4000); }
+            delete btn.dataset.busy; btn.textContent = '⤓ PPT';
+        });
+    }
+    return { exportPptx, bind };
+})();
+(function () {
+    const boot = () => { if (window.__deck && window.DeckExport) window.DeckExport.bind(window.__deck); };
     if (window.__deck) boot(); else addEventListener('load', boot, { once: true });
 })();
 
