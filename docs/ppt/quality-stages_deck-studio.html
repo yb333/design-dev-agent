@@ -290,20 +290,20 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <rect x="30" y="285" width="430" height="24" rx="10" fill="#2563eb"/>
             <rect x="30" y="297" width="430" height="12" fill="#2563eb"/>
             <text x="245" y="301" text-anchor="middle" font-size="10.6" font-weight="800" fill="#fff">防线① 确定性脚本 ——「拦」</text>
-            <text x="40" y="323" font-size="8.3" fill="#1e3a8a">受理：只判「可结构化的对不对」——引用 · 类型 · 列序 · 结构 · 口径</text>
-            <text x="40" y="341" font-size="8.3" fill="#1e3a8a">独立：生成者＝LLM，把关者＝脚本；同一脚本跑两遍结果必然相同</text>
-            <text x="40" y="359" font-size="8.3" fill="#1e3a8a">代价：秒级 · 零成本 · 100% 可复现——拦截的问题占比最大</text>
-            <text x="40" y="377" font-size="8.3" fill="#1e3a8a">限位：规则固定无裁量；检出即分诊——不过闸不放行</text>
+            <text x="40" y="323" font-size="8.3" fill="#1e3a8a">受理（项目实际）：连库核类型 · 值域探测 · 54 条装配校验 · 引用门禁 · 口径对账 · 列序实测</text>
+            <text x="40" y="341" font-size="8.3" fill="#1e3a8a">独立：把关者＝脚本——规则固定无裁量，同脚本跑两遍必同结果</text>
+            <text x="40" y="359" font-size="8.3" fill="#1e3a8a">实例：幻觉字段拦下 · 删除标记译反拦下 · INSERT 列序乱序拦下</text>
+            <text x="40" y="377" font-size="8.3" fill="#1e3a8a">代价：秒级 · 零成本 · 100% 可复现 ｜ 限位：检出即分诊——不过闸不放行</text>
             <text x="40" y="398" font-size="7.7" fill="#2563eb" font-weight="700">四类翻车的前三类死在这里：幻觉引用 / 口径漂移 / 静默错位</text>
             <!-- 防线② -->
             <rect x="490" y="235" width="330" height="195" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
             <rect x="490" y="235" width="330" height="24" rx="10" fill="#1d4ed8"/>
             <rect x="490" y="247" width="330" height="12" fill="#1d4ed8"/>
             <text x="655" y="251" text-anchor="middle" font-size="10.6" font-weight="800" fill="#fff">防线② 有边界的自治 ——「修」</text>
-            <text x="500" y="277" font-size="8.3" fill="#1e3a8a">受理：修「技术性失败」——SQL 语法 · 执行类报错</text>
-            <text x="500" y="297" font-size="8.3" fill="#1e3a8a">动作：先脚本定位 → 旧会话恢复修复 → 修完必重验</text>
-            <text x="500" y="317" font-size="8.3" fill="#1e3a8a">好处：技术问题不过夜，不占人工停等</text>
-            <text x="500" y="337" font-size="8.3" fill="#1e3a8a">代价：分钟级 · 全自动</text>
+            <text x="500" y="277" font-size="8.3" fill="#1e3a8a">受理（项目实际）：UT 失败分诊——SQL 语法错 · 质检 SQL 报错</text>
+            <text x="500" y="297" font-size="8.3" fill="#1e3a8a">动作：先脚本定位（键唯一性逐表实测）→ 旧会话修 → 必重验</text>
+            <text x="500" y="317" font-size="8.3" fill="#1e3a8a">实例：主键重复＝关联发散，逐表实测定位——不让模型猜</text>
+            <text x="500" y="337" font-size="8.3" fill="#1e3a8a">代价：分钟级 · 全自动——技术问题不过夜，不占人工停等</text>
             <text x="500" y="357" font-size="8.3" fill="#1e3a8a">限位：≤3 轮 · 职责白名单 · 数据类问题禁自愈</text>
             <text x="500" y="380" font-size="7.7" fill="#1d4ed8" font-weight="700">第四类翻车（掩盖根因）由防线②定位、防线③裁决——不许用小技巧「消掉」报错</text>
             <text x="500" y="404" font-size="7.7" fill="#64748b">（详见「防线②」页判定树）</text>
@@ -312,9 +312,9 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <rect x="850" y="170" width="160" height="24" rx="10" fill="#d97706"/>
             <rect x="850" y="182" width="160" height="12" fill="#d97706"/>
             <text x="930" y="186" text-anchor="middle" font-size="10.6" font-weight="800" fill="#fff">防线③ 人守闸口</text>
-            <text x="858" y="212" font-size="8" fill="#92400e">受理：语义口径 · 放行 · 规则没覆盖的一切</text>
-            <text x="858" y="230" font-size="8" fill="#92400e">动作：两个闸口人判；告警三选一</text>
-            <text x="858" y="248" font-size="8" fill="#92400e">材料永远是选择题：现象＋证据＋选项</text>
+            <text x="858" y="212" font-size="8" fill="#92400e">受理（项目实际）：粒度口径 · 放行 · 表外一切</text>
+            <text x="858" y="230" font-size="8" fill="#92400e">动作：闸口① 审 TS 设计；闸口② 告警三选一</text>
+            <text x="858" y="248" font-size="8" fill="#92400e">材料：选择题——现象＋证据＋选项</text>
             <text x="858" y="266" font-size="8" fill="#92400e">代价：停等 · 最贵——只花在刀刃上</text>
             <text x="858" y="284" font-size="8" fill="#92400e">限位：三条红线 · 决策留痕</text>
             <!-- 守门人小图 -->
@@ -401,7 +401,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <line x1="135" y1="174" x2="151" y2="160" stroke="#2563eb" stroke-width="1.3" marker-end="url(#p0a)"/>
             <line x1="135" y1="190" x2="151" y2="198" stroke="#2563eb" stroke-width="1.3" marker-end="url(#p0a)"/>
             <rect x="157" y="142" width="135" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="224" y="160" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">设计岗 · 生产者</text>
+            <text x="224" y="160" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">生产者：设计岗＋编码岗</text>
             <rect x="157" y="186" width="135" height="28" rx="7" fill="#fff" stroke="#93c5fd" stroke-width="1.2" stroke-dasharray="4 2"/>
             <text x="224" y="204" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">质检岗 · 检验者</text>
             <line x1="292" y1="156" x2="306" y2="166" stroke="#2563eb" stroke-width="1.3" marker-end="url(#p0a)"/>
@@ -409,7 +409,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <rect x="310" y="162" width="175" height="32" rx="7" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
             <text x="397" y="176" text-anchor="middle" font-size="7.7" font-weight="800" fill="#92400e">两读不一致＝歧义自动暴露</text>
             <text x="397" y="189" text-anchor="middle" font-size="7.2" fill="#92400e">显式上交人工，不静默拍板</text>
-            <text x="30" y="226" font-size="7.7" fill="#475569">① 输入隔离：质检岗不读实现 SQL、不听口径自述——只拿原始原料＋产物接口</text>
+            <text x="30" y="226" font-size="7.7" fill="#475569">① 输入隔离：质检岗不读 TS 加工口径、不读加工 SQL——只拿原始需求＋目标表结构</text>
             <text x="30" y="246" font-size="7.7" fill="#475569">② 干净会话：独立短会话防锚定；检查 FAIL 分钟级短回路自修</text>
             <text x="30" y="266" font-size="7.7" fill="#475569">③ 产物边界：各岗只准写自己的产物，越界落不了盘</text>
             <text x="30" y="290" font-size="8.3" font-weight="700" fill="#1e293b">差别在思维：生产者构造（把活干出来）· 检验者证伪（独立重算挑错）——DQ 断言式＋对比式双模式</text>
