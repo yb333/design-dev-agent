@@ -41,18 +41,26 @@ description: >-
 1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`。（现场就绪——清场重建 build/ + cp archive→archive_tmp/——由步骤 1 的 preprocess_opt 做，不预建）
 3. **查基线（三段式，2026-10-14 编排合入）**：
    - **`{arc}/ts.json` 存在** → 有档（new-pipe 交付即建档；或历次优化 advance 推进过），直接当 baseline。跳到步骤 1。
-   - **无档 + 契约参数 `artifacts`**（制品清单 JSON：execution_tasks 必填 / lts 两种情况必给[增量资产=回刷地基；变更触碰调度=新来源表加依赖/回刷加任务/DQ 加任务行——与全量增量无关] / dq 三态显式[provided 带 path｜declared_absent] / ddl 路径数组——type+path **人指认**，文件命名/形态零要求，类型不识别不猜）→ 起逆向子 agent 产契约：
+   - **无档 + 契约参数 `artifacts`** → 用户通道收**目录路径**（推荐：制品丢一个目录，命名/形态零要求），总控通道收 JSON（机器形态）。目录先判型：
+
+```bash
+python PIPE_SCRIPTS/sniff_artifacts.py --dir {artifacts目录}
+```
+     - 判型干净（每型至多一个 xlsx）→ 输出的 `manifest_artifacts` 即起调参数（路径拼成绝对），**DQ 无文件=按 declared_absent 处理**——闸口①'材料披露"按无 DQ 入档，如有遗漏请说明"（纠错并进已有触点，不新增停等）；
+     - 同型多文件/多义（ambiguous）/unknown 含疑似制品 → **question 一次性指认**（把文件列表和判型结果亮给人选），人答完拼 manifest；
+     - unknown 里出现 mapping/RS 等非制品文件属正常（参数已单独传），披露即可。
+     起 reverser：
 
 ```
 Task(subagent_type="dws-reverser", description="逆向产 baseline_v1 {资产}",
   prompt="按 dws-pipeline-analyzer skill 生成 manifest（artifacts 段用以下清单原样透传，
-          DQ 三态显式）后以编排模式执行。制品清单：{artifacts}；
+          DQ 三态显式）后以编排模式执行。制品清单：{manifest_artifacts}；
           资产：{schema}.{table}；输出落盘：{build}/_internal/baseline_v1.json。
           一次交卷；回报=产物路径+摘要+warnings 原样列出。")
 ```
      记 task_id。**失败路由（reverser ⚠ 回报的 stderr 清单 → 你的动作）**：manifest 装配/路径错→修任务参数恢复其会话重调；资产不一致→核对制品清单与资产标识（大概率串包）；DQ 无有效规则行→问人（制品导错 or 该走声明无）；dm=6 merge_on 空→向用户/平台要配置补源制品后重调；query_sql 截断/空→问人要完整制品；契约校验不过（其他）→错误清单原样上报人。**任何情况禁代填/编造后重跑**。
    - **无档 + 契约参数 `baseline`**（json 路径直交）→ 第三方供方兼容通道，不起调直接入料。
-   - **两者皆无** → 停：指引"存量首优需提供制品清单（artifacts）或 baseline_v1.json（baseline）"。
+   - **两者皆无** → 停：指引"存量首优需提供制品目录（artifacts）或 baseline_v1.json（baseline）"。
 
    入料建档（有产物后，两通道同路）：
 
