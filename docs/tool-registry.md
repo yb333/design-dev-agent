@@ -108,7 +108,6 @@
 |------|------|--------------|------------|------|
 | `opt-pipe/schemas/baseline_v1.schema.json` | 契约 vendor 拷贝（权威在 analyzer 仓） | 步骤 0 入料 | baseline_v1.json 的校验基准 | ✅ 阶段一 |
 | `baseline_contract.py` | 契约校验（schema+版本+语义条件） | 步骤 0 入料 | baseline_v1.json → 违规清单 | ✅ 阶段一 |
-| `sniff_artifacts.py` ★2026-10-14 | 制品目录 sheet 指纹判型（artifacts 目录通道）：术加=RULE+TargetFields/LTS=tasks·jobs·taskParams/DQ=规则基本信息/DDL=.sql；判不了/多义上抛 engineer question 人；DQ 无文件=declared_absent。**逆向侧 15 号实施后退役（判型下沉 analyzer 装配层）** | opt 步骤 0（artifacts=目录时） | 制品目录 → manifest artifacts 形态 JSON | ✅ |
 | `assemble_ts_baseline.py` | json 入料建档：档案件（ts.json + etl/{rule}.sql）落 archive/、过程件（baseline_view + exemptions）落 opt/_internal/；provenance 落 ts._baseline；kind→load_mode 映射、词表外待定不硬映射 | opt 步骤 0 入料 | baseline_v1.json → archive/ + opt/_internal/ | ✅ |
 | `preprocess_opt.py` | **现场就绪**（清场重建 build/ 增量现场 + cp archive→archive_tmp 临时档案）+ 标注解析 → change_request + 一致性校验（冲突/漏标/配对/资产一致[I/F 镜像归一]/RS 对账 warn）；契约参数直传 --mapping/--rs | opt 步骤 1 | mapping xlsx + RS md + archive/ts.json → build/_internal/change_request.json | ✅ |
 | `precheck_opt.py` | 步骤 1b 优化预检（只检新增子集）：命名规范/连库存在性+类型对账（以库为准回填）/类型风险决策（回写 fields『decision』标记）/值域探测/新来源 JOIN 键对账；复用 shared 原语（risk_checks/schema_cache）；无库降 warn | opt 步骤 1b | change_request + archive/ts.json → 决策回写 change_request + PENDING 摘要 | ✅ |

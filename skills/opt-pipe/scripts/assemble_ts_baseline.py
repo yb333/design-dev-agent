@@ -429,15 +429,26 @@ def copy_artifacts_to_export(manifest_path: Path, archive_dir: Path) -> List[str
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="baseline_v1 入料建档（档案件落 archive/，过程件落 opt/_internal/）")
-    ap.add_argument("--baseline", required=True, help="baseline_v1.json 路径")
+    ap.add_argument("--baseline", required=True, help="资产事实包 json 路径（原 baseline_v1.json，更名随契约波次）")
     ap.add_argument("--archive-dir", required=True, help="档案目录（ddlc_design_dev/archive/）")
     ap.add_argument("--internal-dir", required=True, help="过程目录（ddlc_design_dev/opt/_internal/）")
-    ap.add_argument("--manifest", default=None, help="reverser 的 manifest.json 路径（可选：给则按 artifacts 清单拷原始制品入 archive/export/）")
+    ap.add_argument("--manifest", default=None, help="逆向侧的制品清单文件（可选：给则按清单拷原始制品入 archive/export/）")
+    ap.add_argument("--asset", default="", help="资产对账（schema.table，probe 推出——与产物 asset 段比对，不一致=串包拒收；缺省跳过）")
     args = ap.parse_args(argv)
 
     data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
 
     violations = validate_baseline_v1(data)
+    # 资产对账（验收链独立一侧：我们从变更输入推资产，逆向从制品解析资产——双侧独立互证防串包）
+    if args.asset:
+        from baseline_contract import norm_asset
+        _got = ((data.get("asset") or {}).get("schema", "")
+                + "." + (data.get("asset") or {}).get("table", ""))
+        if norm_asset(_got) != norm_asset(args.asset):
+            print(f"[BASELINE_CONTRACT_VIOLATION] 资产对账不通过，拒绝组装：", file=sys.stderr)
+            print(f"  产物资产 = {_got!r}，本次资产 = {args.asset!r}"
+                  f"（I/F 镜像归一后仍不一致=串包：制品不是这个资产的）", file=sys.stderr)
+            return 2
     if violations:
         print("[BASELINE_CONTRACT_VIOLATION] 契约校验不通过，拒绝组装：", file=sys.stderr)
         for v in violations:

@@ -27,6 +27,17 @@ DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schemas" / "base
 _SCHEMA_CACHE: Dict[str, dict] = {}
 
 
+def norm_asset(name: str) -> str:
+    """资产名镜像归一（资产对账口径，唯一源——镜像语义只在 _f↔_i 之间，用户裁定）：
+    剥 schema 前缀 + 去 _f/_i 尾（I 视图与 F 表互为镜像）。**_d 不剥**——dwb 层表的 _d
+    是层命名不是镜像尾缀（dwb_cust_asset_d 的资产名就是原名，它的镜像写法不存在）。"""
+    n = (name or "").strip()
+    if "." in n:
+        n = n.rsplit(".", 1)[-1]
+    import re as _re
+    return _re.sub(r"_[fi]$", "", n.lower())
+
+
 def load_schema(schema_path: Optional[Path] = None) -> dict:
     """加载 vendored baseline_v1 JSON Schema（带简单缓存）。"""
     path = Path(schema_path) if schema_path else DEFAULT_SCHEMA_PATH

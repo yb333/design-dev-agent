@@ -72,13 +72,7 @@ def render_baseline_view_from_ts(ts: dict) -> str:
     return "\n".join(lines)
 
 
-def norm_asset(name: str) -> str:
-    """资产名镜像归一：剥 schema 前缀 + 去 _i/_f 尾（资产铆定 I，mapping 写 I 视图、
-    baseline 记 F 表是同一资产的两面——I 视图是 F 表的固定镜像）。"""
-    n = (name or "").strip()
-    if "." in n:
-        n = n.rsplit(".", 1)[-1]
-    return re.sub(r"_[if]$", "", n.lower())
+from baseline_contract import norm_asset  # 资产对账归一口径（唯一源）
 
 
 # ---------------------------------------------------------------------------

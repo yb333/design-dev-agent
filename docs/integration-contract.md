@@ -29,7 +29,7 @@ rs: /abs/path/RS_xxx.md"""
 | `模式` | ✓ | `新建` \| `优化`（决定加载 new-pipe / opt-pipe 剧本） |
 | `mapping` | ✓ | mapping 文件**绝对路径**（契约参数直传，文件路径不做分拣/猜测）。**资产名/schema/appid 全从输入推导（preprocess --probe）——勿传，传了即双源** |
 | `rs` | 可选 | RS 文件绝对路径；省略 = 无 RS 模式 |
-| `artifacts` | 可选（优化无档时与 `baseline` 二选一，**推荐通道**） | **人通道=制品目录路径**（推荐：用户把制品丢一个目录，文件命名/形态零要求——流程按 sheet 指纹自动判型[sniff_artifacts]，判不了才一次性问人；DQ 无文件按声明无处理、闸口①'披露纠错）；**总控通道=清单 JSON**（机器形态：`execution_tasks`/`lts`/`dq` 三态[`{"status":"provided","path":...}`\|`{"status":"declared_absent"}`]/`ddl` 数组）。LTS 两种情况必给：增量资产（回刷地基）/变更触碰调度（新来源表加依赖/回刷加任务/DQ 加任务行——与全量增量无关）。流程自动起逆向子 agent（dws-reverser）产 baseline_v1，一次交卷 |
+| `artifacts` | 可选（优化无档时与 `baseline` 二选一，**推荐通道**） | **制品目录路径**——用户把制品丢一个目录，文件命名/形态零要求；流程调逆向入口自动完成识别判型与资产事实包生成（asset_facts，接口契约见 docs/specs/opt/12 章：目录进、产物出，我们不构造任何中间结构），产物过验收链（契约校验+资产对账）后入料建档。LTS 两种情况应备：增量资产（回刷地基）/变更触碰调度（新来源表加依赖/回刷加任务/DQ 加任务行——与全量增量无关） |
 | `baseline` | 可选 | baseline_v1.json 绝对路径——**直交通道**（供方已产 json 的兼容场景，如真第三方逆向侧文件交接）；与本仓逆向链（artifacts）二选一，都给时 artifacts 优先并警告 |
 | `交互` | 可选 | `interactive`（默认）：闸口①② question 必发，**调用方保证把问题送到人**；`non-interactive`（对应总控的自动决策开关）：**流程闸口继续**（闸口①②不等待，跑完产物人后审，推生产由人放行兜底）；**人工决策照常阻断上报**（类型风险/关联键类型/UT 数据质量根因——无安全默认，agent 不代答不选默认，属"RS/mapping 等输入派生问题"）。两种模式 agent 都不做语义判断 |
 > 总控侧的自动决策开关映射为本参数（开=non-interactive），**不要以提示词注入实现**——参数外内容一律被忽略。
@@ -91,7 +91,7 @@ Task(
 2. **opencode 版本对齐**：≥ 我们验证过的版本（1.2.27）。
 3. **`subagent_depth ≥ 2`**：opencode.json 配置（默认 1 会拦"engineer→designer"第二层）。
 4. **上游不排除工具面**（★总控侧内容已固化，本条是**部署侧自查项**——核对总控 agent 定义/opencode.json 无对下列工具的 deny/排除即可）：`bash / write / edit / task / skill / read`（直连时总控是 primary 全工具，天然满足；skill/read 被钳不炸但形态退化——子 agent 只能 Read 兜底加载 skill）。
-5. **调用环境不向本链暴露 MCP server**（部署侧自查项）：dws-engineer 链（engineer/designer/coder/reverser）的全部 DB 能力走自带脚本（dws_db 连目标 schema 数据源）——环境里配的任何 MCP（尤其数据库 MCP）与本流程的数据源/权限无关，子 agent 调用必得错误结论。MCP 配置留在总控自己的会话层，勿下压到本链的项目/全局配置；agent 侧已有提示词禁令+permission deny 尽力兜底。★内网魔改版补充（实测）：**父 agent 定义的 deny 会传导给子代工具集**——链上任何我们自己的 agent 若要起子代，其权限必须 allow-only（engineer 已改；designer/coder 不起子代可保留 deny 白名单）。
+5. **调用环境不向本链暴露 MCP server**（部署侧自查项）：dws-engineer 链（engineer/designer/coder）的全部 DB 能力走自带脚本（dws_db 连目标 schema 数据源）——环境里配的任何 MCP（尤其数据库 MCP）与本流程的数据源/权限无关，子 agent 调用必得错误结论。MCP 配置留在总控自己的会话层，勿下压到本链的项目/全局配置；agent 侧已有提示词禁令+permission deny 尽力兜底。★内网魔改版补充（实测）：**父 agent 定义的 deny 会传导给子代工具集**——链上任何我们自己的 agent 若要起子代，其权限必须 allow-only（engineer 已改；designer/coder 不起子代可保留 deny 白名单）。
 6. **优化场景存量首优（artifacts 通道）**：逆向 skill `dws-pipeline-analyzer` 已在内网就位（analyzer 仓 install.bat 安装，安装名即此）——缺失时 opt-pipe 步骤 0 fail loud 并给指引（对齐"skill 读不到"规约，不代跑）。增量资产另需 LTS 制品；DB 可达（UT 段依赖，无库自动跳过）。
 
 ## 四、question 的处理约定
