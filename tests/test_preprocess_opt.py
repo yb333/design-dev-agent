@@ -106,12 +106,14 @@ STD_CHANGES = [
 
 
 def _to_entry(c: dict) -> dict:
-    """chg 中文行 → read_change_sheet 归一后的 entry 同构形态（extract 单测直喂）。"""
+    """chg 中文行 → read_change_sheet 归一后的 entry 同构形态（extract 单测直喂）——
+    含标识符小写归一（与生产 read_change_sheet 同口径）。"""
     from preprocess_opt import normalize_yyyymm
     group, _, key_name = c["变更key"].partition("|")
     return {"seq": c["变更序号"], "time": normalize_yyyymm(c["变更时间"]),
             "page": "entity" if "实体" in c["变更页签"] else "attr",
-            "group": group, "key": key_name, "column": c["变更列"],
+            "group": group.strip().lower(), "key": key_name.strip().lower(),
+            "column": c["变更列"],
             "ctype": c["变更类型"], "before": c["变更前"], "after": c["变更后"]}
 
 
@@ -163,6 +165,13 @@ class TestChangeSheetParsing:
         with pytest.raises(ValueError, match="归一失败"):
             read_change_sheet(tmp_path / PKG_XLSX)
 
+    def test_uppercase_key_normalized(self, tmp_path):
+        """真实填写形态：变更 key 全大写 → read_change_sheet 归一为小写（标识符 foldcase）。"""
+        make_pkg(tmp_path, [ent(), ent(table="dim_channel", alias="c")], [attr()],
+                 [chg(2, "2026-10-14", "attr", "DEFAULT|CHANNEL_NAME", "资产字段", "ADD")])
+        entries = read_change_sheet(tmp_path / PKG_XLSX)
+        assert entries[0]["key"] == "channel_name" and entries[0]["group"] == "default"
+
 
 class TestRenameSynth:
     """改名合成：严格证据链（DELETE.变更后 == ADD.key）才合成，独立行不误合。"""
@@ -173,7 +182,18 @@ class TestRenameSynth:
                  _to_entry(chg(4, "2026-10-14", "attr", "default|order_amount", "资产字段", "ADD"))]
         renames, rest = synth_renames(batch)
         assert renames == [{"kind": "rename", "group": "default",
-                            "old": "order_amt", "new": "order_amount", "seq": "3+4"}]
+                            "old": "order_amt", "new": "order_amount", "seq": "3+4",
+                            "after_raw": "order_amount"}]
+        assert rest == []
+
+    def test_rename_with_uppercase_key_and_after(self):
+        """真实填写形态：变更 key 大写、变更后人填值大写——标识符 foldcase 归一后仍配对。"""
+        batch = [_to_entry(chg(3, "2026-10-14", "attr", "DEFAULT|ORDER_AMT", "目标字段名", "DELETE",
+                               "ORDER_AMT", "ORDER_AMOUNT")),
+                 _to_entry(chg(4, "2026-10-14", "attr", "DEFAULT|ORDER_AMOUNT", "资产字段", "ADD"))]
+        renames, rest = synth_renames(batch)
+        assert renames and renames[0]["old"] == "order_amt" and renames[0]["new"] == "order_amount"
+        assert renames[0]["after_raw"] == "ORDER_AMOUNT"
         assert rest == []
 
     def test_unpaired_stays_independent(self):
@@ -209,6 +229,18 @@ class TestExtract:
         f = add_fields[0]
         assert f["source"]["table"] == "dim_channel" and f["cn"] == "渠道名称"
         assert f["new_source_table"] is True
+        assert not [d for d in diags if d["level"] == "error"]
+
+    def test_extract_add_field_uppercase_key(self, facts):
+        """真实填写形态：变更 key 全大写（DEFAULT|CHANNEL_NAME）也能命中属性级小写行。"""
+        entity = [ent(), ent(table="dim_channel", alias="c")]
+        attrs = [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"), attr()]
+        mapping = mapping_of(entity, attrs)
+        batch = [_to_entry(chg(2, "2026-10-14", "attr", "DEFAULT|CHANNEL_NAME", "资产字段", "ADD"))]
+        renames, rest = synth_renames(batch)
+        add_fields, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        assert [f["field"] for f in add_fields] == ["channel_name"], \
+            "大写 key 归一后应命中属性级小写行"
         assert not [d for d in diags if d["level"] == "error"]
 
     def test_modify_delete_entity_add_classified_unsupported(self, facts):

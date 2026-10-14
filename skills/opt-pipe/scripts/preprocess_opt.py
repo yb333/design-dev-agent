@@ -208,6 +208,9 @@ def read_change_sheet(xlsx_path: Path) -> List[dict]:
         page_raw = get("变更页签")
         page = "entity" if "实体" in page_raw else ("attr" if "属性" in page_raw else "")
         group, _, key_name = get("变更key").partition("|")
+        # 标识符归一小写（DWS=PG 内核 foldcase；变更页签 key 常为大写形态，
+        # 属性级当前态字段名为小写——归一后同表对齐，大小写差异不构成不同字段）
+        group, key_name = group.strip().lower(), key_name.strip().lower()
         try:
             time_ym = normalize_yyyymm(get("变更时间")) if get("变更时间") else ""
         except ValueError as e:
@@ -242,12 +245,13 @@ def synth_renames(batch: List[dict]) -> Tuple[List[dict], List[dict]]:
     paired_ids = set()
     for d in (e for e in batch if e["page"] == "attr" and e["ctype"] == "DELETE" and e["after"]):
         a = next((e for e in batch if e["page"] == "attr" and e["ctype"] == "ADD"
-                  and e["key"] == d["after"] and id(e) not in paired_ids), None)
+                  and e["key"] == d["after"].strip().lower() and id(e) not in paired_ids), None)
         if a is not None:
             paired_ids.update({id(d), id(a)})
             renames.append({"kind": "rename", "group": d["group"],
                             "old": d["key"], "new": a["key"],
-                            "seq": f"{d['seq']}+{a['seq']}"})
+                            "seq": f"{d['seq']}+{a['seq']}",
+                            "after_raw": d["after"]})
     rest = [e for e in batch if id(e) not in paired_ids]
     return renames, rest
 
@@ -267,9 +271,12 @@ def baseline_facts(ts_baseline: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _match_attr_rows(attr_rows: List[dict], entry: dict) -> List[dict]:
-    """按变更key（分组|目标字段名）在属性级当前态匹配行——分组空时按字段名宽松匹配。"""
-    hits = [r for r in attr_rows if r.get("target_column") == entry["key"]
-            and (not entry["group"] or r.get("scene_group", "") == entry["group"])]
+    """按变更key（分组|目标字段名）在属性级当前态匹配行——分组空时按字段名宽松匹配；
+    标识符两侧归一小写（key 常为大写形态，当前态字段名为小写）。"""
+    hits = [r for r in attr_rows
+            if (r.get("target_column") or "").strip().lower() == entry["key"]
+            and (not entry["group"]
+                 or (r.get("scene_group") or "").strip().lower() == entry["group"])]
     return hits
 
 
