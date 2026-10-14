@@ -21,7 +21,7 @@ sync_to_team.bat --config-analyzer D:\path\to\dws-analyzer-skill
 | analyzer 仓（dws-analyzer-skill） | `dws-pipeline-analyzer/`（skill 成品） | `.opencode/skills/dws-pipeline-analyzer/` |
 
 - 提交信息带双源版本：`sync: design-dev-agent@{h1} + analyzer@{h2} ...`
-- **内网一次拉取全有**——逆向 skill 与我们的 skill 同仓共存，opt 场景（dws-reverser 起调）内网即插即用，不再需要 analyzer 侧单独的 install 步骤和旧 sync_to_internal 通道（已退役注记）。
+- **内网一次拉取全有**——逆向 skill 与我们的 skill 同仓共存，opt 场景（dws-reverser 起调）内网即插即用，不再需要 analyzer 侧单独的 install 步骤。analyzer 仓自己的 `sync_to_internal` 通道**不受影响**（它是否继续使用、怎么用归逆向侧自己决定——我们只是提供这条一并通道，不动人家的工具）。
 - 不配置 `--config-analyzer` 时行为与原版完全一致（仅同步本仓）；analyzer 条目在内部仓里如同"别人的内容"不被触碰。
 - 前置：内网电脑需要 analyzer 仓的本地克隆（GitHub clone，跑前自己 pull——与本仓同款纪律）。
 
