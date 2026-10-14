@@ -70,8 +70,10 @@ def render(v2: dict, baseline: dict, cr: dict) -> str:
 
     lines.append("## 回刷意向")
     backfill = v2.get("change", {}).get("backfill") or cr.get("backfill") or "pending"
-    lines.append(f"- backfill: **{backfill}**" + ("（增量基线——闸口①'人选拿：回刷窗口/范围）"
-                 if backfill == "pending" else ""))
+    _hint = ("（增量基线——闸口①'人选拿：回刷窗口/范围）" if backfill == "pending"
+             else "（全量/分区基线：下次调度自动补齐新列，无需回刷）" if backfill == "no"
+             else "")
+    lines.append(f"- backfill: **{backfill}**{_hint}")
     lines.append("")
 
     jdec = cr.get("join_type_decisions") or []

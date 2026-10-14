@@ -202,6 +202,8 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
 
         change_fields.append({
             "field": fname, "target_table": tgt,
+            "field_type": f["field_type"], "field_comment": f["field_comment"],
+            "design_logic": f["design_logic"],
             "placed_rules": list(f["placed_rules"]),
             "intermediate_tables": list(f.get("intermediate_tables", [])),
             "new_joins": [{k: j[k] for k in ("rule", "table", "alias", "on")}
@@ -211,7 +213,10 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
         })
 
     # 5. change 段（fence_check 的消费形状；结构见 fence_check 模块头注释）
-    v2["change"] = {"change_type": "add_field", "fields": change_fields}
+    # backfill 顶层（gate_summary_opt 读这里）：YAML 布尔归一为语义值（no=无需回刷）
+    _bf = decisions.get("backfill", "pending")
+    _bf = "no" if _bf is False else (str(_bf) if _bf else "pending")
+    v2["change"] = {"change_type": "add_field", "backfill": _bf, "fields": change_fields}
     return v2
 
 
@@ -248,8 +253,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 文件名按产出标准 {资产短名}_ts.md（与主线 assemble_ts 同标准，消费方统一寻址）
     try:
         from assemble_ts import render_md
-        _short = str(((v2.get("meta", {}) or {}).get("target", {}) or {})
-                     .get("f_table", {}) or {}).get("table") or "ts"
+        _short = (((v2.get("meta", {}) or {}).get("target", {}) or {})
+                  .get("f_table", {}) or {}).get("table") or "ts"
         md_path = out.parent / f"{_short}_ts.md"
         md_path.write_text(render_md(v2), encoding="utf-8")
         print(f"ts_md: {md_path}")

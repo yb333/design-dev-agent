@@ -153,6 +153,24 @@ class TestMain:
         assert check(baseline, v2, cr_for("channel_name")) == [], \
             "main 产出的 ts_v2 必须过围栏（组装器与围栏同契约）"
 
+    def test_main_produces_ts_md_pair(self, baseline, tmp_path):
+        """ts.md 成对产出（2026-10-14 彩排实证：_short 提取 str() 包错位导致
+        ts.md 渲染自上线起静默失败——档案 ts.json/ts.md 成对是定调，必须断言产物）。"""
+        d = dec_new_join()
+        dp = tmp_path / "d.yaml"
+        dp.write_text(yaml.safe_dump(d), encoding="utf-8")
+        bp = tmp_path / "ts_baseline.json"
+        bp.write_text(json.dumps(baseline, ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "sub" / "ts_v2.json"
+        assert main(["--ts-baseline", str(bp), "--decisions", str(dp),
+                     "--output", str(out)]) == 0
+        v2 = json.loads(out.read_text(encoding="utf-8"))
+        _f = ((v2.get("meta", {}) or {}).get("target", {}) or {}).get("f_table") or {}
+        short = _f.get("table") or "ts"
+        md = out.parent / f"{short}_ts.md"
+        assert md.exists(), f"ts.md 未成对产出: {md}"
+        assert "dwb_trade_order_d" in md.read_text(encoding="utf-8")
+
 
 # ============================================================
 # 包2 补强（2026-09-04）：引用门禁（N36 等价）+ 新 JOIN 键类型比对（N_JOIN2 等价）

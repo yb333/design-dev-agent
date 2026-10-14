@@ -30,8 +30,10 @@ import yaml
 RULE_SHEET_CANDIDATES = ("RULE", "Rule", "rule")
 TF_SHEET_CANDIDATES = ("TargetFields", "target_fields", "targetfields")
 COL_RULE_CODE = "规则编码"
-COL_SQL = "(生成的)查询语句"
-TF_COLS = {"规则编码": "rule_code", "目标字段": "target_field", "来源字段": "source_field",
+# xlsx 的 SQL 列头是「(生成的）查询语句1..N」（全角右括号+数字后缀）——按正则定位（见
+# patch_xlsx 内注释）；yml 的 SQL key 是半角形态（analyzer 372 行注记：yml 半角/excel 全角）
+YML_SQL_KEY = "(生成的)查询语句"
+TF_COLS = {"规则编码": "rule_code", "目标字段名称": "target_field", "来源字段名称": "source_field",
            "加密方式": "encryption", "别名": "alias", "字段类型": "field_type", "备注": "remark"}
 
 
@@ -75,7 +77,17 @@ def patch_xlsx(src: Path, dst: Path, ts_v2: dict, etl_dir: Path, notes: List[str
         return {str(c.value).strip(): c.column for c in ws[1] if c.value is not None}
 
     # --- RULE 表：SQL 单元格替换（按 rule_code 定位行） ---
+    # 真实导出列头是「(生成的）查询语句1..N」（全角右括号+数字后缀，超长 SQL 按列切块存储），
+    # 与 analyzer 读取规则（按 N 序拼接非空列）镜像：写回 = 清空全部查询语句N、新 SQL 整体
+    # 写列 1 —— 拼接语义恒等（读取时 1..N 非空拼接 = 只有列 1 非空 = 新 SQL）。
+    import re as _re
     rh = header_map(rule_ws)
+    sql_cols = sorted((int(m.group(1)), col) for name, col in rh.items()
+                      for m in [_re.match(r".*查询语句\s*(\d+)", name)] if m)
+    if not sql_cols:
+        raise ValueError(f"RULE 表无「查询语句N」列（现有列头样例: {list(rh)[:8]}）——"
+                         f"provenance 指到的可能不是术加制品包")
+    col1 = sql_cols[0][1]
     for rc in _sql_rules(ts_v2):
         sql_text = read_select(etl_dir, rc)   # {code}.sql 或 {code}_描述_模式.sql
         if not sql_text:
@@ -84,9 +96,11 @@ def patch_xlsx(src: Path, dst: Path, ts_v2: dict, etl_dir: Path, notes: List[str
         hit = False
         for row in rule_ws.iter_rows(min_row=2):
             if str(row[rh[COL_RULE_CODE] - 1].value).strip() == rc:
-                row[rh[COL_SQL] - 1].value = sql_text
+                for _, c in sql_cols:
+                    row[c - 1].value = None
+                row[col1 - 1].value = sql_text
                 hit = True
-                notes.append(f"[替换单元格] RULE.{COL_SQL} @ rule={rc}")
+                notes.append(f"[替换单元格] RULE.查询语句1..{sql_cols[-1][0]} → 列1 @ rule={rc}")
                 break
         if not hit:
             notes.append(f"[缺失] RULE 表找不到 rule_code={rc}——定位失败，人工核查")
@@ -96,15 +110,15 @@ def patch_xlsx(src: Path, dst: Path, ts_v2: dict, etl_dir: Path, notes: List[str
     for rc, field, vals in _change_index(ts_v2):
         # 已存在（声明漂移/重复执行）→ 不动不覆盖（严格 patch：只落变更清单，不修存量）
         dup = any(str(r[th[COL_RULE_CODE] - 1].value).strip() == rc and
-                  str(r[th["目标字段"] - 1].value).strip() == field
+                  str(r[th["目标字段名称"] - 1].value).strip() == field
                   for r in tf_ws.iter_rows(min_row=2) if r[th[COL_RULE_CODE] - 1].value)
         if dup:
             notes.append(f"[跳过] TargetFields 已有 ({rc}, {field})——不覆盖（严格 patch）")
             continue
         new_row = tf_ws.max_row + 1
         src_row = tf_ws.max_row
-        for cn, val in ((COL_RULE_CODE, rc), ("目标字段", vals["target_field"]),
-                        ("来源字段", vals["source_field"]), ("加密方式", vals["encryption"]),
+        for cn, val in ((COL_RULE_CODE, rc), ("目标字段名称", vals["target_field"]),
+                        ("来源字段名称", vals["source_field"]), ("加密方式", vals["encryption"]),
                         ("别名", vals["alias"]), ("字段类型", vals["field_type"]),
                         ("备注", vals["remark"])):
             cell = tf_ws.cell(row=new_row, column=th[cn])
@@ -135,20 +149,20 @@ def patch_yml_group(src_dir: Path, dst_dir: Path, ts_v2: dict, etl_dir: Path,
         if rc in touched_rules:
             sql_text = read_select(etl_dir, rc)
             if sql_text:
-                data[COL_SQL] = sql_text
-                notes.append(f"[替换单元格] {yml.name}#{COL_SQL}")
+                data[YML_SQL_KEY] = sql_text
+                notes.append(f"[替换单元格] {yml.name}#{YML_SQL_KEY}")
             extra = data.get("额外信息（其他sheet页信息）")
             if isinstance(extra, dict) and isinstance(extra.get("TargetFields"), list):
                 for _, field, vals in [x for x in _change_index(ts_v2) if x[0] == rc]:
-                    dup = any(str(e.get("目标字段", "")).strip() == field
+                    dup = any(str(e.get("目标字段名称", e.get("目标字段", ""))).strip() == field
                               for e in extra["TargetFields"]
                               if isinstance(e, dict))
                     if dup:
                         notes.append(f"[跳过] {yml.name} TargetFields 已有 {field}（严格 patch）")
                         continue
                     extra["TargetFields"].append({
-                        "规则编码": rc, "目标字段": vals["target_field"],
-                        "来源字段": vals["source_field"], "加密方式": vals["encryption"],
+                        "规则编码": rc, "目标字段名称": vals["target_field"],
+                        "来源字段名称": vals["source_field"], "加密方式": vals["encryption"],
                         "别名": vals["alias"], "字段类型": vals["field_type"],
                         "备注": vals["remark"]})
                     notes.append(f"[追加行] {yml.name} TargetFields {field}")

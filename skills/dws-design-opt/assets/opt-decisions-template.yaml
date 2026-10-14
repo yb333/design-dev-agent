@@ -2,6 +2,14 @@
 # 优化模式增量 decisions 模板（designer 产出格式，add_field）
 # 只写增量，不写存量——存量重写 = 红线禁止。每个新增字段一条。
 # 组装器：assemble_ts_opt.py（ts_baseline + 本文件 → ts_v2 + change 段）
+#
+# ★命名规约（2026-10-14 彩排实证，写错即被组装器拦）：
+#   - target_table / intermediate_tables 用**短表名**（baseline tables 键形态，
+#     如 dwb_cust_asset_d / tmp_cust_asset_detail——不带 schema 前缀）
+#   - source.alias 以 **baseline SQL 实际别名**为准（读 build/_internal/baseline_view.md
+#     或档案 etl/{rule}.sql 核对——mapping 台账的别名可能与 SQL 不同名）
+#   - 直挂字段穿聚合规则（GROUP BY）须声明聚合口径（如 MAX 组内任取）——
+#     design_logic 写明"组内任取"语义，coder 才能合法翻译（GROUP BY 属冻结层不可加键）
 # ============================================================================
 change_type: add_field
 

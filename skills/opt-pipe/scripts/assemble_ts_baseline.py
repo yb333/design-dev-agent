@@ -453,6 +453,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.manifest:
         for line in copy_artifacts_to_export(Path(args.manifest), archive):
             print(line)
+    # MANIFEST 首建（逆向入料建档即完整档案——advance 的追加前提；格式对齐 archive_writer）
+    if not (archive / "MANIFEST.md").exists():
+        f = ts.get("meta", {}).get("target", {}).get("f_table", {})
+        (archive / "MANIFEST.md").write_text(
+            f"# 资产演进索引 · {f.get('schema','')}.{f.get('table','')}\n\n"
+            "（当前态 = archive/ 本体；此文件为版本史一眼索引，完整历史在 git）\n\n"
+            "| 版本 | 内容 |\n|------|------|\n"
+            "| v0 | 逆向入料建档（baseline_v1 → ts_baseline，orchestration 起点）|\n",
+            encoding="utf-8")
+        print("MANIFEST: 首建（逆向入料 v0）")
     # 档案件（资产当前态；provenance 保留原始制品定位——artifact_patcher --source 的来源）
     (archive / "ts.json").write_text(
         json.dumps(ts, ensure_ascii=False, indent=2), encoding="utf-8")

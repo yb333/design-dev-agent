@@ -37,13 +37,15 @@ def v2_and_sql(tmp_path_factory):
 
 
 def make_xlsx(path: Path):
+    """夹具列头 = 真实平台导出形态（2026-10-14 彩排实证，对齐 analyzer/assemble_export）：
+    RULE 的 SQL 列「(生成的）查询语句1..N」（全角右括号+数字后缀）、TargetFields 带名称后缀。"""
     wb = Workbook()
     ws = wb.active; ws.title = "RULE"
-    ws.append(["规则编码", "规则名称", "(生成的)查询语句", "未知列A"])
-    ws.append(["R0001", "订单明细", "SELECT old1", "不许动"])
-    ws.append(["R0002", "订单汇总", "SELECT old2", "不许动"])
+    ws.append(["规则编码", "规则名称", "(生成的）查询语句1", "(生成的）查询语句2", "未知列A"])
+    ws.append(["R0001", "订单明细", "SELECT old1", None, "不许动"])
+    ws.append(["R0002", "订单汇总", "SELECT ", "old2", "不许动"])
     tf = wb.create_sheet("TargetFields")
-    tf.append(["规则编码", "目标字段", "来源字段", "加密方式", "别名", "字段类型", "备注", "未知列B"])
+    tf.append(["规则编码", "目标字段名称", "来源字段名称", "加密方式", "别名", "字段类型", "备注", "未知列B"])
     tf.append(["R0002", "order_id", "t.order_id", "0", "", "VARCHAR(64)", "", "keep"])
     wb.save(path)
     return path
@@ -64,8 +66,9 @@ class TestXlsxPatch:
                    for r in rows), "追加声明字段行"
         rule = wb["RULE"]
         r2 = [r for r in rule.iter_rows(min_row=2) if r[0].value == "R0002"][0]
-        assert "channel_name" in r2[2].value, "SQL 单元格替换为新 SQL"
-        assert [r for r in rule.iter_rows(min_row=2) if r[0].value == "R0001"][0][3].value == "不许动"
+        assert "channel_name" in r2[2].value and r2[3].value is None, \
+            "SQL 整体写查询语句1、其余切块列清空（拼接语义恒等）"
+        assert [r for r in rule.iter_rows(min_row=2) if r[0].value == "R0001"][0][4].value == "不许动"
         assert any("追加行" in n for n in notes) and any("替换单元格" in n for n in notes)
 
     def test_strict_patch_no_overwrite(self, v2_and_sql, tmp_path):
@@ -87,12 +90,12 @@ class TestYmlPatch:
         (d / "R0001.yml").write_text(yaml.safe_dump({
             "规则编码": "R0001", "(生成的)查询语句": "SELECT old1",
             "额外信息（其他sheet页信息）": {"TargetFields": [
-                {"规则编码": "R0001", "目标字段": "order_id", "来源字段": "a.order_id"}]}},
+                {"规则编码": "R0001", "目标字段名称": "order_id", "来源字段名称": "a.order_id"}]}},
         allow_unicode=True, sort_keys=False), encoding="utf-8")
         (d / "R0002.yml").write_text(yaml.safe_dump({
             "规则编码": "R0002", "(生成的)查询语句": "SELECT old2",
             "额外信息（其他sheet页信息）": {"TargetFields": [
-                {"规则编码": "R0002", "目标字段": "order_id", "来源字段": "t.order_id"}]}},
+                {"规则编码": "R0002", "目标字段名称": "order_id", "来源字段名称": "t.order_id"}]}},
         allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     def test_patch_group(self, v2_and_sql, tmp_path):
@@ -103,8 +106,8 @@ class TestYmlPatch:
         r2 = yaml.safe_load((dst / "R0002.yml").read_text(encoding="utf-8"))
         assert "channel_name" in r2["(生成的)查询语句"], "query_sql 替换"
         tfs = r2["额外信息（其他sheet页信息）"]["TargetFields"]
-        assert any(t["目标字段"] == "channel_name" for t in tfs)
-        assert tfs[0]["目标字段"] == "order_id", "存量条目不动"
+        assert any(t["目标字段名称"] == "channel_name" for t in tfs)
+        assert tfs[0]["目标字段名称"] == "order_id", "存量条目不动"
         r1 = yaml.safe_load((dst / "R0001.yml").read_text(encoding="utf-8"))
         assert r1["(生成的)查询语句"] == "SELECT old1", "未落位规则不改"
         assert any("round-trip" in n or "注释" in n for n in notes), "已知限制写进说明"
