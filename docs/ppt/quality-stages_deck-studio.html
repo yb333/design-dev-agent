@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-<!-- deck-studio 构建（AI for IT 质量保障分享稿·环节实例版，8 页）：yunshan 品牌模板 + 蓝色三层主题，
-     主结构按实际环节组织：流程与产物 → 环节① TS 设计 → 环节② 制品开发 → 环节③ UT 与 DQ；
-     三层防线降为标注层（页右上角层级指示 + 总纲阶梯 + 流程页覆盖泳道）。
+<!-- deck-studio 构建（AI for IT 质量保障分享稿·环节实例版 2，6 页）：yunshan 品牌模板 + 蓝色三层主题，
+     主结构：流程与产物（主链+确定性脚本+上下文隔离+分流预告）→ 制品开发（分流判定树）→ 实效边界；
+     三层防线为标注层（层级指示 + 深色条落位句）。原 8 页环节版细节已并入流程页。
      动画申报（animation.md 申报制）：防线一/二 = A 型流线（管线逐站/判定树扇出，进页演一遍）；
      防线三 = 常驻流转（单光点轮巡三圈，演示三种自治节奏：站站停/不停/只停两闸口）；
      实效边界 = 底座数字滚动。reduced-motion 全部静态。 -->
@@ -356,7 +356,6 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
         <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
             <defs>
                 <marker id="p0a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
-                <linearGradient id="p0gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
             </defs>
             <!-- 主链八道工序 -->
             <text x="30" y="20" font-size="10.6" font-weight="800" fill="#1e293b">主链八道工序——三个 AI 岗位执行，两道闸口人判，其余全自动流转：</text>
@@ -392,184 +391,84 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
             <text x="969" y="61" text-anchor="middle" font-size="8.3" font-weight="700" fill="#334155">制品交付</text>
             <text x="969" y="76" text-anchor="middle" font-size="7.2" fill="#64748b">制品包＋档案</text>
 
-            <!-- 三层覆盖泳道（与主链 x 对齐） -->
-            <text x="108" y="129" text-anchor="end" font-size="8.3" font-weight="800" fill="#1e3a8a">防线① 脚本</text>
-            <rect x="158" y="112" width="112" height="26" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
-            <text x="214" y="129" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">G1 输入预检</text>
-            <rect x="304" y="112" width="101" height="26" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
-            <text x="354" y="129" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">G2 设计产物校验</text>
-            <rect x="543" y="112" width="124" height="26" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
-            <text x="605" y="129" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">G3 口径对账 · G4 执行预检</text>
-            <rect x="706" y="112" width="90" height="26" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
-            <text x="751" y="129" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1e3a8a">G5 数据实测</text>
-            <text x="108" y="169" text-anchor="end" font-size="8.3" font-weight="800" fill="#1d4ed8">防线② 自治</text>
-            <rect x="543" y="152" width="262" height="26" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1" stroke-dasharray="5 3"/>
-            <text x="674" y="169" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1d4ed8">② 失败自治与分诊：先定位 · 旧会话修复 ≤3 轮 · 数据退设计岗 · 告警给人</text>
-            <text x="108" y="209" text-anchor="end" font-size="8.3" font-weight="800" fill="#92400e">防线③ 人闸</text>
-            <rect x="415" y="192" width="60" height="26" rx="6" fill="#fde68a" stroke="#f59e0b" stroke-width="1"/>
-            <text x="445" y="209" text-anchor="middle" font-size="7.5" font-weight="700" fill="#92400e">③ 人判设计</text>
-            <rect x="805" y="192" width="60" height="26" rx="6" fill="#fde68a" stroke="#f59e0b" stroke-width="1"/>
-            <text x="835" y="209" text-anchor="middle" font-size="7.5" font-weight="700" fill="#92400e">③ 人判交付</text>
-            <text x="30" y="243" font-size="7.7" fill="#94a3b8">泳道与主链上下对齐——每道工序纵向看即知被哪层防线覆盖；空白＝该工序无此层动作</text>
-
-            <!-- 生产者与质检者分离（自防线③迁入：这是 AI 岗位间的制衡，属流程组织） -->
-            <text x="30" y="272" font-size="11.2" font-weight="800" fill="#1e293b">生产者与质检者分离：同一份原料，两套独立理解——天然的歧义探测器</text>
-            <rect x="30" y="306" width="130" height="48" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
-            <text x="95" y="328" text-anchor="middle" font-size="8.8" font-weight="700" fill="#334155">同一份输入原料</text>
-            <text x="95" y="343" text-anchor="middle" font-size="7.7" fill="#64748b">需求＋字段映射</text>
-            <line x1="160" y1="318" x2="224" y2="300" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p0a)"/>
-            <line x1="160" y1="338" x2="224" y2="356" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p0a)"/>
-            <rect x="228" y="278" width="215" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
-            <text x="335" y="296" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">设计岗的理解</text>
-            <text x="335" y="313" text-anchor="middle" font-size="7.7" fill="#1d4ed8">口径 · 加工逻辑 · 关联声明</text>
-            <rect x="228" y="334" width="215" height="44" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4" stroke-dasharray="4 2"/>
-            <text x="335" y="352" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">质检岗的独立理解</text>
-            <text x="335" y="369" text-anchor="middle" font-size="7.7" fill="#1d4ed8">输入隔离：不读实现 SQL</text>
-            <line x1="443" y1="300" x2="505" y2="318" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p0a)"/>
-            <line x1="443" y1="356" x2="505" y2="338" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p0a)"/>
-            <rect x="509" y="306" width="240" height="48" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6"/>
-            <text x="629" y="328" text-anchor="middle" font-size="8.8" font-weight="800" fill="#92400e">两读不一致＝歧义自动暴露</text>
-            <text x="629" y="343" text-anchor="middle" font-size="7.7" fill="#92400e">显式上交人工，不静默拍板</text>
-            <text x="790" y="300" font-size="8" font-weight="700" fill="#334155">为什么分岗：</text>
-            <text x="790" y="319" font-size="8" fill="#475569">构造与验收两种思维互扰——</text>
-            <text x="790" y="338" font-size="8" fill="#475569">设计岗兼职质检曾互相污染（实测教训）</text>
-            <text x="790" y="357" font-size="8" fill="#475569">审计独立性＝不信任被检对象的自述</text>
-            <text x="790" y="376" font-size="8" font-weight="700" fill="#334155">各岗只准写自己的产物，越界落不了盘</text>
-
+            
+            <!-- 左栏：上下文隔离 -->
+            <text x="30" y="112" font-size="10.6" font-weight="800" fill="#1e293b">上下文隔离：生产者 ∥ 检验者，到底怎么做</text>
+            <text x="30" y="130" font-size="7.7" fill="#64748b">同一份原料（需求＋映射），两套独立理解——不一致＝歧义自动暴露上交</text>
+            <rect x="30" y="166" width="105" height="32" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+            <text x="82" y="180" text-anchor="middle" font-size="7.7" font-weight="700" fill="#334155">同一份输入原料</text>
+            <text x="82" y="193" text-anchor="middle" font-size="7.2" fill="#64748b">需求＋字段映射</text>
+            <line x1="135" y1="174" x2="151" y2="160" stroke="#2563eb" stroke-width="1.3" marker-end="url(#p0a)"/>
+            <line x1="135" y1="190" x2="151" y2="198" stroke="#2563eb" stroke-width="1.3" marker-end="url(#p0a)"/>
+            <rect x="157" y="142" width="135" height="28" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="224" y="160" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">设计岗 · 生产者</text>
+            <rect x="157" y="186" width="135" height="28" rx="7" fill="#fff" stroke="#93c5fd" stroke-width="1.2" stroke-dasharray="4 2"/>
+            <text x="224" y="204" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">质检岗 · 检验者</text>
+            <line x1="292" y1="156" x2="306" y2="166" stroke="#2563eb" stroke-width="1.3" marker-end="url(#p0a)"/>
+            <line x1="292" y1="200" x2="306" y2="190" stroke="#2563eb" stroke-width="1.3" marker-end="url(#p0a)"/>
+            <rect x="310" y="162" width="175" height="32" rx="7" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="397" y="176" text-anchor="middle" font-size="7.7" font-weight="800" fill="#92400e">两读不一致＝歧义自动暴露</text>
+            <text x="397" y="189" text-anchor="middle" font-size="7.2" fill="#92400e">显式上交人工，不静默拍板</text>
+            <text x="30" y="226" font-size="7.7" fill="#475569">① 输入隔离：质检岗不读实现 SQL、不听口径自述——只拿原始原料＋产物接口</text>
+            <text x="30" y="246" font-size="7.7" fill="#475569">② 干净会话：独立短会话防锚定；检查 FAIL 分钟级短回路自修</text>
+            <text x="30" y="266" font-size="7.7" fill="#475569">③ 产物边界：各岗只准写自己的产物，越界落不了盘</text>
+            <text x="30" y="290" font-size="8.3" font-weight="700" fill="#1e293b">差别在思维：生产者构造（把活干出来）· 检验者证伪（独立重算挑错）——DQ 断言式＋对比式双模式</text>
+            <!-- 右栏：确定性规则 -->
+            <text x="535" y="112" font-size="10.6" font-weight="800" fill="#1e293b">确定性规则 · 脚本执行：避免模型发散</text>
+            <text x="535" y="130" font-size="7.7" fill="#64748b">规则由脚本裁决，不由模型自由发挥——模型只起草，规则定对错</text>
+            <text x="535" y="150" font-size="7.7" fill="#991b1b">✗ 复查靠再叫一个 LLM：被生成者锚定，跟着一起错</text>
+            <text x="535" y="168" font-size="7.7" font-weight="700" fill="#1d4ed8">✓ 把关靠确定性脚本：规则固定无裁量——同脚本跑两遍必同结果</text>
+            <rect x="535" y="180" width="42" height="18" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+            <text x="556" y="193" text-anchor="middle" font-size="7.2" font-weight="800" fill="#1e3a8a">G1</text>
+            <text x="585" y="193" font-size="7.7" fill="#475569">输入预检：连库核类型 · 值域探测——类型炸批、溢出拦输入侧</text>
+            <rect x="535" y="202" width="42" height="18" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+            <text x="556" y="215" text-anchor="middle" font-size="7.2" font-weight="800" fill="#1e3a8a">G2</text>
+            <text x="585" y="215" font-size="7.7" fill="#475569">装配校验：54 条结构＋引用门禁——幻觉字段直接拦</text>
+            <rect x="535" y="224" width="42" height="18" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+            <text x="556" y="237" text-anchor="middle" font-size="7.2" font-weight="800" fill="#1e3a8a">G3</text>
+            <text x="585" y="237" font-size="7.7" fill="#475569">口径对账：表达式 vs SQL 逐条——译反、漂移拦下</text>
+            <rect x="535" y="246" width="42" height="18" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+            <text x="556" y="259" text-anchor="middle" font-size="7.2" font-weight="800" fill="#1e3a8a">G4</text>
+            <text x="585" y="259" font-size="7.7" fill="#475569">执行预检：计划真跑＋列序实测——静默错位拦下</text>
+            <rect x="535" y="268" width="42" height="18" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+            <text x="556" y="281" text-anchor="middle" font-size="7.2" font-weight="800" fill="#1e3a8a">G5</text>
+            <text x="585" y="281" font-size="7.7" fill="#475569">数据实测：主键 / 空值 / 行数——对着真实数据说话</text>
+            <text x="535" y="294" font-size="7.2" fill="#94a3b8">全程落盘可回溯：报告与原文全留痕——审查审计有据</text>
+            <!-- 分流诊断预告 -->
+            <text x="30" y="320" font-size="10.6" font-weight="800" fill="#1e293b">失败分流诊断：先定位 · 按根因找岗 · 轮次有限——判定树见下页</text>
+            <rect x="30" y="330" width="235" height="30" rx="7" fill="#fff" stroke="#cbd5e1" stroke-width="1.2"/>
+            <text x="147" y="343" text-anchor="middle" font-size="7.7" font-weight="800" fill="#334155">SQL 语法 → 编码岗修 ≤3 轮</text>
+            <text x="147" y="355" text-anchor="middle" font-size="7.2" fill="#64748b">重走预检＋数据实测</text>
+            <rect x="272" y="330" width="235" height="30" rx="7" fill="#fef2f2" stroke="#fecaca" stroke-width="1.2"/>
+            <text x="389" y="343" text-anchor="middle" font-size="7.7" font-weight="800" fill="#991b1b">数据质量 → 退设计岗</text>
+            <text x="389" y="355" text-anchor="middle" font-size="7.2" fill="#991b1b">改完必回闸口①人确认</text>
+            <rect x="514" y="330" width="235" height="30" rx="7" fill="#fffbeb" stroke="#fde68a" stroke-width="1.2"/>
+            <text x="631" y="343" text-anchor="middle" font-size="7.7" font-weight="800" fill="#92400e">质检告警 → 闸口② 人三选一</text>
+            <text x="631" y="355" text-anchor="middle" font-size="7.2" fill="#92400e">回改 · 人定口径 · 豁免留痕</text>
+            <rect x="756" y="330" width="254" height="30" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+            <text x="883" y="343" text-anchor="middle" font-size="7.7" font-weight="800" fill="#334155">环境问题 → 停＋报人</text>
+            <text x="883" y="355" text-anchor="middle" font-size="7.2" fill="#64748b">附修复指引，不进自动回路</text>
+            <!-- 红线行 -->
+            <rect x="30" y="368" width="980" height="18" rx="5" fill="#fffbeb" stroke="#fde68a" stroke-width="1"/>
+            <text x="520" y="381" text-anchor="middle" font-size="7.7" font-weight="700" fill="#92400e">三条红线：语义判断不自主 · 推生产不自主 · 重写不自主——「做」全自动，「判」的权始终在人</text>
+            <!-- 供料行 -->
+            <rect x="30" y="392" width="980" height="18" rx="5" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+            <text x="520" y="405" text-anchor="middle" font-size="7.7" font-weight="700" fill="#1d4ed8">闸口供料：机器备料（摘要 · 实测 · 报告）→ 打包成选择题（现象＋证据＋选项）→ 人裁 → 决策留痕回写</text>
             <rect x="30" y="440" width="980" height="30" rx="7" fill="#1e293b"/>
-            <text x="520" y="460" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">三层防线不在概念里，在流水线里——每道工序有防线落位，每个 AI 岗位有制衡边界</text>
+            <text x="520" y="460" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">防线① 脚本把关 · 防线② 分流自治 · 防线③ 人守闸口——三层不在概念里，在流水线上</text>
         </svg>
         </div>
     </div>
 </section>
 
 <!-- ============ P4 防线① ============ -->
-<!-- ============ P4 环节① TS 设计 ============ -->
-<section class="slide" data-label="环节设计">
-    <div class="slide-content">
-        <div class="page-head">
-            <div class="page-num">03 / 环节① · TS 设计</div>
-            <div class="page-title">环节① TS 设计：<span class="key">从需求到技术方案，产出的每行都先过机器</span></div>
-            <div class="page-claim">输入是需求说明书＋字段映射表，产出是 TS 设计文档（表结构 · 加工规则 · 数据流 · 增量设计）；评估取证先行、装配校验拦截，闸口①人审后冻结为编码唯一依据。</div>
-        </div>
-        <div style="position:absolute;top:64px;right:90px" title="覆盖防线 ① + ③">
-            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
-                <rect x="2" y="24" width="26" height="10" rx="2" fill="#2563eb"/>
-                <rect x="35" y="15" width="26" height="19" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-                <rect x="68" y="4" width="26" height="30" rx="2" fill="#d97706"/>
-            </svg>
-        </div>
-        <div class="svg-stage">
-        <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
-            <defs>
-                <marker id="p4a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
-                <linearGradient id="p4gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
-            </defs>
-            <!-- 环节流水带 -->
-            <rect x="30" y="14" width="150" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-            <text x="105" y="32" text-anchor="middle" font-size="8.8" font-weight="800" fill="#334155">输入材料</text>
-            <text x="105" y="48" text-anchor="middle" font-size="7.7" fill="#64748b">需求说明书＋字段映射表</text>
-            <line x1="182" y1="36" x2="204" y2="36" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p4a)"/>
-            <rect x="210" y="14" width="140" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="280" y="32" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">评估取证</text>
-            <text x="280" y="48" text-anchor="middle" font-size="7.7" fill="#1d4ed8">关联键唯一性实测 · 需求三问</text>
-            <line x1="352" y1="36" x2="374" y2="36" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p4a)"/>
-            <rect x="380" y="14" width="150" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="455" y="32" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">设计决策</text>
-            <text x="455" y="48" text-anchor="middle" font-size="7.7" fill="#1d4ed8">表结构 · 加工规则 · 血缘 · 增量</text>
-            <line x1="532" y1="36" x2="554" y2="36" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p4a)"/>
-            <rect x="560" y="14" width="130" height="44" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
-            <text x="625" y="32" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">装配产出 TS</text>
-            <text x="625" y="48" text-anchor="middle" font-size="7.7" fill="#1d4ed8">TS 设计文档</text>
-            <line x1="692" y1="36" x2="704" y2="36" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p4a)"/>
-            <polygon points="710,36 738,14 766,36 738,58" fill="url(#p4gate)" stroke="#d97706" stroke-width="2"/>
-            <text x="738" y="33" text-anchor="middle" font-size="8.3" font-weight="800" fill="#92400e">闸口①</text>
-            <text x="738" y="47" text-anchor="middle" font-size="7.2" font-weight="700" fill="#92400e">人判</text>
-            <line x1="766" y1="36" x2="778" y2="36" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p4a)"/>
-            <rect x="784" y="14" width="196" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-            <text x="882" y="32" text-anchor="middle" font-size="8.8" font-weight="700" fill="#334155">TS 冻结 → 进入建造</text>
-            <text x="882" y="48" text-anchor="middle" font-size="7.7" fill="#64748b">确认后冻结＝编码唯一依据</text>
-            <!-- 产出物形态示意 -->
-            <text x="30" y="92" font-size="9.4" font-weight="800" fill="#1e293b">产出物形态：TS 设计文档（节选示意）</text>
-            <rect x="30" y="102" width="470" height="168" rx="8" fill="#fff" stroke="#2563eb" stroke-width="1.6"/>
-            <rect x="30" y="102" width="470" height="26" rx="8" fill="#2563eb"/>
-            <rect x="30" y="114" width="470" height="14" fill="#2563eb"/>
-            <text x="265" y="119" text-anchor="middle" font-size="8.8" font-weight="800" fill="#fff">TS 设计文档 · 四个组成部分</text>
-            <rect x="42" y="136" width="220" height="56" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
-            <text x="152" y="158" text-anchor="middle" font-size="8.3" font-weight="800" fill="#1e3a8a">表结构定义</text>
-            <text x="152" y="176" text-anchor="middle" font-size="7.7" fill="#1d4ed8">字段 · 类型 · 业务键 · 审计列</text>
-            <rect x="268" y="136" width="220" height="56" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
-            <text x="378" y="158" text-anchor="middle" font-size="8.3" font-weight="800" fill="#1e3a8a">加工规则</text>
-            <text x="378" y="176" text-anchor="middle" font-size="7.7" fill="#1d4ed8">每条规则的口径表达式＋引用</text>
-            <rect x="42" y="198" width="220" height="56" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
-            <text x="152" y="220" text-anchor="middle" font-size="8.3" font-weight="800" fill="#1e3a8a">数据流</text>
-            <text x="152" y="238" text-anchor="middle" font-size="7.7" fill="#1d4ed8">多步骤依赖与中间表</text>
-            <rect x="268" y="198" width="220" height="56" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
-            <text x="378" y="220" text-anchor="middle" font-size="8.3" font-weight="800" fill="#1e3a8a">增量与初始化设计</text>
-            <text x="378" y="238" text-anchor="middle" font-size="7.7" fill="#1d4ed8">双管道：日常增量＋首次全量</text>
-            <!-- 本环节机制实例 -->
-            <text x="520" y="92" font-size="9.4" font-weight="800" fill="#1e293b">本环节的三道机器关卡（含真实拦截实例）：</text>
-            <rect x="520" y="106" width="48" height="20" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
-            <text x="544" y="120" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">G1</text>
-            <text x="576" y="116" font-size="8.8" font-weight="800" fill="#1e293b">输入预检</text>
-            <text x="576" y="132" font-size="7.7" fill="#475569">连库核类型 · 值域探测——类型炸批、数值溢出拦在输入侧</text>
-            <rect x="520" y="158" width="48" height="20" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
-            <text x="544" y="172" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">G2</text>
-            <text x="576" y="168" font-size="8.8" font-weight="800" fill="#1e293b">装配校验 · 引用门禁</text>
-            <text x="576" y="184" font-size="7.7" fill="#475569">54 条结构校验；引用不存在的字段直接拦（幻觉引用实例）</text>
-            <rect x="520" y="210" width="48" height="20" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
-            <text x="544" y="224" text-anchor="middle" font-size="7.7" font-weight="800" fill="#1e3a8a">评估</text>
-            <text x="576" y="220" font-size="8.8" font-weight="800" fill="#1e293b">关联键唯一性实测</text>
-            <text x="576" y="236" font-size="7.7" fill="#475569">关联发散在设计期暴露——不等 UT 才炸；实测结论进闸口①材料</text>
-            <text x="520" y="262" font-size="7.7" fill="#94a3b8">三道关卡全部是确定性脚本——不过不放行，报错带原文原路带回</text>
-<!-- 独立性对照 -->
-            <line x1="340" y1="296" x2="340" y2="416" stroke="#e2e8f0" stroke-width="1.2"/>
-            <line x1="660" y1="296" x2="660" y2="416" stroke="#e2e8f0" stroke-width="1.2"/>
-            <text x="30" y="304" font-size="10.6" font-weight="800" fill="#991b1b">✗ 复查靠再叫一个 LLM</text>
-            <circle cx="100" cy="352" r="26" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
-            <text x="100" y="349" text-anchor="middle" font-size="8" font-weight="700" fill="#334155">生成</text>
-            <text x="100" y="360" text-anchor="middle" font-size="8" font-weight="700" fill="#334155">LLM</text>
-            <circle cx="260" cy="352" r="26" fill="#fef2f2" stroke="#ef4444" stroke-width="1.6"/>
-            <text x="260" y="349" text-anchor="middle" font-size="8" font-weight="700" fill="#991b1b">复查</text>
-            <text x="260" y="360" text-anchor="middle" font-size="8" font-weight="700" fill="#991b1b">LLM</text>
-            <line x1="128" y1="352" x2="230" y2="352" stroke="#cbd5e1" stroke-width="1.4" marker-end="url(#p3a)"/>
-            <path d="M258,324 C 220,300 140,300 102,324" fill="none" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="4 3"/>
-            <text x="180" y="308" text-anchor="middle" font-size="7.7" font-weight="700" fill="#991b1b">被锚定</text>
-            <text x="30" y="398" font-size="8" fill="#475569">检查者会被生成者锚定，</text>
-            <text x="30" y="413" font-size="8" fill="#475569">跟着同样的思路一起错</text>
-            <text x="360" y="304" font-size="10.6" font-weight="800" fill="#1e3a8a">✓ 把关靠确定性脚本</text>
-            <circle cx="430" cy="352" r="26" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
-            <text x="430" y="349" text-anchor="middle" font-size="8" font-weight="700" fill="#334155">生成</text>
-            <text x="430" y="360" text-anchor="middle" font-size="8" font-weight="700" fill="#334155">LLM</text>
-            <line x1="458" y1="352" x2="520" y2="352" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p3a)"/>
-            <rect x="524" y="328" width="120" height="48" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
-            <text x="584" y="349" text-anchor="middle" font-size="8" font-weight="800" fill="#1e3a8a">确定性脚本</text>
-            <text x="584" y="363" text-anchor="middle" font-size="7.7" fill="#1d4ed8">同脚本两遍 ＝ 同结果</text>
-            <text x="360" y="398" font-size="8" fill="#475569">规则固定 · 可复现 · 可审计，</text>
-            <text x="360" y="413" font-size="8" fill="#475569">机器判「对不对」零裁量</text>
-            <text x="680" y="304" font-size="10.6" font-weight="800" fill="#1e293b">全过程落盘可回溯</text>
-            <rect x="680" y="328" width="110" height="48" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
-            <text x="735" y="349" text-anchor="middle" font-size="8" font-weight="700" fill="#334155">每道闸门</text>
-            <text x="735" y="363" text-anchor="middle" font-size="7.7" fill="#64748b">跑完即留档</text>
-            <line x1="792" y1="352" x2="824" y2="352" stroke="#2563eb" stroke-width="1.4" marker-end="url(#p3a)"/>
-            <rect x="828" y="328" width="150" height="48" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
-            <text x="903" y="349" text-anchor="middle" font-size="8" font-weight="800" fill="#1e3a8a">报告＋原文落盘</text>
-            <text x="903" y="363" text-anchor="middle" font-size="7.7" fill="#1d4ed8">好坏都留 · 随时可查证</text>
-            <text x="680" y="398" font-size="8" fill="#475569">出了问题能回溯定位到哪一步、</text>
-            <text x="680" y="413" font-size="8" fill="#475569">哪个证据——审查审计成本同步下降</text>
-            <rect x="30" y="440" width="980" height="30" rx="7" fill="#1e293b"/>
-            <text x="520" y="460" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">设计环节：AI 起草、脚本把关、人审冻结——TS 是编码的唯一依据，改设计必回闸口①</text>
-        </svg>
-        </div>
-    </div>
-</section>
 
 <!-- ============ P5 防线② ============ -->
-<section class="slide" data-label="环节开发">
+<section class="slide" data-label="制品开发">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">04 / 环节② · 制品开发</div>
-            <div class="page-title">环节② 制品开发：<span class="key">从 TS 到四件套，失败按根因分流</span></div>
+            <div class="page-num">03 / 制品开发 · 失败分流</div>
+            <div class="page-title">制品开发：<span class="key">从 TS 到四件套，失败按根因分流</span></div>
             <div class="page-claim">TS 切片给编码岗逐规则写加工 SQL，DDL、调度随之生成，质检岗并行出质检 SQL；口径对账、执行预检、UT 实测层层过——失败不裸报也不空转，按根因分流修复。</div>
         </div>
 
@@ -582,7 +481,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
                 <linearGradient id="p4gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
             </defs>
             <!-- 环节流水带 -->
-            <text x="30" y="16" font-size="10.6" font-weight="800" fill="#1e293b">环节② 流水：TS 冻结 → 切片 → 建造 —— 四件套一次齐套：DDL · 加工 SQL · 调度配置 · 质检 SQL</text>
+            <text x="30" y="16" font-size="10.6" font-weight="800" fill="#1e293b">制品开发流水：TS 冻结 → 切片 → 建造 —— 四件套一次齐套：DDL · 加工 SQL · 调度配置 · 质检 SQL</text>
             <rect x="30" y="22" width="95" height="28" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
             <text x="77" y="41" text-anchor="middle" font-size="8.3" font-weight="700" fill="#334155">TS（冻结）</text>
             <line x1="127" y1="36" x2="144" y2="36" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p4a)"/>
@@ -677,7 +576,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
         </div>
         <div style="position:absolute;top:64px;right:90px" title="三层防线 · 当前第 2 层">
             <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
-                <rect x="2" y="24" width="26" height="10" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+                <rect x="2" y="24" width="26" height="10" rx="2" fill="#2563eb"/>
                 <rect x="35" y="15" width="26" height="19" rx="2" fill="#2563eb"/>
                 <rect x="68" y="4" width="26" height="30" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
             </svg>
@@ -685,137 +584,12 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     </div>
 </section>
 
-<!-- ============ P6 防线③ ============ -->
-<section class="slide" data-label="环节数据">
-    <div class="slide-content">
-        <div class="page-head">
-            <div class="page-num">05 / 环节③ · UT 与 DQ</div>
-            <div class="page-title">环节③ UT 与 DQ：<span class="key">用数据说话——通过才算数，告警人裁决</span></div>
-            <div class="page-claim">真实装载后主键、空值、行数实测；质检岗独立重算、双模式出报告；告警三选一由人裁决——定边界＝三条红线，守终裁＝闸口②。</div>
-        </div>
-
-        <div class="svg-stage">
-        <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
-            <defs>
-                <marker id="p5a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
-                <linearGradient id="p5gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
-            </defs>
-            <!-- 层1：三种人机关系定位 -->
-            <text x="30" y="16" font-size="11.2" font-weight="800" fill="#1e293b">三种人机关系——前两种常见形态都不对，我们选第三种</text>
-            <!-- ❶ 步步请示 -->
-            <circle cx="60" cy="50" r="24" fill="none" stroke="#cbd5e1" stroke-width="1.6"/>
-            <rect x="56" y="23" width="8" height="7" rx="1.5" fill="#94a3b8"/>
-            <rect x="53" y="70" width="8" height="7" rx="1.5" fill="#94a3b8"/>
-            <rect x="81" y="47" width="7" height="8" rx="1.5" fill="#94a3b8"/>
-            <circle cx="97" cy="38" r="3" fill="#fee2e2" stroke="#ef4444" stroke-width="1.2"/>
-            <rect x="93.5" y="42" width="7" height="10" rx="3" fill="#fee2e2" stroke="#ef4444" stroke-width="1.2"/>
-            <text x="112" y="46" font-size="8.8" font-weight="800" fill="#1e293b">① 步步请示——人是流程环节</text>
-            <text x="112" y="62" font-size="8" font-weight="700" fill="#991b1b">✗ 每步停等人批，人成瓶颈</text>
-            <!-- ❷ 全自动+人盯梢 -->
-            <circle cx="400" cy="50" r="24" fill="none" stroke="#cbd5e1" stroke-width="1.6"/>
-            <polygon points="415,29 422,31 416,36" fill="#94a3b8"/>
-            <polygon points="385,71 378,69 384,64" fill="#94a3b8"/>
-            <circle cx="446" cy="30" r="3" fill="#eff6ff" stroke="#2563eb" stroke-width="1.2"/>
-            <rect x="442.5" y="34" width="7" height="10" rx="3" fill="#eff6ff" stroke="#2563eb" stroke-width="1.2"/>
-            <line x1="441" y1="42" x2="424" y2="48" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 2"/>
-            <text x="462" y="46" font-size="8.8" font-weight="800" fill="#1e293b">② AI 全自动——人在旁边盯</text>
-            <text x="462" y="62" font-size="8" font-weight="700" fill="#991b1b">✗ 确认疲劳盯不住＝没人盯</text>
-            <!-- ③ 人守两个闸口 -->
-            <rect x="700" y="20" width="310" height="58" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
-            <circle cx="742" cy="50" r="24" fill="none" stroke="#d97706" stroke-width="1.8"/>
-            <polygon points="702,50 709,44 716,50 709,56" fill="#d97706"/>
-            <polygon points="768,50 775,44 782,50 775,56" fill="#d97706"/>
-            <circle cx="709" cy="31" r="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
-            <rect x="705.5" y="35" width="7" height="10" rx="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
-            <circle cx="775" cy="31" r="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
-            <rect x="771.5" y="35" width="7" height="10" rx="3" fill="#fff" stroke="#92400e" stroke-width="1.3"/>
-            <text x="792" y="42" font-size="8.8" font-weight="800" fill="#92400e">③ 人守两个闸口（本方案）</text>
-            <text x="792" y="58" font-size="8" font-weight="800" fill="#1d4ed8">✓ 定边界 · 守终裁 · 最小停等</text>
-            <text x="812" y="92" font-size="7.7" fill="#94a3b8">闸口＝刻意最小化的必经停等点：全流程只此两处必须人</text>
-
-            <!-- 层2：红线围栏 -->
-            <line x1="30" y1="106" x2="1010" y2="106" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="7 4"/>
-            <rect x="150" y="94" width="200" height="24" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
-            <text x="250" y="110" text-anchor="middle" font-size="8.8" font-weight="800" fill="#92400e">红线一 · 语义判断不自主</text>
-            <rect x="370" y="94" width="200" height="24" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
-            <text x="470" y="110" text-anchor="middle" font-size="8.8" font-weight="800" fill="#92400e">红线二 · 推生产不自主</text>
-            <rect x="590" y="94" width="200" height="24" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
-            <text x="690" y="110" text-anchor="middle" font-size="8.8" font-weight="800" fill="#92400e">红线三 · 重写不自主</text>
-            <text x="810" y="122" font-size="7.7" font-weight="700" fill="#92400e">红线内 AI 全自动</text>
-            <text x="810" y="135" font-size="7.7" font-weight="700" fill="#92400e">红线处必须人</text>
-
-            <!-- UT 两阶段 -->
-            <text x="30" y="136" font-size="9.4" font-weight="800" fill="#1e293b">UT 两阶段：先预检，再真刀真枪：</text>
-            <rect x="30" y="146" width="225" height="64" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="142" y="166" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">6a 执行预检 · 秒级</text>
-            <text x="142" y="182" text-anchor="middle" font-size="7.7" fill="#1d4ed8">执行计划真实跑一遍取计划</text>
-            <text x="142" y="197" text-anchor="middle" font-size="7.7" fill="#1d4ed8">数据库实测输出列序 vs 设计列序</text>
-            <line x1="257" y1="178" x2="279" y2="178" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <rect x="285" y="146" width="215" height="64" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
-            <text x="392" y="166" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">6b 真实装载＋检查 · 分钟级</text>
-            <text x="392" y="182" text-anchor="middle" font-size="7.7" fill="#1d4ed8">主键唯一 · 空值 · 行数实测</text>
-            <text x="392" y="197" text-anchor="middle" font-size="7.7" fill="#1d4ed8">全部对着真实数据说话</text>
-            <!-- DQ 两模式 -->
-            <text x="540" y="136" font-size="9.4" font-weight="800" fill="#1e293b">质检岗独立 DQ：不信任被检对象的自述：</text>
-            <rect x="540" y="146" width="225" height="64" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="652" y="166" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">断言式 · 翻译</text>
-            <text x="652" y="182" text-anchor="middle" font-size="7.7" fill="#1d4ed8">人的质检要求→违规条件</text>
-            <text x="652" y="197" text-anchor="middle" font-size="7.7" fill="#1d4ed8">0 行＝通过 · 非 0 行＝告警带样例</text>
-            <rect x="795" y="146" width="215" height="64" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
-            <text x="902" y="166" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">对比式 · 独立重算</text>
-            <text x="902" y="182" text-anchor="middle" font-size="7.7" fill="#1d4ed8">自己算一遍，与产物比对</text>
-            <text x="902" y="197" text-anchor="middle" font-size="7.7" fill="#1d4ed8">输入隔离：不读实现 SQL</text>
-            <!-- 结果三分 -->
-            <text x="30" y="240" font-size="9.4" font-weight="800" fill="#1e293b">结果三分，各有归宿：</text>
-            <rect x="30" y="250" width="300" height="46" rx="8" fill="#fff" stroke="#cbd5e1" stroke-width="1.2"/>
-            <text x="180" y="270" text-anchor="middle" font-size="8.3" font-weight="800" fill="#334155">FAIL ＝ 检查 SQL 自己错</text>
-            <text x="180" y="286" text-anchor="middle" font-size="7.7" fill="#64748b">→ 质检岗旧会话修复，≤3 轮</text>
-            <rect x="360" y="250" width="330" height="46" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
-            <text x="525" y="270" text-anchor="middle" font-size="8.3" font-weight="800" fill="#92400e">ALERT ＝ 真查出问题</text>
-            <text x="525" y="286" text-anchor="middle" font-size="7.7" fill="#92400e">→ 闸口② 三选一：回改 · 人定口径 · 豁免留痕</text>
-            <rect x="720" y="250" width="290" height="46" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-            <text x="865" y="270" text-anchor="middle" font-size="8.3" font-weight="800" fill="#334155">通过 ＋ 零告警</text>
-            <text x="865" y="286" text-anchor="middle" font-size="7.7" fill="#64748b">→ 闸口② 确认，制品交付归档</text>
-<text x="30" y="312" font-size="11.2" font-weight="800" fill="#1e293b">闸口的供料线：人拿到的永远是选择题——机器备料，人只裁</text>
-            <rect x="30" y="330" width="210" height="56" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
-            <text x="135" y="350" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">机器备料</text>
-            <text x="135" y="366" text-anchor="middle" font-size="7.7" fill="#1d4ed8">设计摘要 · 关联实测 · 自测报告</text>
-            <text x="135" y="381" text-anchor="middle" font-size="7.7" fill="#1d4ed8">质检告警（违规带样例）</text>
-            <line x1="242" y1="358" x2="266" y2="358" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <rect x="270" y="330" width="230" height="56" rx="8" fill="#fff" stroke="#93c5fd" stroke-width="1.4"/>
-            <text x="385" y="350" text-anchor="middle" font-size="8.8" font-weight="800" fill="#1e3a8a">打包成选择题</text>
-            <text x="385" y="366" text-anchor="middle" font-size="7.7" fill="#1d4ed8">现象＋证据＋选项</text>
-            <text x="385" y="381" text-anchor="middle" font-size="7.7" fill="#1d4ed8">不给原始报错堆</text>
-            <line x1="502" y1="358" x2="526" y2="358" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <rect x="530" y="330" width="170" height="56" rx="8" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6"/>
-            <text x="615" y="350" text-anchor="middle" font-size="8.8" font-weight="800" fill="#92400e">人裁（两闸口）</text>
-            <text x="615" y="366" text-anchor="middle" font-size="7.7" fill="#92400e">粒度 · 口径 · 安全 · 告警</text>
-            <text x="615" y="381" text-anchor="middle" font-size="7.7" fill="#92400e">回改 · 照译 · 豁免</text>
-            <line x1="702" y1="358" x2="726" y2="358" stroke="#2563eb" stroke-width="1.5" marker-end="url(#p5a)"/>
-            <rect x="730" y="330" width="250" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
-            <text x="855" y="350" text-anchor="middle" font-size="8.8" font-weight="800" fill="#334155">决策留痕回写</text>
-            <text x="855" y="366" text-anchor="middle" font-size="7.7" fill="#64748b">豁免理由 · 人定口径 · 修改记录</text>
-            <text x="855" y="381" text-anchor="middle" font-size="7.7" fill="#64748b">均落盘可回溯——审查审计有据</text>
-
-            <rect x="30" y="440" width="980" height="30" rx="7" fill="#1e293b"/>
-            <text x="520" y="460" text-anchor="middle" font-size="11.8" font-weight="700" fill="#fff">自动的是活，不自动的是裁决权——人不在旁边盯，人只在闸口裁；每个决策留痕可回溯</text>
-        </svg>
-        </div>
-        <div style="position:absolute;top:64px;right:90px" title="覆盖防线 ① + ③">
-            <svg width="96" height="36" viewBox="0 0 96 36" xmlns="http://www.w3.org/2000/svg">
-                <rect x="2" y="24" width="26" height="10" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-                <rect x="35" y="15" width="26" height="19" rx="2" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
-                <rect x="68" y="4" width="26" height="30" rx="2" fill="#d97706"/>
-            </svg>
-        </div>
-    </div>
-</section>
 
 <!-- ============ P7 实效与边界 ============ -->
 <section class="slide" data-label="实效边界">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">06 / 实效与边界</div>
+            <div class="page-num">04 / 实效与边界</div>
             <div class="page-title">一周多的活，1~2 天交付——<span class="key">且清楚哪些还是人的</span></div>
             <div class="page-claim">提效的来源、防线自己的质量底座、还没验证的部分——这一页一并交代。</div>
         </div>
@@ -927,8 +701,6 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
    动画申报（A 型自动 + 常驻流转 + 数字滚动；点击=快进；reduced-motion 全静态）：
    - 防线一：流线沿质量管线逐段推进、五道闸门到站脉冲（顺序关卡判例）
    - 防线二：判定树五路扇出流线（数据质量红/告警琥珀）+ 五分支到站脉冲
-   - 防线三：常驻流转（loops 分圈常驻）——三个光点同屏各转各的，节奏即论点：
-       ①步步请示圈站站停（琥珀闸口环）②全自动圈不停留 ③人守闸口圈只停两菱形
    - 实效边界：三个底座数字进页 0→真值滚动（终帧=原文） */
 const DECK_GAP = 24;
 
@@ -937,29 +709,12 @@ window.DECK_AUTO = {
         ['flow', 75, 65, 930, 65, 1500],
         ['pulses', [[417, 37, 56, 56], [807, 37, 56, 56]]],
     ],
-    '环节设计': [
-        ['flow', 105, 36, 738, 36, 1200],
-        ['pulses', [[710, 8, 56, 56]]],
-    ],
-    '环节开发': [
+    '制品开发': [
         ['flows', [[180, 220, 246, 107], [180, 220, 246, 170], [180, 220, 246, 233, '#ef4444'],
                    [180, 220, 246, 296, '#f59e0b'], [180, 220, 246, 359]], 900],
         ['pulses', [[250, 84, 240, 46], [250, 147, 240, 46], [250, 210, 240, 46],
                     [250, 273, 240, 46], [250, 336, 240, 46]]],
     ],
-};
-window.DECK_AMBIENT = {
-    pageLabel: '环节数据',
-    speed: 150,
-    routes: [
-        { decides: { 1: { ms: 850, gate: true, then: 'blue' }, 3: { ms: 850, gate: true, then: 'blue' }, 5: { ms: 850, gate: true, then: 'blue' } },
-          wp: [[43, 32], [60, 26], [75, 33], [84, 51], [75, 68], [57, 74], [40, 66], [36, 50], [43, 32]] },
-        { wp: [[400, 26], [417, 33], [424, 50], [417, 67], [400, 74], [383, 67], [376, 50], [383, 33], [400, 26]] },
-        { decides: { 2: { ms: 950, gate: true, then: 'blue' }, 6: { ms: 950, gate: true, then: 'blue' } },
-          wp: [[742, 74], [725, 67], [709, 50], [725, 33], [742, 26], [759, 33], [775, 50], [759, 67], [742, 74]] },
-    ],
-    lanes: [ { route: 0, delay: 0 }, { route: 1, delay: 0 }, { route: 2, delay: 0 } ],
-    nodes: { n1: [52, 19, 16, 14], n2: [77, 44, 15, 14], n3: [49, 66, 16, 14], g1: [698, 39, 22, 22], g2: [764, 39, 22, 22] },
 };
 window.DECK_COUNTUP = { '实效边界': { ms: 1200, items: [[520, 252], [722, 252], [942, 252]] } };
 
@@ -1973,7 +1728,7 @@ window.DeckExport = (function () {
         deck.flashHint('playerHint', message, 3000);
     }
 
-    /* ==== 场景收集器（自 editable-scene.mjs 原样移植，改引擎请两处同步） ==== */
+    /* ═══ COLLECTOR:BEGIN — 自 scripts/html2pptx/editable-scene.mjs 同步，勿手改（改收集器→两处源→sync） ═══ */
 function collectEditableScene(slideIndex) {
   const canvas = document.querySelectorAll('section.slide')[slideIndex];   // deck-studio 契约
   const bounds = canvas.getBoundingClientRect();
@@ -2027,12 +1782,16 @@ function collectEditableScene(slideIndex) {
     const key = [...ownContext, phase, 0, paint.length];
     paint.push({ item, key });
   }
+  const firstFontFamily = style => {
+      const first = (style.fontFamily.match(/"?([^";,]+)"?/) || [])[1]?.trim() || 'Microsoft YaHei';
+      return /monospace/i.test(first) ? 'Courier New' : first;      // CSS 泛型等宽 → PPT 可解析的真实字体
+  };
   function font(style, element) {
     const ink = color(style.color);
     const scale = pixelScale(element);
     return {
-      // 网页字体不随 PPTX 嵌入，统一微软雅黑，避免 Office 随机回退成宋体等字体。
-      fontFamily: 'Microsoft YaHei',
+      // 保留网页字体的首个具名字族，与 HTML 观感一致；缺字体的机器由 Office 自行回退。
+      fontFamily: firstFontFamily(style),
       fontSize: Math.max(2, px(style.fontSize) * scale), color: ink.hex, opacity: ink.alpha,
       bold: Number(style.fontWeight) >= 600 || style.fontWeight === 'bold', italic: style.fontStyle === 'italic',
       underline: style.textDecorationLine.includes('underline'), charSpacing: px(style.letterSpacing) * scale,
@@ -2208,11 +1967,25 @@ function collectEditableScene(slideIndex) {
       return { x: left, y: top, width: vr.width * sx, height: vr.height * sy };
     };
     const vrOf = (x, y, w, h) => ({ left: rect0.left + x * ux, top: rect0.top + y * uy, width: w * ux, height: h * uy });
-    for (const node of svg.querySelectorAll('rect, line, text, path')) {
+    for (const node of svg.querySelectorAll('rect, circle, ellipse, line, text, path')) {
       const style = getComputedStyle(node);
       if (style.display === 'none' || style.visibility === 'hidden' || node.closest('defs')) continue;
       const tag = node.tagName;
-      if (tag === 'rect') {
+      if (tag === 'circle' || tag === 'ellipse') {
+        const isCircle = tag === 'circle';
+        const cx = px(node.getAttribute('cx')), cy = px(node.getAttribute('cy'));
+        const rx = isCircle ? px(node.getAttribute('r')) : px(node.getAttribute('rx'));
+        const ry = isCircle ? px(node.getAttribute('r')) : px(node.getAttribute('ry'));
+        if (rx <= 0 || ry <= 0) continue;
+        const fill = svgPaint(node.getAttribute('fill'), defs);
+        const stroke = svgPaint(node.getAttribute('stroke'), defs);
+        const sw = px(node.getAttribute('stroke-width')) || 1;
+        const shape = { type: 'shape', ...canvasRect(vrOf(cx - rx, cy - ry, rx * 2, ry * 2)), geometry: 'ellipse' };
+        if (fill && fill.from) shape.gradient = fill;
+        else if (fill) { shape.fill = fill.hex; shape.opacity = fill.alpha; }
+        if (stroke && sw > 0) shape.border = { color: stroke.hex, opacity: stroke.alpha, width: sw * ux, dash: !!node.getAttribute('stroke-dasharray') };
+        emit(shape, node, true);
+      } else if (tag === 'rect') {
         const x = px(node.getAttribute('x')), y = px(node.getAttribute('y'));
         const w = px(node.getAttribute('width')), h = px(node.getAttribute('height'));
         if (w <= 0 || h <= 0) continue;
@@ -2249,9 +2022,10 @@ function collectEditableScene(slideIndex) {
         const xvp = rect0.left + x * ux, yvp = rect0.top + y * uy;
         const left = anchor === 'middle' ? xvp - w / 2 : anchor === 'end' ? xvp - w : xvp;
         const height = fontSize * 1.35;
+        const family = firstFontFamily(getComputedStyle(node));
         const text = { type: 'text', ...canvasRect({ left, top: yvp - fontSize * 0.85, width: w, height }), width: w + 2, wrap: false,
           paragraphs: [{ align: anchor === 'middle' ? 'center' : anchor === 'end' ? 'right' : 'left',
-            runs: [{ text: content, fontFamily: 'Microsoft YaHei', fontSize, color: fill ? fill.hex : '000000', opacity: fill ? fill.alpha : 1, bold: weight >= 600 }] }] };
+            runs: [{ text: content, fontFamily: family, fontSize, color: fill ? fill.hex : '000000', opacity: fill ? fill.alpha : 1, bold: weight >= 600 }] }] };
         emit(text, node);
       } else if (tag === 'path') {
         const d = node.getAttribute('d');
@@ -2288,7 +2062,7 @@ function collectEditableScene(slideIndex) {
       const clipped = (['hidden', 'clip'].includes(style.overflowX) && element.scrollWidth > element.clientWidth + 2) || (['hidden', 'clip'].includes(style.overflowY) && element.scrollHeight > element.clientHeight + 2);
       const pseudo = pseudos.some(p => p.content !== '""');
       if (element.tagName === 'svg') { visitSvg(element); return; }   // SVG 图表分解为原生可编辑对象
-      if (['CANVAS', 'IMG', 'VIDEO', 'IFRAME', 'OBJECT'].includes(element.tagName) || transformed || clipped || pseudo || Number(style.opacity) < 1 || style.filter !== 'none' || style.clipPath !== 'none' || style.maskImage !== 'none' || style.mixBlendMode !== 'normal' || style.textShadow !== 'none' || px(style.webkitTextStrokeWidth) > 0) {
+      if (['CANVAS', 'IMG', 'VIDEO', 'IFRAME', 'OBJECT'].includes(element.tagName) || transformed || clipped || pseudo || Number(style.opacity) < 1 || style.filter !== 'none' || style.clipPath !== 'none' || style.maskImage !== 'none' || style.mixBlendMode !== 'normal' || px(style.webkitTextStrokeWidth) > 0) {   // text-shadow 不再触发转图片：阴影丢弃，文字保持可编辑
         raster(element, 'subtree', '复杂图形或特殊效果已保留为图片'); return;
       }
     }
@@ -2352,11 +2126,8 @@ function collectEditableScene(slideIndex) {
   window.__aicoEditableCapture = { targets, canvas };
   return { name: canvas.querySelector('section[data-label]')?.getAttribute('data-label') || `第 ${slideIndex + 1} 页`, elements, warnings: [...warnings] };
 }
-
-
-    /* —— 可编辑模式：场景收集器自 editable-scene.mjs 移植（上方），绘图 XML 组装为下方 EditableDrawing —— */
-
-    /* —— 页内元素抠图：foreignObject 透明底 PNG（图片类对象用） —— */
+/* ═══ COLLECTOR:END ═══ */
+/* —— 页内元素抠图：foreignObject 透明底 PNG（图片类对象用） —— */
     async function elementPng(target) {
         const element = target.element;
         const rect = element.getBoundingClientRect();
@@ -2364,6 +2135,11 @@ function collectEditableScene(slideIndex) {
         const deckCss = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n');
         const clone = element.cloneNode(true);
         if (target.kind === 'background') clone.querySelectorAll('*').forEach(n => { n.style.visibility = 'hidden'; });
+        // 克隆体强制钉在裁剪原点：绝对定位/偏移样式会让内容飞出裁剪画布，导出成全透明空图（元素消失根因）
+        for (const [prop, value] of [['position', 'absolute'], ['left', '0'], ['top', '0'], ['margin', '0'],
+                                     ['width', rect.width + 'px'], ['height', rect.height + 'px']]) {
+            clone.style.setProperty(prop, value, 'important');
+        }
         const wrap = document.createElement('div');
         wrap.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
         const style = document.createElement('style');
