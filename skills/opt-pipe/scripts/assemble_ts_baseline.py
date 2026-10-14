@@ -18,6 +18,7 @@
 """
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -397,11 +398,41 @@ def render_baseline_view(data: dict, ts: dict, gaps: List[dict]) -> str:
 # main
 # ---------------------------------------------------------------------------
 
+def copy_artifacts_to_export(manifest_path: Path, archive_dir: Path) -> List[str]:
+    """按 manifest 的 artifacts 清单拷原始制品入 archive/export/（patch 底本，保留原文件名）。
+
+    2026-10-14 编排合入补全：首优制品经手一次入档（幂等全图）；DDL 原始文件不拷
+    （档案 ddl/ 由 ts 投影生成）。返回拷贝报告行（stdout 披露）；manifest 缺失/无
+    artifacts 段 → 空报告（直交通道场景，跳过不阻断）。
+    """
+    report: List[str] = []
+    if not manifest_path or not manifest_path.exists():
+        return report
+    mf = json.loads(manifest_path.read_text(encoding="utf-8"))
+    arts = mf.get("artifacts") or {}
+    export = archive_dir / "export"
+    export.mkdir(parents=True, exist_ok=True)
+    for key in ("execution_tasks", "lts"):
+        p = arts.get(key)
+        if p and Path(p).exists():
+            shutil.copy2(p, export / Path(p).name)
+            report.append(f"export/ <- {key}: {Path(p).name}")
+    dq = arts.get("dq") or {}
+    if dq.get("status") == "provided":
+        p = dq.get("path")
+        if p and Path(p).exists():
+            shutil.copy2(p, export / Path(p).name)
+            report.append(f"export/ <- dq: {Path(p).name}")
+    # declared_absent / 缺省：无文件可拷（"无 DQ"声明已由 baseline_v1.dq_rules=[] 携带）
+    return report
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="baseline_v1 入料建档（档案件落 archive/，过程件落 opt/_internal/）")
     ap.add_argument("--baseline", required=True, help="baseline_v1.json 路径")
     ap.add_argument("--archive-dir", required=True, help="档案目录（ddlc_design_dev/archive/）")
     ap.add_argument("--internal-dir", required=True, help="过程目录（ddlc_design_dev/opt/_internal/）")
+    ap.add_argument("--manifest", default=None, help="reverser 的 manifest.json 路径（可选：给则按 artifacts 清单拷原始制品入 archive/export/）")
     args = ap.parse_args(argv)
 
     data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
@@ -419,6 +450,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     archive, internal = Path(args.archive_dir), Path(args.internal_dir)
     (archive / "etl").mkdir(parents=True, exist_ok=True)
     internal.mkdir(parents=True, exist_ok=True)
+    if args.manifest:
+        for line in copy_artifacts_to_export(Path(args.manifest), archive):
+            print(line)
     # 档案件（资产当前态；provenance 保留原始制品定位——artifact_patcher --source 的来源）
     (archive / "ts.json").write_text(
         json.dumps(ts, ensure_ascii=False, indent=2), encoding="utf-8")

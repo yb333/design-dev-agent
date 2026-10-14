@@ -49,7 +49,7 @@ skills/
                          #   archive_writer.py(档案两动作:new-pipe 收尾 adopt 交付建档/opt advance 收口推进——2026-09-07 双消费者归位)
                          #   ★ 分层铁律：shared 只 import shared + 标准库/三方库，绝不 import 任何 skill 目录；
                          #     skill 脚本（design/coding/new-pipe/opt-pipe）只能 import 自己目录 + shared，pipe 之间不互 import（test_layering AST 守护）
-agents/                  # dws-engineer.md(编排:身份+权限+契约参数+铁律) dws-designer.md dws-coder.md dws-dq-producer.md(★DQ翻译者+独立实现者,2026-09-14拆分)（subagent 定义：身份+权限+skill指针+工具清单）
+agents/                  # dws-engineer.md(编排:身份+权限+契约参数+铁律) dws-designer.md dws-coder.md dws-dq-producer.md(★DQ翻译者+独立实现者,2026-09-14拆分) dws-reverser.md(★逆向翻译者,2026-10-14编排合入:制品清单→baseline_v1一次交卷,skill指针指向逆向仓dws-pipeline-analyzer)（subagent 定义：身份+权限+skill指针+工具清单）
 commands/new-pipe.md     # 薄壳入口（frontmatter agent: dws-engineer + 一行加载 new-pipe skill——人手工 /new-pipe 用；生产走 Task 直连）
 commands/opt-pipe.md     # 薄壳入口（同上，加载 opt-pipe skill）
 skills/dws-design-opt/   # 优化设计 skill（薄：读 baseline_view+change_request→增量 decisions→assemble_ts_opt）
@@ -71,6 +71,7 @@ docs/                    # architecture/specs/templates/output 示例 + tool-reg
 | **dws-engineer** | 设计开发段**编排+质检**：契约参数→加载剧本→调管线脚本→起 designer/producer/coder→跑确定性验证产事实→按分流表路由问题→守闸口（判断=分流不定罪，定罪归闸口人） | new-pipe / opt-pipe（按模式路由） | check_env（步骤0探针）；管线脚本经 bash python 调（不属 agent 工具） | `ddlc_design_dev/**`（含 opt/ 优化现场与 archive/ 档案） |
 | **dws-designer** | 设计判断（纯主线，无 DQ），产 design_decisions.yaml | dws-design / dws-design-opt（按任务路由） | assemble_ts（组装）/ assemble_ts_opt（opt 组装）/ explore（评估层唯一动作 --eval：草稿随 view 预置→stdin 答案合并→存在性+唯一性流水线→评估结果随回复上报）/ check_field（引用确认器）/ pick_targets（字段清单取料） | `_internal/design_decisions.yaml` |
 | **dws-dq-producer** | ★DQ 翻译者+独立实现者（2026-09-14 拆分）：断言式翻译+对比式独立重算，**直接产 dq.json+SQL**（两跳并一跳 2026-09-15，无 decisions 中间产物）；身份级纪律=输入隔离（不读 design_logic/ETL SQL）/歧义不拍板标注上交/检查成本自约束 | dws-dq | pick_dq_context（三件套取料+--query/--field 深挖）/ assemble_dq（唯一校验入口——写完即跑，2026-09-15 合并 check_sql --dq） | `dq/*.sql`、`build/dq.json` |
+| **dws-reverser** | ★逆向翻译者（2026-10-14 编排合入，opt-pipe 步骤 0 无档分支起调）：制品清单（type+path 人指认，DQ 三态显式）→ baseline_v1.json **一次交卷**；失败语义原样上交不代填；不做语义判断（增量字段/驱动表/主键/粒度永不进产物） | dws-pipeline-analyzer（★逆向仓 skill，按安装名解析——能力手册在逆向侧唯一维护，本仓不复述） | run.py（经 bash python 调：编排模式 --manifest / 文件交接 --input；skill 白名单只放这一个） | `{ddlc}/**/_internal/**`（manifest.json+baseline_v1.json；不碰档案——建档归 engineer 侧脚本） |
 | **dws-coder** | 单规则加工 SELECT（DQ 已拆归 producer） | dws-coding / dws-coding-opt（按任务路由） | slice_ts / pick_fields / check_sql / reorder_select（写完先跑：投影按 INSERT 清单序重排幂等；opt 不适用） | `etl/*.sql` |
 
 > ★ **上报路由统一（2026-09-15 定调+复调）**：子 agent（designer/coder/producer）的问题一律**上报调用方 engineer**——两通道：回复内结构化上报（常态；阻塞=首行 ⚠ 标记后结束会话，question 已 deny：源码级查证其机制只会直连人/子会话调用挂死，两种都坏）/结构化产物字段（歧义/declined 随材料上交）。engineer=**第一响应人**（上报处理协议四步：核实→诊断方向→影响评估→路由，永不裸转发——身份层定调+方法手册 new-pipe/references/report-triage.md，opt 跨引）：表内确定性技术回路直接恢复会话修（不问人），语义/表外带四件套（实测事实+根因方向+影响+选项）给人，人答案经 engineer 回子 agent。engineer 不代答语义决策（红线 L3 归闸口人）。
