@@ -29,7 +29,7 @@ rs: /abs/path/RS_xxx.md"""
 | `模式` | ✓ | `新建` \| `优化`（决定加载 new-pipe / opt-pipe 剧本） |
 | `mapping` | ✓ | mapping 文件**绝对路径**（契约参数直传，文件路径不做分拣/猜测）。**资产名/schema/appid 全从输入推导（preprocess --probe）——勿传，传了即双源** |
 | `rs` | 可选 | RS 文件绝对路径；省略 = 无 RS 模式 |
-| `artifacts` | 可选（优化无档时与 `baseline` 二选一，**推荐通道**） | 存量资产**原始制品清单 JSON**（结构=逆向 manifest 的 artifacts 段：`execution_tasks` 必填[术加 excel，query_sql 唯一来源] / `lts` 增量资产必给 / `dq` 三态显式[`{"status":"provided","path":...}` \| `{"status":"declared_absent"}`，缺 key 即违规] / `ddl` 路径数组）。**type+path 由人指认**——文件命名/形态零要求，类型靠指认不靠识别。流程自动起逆向子 agent（dws-reverser）产 baseline_v1，一次交卷 |
+| `artifacts` | 可选（优化无档时与 `baseline` 二选一，**推荐通道**） | 存量资产**原始制品清单 JSON**（结构=逆向 manifest 的 artifacts 段：`execution_tasks` 必填[术加 excel，query_sql 唯一来源] / `lts` 两种情况必给[增量资产=回刷地基；变更触碰调度=新来源表加上游依赖/回刷加任务/DQ 加任务行——与全量增量无关] / `dq` 三态显式[`{"status":"provided","path":...}` \| `{"status":"declared_absent"}`，缺 key 即违规] / `ddl` 路径数组）。**type+path 由人指认**——文件命名/形态零要求，类型靠指认不靠识别。流程自动起逆向子 agent（dws-reverser）产 baseline_v1，一次交卷 |
 | `baseline` | 可选 | baseline_v1.json 绝对路径——**直交通道**（供方已产 json 的兼容场景，如真第三方逆向侧文件交接）；与本仓逆向链（artifacts）二选一，都给时 artifacts 优先并警告 |
 | `交互` | 可选 | `interactive`（默认）：闸口①② question 必发，**调用方保证把问题送到人**；`non-interactive`（对应总控的自动决策开关）：**流程闸口继续**（闸口①②不等待，跑完产物人后审，推生产由人放行兜底）；**人工决策照常阻断上报**（类型风险/关联键类型/UT 数据质量根因——无安全默认，agent 不代答不选默认，属"RS/mapping 等输入派生问题"）。两种模式 agent 都不做语义判断 |
 > 总控侧的自动决策开关映射为本参数（开=non-interactive），**不要以提示词注入实现**——参数外内容一律被忽略。
