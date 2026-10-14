@@ -61,6 +61,13 @@ class TestV11MergeCase:
         errors = validate_baseline_v1(merge_case, schema)
         assert errors == [], "v1.1 案例应通过校验，违规: " + "; ".join(errors)
 
+    def test_v13_facts_product_passes(self, schema):
+        """v1.3 实跑产物（facts 两路径入口 + 分拣三修正后的真产物，DWB_CUST_ASSET_D
+        混放目录案例）必须通过校验链——真实链路契约夹具（2026-10-14 波次）。"""
+        data = json.loads((FIXTURES / "asset_facts_v13_full.json").read_text(encoding="utf-8"))
+        assert data["version"] == "1.3"
+        assert validate_baseline_v1(data, schema) == []
+
     def test_dm6_rule_has_write_plan_and_merge_on(self, merge_case):
         r2 = next(r for r in merge_case["rules"] if r["delete_mode"] == "6")
         assert r2["merge_on"], "dm=6 必供 merge_on"

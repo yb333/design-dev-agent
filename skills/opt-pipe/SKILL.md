@@ -41,13 +41,17 @@ description: >-
 1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`。（现场就绪——清场重建 build/ + cp archive→archive_tmp/——由步骤 1 的 preprocess_opt 做，不预建）
 3. **查基线（三段式；接口契约=docs/specs/opt/12 章 v3）**：
    - **`{arc}/ts.json` 存在** → 有档（new-pipe 交付即建档；或历次优化 advance 推进过），直接当 baseline。跳到步骤 1。
-   - **无档 + 契约参数 `artifacts`**（制品目录路径）→ 调**逆向入口**生成资产事实包（两路径接口：目录进、asset_facts 出——**我们不构造 manifest/清单等任何中间结构**，判型/执行/失败处理全归逆向侧；入口命令形态以逆向对接文档为准，当前过渡形态见 12 章注记）：
+   - **无档 + 契约参数 `artifacts`**（制品目录路径）→ 调逆向 **facts 服务**生成资产事实包（两路径接口：目录进、asset_facts.json 出——我们不构造任何中间结构，判型/执行/失败处理全归逆向侧）：
 
 ```bash
-# 逆向入口（产物落 {build}/_internal/；成功 stdout 打一行产物绝对路径）
-{逆向入口命令，见 12 章 §一——制品目录} {artifacts目录} {输出路径}
+python {ANALYZER}/run.py facts --dir {artifacts目录} \
+    --output {build}/_internal/asset_facts.json
+# {ANALYZER} 定位顺序：项目仓 .opencode/skills/dws-pipeline-analyzer →
+# ~/.config/opencode/skill(s)/dws-pipeline-analyzer（内网=双源同步位；都没有→fail loud 指引）
 ```
-     成功 → **验收**：产物过 `baseline_contract` 校验（assemble_ts_baseline 内置）+ **资产对账**（`--asset {schema}.{table}`，probe 结果 vs 产物资产标识——不一致=串包拒收）。失败（exit 非 0）→ 按错误清单路由：缺料（必需制品缺失/判不出）→ 问人要料；制品本身问题（SQL 截断/配置缺失）→ 问人或平台补源制品；其他契约问题 → 错误清单原样上报人。**任何情况禁代填/编造后重跑**。
+     - **exit 0**：stdout 找 `asset_facts: ` 前缀行取产物路径 → **验收**（入料命令内置：契约校验 + `--asset` 资产对账——不一致=串包拒收）。目录混放 mapping/RS 等非制品文件不阻断（进产物 warnings，闸口给人扫）；
+     - **exit 1**（制品/数据问题）：stderr 清单路由——缺必需料→问人要；多义同型→问人确认；制品配置缺失（如 merge_on）→向人/平台要配置补源制品后重调；其他→清单原样上报人。**禁重试绕过/代填/改制品**；
+     - **exit 2**（参数错）：核对 --dir/--output 后重调一次。
    - **无档 + 契约参数 `baseline`**（json 路径直交）→ 第三方供方兼容通道，不起调直接入料。
    - **两者皆无** → 停：指引"存量首优需提供制品目录（artifacts）或资产事实包 json（baseline）"。
 
@@ -55,7 +59,7 @@ description: >-
 
 ```bash
 python PIPE_SCRIPTS/assemble_ts_baseline.py \
-  --baseline {build}/_internal/{资产事实包.json} --archive-dir {arc} \
+  --baseline {build}/_internal/asset_facts.json --archive-dir {arc} \
   --internal-dir {build}/_internal --asset {schema}.{table} \
   [--manifest {逆向侧的制品清单文件，若落盘}]
 ```
