@@ -1,7 +1,8 @@
-"""preprocess_opt v2 测试：真实输入格式（全量 mapping 备注版本标记 + RS 变更记录）。
+"""preprocess_opt v3 测试：变更记录页签格式（2026-10-14 与业务侧确认）。
 
-场景构造对齐 docs/specs/opt/11-测试指引：需求包目录（全量 mapping + RS）、
-baseline 由 demo fixture 现场组装。不连库。
+场景构造对齐 mapping-format.md「变更记录页签」规范：三页签 mapping（实体级/属性级/
+变更记录）+ RS（口径材料）。批次过滤/改名合成/类型归类/conflict/dangling/漏标/e2e。
+不连库。
 """
 import json
 from pathlib import Path
@@ -12,9 +13,8 @@ import pytest
 
 from assemble_ts_baseline import build_ts_baseline
 from preprocess_opt import (
-    parse_change_log, normalize_yyyymm, pick_current_version,
-    extract_version_section, remark_markers, extract_and_check, main,
-    norm_asset,
+    read_change_sheet, pick_batch_version, synth_renames, extract_and_check,
+    extract_version_section, parse_change_log, norm_asset, main,
 )
 
 PKG_XLSX = "dwb_trade_order_d_全量mapping.xlsx"
@@ -24,36 +24,37 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
 ENTITY_COLS = ["源表schema", "源表物理表名", "源表别名", "目标表逻辑schema",
                "目标表物理名称", "关联&限定条件", "备注"]
-ATTR_COLS = ["源表别名", "源表物理表名", "源表字段名", "映射规则", "映射表达式",
+ATTR_COLS = ["分组", "源表别名", "源表物理表名", "源表字段名", "映射规则", "映射表达式",
              "目标字段名", "目标字段中文名", "目标字段类型", "备注"]
+CHANGE_COLS = ["变更序号", "变更时间", "变更页签", "变更key", "变更列", "变更类型", "变更前", "变更后"]
 
 RS_MD = """# 某资产需求规格
 
-## 3.3 变更记录
-
-| 日期 | 版本 | 修改人 | 修改内容 |
-|------|------|--------|----------|
-| 2026-03-10 | v1.0 | 张三 | 初始版本 |
-| 2026-08-21 | v2.0 | 李四 | 优化版本：新增渠道相关字段 |
-
 ## 4. 字段需求
 
-202608版本新增需求：新增 channel_name（渠道名称），来源渠道维表，
-按订单关联取渠道名称；202603版本新增需求：旧版本内容示例。
+202610版本新增需求：新增 channel_name（渠道名称），来源渠道维表，按订单关联取渠道名称。
 """
 
 
-def ent(remark="", table="ods_trade_order_di", alias="a", target="dwb_trade_order_d"):
+def ent(table="ods_trade_order_di", alias="a", target="dwb_trade_order_d"):
     return {"源表schema": "ods", "源表物理表名": table, "源表别名": alias,
             "目标表逻辑schema": "dws", "目标表物理名称": target,
-            "关联&限定条件": "", "备注": remark}
+            "关联&限定条件": "", "备注": ""}
 
 
-def attr(remark="", tcol="channel_name", tcol_cn="渠道名称", ttype="VARCHAR(64)",
-         alias="c", stable="dim_channel", scol="channel_name"):
-    return {"源表别名": alias, "源表物理表名": stable, "源表字段名": scol,
+def attr(tcol="channel_name", tcol_cn="渠道名称", ttype="VARCHAR(64)",
+         alias="c", stable="dim_channel", scol="channel_name", group="default"):
+    return {"分组": group, "源表别名": alias, "源表物理表名": stable, "源表字段名": scol,
             "映射规则": "直取", "映射表达式": "-", "目标字段名": tcol,
-            "目标字段中文名": tcol_cn, "目标字段类型": ttype, "备注": remark}
+            "目标字段中文名": tcol_cn, "目标字段类型": ttype, "备注": ""}
+
+
+def chg(seq, time_, page, key, column, ctype, before="", after=""):
+    """变更记录行：page='entity'|'attr'；key='分组|名'；column='资产字段' 表示整行新增。"""
+    page_cn = "实体级" if page == "entity" else "属性级"
+    return {"变更序号": seq, "变更时间": time_, "变更页签": page_cn,
+            "变更key": key, "变更列": column, "变更类型": ctype,
+            "变更前": before, "变更后": after}
 
 
 @pytest.fixture(scope="module")
@@ -64,8 +65,8 @@ def facts():
     return baseline_facts(ts)
 
 
-def make_pkg(pkg_dir: Path, entity_rows, attr_rows, rs_md=RS_MD,
-             mapping_name="dwb_trade_order_d_全量mapping.xlsx"):
+def make_pkg(pkg_dir: Path, entity_rows, attr_rows, change_rows, rs_md=RS_MD,
+             mapping_name=PKG_XLSX, with_change_sheet=True):
     pkg_dir.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
     ws1 = wb.active; ws1.title = "实体级mapping"; ws1.append(ENTITY_COLS)
@@ -74,29 +75,19 @@ def make_pkg(pkg_dir: Path, entity_rows, attr_rows, rs_md=RS_MD,
     ws2 = wb.create_sheet("属性级mapping"); ws2.append(ATTR_COLS)
     for r in attr_rows:
         ws2.append([r.get(c, "") for c in ATTR_COLS])
+    if with_change_sheet:
+        ws3 = wb.create_sheet("变更记录"); ws3.append(CHANGE_COLS)
+        for r in change_rows:
+            ws3.append([r.get(c, "") for c in CHANGE_COLS])
     wb.save(pkg_dir / mapping_name)
-    (pkg_dir / "RS_需求文档.md").write_text(rs_md, encoding="utf-8")
-    (pkg_dir / "冗余说明.txt").write_text("多余文件", encoding="utf-8")
+    (pkg_dir / PKG_RS).write_text(rs_md, encoding="utf-8")
     return pkg_dir
 
 
-def std_rows(extra_entity=(), extra_attr=(), with_old=False):
-    """标准行集：干净 happy path；with_old=True 加一行 202603 标记字段（台账/实跑漂移场景）。"""
-    attr_rows = [attr(remark="202608版本新增"),
-                 attr(remark="", tcol="order_id", tcol_cn="订单ID", alias="a",
-                      stable="ods_trade_order_di", scol="order_id")]
-    if with_old:
-        attr_rows.append(attr(remark="202603版本新增", tcol="pay_type", tcol_cn="支付类型",
-                              alias="a", stable="ods_trade_order_di", scol="pay_type"))
-    return ([ent(),
-             ent(remark="202608版本新增", table="dim_channel", alias="c")] + list(extra_entity),
-            attr_rows + list(extra_attr))
-
-
-ATTR_EN = {"源表别名": "source_alias", "源表物理表名": "source_table", "源表字段名": "source_column",
-           "映射规则": "mapping_rule", "映射表达式": "mapping_expression",
+ATTR_EN = {"分组": "scene_group", "源表别名": "source_alias", "源表物理表名": "source_table",
+           "源表字段名": "source_column", "映射规则": "mapping_rule", "映射表达式": "mapping_expression",
            "目标字段名": "target_column", "目标字段中文名": "target_column_cn",
-           "目标字段类型": "target_type", "备注": "remark", "分组": "scene_group"}
+           "目标字段类型": "target_type", "备注": "remark"}
 ENT_EN = {"源表schema": "source_schema", "源表物理表名": "source_table", "源表别名": "source_alias",
           "目标表逻辑schema": "target_schema", "目标表物理名称": "target_table",
           "关联&限定条件": "join_condition", "备注": "remark"}
@@ -108,6 +99,22 @@ def mapping_of(entity_rows, attr_rows):
     return {"entity": to_en(entity_rows, ENT_EN), "attr": to_en(attr_rows, ATTR_EN)}
 
 
+STD_CHANGES = [
+    chg(1, "2026-03-10", "attr", "default|pay_type", "资产字段", "ADD"),          # 历史批次（不进本次）
+    chg(2, "2026-10-14", "attr", "default|channel_name", "资产字段", "ADD"),      # 本次新增字段
+]
+
+
+def _to_entry(c: dict) -> dict:
+    """chg 中文行 → read_change_sheet 归一后的 entry 同构形态（extract 单测直喂）。"""
+    from preprocess_opt import normalize_yyyymm
+    group, _, key_name = c["变更key"].partition("|")
+    return {"seq": c["变更序号"], "time": normalize_yyyymm(c["变更时间"]),
+            "page": "entity" if "实体" in c["变更页签"] else "attr",
+            "group": group, "key": key_name, "column": c["变更列"],
+            "ctype": c["变更类型"], "before": c["变更前"], "after": c["变更后"]}
+
+
 class TestNormAsset:
     """资产名 I/F 镜像归一：资产铆定 I，mapping 写 I 视图、baseline 记 F 表是同一资产。"""
 
@@ -115,181 +122,253 @@ class TestNormAsset:
         assert norm_asset("dwb_trade_order_i") == norm_asset("dwb_trade_order_f")
 
     def test_schema_prefix_and_case(self):
-        assert norm_asset("dws.dwb_trade_order_i") == norm_asset("DWB_TRADE_ORDER_F")
+        assert norm_asset("DWS.DWB_TRADE_ORDER_I") == norm_asset("dwb_trade_order")
 
     def test_bare_name(self):
-        assert norm_asset("dwb_trade_order") == norm_asset("dwb_trade_order_f")
+        assert norm_asset("dwb_trade_order") == norm_asset("dwb_trade_order_i")
 
     def test_real_mismatch(self):
-        assert norm_asset("dwb_trade_order_i") != norm_asset("dwb_other_f")
+        assert norm_asset("dwb_cust_asset_i") != norm_asset("dwb_trade_order_f")
 
-    def test_entity_i_view_vs_baseline_f_table_passes(self, facts):
-        """mapping 目标表写 I 视图、baseline 是 F 表 → 不误报（内网实测踩过的坑）。"""
-        f_facts = dict(facts, target_short="dwb_trade_order_f")   # baseline F 表名
-        entity, attr_rows = std_rows()
-        for e in entity:                                          # 所有实体行的目标表都写 I 视图
-            e["目标表物理名称"] = "dwb_trade_order_i"
-        mapping = mapping_of(entity, attr_rows)
-        _, _, diags = extract_and_check(mapping, f_facts, "202608", "channel_name")
-        assert not any(d["code"] == "asset_table_mismatch" for d in diags)
-        # 真不一致仍拦（归一后基名不同）
-        for e in entity:
-            e["目标表物理名称"] = "dwb_other_i"
-        _, _, diags2 = extract_and_check(mapping_of(entity, attr_rows), f_facts,
-                                         "202608", "channel_name")
-        assert any(d["code"] == "asset_table_mismatch" for d in diags2)
+
+class TestChangeSheetParsing:
+    """变更记录页签读取：八列规格/枚举校验/批次锚定/历史批次过滤。"""
+
+    def test_read_and_batch(self, tmp_path):
+        make_pkg(tmp_path, [ent(), ent(table="dim_channel", alias="c")],
+                 [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"), attr()],
+                 STD_CHANGES)
+        entries = read_change_sheet(tmp_path / PKG_XLSX)
+        assert len(entries) == 2
+        assert pick_batch_version(entries) == "202610"
+        batch = [e for e in entries if e["time"] == "202610"]
+        assert [e["key"] for e in batch] == ["channel_name"]
+        assert batch[0]["column"] == "资产字段" and batch[0]["ctype"] == "ADD"
+        assert batch[0]["group"] == "default"
+
+    def test_missing_sheet_rejected(self, tmp_path):
+        make_pkg(tmp_path, [ent()], [attr()], STD_CHANGES, with_change_sheet=False)
+        with pytest.raises(ValueError, match="变更记录"):
+            read_change_sheet(tmp_path / PKG_XLSX)
+
+    def test_bad_ctype_rejected(self, tmp_path):
+        make_pkg(tmp_path, [ent()], [attr()],
+                 [chg(1, "2026-10-14", "attr", "default|x", "资产字段", "新增")])
+        with pytest.raises(ValueError, match="非法"):
+            read_change_sheet(tmp_path / PKG_XLSX)
+
+    def test_bad_time_rejected(self, tmp_path):
+        make_pkg(tmp_path, [ent()], [attr()],
+                 [chg(1, "不知道", "attr", "default|x", "资产字段", "ADD")])
+        with pytest.raises(ValueError, match="归一失败"):
+            read_change_sheet(tmp_path / PKG_XLSX)
+
+
+class TestRenameSynth:
+    """改名合成：严格证据链（DELETE.变更后 == ADD.key）才合成，独立行不误合。"""
+
+    def test_paired_delete_add_synthesizes(self):
+        batch = [_to_entry(chg(3, "2026-10-14", "attr", "default|order_amt", "目标字段名", "DELETE",
+                               "order_amt", "order_amount")),
+                 _to_entry(chg(4, "2026-10-14", "attr", "default|order_amount", "资产字段", "ADD"))]
+        renames, rest = synth_renames(batch)
+        assert renames == [{"kind": "rename", "group": "default",
+                            "old": "order_amt", "new": "order_amount", "seq": "3+4"}]
+        assert rest == []
+
+    def test_unpaired_stays_independent(self):
+        batch = [_to_entry(chg(1, "2026-10-14", "attr", "default|old_f", "目标字段名", "DELETE",
+                               "old_f", "")),               # 变更后为空——无配对证据
+                 _to_entry(chg(2, "2026-10-14", "attr", "default|new_f", "资产字段", "ADD"))]
+        renames, rest = synth_renames(batch)
+        assert renames == [] and len(rest) == 2
+
+    def test_delete_after_points_elsewhere_no_synth(self):
+        batch = [_to_entry(chg(1, "2026-10-14", "attr", "default|a", "目标字段名", "DELETE", "a", "zzz")),
+                 _to_entry(chg(2, "2026-10-14", "attr", "default|b", "资产字段", "ADD"))]
+        assert synth_renames(batch)[0] == []
+
+
+class TestExtract:
+    """提取与校验：add_field 候选/类型归类待扩展/conflict/dangling/漏标。"""
+
+    def _std(self, extra_changes=(), extra_entity=(), extra_attr=()):
+        entity = [ent(), ent(table="dim_channel", alias="c")] + list(extra_entity)
+        attrs = [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                 attr()] + list(extra_attr)
+        mapping = mapping_of(entity, attrs)
+        all_changes = STD_CHANGES + list(extra_changes)
+        batch = [_to_entry(e) for e in all_changes if "10-14" in e["变更时间"]]
+        return mapping, batch
+
+    def test_extract_add_field(self, facts):
+        mapping, batch = self._std()
+        renames, rest = synth_renames(batch)
+        add_fields, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        assert [f["field"] for f in add_fields] == ["channel_name"]
+        f = add_fields[0]
+        assert f["source"]["table"] == "dim_channel" and f["cn"] == "渠道名称"
+        assert f["new_source_table"] is True
+        assert not [d for d in diags if d["level"] == "error"]
+
+    def test_modify_delete_entity_add_classified_unsupported(self, facts):
+        extra = [chg(3, "2026-10-14", "attr", "default|order_id", "映射表达式", "MODIFY"),
+                 chg(4, "2026-10-14", "attr", "default|gone_f", "资产字段", "DELETE"),
+                 chg(5, "2026-10-14", "entity", "default|dim_shop", "资产字段", "ADD"),
+                 chg(6, "2026-10-14", "attr", "default|order_id", "备注", "ADD")]
+        mapping, batch = self._std(extra)
+        renames, rest = synth_renames(batch)
+        _, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        kinds = {(u["change_type"], u["name"]) for u in unsupported}
+        assert ("modify", "order_id") in kinds
+        assert ("delete", "gone_f") in kinds
+        assert ("add_source", "dim_shop") in kinds
+        assert ("add_column", "order_id.备注") in kinds
+
+    def test_rename_reported_unsupported(self, facts):
+        extra = [chg(3, "2026-10-14", "attr", "default|order_amt", "目标字段名", "DELETE",
+                     "order_amt", "order_amount"),
+                 chg(4, "2026-10-14", "attr", "default|order_amount", "资产字段", "ADD")]
+        mapping, batch = self._std(extra)
+        renames, rest = synth_renames(batch)
+        assert renames, "先删后加对应合成 rename"
+        _, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        assert any(u["change_type"] == "rename" and "order_amt→order_amount" in u["name"]
+                   for u in unsupported)
+
+    def test_conflict_and_dangling_and_row_missing(self, facts):
+        mapping, batch = self._std(extra_changes=[
+            chg(7, "2026-10-14", "attr", "default|order_id", "资产字段", "ADD"),   # baseline 已有
+            chg(8, "2026-10-14", "attr", "default|ghost_f", "资产字段", "ADD"),    # 当前态无行
+        ])
+        renames, rest = synth_renames(batch)
+        add_fields, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        codes = {d["code"] for d in diags if d["level"] == "error"}
+        assert "add_field_conflict" in codes
+        assert "add_field_row_missing" in codes
+        assert [f["field"] for f in add_fields] == ["channel_name"]
+
+    def test_alias_dangling(self, facts):
+        mapping, batch = self._std(extra_changes=[
+            chg(9, "2026-10-14", "attr", "default|dangle_f", "资产字段", "ADD"),
+        ], extra_attr=[attr(tcol="dangle_f", alias="nope", stable="dim_x", scol="x")])
+        renames, rest = synth_renames(batch)
+        _, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        assert any(d["code"] == "source_alias_dangling" for d in diags if d["level"] == "error")
+
+    def test_unmarked_new_field_warns(self, facts):
+        # 属性级当前态有 extra_f 不在 baseline 且不在变更记录 → 漏标 warn（台账漂移防线）
+        mapping, batch = self._std(extra_attr=[
+            attr(tcol="extra_f", alias="a", stable="ods_trade_order_di", scol="extra_f")])
+        renames, rest = synth_renames(batch)
+        _, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        assert any(d["code"] == "unmarked_new_field" and "extra_f" in d["message"]
+                   for d in diags if d["level"] == "warn")
+
+    def test_rs_material_reconciliation(self, facts):
+        mapping, batch = self._std()
+        renames, rest = synth_renames(batch)
+        _, _, diags = extract_and_check(rest, renames, mapping, facts, "202610",
+                                        "新增 other_f 字段")   # RS 段没提 channel_name
+        assert any(d["code"] == "rs_field_not_mentioned" for d in diags if d["level"] == "warn")
 
 
 class TestRsParsing:
-    def test_change_log_and_version(self):
-        rows = parse_change_log(RS_MD)
-        assert rows[0]["desc"].startswith("初始版本") and rows[1]["ver"] == "v2.0"
-        ver, row = pick_current_version(rows)
-        assert ver == "202608" and "优化" in row["desc"]
-
-    def test_normalize_variants(self):
-        assert normalize_yyyymm("2026-08-21") == "202608"
-        assert normalize_yyyymm("2026/8/1") == "202608"
-        assert normalize_yyyymm("202608") == "202608"
-        with pytest.raises(ValueError):
-            normalize_yyyymm("不知道")
+    """RS 材料角色（v3：版本锚定主源已移至 mapping 变更记录页签）。"""
 
     def test_version_section_anchor(self):
-        sec = extract_version_section(RS_MD, "202608")
-        assert "channel_name" in sec and "202603版本" not in sec
+        rs = "前文\n202610版本 需求正文A\n202603版本 需求正文B\n"
+        assert "需求正文A" in extract_version_section(rs, "202610")
+        assert "202603版本" not in extract_version_section(rs, "202610")
 
-
-class TestRemarkMarkers:
-    def test_multi_markers(self):
-        assert remark_markers("202603版本新增；202608版本新增") == [("202603", "新增"), ("202608", "新增")]
-        assert remark_markers("202608版本修改") == [("202608", "修改")]
-        assert remark_markers("") == []
-
-    def test_extract_add_field(self, facts):
-        entity, attr_rows = std_rows()
-        mapping = mapping_of(entity, attr_rows)
-        adds, unsup, diags = extract_and_check(mapping, facts, "202608", "channel_name 在此")
-        assert [f["field"] for f in adds] == ["channel_name"], "202603 标记与无标记行都不进本次"
-        assert adds[0]["new_source_table"] is True
-        assert unsup == []
-        assert diags == [], "202603 字段在 baseline？——不在，会触发漏标 warn，见下个测试"
-
-    def test_old_version_field_not_in_baseline_warns(self, facts):
-        """202603 版本新增的字段不在 baseline（台账/实跑漂移）→ warn 提示而非静默。"""
-        entity, attr_rows = std_rows(with_old=True)
-        mapping = mapping_of(entity, attr_rows)
-        _, _, diags = extract_and_check(mapping, facts, "202608", "channel_name")
-        assert any(d["code"] == "unmarked_new_field" and "pay_type" in d["message"] for d in diags)
-
-    def test_unsupported_verb_recognized_not_rejected(self, facts):
-        entity, attr_rows = std_rows(
-            extra_attr=[attr(remark="202608版本修改", tcol="total_amount", tcol_cn="订单总额",
-                             alias="a", stable="ods_trade_order_di", scol="amount")])
-        mapping = mapping_of(entity, attr_rows)
-        adds, unsup, diags = extract_and_check(mapping, facts, "202608", "channel_name total_amount")
-        assert [f["field"] for f in adds] == ["channel_name"]
-        assert any(u["change_type"] == "modify" and u["name"] == "total_amount" for u in unsup)
-        assert not any(d["level"] == "error" for d in diags), "识别待扩展不是错误"
-
-    def test_conflict_and_dangling(self, facts):
-        entity, attr_rows = std_rows(
-            extra_attr=[attr(remark="202608版本新增", tcol="order_id")])
-        mapping = mapping_of(entity, attr_rows)
-        _, _, diags = extract_and_check(mapping, facts, "202608", "channel_name order_id")
-        assert any(d["code"] == "add_field_conflict" for d in diags)
+    def test_parse_change_log_material(self):
+        rs = "## 3.3 变更记录\n\n| 日期 | 版本 | 修改人 | 修改内容 |\n|---|---|---|---|\n| 2026-10-14 | v3 | x | 优化 |\n"
+        assert parse_change_log(rs)[0]["date"] == "2026-10-14"
 
 
 def _opt_ready(root, baseline_ts):
-    """造 ddlc 结构：archive（demo ts）+ 旧残留（build/archive_tmp 的上次现场）——验证清场重建。"""
-    import shutil
-    (root / "archive").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(baseline_ts, root / "archive" / "ts.json")
-    (root / "build" / "etl" / "OLD.sql").parent.mkdir(parents=True, exist_ok=True)
-    (root / "build" / "etl" / "OLD.sql").write_text("STALE", encoding="utf-8")
-    (root / "archive_tmp").mkdir(exist_ok=True)
-    (root / "archive_tmp" / "stale.txt").write_text("STALE", encoding="utf-8")
-    return root / "build" / "_internal"
+    arc = root / "archive"
+    arc.mkdir(parents=True, exist_ok=True)
+    (arc / "ts.json").write_text(json.dumps(baseline_ts, ensure_ascii=False), encoding="utf-8")
+    return arc
+
+
+@pytest.fixture()
+def demo_baseline():
+    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
+    ts, _ = build_ts_baseline(demo)
+    return ts
 
 
 class TestMainEndToEnd:
     def test_direct_paths_flow(self, tmp_path, demo_baseline):
-        pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
-        out = _opt_ready(tmp_path, demo_baseline)
+        arc = _opt_ready(tmp_path, demo_baseline)
+        pkg = make_pkg(tmp_path / "pkg",
+                       [ent(), ent(table="dim_channel", alias="c")],
+                       [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                        attr()],
+                       STD_CHANGES)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
-                   "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
         assert rc == 0
-        cr = json.loads((out / "change_request.json").read_text(encoding="utf-8"))
-        assert cr["version"] == "202608" and cr["change_type"] == "add_field"
-        assert cr["change_log_summary"]["ver"] == "v2.0"
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert cr["version"] == "202610"
         assert [f["field"] for f in cr["fields"]] == ["channel_name"]
-        assert "channel_name" in cr["rs_opt_section"]
-        assert cr["source_files"]["mapping"].endswith(PKG_XLSX)
+        assert len(cr["change_entries"]) == 1          # 本批次（历史 202603 批次行不混入）
+        assert "mapping" in cr["source_files"]
 
-    def test_explicit_version_override(self, tmp_path, demo_baseline):
-        pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
-        _opt_ready(tmp_path, demo_baseline)
+    def test_explicit_version_override_picks_history_batch(self, tmp_path, demo_baseline):
+        arc = _opt_ready(tmp_path, demo_baseline)
+        pkg = make_pkg(tmp_path / "pkg", [ent()],
+                       [attr(tcol="pay_type", alias="a", stable="ods_trade_order_di", scol="pay_type"),
+                        attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id")],
+                       STD_CHANGES)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
-                   "--ts-baseline", str(demo_baseline),
-                   "--opt-root", str(tmp_path), "--version", "202609"])
-        assert rc in (0, 1)   # 无 202609 标记行 → 提取为空 + rs warn；不阻断（版本是显式的）
-        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json")
-                        .read_text(encoding="utf-8"))
-        assert cr["version"] == "202609" and cr["fields"] == []
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path),
+                   "--version", "202603"])
+        assert rc in (0, 1)
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert cr["version"] == "202603"
+        assert [f["field"] for f in cr["fields"]] == ["pay_type"]
 
     def test_blocked_exit_2(self, tmp_path, demo_baseline):
-        entity, attr_rows = std_rows(extra_attr=[attr(remark="202608版本新增", tcol="order_id")])
-        pkg = make_pkg(tmp_path / "rs_mapping", entity, attr_rows)
-        _opt_ready(tmp_path, demo_baseline)
+        arc = _opt_ready(tmp_path, demo_baseline)
+        pkg = make_pkg(tmp_path / "pkg",
+                       [ent(target="dwb_other_asset_d")],     # 资产不一致 → 阻断
+                       [attr()], STD_CHANGES)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
-                   "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
         assert rc == 2
-        assert not (tmp_path / "build" / "_internal" / "change_request.json").exists()
 
     def test_missing_input_file_exit_2(self, tmp_path, demo_baseline):
-        rc = main(["--mapping", str(tmp_path / "不存在.xlsx"), "--rs", str(tmp_path / "r.md"),
-                   "--ts-baseline", str(demo_baseline), "--opt-root", str(tmp_path)])
+        arc = _opt_ready(tmp_path, demo_baseline)
+        rc = main(["--mapping", str(tmp_path / "nope.xlsx"), "--rs", str(tmp_path / "nope.md"),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
         assert rc == 2
-
-
-@pytest.fixture(scope="module")
-def demo_baseline(tmp_path_factory):
-    import assemble_ts_baseline as m
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    d = tmp_path_factory.mktemp("baseline")
-    src = d / "baseline_v1.json"
-    src.write_text(json.dumps(demo, ensure_ascii=False), encoding="utf-8")
-    archive, internal = d / "archive", d / "internal"
-    assert m.main(["--baseline", str(src), "--archive-dir", str(archive),
-                   "--internal-dir", str(internal)]) == 0
-    return archive / "ts.json"
 
 
 class TestBaselineViewBackfill:
     def test_view_rendered_when_missing(self):
-        """档案路径（无 json 契约）——preprocess_opt 从 ts 渲染简化版 baseline_view。"""
         from preprocess_opt import render_baseline_view_from_ts
-        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_d"}}},
-              "rules": {"R0002": {"load_mode": "truncate_table", "target_table": "dws.dwb_x_d",
-                                  "exec_sequence": 1,
-                                  "source_tables": [{"schema": "ods", "table": "ods_order"}]}},
-              "tables": {"dwb_x_d": {"fields": [{"target_field": "a"}] * 3}},
-              "_baseline": {"source": "archive"}}
-        text = render_baseline_view_from_ts(ts)
-        assert "baseline_view" in text and "R0002" in text
-        assert "ods_order" in text and "3 字段" in text
-        assert "语义空位" in text
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}}},
+              "rules": {"R0001": {"exec_sequence": 1, "load_mode": "no_delete",
+                                  "target_table": "dws.t_f",
+                                  "source_tables": [{"schema": "ods", "table": "s"}]}},
+              "tables": {"t_f": {"fields": [{"name": "a"}, {"name": "b"}]}}}
+        view = render_baseline_view_from_ts(ts)
+        assert "R0001" in view and "t_f" in view and "2 字段" in view
 
 
 class TestWorkspaceReady:
     def test_build_cleared_and_tmp_created(self, tmp_path, demo_baseline):
-        """现场就绪：旧 build/archive_tmp 残留清掉；tmp=档案副本起步。"""
-        _opt_ready(tmp_path, demo_baseline)
-        pkg = make_pkg(tmp_path / "rs_mapping", *std_rows())
-        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
-                   "--ts-baseline", str(demo_baseline),
-                   "--opt-root", str(tmp_path)])
-        assert rc == 0
-        assert not (tmp_path / "build" / "etl" / "OLD.sql").exists(), "旧残留清场"
-        assert (tmp_path / "build" / "_internal" / "change_request.json").exists()
-        assert (tmp_path / "archive_tmp" / "ts.json").exists(), "临时档案=档案副本"
-        assert not (tmp_path / "archive_tmp" / "stale.txt").exists(), "旧 tmp 清场"
+        arc = _opt_ready(tmp_path, demo_baseline)
+        stale = tmp_path / "build" / "stale.txt"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("旧现场残留", encoding="utf-8")
+        pkg = make_pkg(tmp_path / "pkg", [ent(), ent(table="dim_channel", alias="c")],
+                       [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                        attr()], STD_CHANGES)
+        main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+              "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert not stale.exists()                       # 开工清场
+        assert (tmp_path / "archive_tmp" / "ts.json").exists()   # 临时档案=档案副本起步
