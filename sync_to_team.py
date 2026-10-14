@@ -198,7 +198,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="同步本仓使用侧内容到内部仓 .opencode/")
     parser.add_argument("team_repo", nargs="?", help="内部仓路径（本次生效）")
     parser.add_argument("--config", metavar="TEAM_REPO", help="保存配置（含其他已生效选项）后退出")
+    parser.add_argument("--config-analyzer", metavar="ANALYZER_REPO",
+                        help="保存 analyzer 仓路径配置后退出（双源一并同步：其 dws-pipeline-analyzer/ "
+                             "skill 成品镜像到内部仓 .opencode/skills/，一次同步两仓内网就绪）")
     parser.add_argument("--src-branch", help="源仓分支（默认 main）")
+    parser.add_argument("--analyzer-branch", help="analyzer 仓分支（默认 main）")
     parser.add_argument("--team-branch", help="内部仓分支校验（空=用当前 checkout 分支）")
     parser.add_argument("--switch", metavar="BRANCH",
                         help="内部仓切到指定分支并更新配置（只切换：不同步不提交，推送回菜单/重跑再选）")
@@ -222,14 +226,20 @@ def execute_action(args, config_path: Path | None = None) -> int:
     team_repo = args.team_repo or cfg.get("TEAM_REPO", "")
     src_branch = args.src_branch or cfg.get("SRC_BRANCH", "") or "main"
     team_branch = args.team_branch or cfg.get("TEAM_BRANCH", "")
+    analyzer_repo = args.config_analyzer or cfg.get("ANALYZER_REPO", "")
+    analyzer_branch = args.analyzer_branch or cfg.get("ANALYZER_BRANCH", "") or "main"
 
-    if args.config:
+    if args.config or args.config_analyzer:
+        team_repo = args.config or team_repo
         save_config(config_path, {
-            "TEAM_REPO": args.config,
+            "TEAM_REPO": team_repo,
             "SRC_BRANCH": src_branch,
             "TEAM_BRANCH": team_branch,
+            "ANALYZER_REPO": analyzer_repo,
+            "ANALYZER_BRANCH": analyzer_branch,
         })
-        print(f"[OK] 已保存配置: {args.config}（源分支: {src_branch}，内部仓分支: {team_branch or '不校验'}）")
+        print(f"[OK] 已保存配置: 内部仓={team_repo}（源分支: {src_branch}，内部仓分支: {team_branch or '不校验'}）")
+        print(f"     analyzer 仓={analyzer_repo or '（未配置——仅同步本仓）'}（分支: {analyzer_branch}）")
         return 0
 
     if not team_repo:
@@ -300,14 +310,19 @@ def execute_action(args, config_path: Path | None = None) -> int:
         return 0
 
     print("=" * 60)
-    print("  同步设计开发能力 → 内部仓 .opencode/")
+    print("  同步设计开发能力 → 内部仓 .opencode/（双源）")
     print("=" * 60)
-    print(f"源:   {src_repo} (origin/{src_branch})")
+    print(f"源1:  {src_repo} (origin/{src_branch})")
+    if analyzer_repo:
+        print(f"源2:  {analyzer_repo} (dws-pipeline-analyzer skill)")
+    else:
+        print("源2:  未配置 analyzer 仓——仅同步本仓（一并同步用 --config-analyzer 配置）")
     print(f"目标: {team_repo}/.opencode/")
     print()
 
     with tempfile.TemporaryDirectory(prefix="design-dev-sync-") as tmp:
-        return do_sync(src_repo, Path(tmp), team_repo, src_branch, team_branch)
+        return do_sync(src_repo, Path(tmp), team_repo, src_branch, team_branch,
+                       analyzer_repo, analyzer_branch)
 
 
 def main() -> int:
@@ -369,7 +384,8 @@ def managed_paths(skills: list, agents: list, commands: list, rules_dir: str) ->
     )
 
 
-def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_branch: str) -> int:
+def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_branch: str,
+            analyzer_repo: str = "", analyzer_branch: str = "main") -> int:
     # ── Step 1: 读源仓本地分支当前内容（用户自己 pull，工具不 fetch 远端）──
     print(f"[Step 1] 读取源仓本地分支 ({src_branch})...")
     r = run_git(["rev-parse", "--short", src_branch], cwd=src_repo, capture=True)
@@ -390,6 +406,28 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         fail(f"git archive 失败: {r.stderr.decode('utf-8', errors='replace')[:200]}")
     with tarfile.open(fileobj=BytesIO(r.stdout)) as tf:
         tf.extractall(export_dir)
+
+    # ── Step 1b: analyzer 源（双源一并同步——2026-10-14 定调：逆向 skill 成品进同一
+    # 内部仓 .opencode/skills/，内网一次拉取全有；不配置则仅同步本仓（向后兼容）──
+    analyzer_hash = ""
+    if analyzer_repo:
+        az = Path(analyzer_repo).expanduser().resolve()
+        if not (az / ".git").exists():
+            fail(f"ANALYZER_REPO 配置的不是 git 仓库: {az}（修正：sync_to_team --config-analyzer <路径>）")
+        r = run_git(["rev-parse", "--short", analyzer_branch], cwd=az, capture=True)
+        if r.returncode != 0 or not r.stdout.strip():
+            fail(f"analyzer 仓本地分支不存在: {analyzer_branch}（请先 git pull）")
+        analyzer_hash = r.stdout.strip()
+        r = subprocess.run(
+            ["git", "-C", str(az), "archive", analyzer_branch, "--", "dws-pipeline-analyzer"],
+            capture_output=True,
+        )
+        if r.returncode != 0:
+            fail(f"analyzer git archive 失败: {r.stderr.decode('utf-8', errors='replace')[:200]}"
+                 f"（仓根应有 dws-pipeline-analyzer/ skill 成品目录）")
+        with tarfile.open(fileobj=BytesIO(r.stdout)) as tf:
+            tf.extractall(export_dir / "skills")
+        print(f"  analyzer 源: {analyzer_hash}（dws-pipeline-analyzer → .opencode/skills/）")
 
     # 条目清单动态扫描（对齐 install.py：含 SKILL.md 的目录 + design-dev-shared 特例）
     skills = [
@@ -557,9 +595,11 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
             print(f"  {line}")
         if len(changed) > 20:
             print(f"  ...（共 {len(changed)} 个）")
-        # 提交信息 = 实际推送内容对应的源仓提交：对每个变更的能力文件反查源仓
-        # 上"最后改动它的提交"，去重。不依赖任何基线/内网历史——推了什么，
-        # 名字就说什么。纯 config 变化（config 不在源仓）标 config 更新。
+        # 提交信息 = 实际推送内容对应的源仓提交：对每个变更的能力文件反查其归属源仓
+        # （本仓条目 / dws-pipeline-analyzer 前缀归 analyzer 仓）上"最后改动它的提交"，
+        # 去重。不依赖任何基线/内网历史——推了什么，名字就说什么。纯 config 变化
+        # （config 不在源仓）标 config 更新。
+        az_repo = Path(analyzer_repo).expanduser().resolve() if analyzer_repo else None
         cap_files = []
         for l in changed:
             p = l.split(maxsplit=2)[-1].strip('"')
@@ -570,19 +610,23 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
         entries = list(dict.fromkeys(  # 去重保序
             r.stdout.strip()
             for f in cap_files
-            for r in [run_git(["log", "-1", "--format=%h %s", src_branch, "--", f],
-                              cwd=src_repo, capture=True)]
+            for r in [run_git(["log", "-1", "--format=%h %s",
+                               analyzer_branch if f.startswith("dws-pipeline-analyzer") else src_branch,
+                               "--", f],
+                              cwd=az_repo if f.startswith("dws-pipeline-analyzer") else src_repo,
+                              capture=True)]
             if r.returncode == 0 and r.stdout.strip()
         ))
+        tag = f"design-dev-agent@{src_hash}" + (f" + analyzer@{analyzer_hash}" if analyzer_hash else "")
         if len(entries) >= 2:
-            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} 能力更新 {len(entries)} 项",
+            commit_args = ["-m", f"sync: {tag} 能力更新 {len(entries)} 项",
                            "-m", "\n".join(f"* {e}" for e in entries)]
             print(f"  信息: 能力更新 {len(entries)} 项（正文含逐条清单）")
         elif len(entries) == 1:
             subject = entries[0].split(" ", 1)[-1]
-            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} {subject}"]
+            commit_args = ["-m", f"sync: {tag} {subject}"]
         else:
-            commit_args = ["-m", f"sync: design-dev-agent@{src_hash} config 更新"]
+            commit_args = ["-m", f"sync: {tag} config 更新"]
         if run_git(["commit"] + commit_args, cwd=team_repo).returncode != 0:
             fail("commit 失败")
 

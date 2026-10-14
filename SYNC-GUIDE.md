@@ -5,6 +5,28 @@
 
 ---
 
+## ⓪ 双源同步（2026-10-14 新增）：analyzer 仓一并上去，一把搞定
+
+配置一次（内网电脑上，两仓的本地克隆都在）：
+
+```bat
+sync_to_team.bat --config-analyzer D:\path\to\dws-analyzer-skill
+```
+
+此后每次跑同步（菜单选 1 或直接跑）**自动双源**：
+
+| 源 | 内容 | 目标 |
+|---|---|---|
+| 本仓（design-dev-agent） | skills/agents/commands | `.opencode/`（原有） |
+| analyzer 仓（dws-analyzer-skill） | `dws-pipeline-analyzer/`（skill 成品） | `.opencode/skills/dws-pipeline-analyzer/` |
+
+- 提交信息带双源版本：`sync: design-dev-agent@{h1} + analyzer@{h2} ...`
+- **内网一次拉取全有**——逆向 skill 与我们的 skill 同仓共存，opt 场景（dws-reverser 起调）内网即插即用，不再需要 analyzer 侧单独的 install 步骤和旧 sync_to_internal 通道（已退役注记）。
+- 不配置 `--config-analyzer` 时行为与原版完全一致（仅同步本仓）；analyzer 条目在内部仓里如同"别人的内容"不被触碰。
+- 前置：内网电脑需要 analyzer 仓的本地克隆（GitHub clone，跑前自己 pull——与本仓同款纪律）。
+
+---
+
 ## 一、同步什么
 
 | 本仓（源，origin/main） | 内部仓（目标，8.12 分支） | 方式 |
