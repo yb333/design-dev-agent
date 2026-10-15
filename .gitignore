@@ -51,8 +51,8 @@ legacy/
 # 开发时 skill 软链接（实际在 skills/，这里链接给 opencode 扫描）
 .opencode/skills/
 
-# 旧版 PPT（已被 architecture-overview.html 替代）
-docs/ppt/agent-concept.html
+# 最早概念稿（2026-07-28，历来只留本地不进 git；已移 docs/ppt/archive/，见该目录 README）
+docs/ppt/archive/agent-concept.html
 
 # RS图转文原始文件（已还原为 RS模板.md）
 docs/templates/RS（图转文）.md
