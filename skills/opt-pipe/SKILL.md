@@ -20,9 +20,11 @@ description: >-
 ├── build/          ← 增量现场（本次变更产出：新 SQL/ALTER/view/patched/报告/过程产物；
 │                      开工清场只留最新，不进 git——与 new-pipe 的 {deliver} 同一目录同一语义：
 │                      新建=特殊优化场景，其增量恰好是全部产出）
-└── archive_tmp/    ← 临时档案（仅优化场景：档案副本起步，优化过程维护进度态全量——
-                       ts/DDL/新 SQL/patched 落位于此，随时可用；最终确认后三步全量替换上位；
-                       中止留存=保存进度，开工清场重建）
+├── archive_tmp/    ← 临时档案（仅优化场景：档案副本起步，优化过程维护进度态全量——
+│                       ts/DDL/新 SQL/patched 落位于此，随时可用；最终确认后三步全量替换上位；
+│                       中止留存=保存进度，开工清场重建）
+└── reverse/        ← 逆向交付暂存（facts 产物落这里；随时可删可覆盖重跑，不参与
+                        路由判断——档案只经审核确认后诞生，reverse 不是档案域）
 ```
 - **资产标识 = mapping 声明的目标表**（正常 I 视图名；只存 F 的资产即 F 名——按人写的算）。
 - baseline = **archive/ 本体**（脚本只读消费，无快照拷贝；写坏有 git 兜底）。
@@ -39,32 +41,31 @@ description: >-
 
 0. 环境探针（一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——exit 1 = 环境/依赖不符 → 停。工具面自检同 new-pipe 步骤0。
 1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`。（现场就绪——清场重建 build/ + cp archive→archive_tmp/——由步骤 1 的 preprocess_opt 做，不预建）
-3. **查基线（三段式；接口契约=docs/specs/opt/12 章 v3）**：
-   - **`{arc}/ts.json` 存在** → 有档（new-pipe 交付即建档；或历次优化 advance 推进过），直接当 baseline。跳到步骤 1。
-   - **无档 + 契约参数 `artifacts`**（制品目录路径）→ 调逆向 **facts 服务**生成资产事实包（两路径接口：目录进、asset_facts.json 出——我们不构造任何中间结构，判型/执行/失败处理全归逆向侧）：
+3. **查基线（交付门模型，2026-10-14 定稿——archive/ 存在性=确认性）**：
+   - **`{arc}/ts.json` 存在** → 有档（确认档：new-pipe adopt / 逆向入料建档 / 历次 advance），直接当 baseline。跳到步骤 1。
+   - **无档 + 契约参数 `artifacts`**（制品目录路径）→ 逆向 facts 服务产资产事实包到 **reverse/ 暂存区**（自由区：随时可删可覆盖，不参与路由判断）→ **入料审核** → 过则**建档**：
 
 ```bash
+# ① facts：制品目录 → 逆向暂存区（exit 0=产物落盘；stdout `asset_facts: ` 行取路径）
 python {ANALYZER}/run.py facts --dir {artifacts目录} \
-    --output {build}/_internal/asset_facts.json
+    --output {ddlc}/reverse/asset_facts.json
 # {ANALYZER} 定位顺序：项目仓 .opencode/skills/dws-pipeline-analyzer →
 # ~/.config/opencode/skill(s)/dws-pipeline-analyzer（内网=双源同步位；都没有→fail loud 指引）
-```
-     - **exit 0**：stdout 找 `asset_facts: ` 前缀行取产物路径 → **验收**（入料命令内置：契约校验 + `--asset` 资产对账——不一致=串包拒收）。目录混放 mapping/RS 等非制品文件不阻断（进产物 warnings，闸口给人扫）；
-     - **exit 1**（制品/数据问题）：stderr 清单路由——缺必需料→问人要；多义同型→问人确认；制品配置缺失（如 merge_on）→向人/平台要配置补源制品后重调；其他→清单原样上报人。**禁重试绕过/代填/改制品**；
-     - **exit 2**（参数错）：核对 --dir/--output 后重调一次。
-   - **无档 + 契约参数 `baseline`**（json 路径直交）→ 第三方供方兼容通道，不起调直接入料。
-   - **两者皆无** → 停：指引"存量首优需提供制品目录（artifacts）或资产事实包 json（baseline）"。
 
-   入料建档（有产物后，两通道同路）：
+# ② 入料审核（确定性门：契约/资产对账/变更冲突对账/台账对账）
+python PIPE_SCRIPTS/audit_ingest.py --facts {ddlc}/reverse/asset_facts.json \
+    --asset {schema}.{table} --mapping {mapping}
 
-```bash
+# ③ 审核过 → 建档（组装 ts_baseline + asset_facts 随档 + 制品入 export/ + MANIFEST 首条）
 python PIPE_SCRIPTS/assemble_ts_baseline.py \
-  --baseline {build}/_internal/asset_facts.json --archive-dir {arc} \
-  --internal-dir {build}/_internal --asset {schema}.{table} \
-  [--manifest {逆向侧的制品清单文件，若落盘}]
+    --baseline {ddlc}/reverse/asset_facts.json --archive-dir {arc} \
+    --internal-dir {build}/_internal --asset {schema}.{table}
 ```
-     档案件（ts.json + etl/{rule}.sql）落 `{arc}`，过程件（baseline_view.md + exemptions.json）落 `{build}/_internal`；`--asset` 过产物资产对账（串包防线）。`--manifest` 给了则按其清单**拷原始制品入 `{arc}/export/`**（patch 底本，保留原文件名；无 manifest → 跳过拷贝，闸口②'披露 export/ 空缺——终态由逆向产物 provenance 支撑自动拷贝，随 12 章波次）。exit 2 = 契约违约/资产不一致 → 停，报告（契约问题归逆向侧）。
-     （边界：有档又交制品目录/json = 线上被外力改过 → **问人确认**后覆盖重入料——重入料会清掉档案攒的 decisions/export patch 历史，明知才做。）
+     - **exit 0 走完三步** → 档案诞生（此后 archive/ 即确认态）→ 步骤 1；
+     - **任一步 exit 1/2** → **上报即止**：报错自带处置路由（缺料→问人要；串包→核对资产与料；制品新鲜度冲突→三选一给人；契约问题→退逆向侧）。**禁止：原因分析、读制品原文、代填、重试绕过**——处置后重来（archive 未诞生，零残留）；
+     - 结构级矛盾的人审载体=审核拦截（自检结论通道待逆向 12 章 §八交付，当前 warnings 折叠披露）；首优连优化时基线确认并入闸口①'（零新增停等）。
+   - **无档 + 契约参数 `baseline`**（asset_facts json 路径直交）→ 第三方供方兼容通道：跳过 facts，仍走 ②③（审核+建档）。
+   - **两者皆无** → 停：指引"存量首优需提供制品目录（artifacts）或资产事实包 json（baseline）"。
 
 ## 步骤 1：优化输入预处理（契约参数直传）
 

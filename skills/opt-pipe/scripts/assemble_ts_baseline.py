@@ -398,6 +398,30 @@ def render_baseline_view(data: dict, ts: dict, gaps: List[dict]) -> str:
 # main
 # ---------------------------------------------------------------------------
 
+def copy_artifacts_from_provenance(data: dict, archive_dir: Path) -> List[str]:
+    """按产物 provenance[] 拷原始制品入 archive/export/（patch 底本，保原文件名）。
+
+    facts 模式（无 manifest 文件）的拷贝通道：provenance 逐条 {type, path[, sheets]}——
+    拷 execution_tasks / lts / dq（excel 制品；.sql DDL 不拷=档案 ddl/ 由 ts 投影）。
+    缺 path/文件不存在 → 报告行披露（不阻断）。"""
+    import shutil as _sh
+    report: List[str] = []
+    export = archive_dir / "export"
+    export.mkdir(parents=True, exist_ok=True)
+    for pv in (data.get("provenance") or []):
+        ptype = str(pv.get("type") or "")
+        path = str(pv.get("path") or "")
+        if ptype not in ("execution_tasks", "lts", "dq") or not path:
+            continue
+        src = Path(path)
+        if not src.exists():
+            report.append(f"export/ 跳过 {ptype}: 源文件不存在 {path}（披露——patch 时问人）")
+            continue
+        _sh.copy2(src, export / src.name)
+        report.append(f"export/ <- {ptype}: {src.name}")
+    return report
+
+
 def copy_artifacts_to_export(manifest_path: Path, archive_dir: Path) -> List[str]:
     """按 manifest 的 artifacts 清单拷原始制品入 archive/export/（patch 底本，保留原文件名）。
 
@@ -459,21 +483,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     view = render_baseline_view(data, ts, gaps)
 
     archive, internal = Path(args.archive_dir), Path(args.internal_dir)
+    # 建档守门（交付门模型 2026-10-14）：archive/ 存在性=确认性——本脚本只允许无档建档；
+    # 已有档（ts.json 在）= 确认档，覆盖=「线上被外力改过」语义，人显式决策后才动
+    if (archive / "ts.json").exists():
+        print(f"[BASELINE_CONTRACT_VIOLATION] 拒绝建档：{archive} 已是确认档案——", file=sys.stderr)
+        print("  覆盖重入料 = 线上被外力改过/推倒重来（人发起的重建），处置由人定，", file=sys.stderr)
+        print("  本脚本不自动覆盖（人确认后手工清理档案再调）", file=sys.stderr)
+        return 2
     (archive / "etl").mkdir(parents=True, exist_ok=True)
     internal.mkdir(parents=True, exist_ok=True)
     if args.manifest:
         for line in copy_artifacts_to_export(Path(args.manifest), archive):
             print(line)
-    # MANIFEST 首建（逆向入料建档即完整档案——advance 的追加前提；格式对齐 archive_writer）
-    if not (archive / "MANIFEST.md").exists():
-        f = ts.get("meta", {}).get("target", {}).get("f_table", {})
-        (archive / "MANIFEST.md").write_text(
-            f"# 资产演进索引 · {f.get('schema','')}.{f.get('table','')}\n\n"
-            "（当前态 = archive/ 本体；此文件为版本史一眼索引，完整历史在 git）\n\n"
-            "| 版本 | 内容 |\n|------|------|\n"
-            "| v0 | 逆向入料建档（baseline_v1 → ts_baseline，orchestration 起点）|\n",
-            encoding="utf-8")
-        print("MANIFEST: 首建（逆向入料 v0）")
+    else:
+        for line in copy_artifacts_from_provenance(data, archive):
+            print(line)
+    # asset_facts 原文随档（出生证明：基线从哪份制品逆向来的——溯源与「逆向一次」对齐）
+    facts_src = Path(args.baseline)
+    if facts_src.exists():
+        import shutil as _sh
+        _sh.copy2(facts_src, archive / "asset_facts.json")
+        print("asset_facts: 随档留存（出生证明）")
+    # MANIFEST 首建——首条=正经交付条目（确立基线=交付了基线；出身标记：逆向入料 vs new-pipe 建造）
+    f = ts.get("meta", {}).get("target", {}).get("f_table", {})
+    (archive / "MANIFEST.md").write_text(
+        f"# 资产演进索引 · {f.get('schema','')}.{f.get('table','')}\n\n"
+        "（当前态 = archive/ 本体；此文件为版本史一眼索引，完整历史在 git）\n\n"
+        "| 版本 | 内容 |\n|------|------|\n"
+        "| v1 | 逆向入料建档（asset_facts → ts_baseline，经入料审核确认）|\n",
+        encoding="utf-8")
+    print("MANIFEST: 首建（v1 逆向入料建档——经审核确认）")
     # 档案件（资产当前态；provenance 保留原始制品定位——artifact_patcher --source 的来源）
     (archive / "ts.json").write_text(
         json.dumps(ts, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -33,9 +33,13 @@ depends_on: [./00-总纲与范围.md, ./01-逆向契约.md, ./03-输入与围栏
 ## 二、我方加工链（从 json 到 designer 可开工）
 
 ```
-制品全集（首优一次：术加必/增量加 LTS/DQ 三态/DDL 给则用缺则连库回填）
-  → dws-reverser（Task 起调，2026-10-14 编排合入；一次交卷，自校验全绿）
-baseline_v1.json
+制品全集（首优一次：术加必/增量加 LTS/DQ 两态/DDL 给则用缺则连库回填）
+  → facts 服务（run.py facts --dir --output → reverse/ 暂存区，随时可删可重跑）
+asset_facts.json（reverse/）
+  → 入料审核 audit_ingest（契约/资产对账/变更冲突前移[三选一路由]/台账对账/自检结论消费）
+  → 审核过 → 建档 assemble_ts_baseline（ts_baseline 组装/asset_facts 随档[出生证明]/
+      制品按 provenance 入 export//MANIFEST 首条「v1 逆向入料建档」）——档案只经审核确认后诞生
+档案（archive/）
   → 契约校验（vendored schema：version / required keys，fail loud）
   → ts_baseline 组装（assemble_ts_baseline.py，独立脚本；ts 结构构造函数与 assemble_ts 单源共享）
       存量语义位显式空值 + 校验自动豁免（_reverse_engineered）
