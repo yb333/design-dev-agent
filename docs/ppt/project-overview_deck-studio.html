@@ -2,7 +2,7 @@
 <!-- deck-studio 构建（数据交付 Agent 设计开发段 · 项目总览，15 页）：
      主线整合自四份历史 deck（tech-review / quality 防线框架版 / quality-stages 环节实例版 / user-briefing），
      壳与引擎取自 quality-stages（deck-studio 1.5.0）。逐页来源见 project-overview_deck-studio.plan.md。
-     动画申报（animation.md 申报制；reduced-motion 全静态）：流转 = 常驻流转六路线（全 deck 唯一 ambient）；
+     动画申报（animation.md 申报制；reduced-motion 全静态）：流转/人的位置 = 常驻流转（数组声明，两页各一处）；
      制品开发 = 判定树五路扇出流线+到站脉冲；实效边界 = 底座数字滚动。 -->
 <html lang="zh-CN">
 <head>
@@ -208,7 +208,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     <div class="cover-title">从两份文件，到可上线的数仓资产</div>
     <div class="cover-underline"></div>
     <div class="cover-date" style="font-size:28px">数据交付 Agent 设计开发段 · 项目总览</div>
-    <div class="cover-date" style="top:757px;font-size:28px">2026.10 · 数据交付 Agent 项目组</div>
+    <div class="cover-date" style="top:757px;font-size:28px">2026.10 · 院博</div>
     <div class="tpl-bar">
       <div style="display:flex;align-items:center;gap:12px" data-slot="logo">
         <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAI4AAAAoCAYAAAAouML7AAAfoUlEQVR4nO18CZgVxbl2Lb2cdebMxo6sCrgQTSQuqDEYvaKiYlDcNVcRibvXmN+o+Y1r1BhRESTigqgEcMPduBEFROSPgggoMoDINvuZs/ZSVfd5+5wa2nHEm/zPjZpYz/R0n+rqquqqt95vqaqmSglGEFTwnxDCFKFEKUKoJIQxQiRiKZGUEMkUYVISRsuPUKaIVJSUfwtqlDPy8QThzJLBpVJUUp/4hkmoIoQLJRkhTJcqKVVMEZRMd9REUV2u4DoueJYwhboFvwgRO+59H/5ZoQQaBHR90P1fDjQEK1ruLAAK8QyHIoCB5MAaICJ8A/FBp3YAgSkDoFMAn+CUEgUIdSroC6AJzqUbqouKB2X+f77/9+EfDAZGbwcwMOJDQYMjiEcKQATdSyWjlClOiSCqTD8dTyvKOBcBOykiCeVKCsIpA60wCYxRDQSlKKUgtiBPSgiT4ZzAKjr7gO6QRQf7ldN+H745xoHIwdEx4hVBB+0AFOIhlEL3g44OYiRkUlncQdxwEXBJcJR5o0MkMcloucPxNANDdcFzIebZUc3gCIElIJwdjPl9+KcGqhQIZUfnlUZzWUYEyAlYpnyvzD5I80Vuksgj4JESvChhJTGiRQ6elb4wGKdSQVxRQ35BXJX1qhJYdwBCl9+5bDCXJExxwr7Xcb6B8D8asRAZAlopITwAgmYNIhm03ICxFKFCEN7BID4xiK8MIsqsBrGElAqiqvQ8nulcVkldKuWNo4P5NCDLQAJoSum/SjP7PvxvhqDTu7xDvywGtKX1xWeCDqZgD86JIFIyUihGiVu0wEEBzkpdzShTVOWzCeI7NggpIBmIMxUQT5A3LDYBQBJFS4fkHWJ0h6IdGFU71Kvvwz87GF1YTl/qDCBDm787LBl0nmQcsHAcmzieSVzPIk0ttbkt23qJeCxXMWzoahKJFAMAKc8knmu1rv90cFWyMk1TqTYaS2SJwQWh0Iu4YlSXA2yKjnogriuzO2ztfR++AeB06BVlvQYB/prShSJUUcrL4kIqwhmYJUjHJMBAsrk4qd80YMnUqb9s+3TdYI9z4ffttWnsjTdcQ3p030YUNYjwjfb19QM3Llo0sj1qO0WTi2677bq2etjuq4idyFIWLUIocUqkkIpxDulHiJCCccZ8IRRnIB5QlVSMQbH+NwWPKhsdtKRVfiNhhzjqVAUZiA4Gc7kkIoQK9BeGjtO6iaNMkvci5NPPBs0574I/5Re/d2C3puba/m7RqsvnY4UP3t+buI4dCCvPM1vq6wdWc0Jw1DDBs5vqB65Z8tYhRBQjxHOscj0oZ1wKH0CmymCmB3BwRmUAGuEZASHhryuL7F8cLAjok28SNAiB8lmqzRf1GlgrEEsdnWMqoZjLCBWBxVSKp4S0exXPX3vTDZXbW7rX5HLxSuHwqHR5zHPNrR9/PIQ4AShskskks9u39ErGTC9mM1kVjxRj0Htam2saVi7/AfQe4gtD+dIQvjQ4t7ygaSRhwiMm6VC8YeajQoJBryL/JqBR5YN8S0JIAQ4pw2X3f8m5g1s+J8ozqfRMIlyLSM+keImiEyF/W/HDtg8/3qsyW0xU+cqIU6YiRNGoULxhbf2uJA/g+AZpaa2yfN8wlaJc+YahJEswqiJFx962es1Q4vsGoYJQg/mw2EmxEAkmM4TkgdJdEo8QlLLkgETtyq6Df1PAqG8QSJhaCiyWL2nGmmmCUa0oKWQTfmNjncFth1TXNBNmucQTZsvHq4cklaQVhBNelBEZlQXhKW4Jwi1XWqS5tYZEbEdsbehmu76hiG9IafjKV9RxfCPi+UYGelIuFydWpEik4ACHs/3zPnZNXSNhpkei8QKayJPCtBj1S9Ur+yHJvzZgaFksdSWavh06ThA6IRg9IwSHfkIaW6rvuuyKPzx12x3/RdoyyWDGigrl5DMx5RcNt5iPUOFzqCEWocTP5hIc1lZjUx0pFiNt27d3l3nH9gv5mJPJJlQuHyPZfIzmPRPxJV1IMuIWI2TDhv7zJ99z0QezHj2d5AsxUshH0USYTJVBHTHnBWfhNyvn/zeAog8pJcPRmVW+LSKrwxz/UtD6gy8M0pJOvXH7PZcU3v1wn/r31+7RPPSHq2qOO3o+4UxUdk9td03p8ahR8IXLuaNsmTdiFcmqjJPNJkRLSzUXimWaWqq9QjHiuZ5JiW8QA0ovk64yvZwjGWGGTzzBSbYQ/eDxOeOT6zYN+GT56r2GdOu7LXroTxYQ23Isw3A7dDJBDJh631XKUZ0so85gYIzJMOMgDkAKP/NNhg7GgSdWdh7BYJyiE3FXrtzzvSeeGtfXk2Z1U6Z27q23/5qs3zCAuL4VGzigvkCJKhJBPCWp8ITJXWHJ9nSF4Th2dntDd+K4dr6psU60ZxMqU4iaBclkWy7utmaS+XQunojG8sS2HSjQzusLDsu+t3xEbWO6rltrrurFqdN/SZrbaogrLCICl0HgCuTwS5PvZlBlkHTFNAAFQIODcy5wDj/zbQmljpBYHQHwUAoPXBBQUekx4uai8++ffl43XxgV2WyizveNVHu2Ys5v/u/NJJ2tJL37bo5277E9AI8vDM9VlnKEbeSKcTOXjzutrVUQdW5TYx3PZpKqrRD1mnJxr60Q9XO+Ucx7dp9evTcH4rC+fuDyp549obopXZtK5yor2vMVZNPWvi1/+csRBKIQOC+pyTzwRFM/OPtQrEMjsit639nvnYVwWgGxvZM0Ukqm0+i6fFUaHDoO9dcgAXD0s4j3PM9EWlxrUH0V4yCtvg63hb7ufO7qHTvn0VVbIT5wBCsiMEuJOSSFeYFgthuVw2qr9kxy7dJlI4xsLpHwpVEBAOXycW/NJ0O3PjzzbPh3Rh426nXHMHyPG8LzpKmKIqIKblRmcwmvPVMBxddrbUuRdDahWtqrRFs2RXJOpL0lnXJcz6rqN2AjyWQTf3t09qnx5uaaWGtbVTybT1iZXNJsz1aseHvxwcTzTeIU7LAYxRQ8XsIwDB+N29TUVFtdXd1SW1vbtMcee3zUuVH09QMPPHBOKpVqQ9rLLrvsTjyrG/Oll14aXVlZmca9008//VF0EjoN99G5Oq+zzz77YeSBtE8++eTPkYdmCZSjRQ2OQYMGraupqWmuq6tr/Oyzz3ZBHOqsxdDFF198N/JCva+66qpbUJYeDKZpeshz3bp1g1AnpPvNb35zc1fvtXbt2l0rKirakW7gwIH1GmxXX331TSi/W7duDaiDbiOcq6qqWvU1nl28ePGBHeBgTA4YMGA90uDQ5QWMSKjglDFpUOYbigolCC85i4MqUfL5ll6s6EQiQLrnmIbvGlVMybpcJv7qAw+eQ1avGtb7pz99M0e5KnBDYO2NLLjRQnu+Qrm+5eTycYgqty1TqdoyKZrJJkl7uiLX0lqNypnRWIGkqtu8+S+P4R+vGxJp2l5r59tjpJCNEqdo24rR7Zs29w0YyTY8okp+pBJJmj5jhh8eQa2trVUtLS3VrutaevTrUaxHKu6l0+nKtra2VKFQiIZFAkI2m00gH8dxbA1MfV+XlU6nKzPwTWWzCQ2qcHm6Q2fPnn3K+vXrB7S3t1cA2Pfcc89FAIPuAJQxduzYp3Ef9Z45c+ZZGlQ4ayUZ8SgT5T3yyCNnhplJ12vOnDnjc7lcHO913HHHzdcDCu+LvJubm2twoCy8Hw6kxRlxaAukDYOxCMOmrS2FeF0XxBuKUiVksCJPcsJK3llKlE8IN4RvkGRFpuD5pqBMmabteV7OjHjKjArCay3uPnfnXZeNue32K0cc8pO31ry+4LAkV6JQcKKMUuUUilGaK8RJ3onJdL4SLa+Ex32D+wXD8NtcYe1/3Lj5pH7jwOXPvTAm3txYE3GKtshkkl7WS0jD8h3uisra6qaAZfBSdrQQLABjaDiIWkU4Ly2tCCuPYYbQDIBrNKRlWa6ORxo9urQYCXd8WMfQecoymHR5WvTo8jDScR/XkydPvlTXDflOmzZt0vXXX//bWCyWxzO2bTs/+9nPXsOoR6du27atx/vvv7/PPvvs876uF55/9tlnj9WduXXr1p4LFy486KCDDlqo45Du6aefHqvrdOKJJ87DWddXv9Nuu+32CVgH4NVxSAMAI694PJ7TceF6AzjhwWMIGFZB85eWxsChw7BOBpKAWy50mJrBgz/NrVk7NOf7RpLbQgiPG9RULF+ItX26YbD//CvH9Bkz5rn33nhzVEpIHo3YxZzj2ul0ptLI52OBozDvxOD3kZ5jKstwC9FIoSJV00Z67LLtw7snX0wbG+vMXCbu5/JxmXdiVDCuLO4WTertvvfwD4gVcYlhu4E+j/phbSEjAuwY7nh9DputWunsyqGmRUwHBTMmNXOg88OWTbgMzrnQ8Vqc6Dw1qN5+++2D33vvvRHheIzq6dOnT7z88sv/qOuJPE4++eQ/T5ky5UL8njt37kl77733B7gGCFesWDF8zZo1Q3V9kc/8+fOPGzly5CLd+Z988sluK1eu3BO/IRoBqo5ODr3Htddee8Npp532WFgc6TYI607QdTS4wmzcMaB8QozSUglJpfJ5kMb3DZbLR4L5KcbkiRPOu7/VNLxmKlWGEuWWR3SCmTJRdCJPPjDjHGJQ/6AjD3+5wIlo94omMw0vqFTRjxBmyWJbNlXIZJMQXaDTlnS2cvfRx7xEFvz10KYVHw23M7mkbM9WiLwXY9wWGcpUK2fCr6lsHnzM6OfBf/Aik3wuVvIyEyWUDNgB5aCB8aJ6hIQP3eGa/rX+0Fn8dGYZjMJwY4avVQiEoHM0PtJrZRZ5aLYBqBYtWjRS6xx33XXXJQCQZj6Uf9ZZZ83UeQMUyEfrQs8999yYsH6BfObNm3eiHgz4DbbRvwFCnHU99PsiTuer89KsGxZ9eA5tqfPQv8MszQxCfL22mCM7rxAlhXzsk4WLDwq8vsLjPccc+fyhp41/rDWZzLRZEbdgRHxBTSWLTiQlJUsqn/5t1sNn1B171LPFhJnNWcR1pcek72JNMyGG7edyhXgmm0+0OXm7qZiP9Nx1yFqSTGUWznrsDGt7Q3famquiBRWVgvOMZGybbTtbKxPpU6+/7rekrq4RrFVYvuIHufq1g4nyjNK+CRasDdKjCo2iGw+dAp0AB2Q4dAPIavxGp4XFDxpQN6gGH+5DjITThTuOhURYBEtHyoqs7oz6+vqBAADi99xzz5UHHnjgYugduAdR88ILLxwdZiKIpj59+nyOTlm9evWwDRs29NfiDgyE8nv27Ll1v/32exfxmzZt6vvuu+/uh/fFMyhL1/Gkk06aGxY3OqB+YK5XX3318JdffvlIfSxZsmT/8IDpPND0O4fbFy0v4Y6VmI0OWiLAHJ9y7bU3XHHssc9+9MxTY+Ff2XfS+dPGnnvujEZORXskUoQyTJgpKZTWfD62BjPhDdu7HX7iCfPyEFVUKY9QYgSNSgnlpkAvZBWl7Z40hxx3/PymF18+SjY21lUzQzJMblJT5UzbazAs3+/T+/NTbvzdNWTokDWkrTX1zm23X3njOec88ObceSeSomPDhaCdgeEX1ayABoIFAmtAWyPairjiiiv+EGYXDRjNMmFdRTONHpGaBTzPMzW9h01lPIv7UIJ12vPOO+9PuL7wwgunaDGg2QjPaasOlprWsaDo4pmPP/54iBZTo0aNemPSpEnTtJUHaw66B/Sid9555wCk2X333VfttddeH4brq8GFcm+99dZfH3nkkS8fddRRL44ePfqlo48++oVzzz13Rliv6zzFoQGJNtL1A5awiIFa1BREGdizJInrG7Jxe5352We7zL32uusfPO2MR8nSZT/uO378nEvumnxJvqayOZuIZNNY5YBJTWZIK5+LvXzflPPJ0Ue+IOqqGzOci6JtOSpm5UkympFYxkWpajdsf+R/HPUKTP53X3vtZxHlUy+fiQlqqHZqqG2RSLFi332Wjb7rj5eQfrtsbJk756SHxo17YtWjj53eszVdRZvbq0nejxDFKJeBL6GDwsMACouUcKOEHW2alvUoCusnYdGkdR4NMtlJl9IMpPOGKL7//vsn4JlEIpGdMGHC/biGEoyOxTU6etmyZfuGy/n5z3/+pL6GKEK5jz/++Km6Pscff/wzsMA0EyIN6guQ6Xygv4TZsTOwwyI63D5f5cnuDCT9rBH4jqFqBhZKQA3B8s+aeCJntaarEp5ntn+0eo+bL71i8rB9f7hs7KWXTv7Pe6dcsOLeqResXLjoIDj7AL4IM2XLtoYe/pKl+4++6JJ7Zv/2xusLwud949EcsZjrxyL5gl80ohWV7clTTp296vY7foUZcHibScQsFqmp8pblHnnuOTPIf4x6hXzwt71nP/LQmd6mjX0TsFIUpc3Q+qEk21EHfh0KvSf0cmGGQOOC1sMjWpvdmzdv7g2fhx5FYSso3Ghhq0ODR4ODl1lJl6XzwHnq1Km/1OIQPhroQBqAUIoxwpEHdB2Y2RqEw4cPXzFs2LDVYJgPP/xwr88//7zPE088MU4DEMDBNZgCeg/EGZRvMI+uI/Qb/R7a0oPY1m0D9oNSDabS7wwW7uxUDOs8YTGm29MIfDXKNwi3vNIWTaYwS73b7kNXfVK/bqAtfB6RhCUVo5vfWnjIPe8sPWD0Ccc9Nfyic6cOH3PE809PnnZJevO23jEBLy4js//85MlnTL3vl8MOP+zVBYsXH8hSqTZim45Tk2huKqYjl144aQpZv27AmpUf7hmlQrXAdRSP5vruO2LZIedOmEEaGrotufrKmz79aPkecUpVlSKBQlekXLmxSH7wPnu+H3i0zbgXgB1+5JBCpzuhf//+G954441RXY0wsAEov8MnUWYZpItGowU9Ajdu3NgP8WhkbWFowDQ1NdXq/OA406Y8zrCOdN633HLLVTfffPNvNCtpttC6y2233XYlHHOoA8o55ZRTZsPyQdq777774lWrVu2Oa7AR8gAIwCrPPPPM8ajPrFmzzli6dOmPUY/9999/CRx/mgm1eAqDH2nOPPPMR8IgCQ+IzoaFHnBaUdZtwALvMGcSMopyIoNRTKk6YvxJc/1EPOuBhXxhmE7BrlCCJoXgrz/1zAnTJkycnmvY1mPs5DsuPfWCifeKymQ6ww3R5DrWpsWLDtx70sRpbl1NY6RP789JJFr06qobBx0y8i2y/75Lnp3/9HFp4pG8xd3U0F3XHH/NNTf+aOKE6SuemDNu5rVX3fD56pXDaoXgFa5n8XwxpiRlBdPyctFooc/IAxaTmFUIJsixbqfMDvrldIdhxGvxhcYLi5/OFkTYJB88ePCnGhwQJfDYQvnVz2lA/fWvf/2Jzh/KLzoU9+BvgXdYAzZsxeB57XBEHIBy3333na/LQx7aukLaO++88zJdVzAJ6oE8x4wZ8xzAijzuvffeC7RzTrNNeOpCM6pmzDB7dg5hURxmWD09EnaUMsJQaSbhE4Gy6QmPk3i00O3gkYt6jPjR/2uPJfIFy3bzSmDFuVJu3ooLj0dbclUP33znr5++4so/8IH96k/607TzfnzaSY81GsSf/tScE0gq0TbmnLMeaI/EivAMF2vrmsb86orb3XWfDvpw4yf9RL8eG4+69ILJB990y9XFLQ29Zk+YdP+a5188psop2DYOxajEvBeJEM9KuI227Yz/1X/dTrrVNQYLjamkFI4/LCntYvZY07A208Omd2cnn3aS4Tcsm3333XeZBgmUSPhjdOPBkjnmmGOe14AA7Xfv3n27Zi6IH90ReBbscOqppz6O8/jx4+eAUWD1aEUa4NBiDXXt27fvJvhgwh2H/I844oi/aKADYMcee+yzYd8L3hFTJLqjw+JGK/44Q/mH6IQeBm8xzrA48/l8DIcWS+F8NcvoARCwGD46UDoUKs6Da+kZKttWqdauGXLH/iPf+W2yqv2PFZXpe2zLecCOFh8ybfdRu6I4M1aVuzdZ1X5rVU3LG+NP/rNa8OahauGikY+fP2naa7f+/teqsblWNbTVqdZcSm1r7K62N3Sbfsqpj390w03XqEWLDlSP//mUR350wLLpdf0b5iZ7tD8bTeVfSFRmnrGizvN2sviklXIejdQVJqf6ti644PIpatPmPsp1TaU8A/X0fRc+k6DujuNYW7Zs6Ym2NgzD69ev3wYpJd3xXiCn0vX06dPP02vBJkyY8CfEuW4pLxyLFy8+QN8vb1FW0Wg0H4lECowFXurShmjGxNKlS0fofPVznHN/yJAha8Jleh7qXPqNY/To0S8irWma7uTJky9BHOpbLBZt/Nb54HzhhRfeg3s6D1y/8sorR4TrOGrUqNdxL5xGl4Xn0Sa6zsjXsiwHB37jnj5fdtllf9R54Ny9e/dtui7h+hNfCi5BT77gSiqqhM8D4EjXVOnmarV+3cB5E8+/74pu3bffUFXVcns8kZ0SixTutS3nvkikMC2Wyt2dqMn8oa57w40DB9R/dPttv1KfbdxF1a8foLK5uCq6tvIVV65vqvZMUn22ta9avnr4a6efPeuOHrtsva+ud8MDFbXpeRV16XmxVG52JFmYU1GbnlVRm55a07PprmF7r1pz59RLVUO6TuXdqO85lq9EGeCoa8CDwcs0NDTU6cYcNGjQp+EXxVEoFOCoY1OnTp2kG2PixIn3oWN1xwBA+D1z5swzE4lEJgwe3ZGUUplKpVqRRjcwnj/55JNn6/IffPDBX2jA4h6AHa4LOl7nN2zYsFW6XNxrbGysRafqvADI8LMaYNXV1c26PjNmzDhHg0UPJvzG9eWXX36Hfgd9DoNfx+MAcMLAq6mpacJ927aLYTAa2G/SYUEEM4f4qojE9gJJK5IZYpreuJuuv3bcmWc80vzu0v22rVk1zCjmY6bEJ0uYJMqSzIq4HieiEI/mGlvaqla9884Bux9z7HMkYhf1nnPBOeFGIgt96bXHHj2tZ8++W3c9fuwzUSwpEA4kb8lDacXcrO8b0Zqa5tTQ3daQ/fdbQnr12kIS8SyxuYN5+6DCwabjkvjRFg0OONlAr1BytWjSugYoHte9evXagrkc6AbweYTnn/AM4kH7hxxyyFszZsw4d8GCBYdCb0EauPMPPvjgt2Fi77LLLp9p8x9ORtRj3LhxTyA/iCetT4T9RLo+ED0oA2IKaWBJoS5Io2ftoV/huREjRrynxZ9+Hkr2dddddx0MAPxGueH1PGFFFzoYzHg99RCecwuLJtQfll3YRIe4hWgL64ZBek8JA4tayjsKsCyztDkGewqgOMPZ1tDQjWzd2jM4O1gfnEkGHmZcE8P3Mvm4YqZMMybrpcd2G/XTN6qGD18hoVsE+371t258ToqF6EfzXzg6sm7LwJ6UqBj2RxmldcQEnQ3lHCZ6qqqNJJMZryLZbu6510qSSGYlJ0Kx0gcSgk8blPenB2umQ76ZsKUQ1n/CCm7nZRJ/b1A7yUPf0w7AcKeHFeXOc0DfpRBaOhowQymUOru0SY9z4Qrf+M9zfvFQPFeIRtKZZCVe2itGLG74PkYztzxh204xFs8ff/GFd1cN2XUtsbgI1gRj0RUnAvNgHIs1OFV7jNzv3cdeu+Ww5S+/fmTUK5pR4lMOceb5pmFYvmcaXgtnoj1iF7v/4AfLr5v50FlEuoyZlucpYhoUD5T3k+9ki8zOvKFdOb3+3kDLozSsTGolOzy73FWd/tEyvy2B+go7JMuME/pqBD4wgKWB3PMMbPFd/8prh994wcX3dleERvKFmC39YG1G0bS9bDRS6H/gjxdfdOuNV5N+fTcRUKLkghqW17GLgmJmQzLpOrYJJvMl2/z6G6Nm/u6663hDU62VdWOs4EYtbooMo7IpyguRwQPWXf/4rDMCSyoWy6vguwdlBpOlrTGdl1Z21SGdpyPCM+SdAfX3BBWyYDR4Onutw8D5rrNM18Apb/FFc2K2HLPmiLOUENi+S7LFaOvbCw++4/9c8/vC1m094RiEWKnuP3DDL668/Laaww56k8Rth8CfgYVIyvBLizMoBeMAiMgZrqJAcAUb9XyDbN/WY+mDD5/96qx5pxhFL6JcYeVN5vUesc97E3//u2vIoIH1xLZcYliuwEfgaMk7yw14jfGllC+7zzu/ZHitTBgw4fUu4Tz0/Z3luTPnGeLC3up/FZYJBwoLBZ9dC77BVw7BHiZCAo8jyAKbOEnRM4POzuVjq99665BMc3NN7379N/Y+4IB3iGH6JG4Vgy9VlJcKBMt7GPZ/M4X9UJxxQbFuD2IQyyPwvS7fM7G5L9CVWjIVH73+1mFOLhvvs+vgtd32++FSEo/lJaOKWrYTACRYHw3fE4F+H2yP+bq94511kc7A+Tom+p8AR4fwOmLtHCT/ooH6ysP3+vAlpPKEYQlAWKCpN3Iq4VMTZpssK8tBJwS7LFnABmhYhj3mpe25EjPHVml5gmJGsMLQZLxjS6/+ZAn2p2NynuO3I8xgD1fwUSYqicl8fMnCU2AqRkTRN7BYyDSY78PTazFfEMENFZi0XzmawxN+O7uvQ2e3+84aT33FTsudLSgPl0G+w4FK5UEkhS370guhodG5ijB8fiTYX8UwHx18L5JgT1Uph7KICzov9PHH8pbiHd8qgVkVAItKT5nMpFh1saPxoETr3zhLwQQ6RVtlgUnLA88nPltoGEzCsDIURMEOcdA5dCWOOt/vaIyvWLT1daBRX8EyX1f2dzl8eUOetlTKNlYJJQjl6Q0Ovbm0tjTQW0rfX1PgK/3NNQSwSZCN1DOrgVAp5WlRt4N5wp9+KwG11BnaX4BbKLNscls2lo/63IeiLUqfzy35r75+BHdeYhFmlX+EAVRoljwcp/PravnCV9Xnuxb+Gzq2y97tTXyDAAAAAElFTkSuQmCC" style="height:37px" alt="HUAWEI">
@@ -1438,7 +1438,6 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
     <button class="deck-menu" id="deckMenu" title="页面目录">☰</button>
     <span class="deck-page" id="deckPage">1 / 15</span>
   <button class="deck-pptx-btn" id="pptxBtn" title="导出可编辑 PPTX（文字/形状/图表可直接编辑）">⤓ PPT</button>
-  <button class="deck-pptx-btn" id="snapBtn" title="导出快照 PPTX（每页一张高清图）">⤓ 图</button>
   <button class="deck-present-btn" id="presentBtn" title="放映模式 (F)">▶ 放映</button></header>
 <aside class="deck-sidebar" id="deckSidebar" aria-label="页面目录">
     <div class="deck-sidebar-head"><span>页面目录</span><button class="deck-sidebar-close" id="tocClose" title="关闭 (Esc)">×</button></div>
@@ -1473,12 +1472,13 @@ window.DECK_AUTO = {
 };
 window.DECK_COUNTUP = { '实效边界': { ms: 1200, items: [[520, 252], [722, 252], [942, 252]] } };
 
-/* 常驻流转（唯一 ambient）：流转页六路线循环巡航，坐标=该页 svg viewBox 体系。
+/* 常驻流转（数组声明，两页各一处——引擎 1.5.x 多页支持）：
+   ① 流转页六路线循环巡航，坐标=该页 svg viewBox 体系。
    演示次序＝正常交付 → SQL 打回编码岗 → DQ 打回质检岗 → 数据质量退设计岗（改完回闸口①放行）
    → 闸口②拒收打回建造 → 闸口①拒收打回设计。
    注：fail-sql/fail-dq 用 decides 多点判定形式（免闸口环——分流是机器判定不是人判闸口）；
    打回到站脉冲在 1.5.0 通用引擎为下一周期起点脉冲（tech-review 旧版为终点脉冲，语义差异已接受）。 */
-window.DECK_AMBIENT = {
+window.DECK_AMBIENT = [{
     pageLabel: '流转',
     speed: 240, decideMs: 500, gateMs: 950, restMs: 1800,
     routes: [
@@ -1498,7 +1498,22 @@ window.DECK_AMBIENT = {
     nodes: { a:[36,150,84,56], b:[138,150,84,56], c:[240,150,108,56], d:[366,150,72,56],
              e:[456,142,160,72], f:[634,142,110,72], g:[762,150,72,56], h:[852,150,92,56] },
     stateAt: 7, stateRect: [852, 150, 92, 56],
-};
+},
+    { /* ② 人的位置页：三圈三光点并行轮巡（quality 防线三页原配置移植，pageLabel 随页改名）
+           三种人机关系各一光点：①③圈判定停等琥珀环、②圈恒蓝不停留——「同时播放的动态感」 */
+        pageLabel: '人的位置',
+        speed: 150,
+        routes: [
+            { decides: { 1: { ms: 850, gate: true, then: 'blue' }, 3: { ms: 850, gate: true, then: 'blue' }, 5: { ms: 850, gate: true, then: 'blue' } },
+              wp: [[43, 32], [60, 26], [75, 33], [84, 51], [75, 68], [57, 74], [40, 66], [36, 50], [43, 32]] },
+            { wp: [[400, 26], [417, 33], [424, 50], [417, 67], [400, 74], [383, 67], [376, 50], [383, 33], [400, 26]] },
+            { decides: { 2: { ms: 950, gate: true, then: 'blue' }, 6: { ms: 950, gate: true, then: 'blue' } },
+              wp: [[742, 74], [725, 67], [709, 50], [725, 33], [742, 26], [759, 33], [775, 50], [759, 67], [742, 74]] },
+        ],
+        lanes: [ { route: 0, delay: 0 }, { route: 1, delay: 0 }, { route: 2, delay: 0 } ],
+        nodes: { n1: [52, 19, 16, 14], n2: [77, 44, 15, 14], n3: [49, 66, 16, 14], g1: [698, 39, 22, 22], g2: [764, 39, 22, 22] },
+    },
+];
 
 /* ═══ DECK ENGINE:BEGIN — 唯一源 deck-studio/assets/effects/ 四件套，勿手改；同步: node deck-studio/scripts/sync-engine.mjs ═══ */
 
@@ -2151,10 +2166,14 @@ Object.assign(DeckPlayer.prototype, {
    ---------------------------------------------------------------------
    闭环/迭代机制页的"活流程"——光点沿航线循环巡航，走完全部回路（打回
    分支逐一出演）后到达产出节点，休息后开新周期。离页自动暂停；
-   prefers-reduced-motion 静态；每 deck 至多一处（animation.md 限定）。
+   prefers-reduced-motion 静态；每页至多一处，多页各一处用数组声明
+   （animation.md 限定）。
    作者只声明数据（deck 数据区，勿改本文件）：
-     window.DECK_AMBIENT = {
-       pageLabel: '机制',        // 常驻流转所在页的 data-label（无此页则不装配）
+     window.DECK_AMBIENT = { ... };     // 单页（向后兼容）
+     window.DECK_AMBIENT = [ {...}, {...} ];   // 多页各一处，每项格式同下
+     —— 单项格式：——
+     {
+       pageLabel: '机制',        // 常驻流转所在页的 data-label（无此页则该处不装配）
        speed: 200,               // 光点速度（viewBox 单位/秒）：平滑追踪舒适区 ~30°/s 视角，沿线需读标签
        decideMs: 500,            // 判定菱形停留：标签识读 ≥400ms
        gateMs: 950,              // 闸口停留：语义"等人"，需明显长于判定
@@ -2181,10 +2200,16 @@ Object.assign(DeckPlayer.prototype, {
 (function () {
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const boot = () => {
-        const deck = window.__deck, CFG = window.DECK_AMBIENT;
-        if (!deck || !CFG) return;                          // 本 deck 无常驻流转声明 → 不装配
+        const deck = window.__deck;
+        if (!deck) return;
+        /* 多页各一处：数组声明；单对象向后兼容。每页至多一处（animation.md 限定） */
+        const CFGS = Array.isArray(window.DECK_AMBIENT) ? window.DECK_AMBIENT
+                   : (window.DECK_AMBIENT ? [window.DECK_AMBIENT] : []);
+        for (const CFG of CFGS) mount(deck, CFG);
+    };
+    function mount(deck, CFG) {
         const IDX = deck.slides.findIndex(s => s.dataset.label === CFG.pageLabel);
-        if (IDX < 0) return;
+        if (IDX < 0) return;                          // 该页不存在 → 此处不装配
         const SPEED = CFG.speed || 200, DECIDE_MS = CFG.decideMs || 500,
               GATE_MS = CFG.gateMs || 950, REST_MS = CFG.restMs || 1800;
         const COUNT = Math.max(1, CFG.count || 1);
