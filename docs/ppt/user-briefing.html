@@ -6,568 +6,646 @@
 <title>设计开发智能体 · 用户宣讲：从两份文件到可上线的资产</title>
 <style>
 :root {
-    --exec: #2563eb; --info: #3b82f6; --warn: #f59e0b; --ok: #10b981;
-    --danger: #ef4444; --pink: #ec4899; --text-main: #1e293b; --text-sub: #64748b; --text-dim: #94a3b8;
-    --title-size: clamp(1.7rem, 3.6vw, 2.9rem); --h2-size: clamp(1.1rem, 2.1vw, 1.8rem);
-    --h3-size: clamp(0.88rem, 1.4vw, 1.3rem); --body-size: clamp(0.78rem, 1.06vw, 1.08rem);
-    --small-size: clamp(0.68rem, 0.9vw, 0.92rem); --slide-padding: clamp(1.1rem, 2.6vw, 2.6rem);
+    --primary: #2563eb; --info: #3b82f6; --warn: #f59e0b; --danger: #ef4444;
+    --text-main: #1e293b; --text-sub: #64748b; --text-dim: #94a3b8;
+    --title-size: clamp(1.8rem, 3.8vw, 3.2rem); --h2-size: clamp(1.3rem, 2.1vw, 2.1rem);
+    --h3-size: clamp(1rem, 1.5vw, 1.5rem); --body-size: clamp(0.9rem, 1.3vw, 1.4rem);
+    --small-size: clamp(0.75rem, 1.05vw, 1.15rem); --slide-padding: clamp(1rem, 2.4vw, 2.4rem);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html { height: 100%; scroll-snap-type: y mandatory; scroll-behavior: smooth; overflow-x: hidden; }
-body { font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif; background: #fff; color: var(--text-main); height: 100%; overflow-x: hidden; }
+/* 注意：html/body 不能设 height:100% —— 会把 html 锁在一屏高，window.scrollTo 失效（内容溢出挂在 body 上） */
+html, body { overflow-x: hidden; }
+html { scroll-snap-type: y mandatory; }
+body { font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif; background: #fff; color: var(--text-main); }
 .slide { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; scroll-snap-align: start; display: flex; flex-direction: column; position: relative; padding: var(--slide-padding); }
-.slide-content { flex: 1; display: flex; flex-direction: column; max-height: 100%; overflow: hidden; gap: clamp(0.4rem, 1.1vh, 0.85rem); }
+.slide-content { flex: 1; display: flex; flex-direction: column; max-height: 100%; overflow: hidden; gap: clamp(0.4rem, 1vh, 0.8rem); padding-bottom: clamp(1.6rem, 3vh, 2.4rem); }
 .page-head { display: flex; flex-direction: column; gap: 0.18rem; flex-shrink: 0; }
 .page-num { font-size: var(--small-size); color: var(--text-dim); letter-spacing: 0.12em; font-weight: 600; }
 .page-title { font-size: var(--h2-size); font-weight: 800; color: var(--text-main); line-height: 1.2; }
 .page-claim { font-size: var(--body-size); color: var(--text-sub); font-weight: 500; line-height: 1.35; }
-.key { font-weight: 700; color: var(--exec); }
+.key { font-weight: 700; color: var(--primary); }
 .svg-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .svg-stage svg { width: 100%; height: 100%; max-height: 100%; }
 #progressBar { position: fixed; top: 0; left: 0; width: 100%; height: 3px; z-index: 100; background: #e2e8f0; }
-#progressFill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--info), var(--exec)); transition: width 0.4s ease; }
+#progressFill { height: 100%; width: 0%; background: linear-gradient(90deg, #3b82f6, #2563eb); transition: width 0.4s ease; }
 .nav-dots { position: fixed; right: 12px; top: 50%; transform: translateY(-50%); z-index: 100; display: flex; flex-direction: column; gap: 6px; }
 .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: #cbd5e1; cursor: pointer; transition: all 0.3s ease; }
-.nav-dot.active { background: var(--exec); transform: scale(1.6); }
-.reveal { opacity: 0; transform: translateY(18px); transition: opacity .55s cubic-bezier(.16,1,.3,1), transform .55s cubic-bezier(.16,1,.3,1); }
-.slide.visible .reveal { opacity: 1; transform: translateY(0); }
-.reveal:nth-child(1){transition-delay:.04s} .reveal:nth-child(2){transition-delay:.12s}
-.reveal:nth-child(3){transition-delay:.2s} .reveal:nth-child(4){transition-delay:.28s}
+.nav-dot.active { background: #3b82f6; transform: scale(1.5); }
+.nav-dot:hover { background: #3b82f6; }
+/* 屏幕翻页按钮：环境不送键盘事件时也能翻页 */
+.page-btns { position: fixed; right: 14px; bottom: 42px; z-index: 120; display: flex; flex-direction: column; gap: 8px; }
+.page-btn { width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.95); border: 1px solid #cbd5e1; color: #2563eb; font-size: 20px; font-weight: 800; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; box-shadow: 0 1px 4px rgba(15,23,42,0.14); }
+.page-btn:hover { background: #eff6ff; border-color: #93c5fd; }
+/* 入场动画为增强项：仅当 JS 可用（html.js-anim）且页面未进入视口时才隐藏；JS 缺失/失效时内容全部直接可见 */
+html.js-anim .reveal { opacity: 0; transform: translateY(18px); transition: opacity .55s cubic-bezier(.16,1,.3,1), transform .55s cubic-bezier(.16,1,.3,1); }
+html.js-anim .slide.visible .reveal { opacity: 1; transform: translateY(0); }
 
 /* ---- components ---- */
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(0.7rem, 1.6vw, 1.4rem); min-height: 0; flex: 1; }
-.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: clamp(0.7rem, 1.6vw, 1.4rem); min-height: 0; flex: 1; }
-.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(0.6rem, 1.3vw, 1.1rem); min-height: 0; flex: 1; }
-.card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: clamp(0.6rem, 1.4vw, 1.15rem); display: flex; flex-direction: column; gap: clamp(0.3rem, 0.8vh, 0.6rem); min-height: 0; overflow: hidden; }
-.card.accent { border-top: 3px solid var(--exec); }
-.card.warn-top { border-top: 3px solid var(--warn); }
-.card.ok-top { border-top: 3px solid var(--ok); }
-.card.danger-top { border-top: 3px solid var(--danger); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(0.7rem, 1.5vw, 1.3rem); min-height: 0; margin: auto 0; width: 100%; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: clamp(0.7rem, 1.5vw, 1.3rem); min-height: 0; margin: auto 0; width: 100%; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(0.6rem, 1.3vw, 1.1rem); min-height: 0; margin: auto 0; width: 100%; }
+.card { background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); border: 1px solid #e2e8f0; border-radius: 10px; padding: clamp(0.7rem, 1.5vw, 1.4rem); display: flex; flex-direction: column; gap: clamp(0.35rem, 0.9vh, 0.7rem); min-height: 0; overflow: hidden; }
+.card.accent { background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%); border-color: #bfdbfe; }
+.card.gate { background: linear-gradient(180deg, #fef9e7 0%, #fffbeb 100%); border-color: #fde68a; }
+.card.redline { background: linear-gradient(180deg, #fef2f2 0%, #fff5f5 100%); border-color: #fecaca; }
 .card h3 { font-size: var(--h3-size); font-weight: 800; color: var(--text-main); display: flex; align-items: center; gap: 0.45em; }
-.card p, .card li { font-size: var(--body-size); color: var(--text-sub); line-height: 1.55; }
-.card ul { padding-left: 1.15em; display: flex; flex-direction: column; gap: 0.45em; }
+.card p, .card li { font-size: var(--body-size); color: #475569; line-height: 1.5; }
+.card ul { padding-left: 1.15em; display: flex; flex-direction: column; gap: 0.5em; }
 .badge { display: inline-flex; align-items: center; font-size: var(--small-size); font-weight: 700; padding: 0.12em 0.65em; border-radius: 999px; letter-spacing: 0.04em; white-space: nowrap; }
 .b-ai { background: #dbeafe; color: #1d4ed8; }
-.b-script { background: #d1fae5; color: #047857; }
+.b-script { background: #e2e8f0; color: #475569; }
 .b-human { background: #fef3c7; color: #b45309; }
 .b-warn { background: #fee2e2; color: #b91c1c; }
-.b-dim { background: #e2e8f0; color: #475569; }
 table.tbl { width: 100%; border-collapse: collapse; font-size: var(--body-size); }
-table.tbl th { text-align: left; background: #eff6ff; color: #1e40af; font-weight: 700; padding: 0.42em 0.7em; border-bottom: 2px solid #bfdbfe; white-space: nowrap; }
-table.tbl td { padding: 0.4em 0.7em; border-bottom: 1px solid #e2e8f0; color: var(--text-sub); line-height: 1.42; vertical-align: top; }
+table.tbl th { text-align: left; background: linear-gradient(180deg, #dbeafe, #eff6ff); color: #1e40af; font-weight: 700; padding: 0.42em 0.7em; border-bottom: 2px solid #bfdbfe; white-space: nowrap; }
+table.tbl td { padding: 0.4em 0.7em; border-bottom: 1px solid #e2e8f0; color: #475569; line-height: 1.42; vertical-align: top; }
 table.tbl tr:last-child td { border-bottom: none; }
 table.tbl td.first { color: var(--text-main); font-weight: 700; white-space: nowrap; }
-pre.code { background: #0f172a; color: #cbd5e1; border-radius: 8px; padding: clamp(0.5rem, 1.1vw, 0.95rem); font-family: "SF Mono", Menlo, Consolas, monospace; font-size: clamp(0.58rem, 0.8vw, 0.84rem); line-height: 1.55; overflow: hidden; white-space: pre; }
-pre.code .c { color: #64748b; } pre.code .k { color: #7dd3fc; } pre.code .s { color: #86efac; } pre.code .hl { color: #fbbf24; }
-.tree { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: clamp(0.64rem, 0.9vw, 0.92rem); line-height: 1.8; color: var(--text-sub); white-space: pre; }
-.tree b { color: var(--text-main); }
-.tree .d1 { color: var(--exec); font-weight: 700; } .tree .d2 { color: var(--ok); font-weight: 700; } .tree .d3 { color: var(--warn); font-weight: 700; }
-.strip { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: clamp(0.5rem, 1.2vw, 1rem) clamp(0.7rem, 1.6vw, 1.3rem); font-size: var(--body-size); color: #1e40af; line-height: 1.5; flex-shrink: 0; }
-.strip.amber { background: #fffbeb; border-color: #fde68a; color: #92400e; }
-.strip.red { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
-.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(0.6rem, 1.4vw, 1.2rem); }
-.stat { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: clamp(0.55rem, 1.2vw, 1rem); text-align: center; }
-.stat .num { font-size: clamp(1.3rem, 2.6vw, 2.2rem); font-weight: 800; color: var(--exec); line-height: 1.15; }
+.strip { background: linear-gradient(180deg, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 10px; padding: clamp(0.5rem, 1.1vw, 0.95rem) clamp(0.7rem, 1.6vw, 1.3rem); font-size: var(--body-size); color: #1e40af; line-height: 1.5; flex-shrink: 0; }
+.strip.amber { background: linear-gradient(180deg, #fef9e7, #fffbeb); border-color: #fde68a; color: #92400e; }
+.strip.red { background: linear-gradient(180deg, #fef2f2, #fff5f5); border-color: #fecaca; color: #991b1b; }
+.chip-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(0.5rem, 1.1vw, 1rem); flex-shrink: 0; }
+.chip { background: linear-gradient(180deg, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 9px; padding: 0.5em 0.8em; font-size: var(--body-size); color: #1e40af; text-align: center; font-weight: 600; }
+.chip b { font-weight: 800; }
+.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(0.6rem, 1.3vw, 1.1rem); }
+.stat { background: linear-gradient(180deg, #eff6ff, #f8fafc); border: 1px solid #bfdbfe; border-radius: 10px; padding: clamp(0.55rem, 1.2vw, 1rem); text-align: center; }
+.stat .num { font-size: clamp(1.4rem, 2.8vw, 2.5rem); font-weight: 800; color: var(--primary); line-height: 1.15; }
 .stat .lbl { font-size: var(--small-size); color: var(--text-sub); margin-top: 0.25em; line-height: 1.35; }
 footer.foot { position: absolute; bottom: clamp(0.5rem, 1.4vh, 1rem); left: var(--slide-padding); right: var(--slide-padding); display: flex; justify-content: space-between; font-size: var(--small-size); color: var(--text-dim); }
-.numchip { display: inline-flex; width: 1.5em; height: 1.5em; border-radius: 50%; background: var(--exec); color: #fff; font-size: var(--small-size); font-weight: 700; align-items: center; justify-content: center; flex-shrink: 0; }
-.flow-pills { display: flex; align-items: stretch; gap: 0.4rem; }
-.fp { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 9px; padding: 0.5em 0.6em; display: flex; flex-direction: column; gap: 0.3em; min-width: 0; }
-.fp .t { font-size: var(--body-size); font-weight: 800; color: var(--text-main); line-height: 1.2; }
-.fp .d { font-size: var(--small-size); color: var(--text-sub); line-height: 1.4; }
-.fp .who { margin-top: auto; }
-@media (max-height: 760px) { :root { --slide-padding: clamp(0.8rem, 2vw, 1.6rem); } }
+.numchip { display: inline-flex; width: 1.5em; height: 1.5em; border-radius: 50%; background: var(--primary); color: #fff; font-size: var(--small-size); font-weight: 700; align-items: center; justify-content: center; flex-shrink: 0; }
+@media (max-height: 760px) { :root { --slide-padding: clamp(0.7rem, 1.8vw, 1.4rem); } }
+@media (max-height: 600px) { :root { --slide-padding: clamp(0.5rem, 1.4vw, 1rem); } .page-claim { display: none; } }
+
+/* ---- 聚光灯光标（按 P 开关） ---- */
+.pres-cursor { position: fixed; pointer-events: none; z-index: 9999; width: 0; height: 0; opacity: 0; transition: opacity 0.4s ease; }
+.pres-cursor.active { opacity: 1; }
+.pres-cursor.fading .pres-spotlight { opacity: 0.04; }
+.pres-cursor.fading .pres-dot { opacity: 0.4; }
+.pres-spotlight { position: absolute; width: 220px; height: 220px; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 50%; background: radial-gradient(circle, rgba(59,130,246,0.16) 0%, rgba(59,130,246,0.09) 35%, rgba(59,130,246,0.03) 60%, transparent 80%); opacity: 0.14; transition: opacity 0.6s ease; }
+.pres-dot { position: absolute; width: 8px; height: 8px; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 50%; background: #3b82f6; box-shadow: 0 0 8px rgba(59,130,246,0.5); transition: opacity 0.6s ease; }
+.pres-cursor-hint { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #94a3b8; background: rgba(255,255,255,0.9); padding: 6px 16px; border-radius: 20px; border: 1px solid #e2e8f0; z-index: 9999; opacity: 0; transition: opacity 0.3s ease; pointer-events: none; }
+.pres-cursor-hint.show { opacity: 1; }
 </style>
 </head>
 <body>
 <div id="progressBar"><div id="progressFill"></div></div>
 <div class="nav-dots" id="navDots"></div>
+<div class="pres-cursor" id="presCursor"><div class="pres-spotlight"></div><div class="pres-dot"></div></div>
+<div class="pres-cursor-hint" id="presCursorHint">按 P 开关演示光标</div>
+<div class="page-btns"><div class="page-btn" id="btnPrev" title="上一页 (↑)">‹</div><div class="page-btn" id="btnNext" title="下一页 (↓)">›</div></div>
 
-<!-- ============ S1 封面 ============ -->
+<!-- ============ P1 封面 ============ -->
 <section class="slide" id="s1">
-  <div class="slide-content" style="justify-content: center; gap: clamp(0.8rem, 2.4vh, 1.6rem);">
-    <div class="reveal" style="font-size: var(--small-size); letter-spacing: 0.25em; font-weight: 700; color: var(--exec);">数据交付智能体 · 设计开发段（DDLC 中游）· 用户宣讲</div>
+  <div class="slide-content" style="justify-content: center; gap: clamp(0.9rem, 2.4vh, 1.6rem);">
+    <div class="reveal" style="font-size: var(--small-size); letter-spacing: 0.25em; font-weight: 700; color: var(--primary);">数据交付智能体 · 设计开发段（DDLC 中游）· 用户宣讲</div>
     <h1 class="reveal" style="font-size: var(--title-size); font-weight: 800; line-height: 1.22;">从两份文件，到<span class="key">可上线的数仓资产</span></h1>
-    <p class="reveal page-claim" style="font-size: clamp(0.85rem, 1.25vw, 1.12rem); max-width: 62em;">输入 <b>RS（需求说明）</b> + <b>mapping（字段映射）</b>，智能体连续完成设计、编码、测试，交付 <b>设计文档 + 四件套制品</b>（建表 DDL / 术加 ETL / 调度任务 / DQ 检查）与测试报告。<br>它把「做」的活干完并自证质量，「判」的权始终在人。</p>
-    <div class="reveal svg-stage" style="flex: 0 0 auto; height: clamp(120px, 22vh, 190px); margin-top: 0.5rem;">
-      <svg viewBox="0 0 960 170" xmlns="http://www.w3.org/2000/svg">
-        <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#94a3b8"/></marker></defs>
-        <rect x="10" y="30" width="200" height="110" rx="12" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
-        <text x="110" y="70" text-anchor="middle" font-size="17" font-weight="700" fill="#334155">需求受理</text>
-        <text x="110" y="95" text-anchor="middle" font-size="13" fill="#64748b">BA 产出 RS + mapping</text>
-        <text x="110" y="118" text-anchor="middle" font-size="12" fill="#94a3b8">（上游 · 人）</text>
-        <line x1="215" y1="85" x2="268" y2="85" stroke="#94a3b8" stroke-width="2" marker-end="url(#ar)"/>
-        <rect x="273" y="18" width="414" height="134" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="2.5"/>
-        <text x="480" y="58" text-anchor="middle" font-size="19" font-weight="800" fill="#1d4ed8">设计 → 编码 → 测试 → 交付制品</text>
-        <text x="480" y="86" text-anchor="middle" font-size="13.5" fill="#3730a3">智能体一条龙 · 程序化质检 · 两处人工闸口</text>
-        <text x="480" y="112" text-anchor="middle" font-size="13" fill="#64748b">粗设计 → 细设计 → 编码 → UT 实测</text>
-        <text x="480" y="136" text-anchor="middle" font-size="12" fill="#94a3b8">（本讲的主角）</text>
-        <line x1="692" y1="85" x2="745" y2="85" stroke="#94a3b8" stroke-width="2" marker-end="url(#ar)"/>
-        <rect x="750" y="30" width="200" height="110" rx="12" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
-        <text x="850" y="70" text-anchor="middle" font-size="17" font-weight="700" fill="#334155">上线调度</text>
-        <text x="850" y="95" text-anchor="middle" font-size="13" fill="#64748b">制品入档案，人推生产</text>
-        <text x="850" y="118" text-anchor="middle" font-size="12" fill="#94a3b8">（下游 · 人）</text>
-      </svg>
-    </div>
-    <div class="reveal flow-pills" style="flex: 0 0 auto;">
-      <div class="fp" style="border-color:#bfdbfe; background:#eff6ff;"><span class="t" style="color:#1d4ed8;">★ 新建交付</span><span class="d">本次宣讲主线：RS + mapping → 全新资产全流程</span><span class="who"><span class="badge b-ai">主推</span></span></div>
-      <div class="fp"><span class="t">存量优化</span><span class="d">全量 mapping 标注变更 → 只做精确增量，存量零接触</span><span class="who"><span class="badge b-dim">开发调试中 · 后续专题</span></span></div>
+    <p class="reveal page-claim" style="font-size: clamp(0.9rem, 1.3vw, 1.25rem); max-width: 62em;">输入 <b>RS</b>（Requirement Spec）需求说明 + <b>mapping</b> 字段映射，交付 <b>设计文档 + 四件套制品</b>（Artifacts），自带 UT 报告与测试脚本。<br>「做」的活全部干完并自证质量，「判」的权始终在人。</p>
+    <div class="reveal" style="display: grid; grid-template-columns: 1fr 1fr; gap: clamp(0.7rem, 1.5vw, 1.3rem); max-width: 70%; margin: 0 auto;">
+      <div class="card accent" style="flex-direction: row; align-items: center; gap: 1em;"><span class="badge b-ai" style="flex-shrink:0;">★ 主推</span><p style="color:#1e40af;"><b>新建交付</b>——本讲主线</p></div>
+      <div class="card" style="flex-direction: row; align-items: center; gap: 1em;"><span class="badge b-human" style="flex-shrink:0;">后续专题</span><p><b>存量优化</b>——开发调试中</p></div>
     </div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>01 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>01 / 08</span></footer>
 </section>
 
-<!-- ============ S2 一段流程 ============ -->
+<!-- ============ P2 他能干什么 ============ -->
 <section class="slide" id="s2">
   <div class="slide-content">
     <div class="page-head reveal">
-      <div class="page-num">02 · 它是什么</div>
-      <h1 class="page-title">八个步骤一条龙：AI 干活，程序把关，人只在两处拍板</h1>
-      <p class="page-claim">从输入校验到制品落档案，每一步都有明确的责任者——<span class="key">人只在闸口①②出手</span>，其余时间全程自动，且每一步的产物都落盘可查。</p>
+      <div class="page-num">02 · 能干什么</div>
+      <h1 class="page-title">设计、编码、测试、制品一条龙全包</h1>
+      <p class="page-claim">人只在闸口（Gate）①②出手，其余全程自动，产物全程落盘可查。</p>
     </div>
-    <div class="reveal svg-stage" style="flex: 0 0 auto; height: clamp(150px, 26vh, 230px);">
-      <svg viewBox="0 0 1040 210" xmlns="http://www.w3.org/2000/svg">
-        <defs><marker id="ar2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#94a3b8"/></marker></defs>
-        <g font-family="PingFang SC, Microsoft YaHei, sans-serif">
-        <!-- row of 8 boxes -->
-        <g>
-          <rect x="4"   y="14" width="118" height="86" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
-          <text x="63"  y="38" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e293b">① 预处理·预检</text>
-          <text x="63"  y="58" text-anchor="middle" font-size="11.5" fill="#64748b">输入校验+连库查字段</text>
-          <text x="63"  y="74" text-anchor="middle" font-size="11.5" fill="#64748b">类型/值域提前暴露</text>
-          <rect x="63"  y="80" width="46" height="15" rx="7.5" fill="#d1fae5"/><text x="86" y="91" text-anchor="middle" font-size="10" font-weight="700" fill="#047857">程序</text>
-        </g>
-        <g>
-          <rect x="134" y="14" width="118" height="86" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
-          <text x="193" y="38" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e293b">② 设计</text>
-          <text x="193" y="58" text-anchor="middle" font-size="11.5" fill="#64748b">五层决策骨架</text>
-          <text x="193" y="74" text-anchor="middle" font-size="11.5" fill="#64748b">产设计文档+加工口径</text>
-          <rect x="167" y="80" width="52" height="15" rx="7.5" fill="#dbeafe"/><text x="193" y="91" text-anchor="middle" font-size="10" font-weight="700" fill="#1d4ed8">AI</text>
-        </g>
-        <g>
-          <rect x="264" y="14" width="118" height="86" rx="9" fill="#fffbeb" stroke="#f59e0b" stroke-width="2.5"/>
-          <text x="323" y="38" text-anchor="middle" font-size="14.5" font-weight="800" fill="#92400e">③ 闸口①</text>
-          <text x="323" y="58" text-anchor="middle" font-size="11.5" fill="#92400e">确认设计方向</text>
-          <text x="323" y="74" text-anchor="middle" font-size="11.5" fill="#92400e">看摘要+关联实测</text>
-          <rect x="294" y="80" width="58" height="15" rx="7.5" fill="#fef3c7"/><text x="323" y="91" text-anchor="middle" font-size="10" font-weight="800" fill="#b45309">★ 人拍板</text>
-        </g>
-        <g>
-          <rect x="394" y="14" width="118" height="86" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
-          <text x="453" y="38" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e293b">④ DDL</text>
-          <text x="453" y="58" text-anchor="middle" font-size="11.5" fill="#64748b">由设计文档生成</text>
-          <text x="453" y="74" text-anchor="middle" font-size="11.5" fill="#64748b">建表+视图脚本</text>
-          <rect x="427" y="80" width="52" height="15" rx="7.5" fill="#d1fae5"/><text x="453" y="91" text-anchor="middle" font-size="10" font-weight="700" fill="#047857">程序</text>
-        </g>
-        <g>
-          <rect x="524" y="14" width="118" height="86" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
-          <text x="583" y="38" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e293b">⑤ 编码</text>
-          <text x="583" y="58" text-anchor="middle" font-size="11.5" fill="#64748b">逐规则产 SELECT</text>
-          <text x="583" y="74" text-anchor="middle" font-size="11.5" fill="#64748b">+ DQ 检查 SQL</text>
-          <rect x="557" y="80" width="52" height="15" rx="7.5" fill="#dbeafe"/><text x="583" y="91" text-anchor="middle" font-size="10" font-weight="700" fill="#1d4ed8">AI</text>
-        </g>
-        <g>
-          <rect x="654" y="14" width="118" height="86" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
-          <text x="713" y="38" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e293b">⑥ UT 实测</text>
-          <text x="713" y="58" text-anchor="middle" font-size="11.5" fill="#64748b">预检秒级+真库执行</text>
-          <text x="713" y="74" text-anchor="middle" font-size="11.5" fill="#64748b">主键/空值/行数实锤</text>
-          <rect x="687" y="80" width="52" height="15" rx="7.5" fill="#d1fae5"/><text x="713" y="91" text-anchor="middle" font-size="10" font-weight="700" fill="#047857">程序</text>
-        </g>
-        <g>
-          <rect x="784" y="14" width="118" height="86" rx="9" fill="#fffbeb" stroke="#f59e0b" stroke-width="2.5"/>
-          <text x="843" y="38" text-anchor="middle" font-size="14.5" font-weight="800" fill="#92400e">⑦ 闸口②</text>
-          <text x="843" y="58" text-anchor="middle" font-size="11.5" fill="#92400e">确认编码质量</text>
-          <text x="843" y="74" text-anchor="middle" font-size="11.5" fill="#92400e">看 UT 报告+DQ 告警</text>
-          <rect x="814" y="80" width="58" height="15" rx="7.5" fill="#fef3c7"/><text x="843" y="91" text-anchor="middle" font-size="10" font-weight="800" fill="#b45309">★ 人拍板</text>
-        </g>
-        <g>
-          <rect x="914" y="14" width="118" height="86" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
-          <text x="973" y="38" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e293b">⑧ 制品包</text>
-          <text x="973" y="58" text-anchor="middle" font-size="11.5" fill="#64748b">平台 xlsx 生成</text>
-          <text x="973" y="74" text-anchor="middle" font-size="11.5" fill="#64748b">资产落档案+索引</text>
-          <rect x="947" y="80" width="52" height="15" rx="7.5" fill="#d1fae5"/><text x="973" y="91" text-anchor="middle" font-size="10" font-weight="700" fill="#047857">程序</text>
-        </g>
-        <g stroke="#94a3b8" stroke-width="1.8">
-          <line x1="122" y1="57" x2="132" y2="57" marker-end="url(#ar2)"/><line x1="252" y1="57" x2="262" y2="57" marker-end="url(#ar2)"/>
-          <line x1="382" y1="57" x2="392" y2="57" marker-end="url(#ar2)"/><line x1="512" y1="57" x2="522" y2="57" marker-end="url(#ar2)"/>
-          <line x1="642" y1="57" x2="652" y2="57" marker-end="url(#ar2)"/><line x1="772" y1="57" x2="782" y2="57" marker-end="url(#ar2)"/>
-          <line x1="902" y1="57" x2="912" y2="57" marker-end="url(#ar2)"/>
-        </g>
-        <!-- failure loop -->
-        <path d="M 713 104 L 713 150 L 583 150 L 583 126" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#ar2)"/>
-        <path d="M 713 104 L 713 150 L 193 150 L 193 104" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="5 4"/>
-        <path d="M 583 104 L 583 128 L 453 128 L 453 104" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-dasharray="5 4" opacity="0.55"/>
-        <text x="745" y="145" font-size="12" fill="#b91c1c" font-weight="700">SQL 语法错→回编码修（限3轮）</text>
-        <text x="300" y="168" font-size="12" fill="#b45309" font-weight="700">数据质量问题→退设计重判（改完回闸口①复审）</text>
-        <text x="453" y="145" font-size="11" fill="#b91c1c" opacity="0.8">语法微修</text>
-        </g>
+    <div class="reveal svg-stage">
+      <svg viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+        <defs>
+          <marker id="s2b" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+          <marker id="s2r" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#ef4444"/></marker>
+          <linearGradient id="s2step" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#bfdbfe"/></linearGradient>
+          <linearGradient id="s2gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+          <linearGradient id="s2agent" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+          <linearGradient id="s2neu" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f8fafc"/><stop offset="100%" stop-color="#e2e8f0"/></linearGradient>
+        </defs>
+        <!-- spec 演化链 -->
+        <text x="20" y="20" font-size="11" font-weight="800" fill="#1e3a8a">spec 演化链（一份 spec 从头贯穿）</text>
+        <rect x="20" y="28" width="250" height="34" rx="7" fill="#1e3a8a"/>
+        <text x="145" y="44" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">RS + mapping</text>
+        <text x="145" y="57" text-anchor="middle" font-size="8.5" fill="#bfdbfe">由《SDD》生成（BA 填写）</text>
+        <text x="145" y="74" text-anchor="middle" font-size="8.5" fill="#94a3b8">上游 · 需求段产出</text>
+        <line x1="272" y1="45" x2="304" y2="45" stroke="#2563eb" stroke-width="1.8" marker-end="url(#s2b)"/>
+        <text x="288" y="38" text-anchor="middle" font-size="8" fill="#64748b">智能体</text>
+        <rect x="308" y="28" width="240" height="34" rx="7" fill="#2563eb"/>
+        <text x="428" y="44" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">TS 设计文档</text>
+        <text x="428" y="57" text-anchor="middle" font-size="8.5" fill="#bfdbfe">机读权威源 + 人读投影</text>
+        <text x="428" y="74" text-anchor="middle" font-size="8.5" fill="#94a3b8">ts.json + ts.md</text>
+        <line x1="550" y1="45" x2="582" y2="45" stroke="#2563eb" stroke-width="1.8" marker-end="url(#s2b)"/>
+        <text x="566" y="38" text-anchor="middle" font-size="8" fill="#64748b">编码</text>
+        <rect x="586" y="28" width="354" height="34" rx="7" fill="#3b82f6"/>
+        <text x="763" y="44" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">四件套制品（Artifacts）</text>
+        <text x="763" y="57" text-anchor="middle" font-size="8.5" fill="#dbeafe">《DDL》《术加 ETL》《LTS 调度》《DQ》</text>
+        <text x="763" y="74" text-anchor="middle" font-size="8.5" fill="#94a3b8">下游 · 推上线由人</text>
+        <!-- 人行 -->
+        <rect x="20" y="86" width="920" height="24" rx="6" fill="#fffbeb" opacity="0.55"/>
+        <rect x="20" y="88" width="52" height="20" rx="10" fill="#f59e0b"/>
+        <text x="46" y="102" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">人</text>
+        <rect x="252" y="88" width="128" height="20" rx="5" fill="url(#s2gate)" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2"/>
+        <text x="316" y="102" text-anchor="middle" font-size="9" font-weight="700" fill="#92400e">⏸ 闸口① 确认设计方向</text>
+        <rect x="646" y="88" width="128" height="20" rx="5" fill="url(#s2gate)" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2"/>
+        <text x="710" y="102" text-anchor="middle" font-size="9" font-weight="700" fill="#92400e">⏸ 闸口② 确认编码质量</text>
+        <!-- 主框 -->
+        <rect x="20" y="120" width="920" height="230" rx="12" fill="url(#s2agent)" stroke="#2563eb" stroke-width="2.2"/>
+        <text x="32" y="138" font-size="10" font-weight="700" fill="#1e3a8a">一个编排者（Orchestrator）+ 确定性脚本 · 设计+编码+UT 不拆</text>
+        <rect x="34" y="150" width="96" height="66" rx="8" fill="url(#s2neu)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="82" y="170" text-anchor="middle" font-size="11" font-weight="800" fill="#334155">① 预处理</text>
+        <text x="82" y="186" text-anchor="middle" font-size="8.5" fill="#64748b">输入校验</text>
+        <text x="82" y="198" text-anchor="middle" font-size="8.5" fill="#64748b">连库查字段</text>
+        <rect x="92" y="202" width="40" height="11" rx="5.5" fill="#e2e8f0"/><text x="112" y="211" text-anchor="middle" font-size="8" font-weight="700" fill="#475569">程序</text>
+        <line x1="130" y1="183" x2="148" y2="183" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s2b)"/>
+        <rect x="152" y="150" width="106" height="66" rx="8" fill="url(#s2step)" stroke="#2563eb" stroke-width="1.8"/>
+        <text x="205" y="170" text-anchor="middle" font-size="11" font-weight="800" fill="#1e3a8a">② 设计</text>
+        <text x="205" y="186" text-anchor="middle" font-size="8.5" fill="#1e3a8a">五层决策骨架</text>
+        <text x="205" y="198" text-anchor="middle" font-size="8.5" fill="#1e3a8a">产 TS + 加工口径</text>
+        <rect x="210" y="202" width="34" height="11" rx="5.5" fill="#dbeafe"/><text x="227" y="211" text-anchor="middle" font-size="8" font-weight="700" fill="#1d4ed8">AI</text>
+        <line x1="258" y1="183" x2="272" y2="183" stroke="#2563eb" stroke-width="1.5"/>
+        <rect x="274" y="146" width="34" height="74" rx="7" fill="url(#s2gate)" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 2"/>
+        <text x="291" y="176" text-anchor="middle" font-size="13" font-weight="800" fill="#92400e">⏸</text>
+        <text x="291" y="192" text-anchor="middle" font-size="8.5" font-weight="800" fill="#92400e">③</text>
+        <text x="291" y="204" text-anchor="middle" font-size="8" fill="#92400e">人拍板</text>
+        <line x1="308" y1="183" x2="322" y2="183" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s2b)"/>
+        <rect x="326" y="150" width="96" height="66" rx="8" fill="url(#s2neu)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="374" y="170" text-anchor="middle" font-size="11" font-weight="800" fill="#334155">④ DDL</text>
+        <text x="374" y="186" text-anchor="middle" font-size="8.5" fill="#64748b">由 TS 生成</text>
+        <text x="374" y="198" text-anchor="middle" font-size="8.5" fill="#64748b">建表+视图</text>
+        <rect x="354" y="202" width="40" height="11" rx="5.5" fill="#e2e8f0"/><text x="374" y="211" text-anchor="middle" font-size="8" font-weight="700" fill="#475569">程序</text>
+        <line x1="422" y1="183" x2="440" y2="183" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s2b)"/>
+        <rect x="444" y="150" width="110" height="66" rx="8" fill="url(#s2step)" stroke="#2563eb" stroke-width="1.8"/>
+        <text x="499" y="170" text-anchor="middle" font-size="11" font-weight="800" fill="#1e3a8a">⑤ 编码</text>
+        <text x="499" y="186" text-anchor="middle" font-size="8.5" fill="#1e3a8a">逐规则产 SELECT</text>
+        <text x="499" y="198" text-anchor="middle" font-size="8.5" fill="#1e3a8a">+ DQ SQL（跟随RS）</text>
+        <rect x="482" y="202" width="34" height="11" rx="5.5" fill="#dbeafe"/><text x="499" y="211" text-anchor="middle" font-size="8" font-weight="700" fill="#1d4ed8">AI</text>
+        <line x1="554" y1="183" x2="572" y2="183" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s2b)"/>
+        <rect x="576" y="150" width="120" height="66" rx="8" fill="url(#s2neu)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="636" y="170" text-anchor="middle" font-size="11" font-weight="800" fill="#334155">⑥ UT 实测</text>
+        <text x="636" y="186" text-anchor="middle" font-size="8.5" fill="#64748b">预检秒级</text>
+        <text x="636" y="198" text-anchor="middle" font-size="8.5" fill="#64748b">真库执行实锤</text>
+        <rect x="596" y="202" width="40" height="11" rx="5.5" fill="#e2e8f0"/><text x="616" y="211" text-anchor="middle" font-size="8" font-weight="700" fill="#475569">程序</text>
+        <line x1="696" y1="183" x2="710" y2="183" stroke="#2563eb" stroke-width="1.5"/>
+        <rect x="712" y="146" width="34" height="74" rx="7" fill="url(#s2gate)" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 2"/>
+        <text x="729" y="176" text-anchor="middle" font-size="13" font-weight="800" fill="#92400e">⏸</text>
+        <text x="729" y="192" text-anchor="middle" font-size="8.5" font-weight="800" fill="#92400e">⑦</text>
+        <text x="729" y="204" text-anchor="middle" font-size="8" fill="#92400e">人拍板</text>
+        <line x1="746" y1="183" x2="764" y2="183" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s2b)"/>
+        <rect x="768" y="150" width="106" height="66" rx="8" fill="url(#s2step)" stroke="#2563eb" stroke-width="1.5"/>
+        <text x="821" y="170" text-anchor="middle" font-size="11" font-weight="800" fill="#1e3a8a">⑧ 制品包</text>
+        <text x="821" y="186" text-anchor="middle" font-size="8.5" fill="#1e3a8a">平台 xlsx</text>
+        <text x="821" y="198" text-anchor="middle" font-size="8.5" fill="#1e3a8a">落档案 MANIFEST</text>
+        <rect x="804" y="202" width="40" height="11" rx="5.5" fill="#dbeafe"/><text x="824" y="211" text-anchor="middle" font-size="8" font-weight="700" fill="#1d4ed8">程序</text>
+        <!-- 回路 -->
+        <path d="M 636 220 Q 636 242, 520 242 Q 499 242, 499 220" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#s2r)"/>
+        <text x="568" y="256" text-anchor="middle" font-size="9" font-weight="700" fill="#b91c1c">SQL 语法错 → 回编码修（限 3 轮）</text>
+        <path d="M 560 220 Q 560 274, 300 274 Q 205 274, 205 220" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#s2r)"/>
+        <text x="382" y="290" text-anchor="middle" font-size="9" font-weight="700" fill="#b45309">数据质量问题 → 绝不回编码！带证据退设计，改完回闸口①复审</text>
+        <text x="32" y="338" font-size="9" fill="#64748b">预处理 / DDL / UT / 制品包 = 确定性脚本 · 设计 / 编码 = AI（独立上下文子代理） · 大表按规则切片串行</text>
+        <!-- 底带：交付完整性 -->
+        <rect x="20" y="356" width="920" height="52" rx="9" fill="#1e293b"/>
+        <text x="480" y="377" text-anchor="middle" font-size="11.5" font-weight="700" fill="#fff">交付 = 设计文档 + 代码 + UT 报告 + 测试脚本 · 完整覆盖 IT 设计段与开发段</text>
+        <text x="480" y="397" text-anchor="middle" font-size="9" fill="#93c5fd">平台侧配置当前需手工补齐（工具能力持续推进中）</text>
+        <text x="20" y="438" font-size="10" fill="#64748b">端到端模式自动流转到本段；独立运作用 /new-pipe 直接唤起（甚至仅 mapping 输入） · 修复后凭 task id 断点续跑 · 无人值守闸口后人审</text>
+        <text x="20" y="462" font-size="10" font-weight="700" fill="#1e293b">一句话：AI 干活，程序把关，人只在两处拍板——每个结论都有落盘证据。</text>
       </svg>
     </div>
-    <div class="grid2 reveal" style="flex: 1; min-height: 0;">
-      <div class="card accent">
-        <h3>★ 新建交付（本讲主线）</h3>
-        <ul>
-          <li>适用：全新目标表，从零到档案一次跑完</li>
-          <li>输入：RS + mapping 两个文件，路径发起即可</li>
-          <li>产出：设计文档 + 四件套 + UT 报告 + 平台制品包</li>
-          <li>周期：流程连续跑完，人只需在两处确认</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h3>存量优化（在途，后续专题）</h3>
-        <ul>
-          <li>全量 mapping 上标注变更行（版本+动词），RS 附变更记录</li>
-          <li>只做精确增量：新增字段/逻辑，<b>存量零接触</b>，双向比对冻结列</li>
-          <li>设计原则与质检机制和新建完全一致，信任同一套护栏</li>
-          <li>当前状态：开发调试中，本次不展开</li>
-        </ul>
-      </div>
-    </div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>02 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>02 / 08</span></footer>
 </section>
 
-<!-- ============ S3 三条红线 ============ -->
+<!-- ============ P3 他怎么做到的 ============ -->
 <section class="slide" id="s3">
   <div class="slide-content">
     <div class="page-head reveal">
-      <div class="page-num">03 · 设计原理 Ⅰ</div>
-      <h1 class="page-title">三条红线：自主权收窄到「干活」，判断权留给人</h1>
-      <p class="page-claim">这不是能力限制，是<span class="key">刻意的设计决定</span>——全自动交付省下的是人力，赌上的是数据正确性：错一次，就是无声上线的脏数据。</p>
+      <div class="page-num">03 · 怎么做到的</div>
+      <h1 class="page-title">AI 生成，脚本把关，通过才落盘</h1>
+      <p class="page-claim">生成 → 验证 → 通过才进下一步；不通过带着报错原路返回，改完再验。</p>
     </div>
-    <div class="grid3 reveal">
-      <div class="card accent">
-        <h3><span class="numchip">1</span> 语义判断不自主</h3>
-        <p style="font-weight:700; color:var(--text-main);">业务含义永远由人定</p>
-        <ul>
-          <li>关联键怎么收敛、表的粒度是什么、主键是哪几个——这些只有懂业务的人能判断</li>
-          <li>智能体的做法：<b>拿证据来问</b>——类型风险、值域溢出、关联键对账，全部整理成选择题</li>
-          <li>实例：实测发现某关联键不唯一时，它报告差异证据、给出收敛选项，<b>选哪个由你定</b></li>
-        </ul>
-      </div>
-      <div class="card warn-top">
-        <h3><span class="numchip">2</span> 推生产不自主</h3>
-        <p style="font-weight:700; color:var(--text-main);">上生产永远是人按按钮</p>
-        <ul>
-          <li>全部产物只落到档案目录，<b>不触碰生产环境</b></li>
-          <li>UT 通过 ≠ 自动上线：闸口②确认后制品入档案，推不推、何时推，人来定</li>
-          <li>它是「交付到门口」，不是「送进家门」</li>
-        </ul>
-      </div>
-      <div class="card danger-top">
-        <h3><span class="numchip">3</span> 重写不自主</h3>
-        <p style="font-weight:700; color:var(--text-main);">存量只做精确修改</p>
-        <ul>
-          <li>已有资产的变更，只做声明的增量改动，<b>绝不推倒重来</b></li>
-          <li>改了什么、没改什么，双向比对出报告，冻结列零差异可验证</li>
-          <li>「AI 把我的存量改乱了」这件事在机制上不会发生</li>
-        </ul>
-      </div>
+    <div class="reveal svg-stage">
+      <svg viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+        <defs>
+          <marker id="s3b" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+          <marker id="s3r" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#ef4444"/></marker>
+          <linearGradient id="s3step" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#bfdbfe"/></linearGradient>
+          <linearGradient id="s3chk" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+          <linearGradient id="s3gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+          <linearGradient id="s3neu" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f8fafc"/><stop offset="100%" stop-color="#e2e8f0"/></linearGradient>
+        </defs>
+        <!-- 检查点主线 -->
+        <text x="20" y="20" font-size="12" font-weight="800" fill="#1e293b">每个产出后有检查点，不通过回最近产出者重做（≤3 轮，超则闸口问人）</text>
+        <rect x="20" y="34" width="88" height="52" rx="8" fill="url(#s3neu)" stroke="#94a3b8" stroke-width="1.4"/>
+        <text x="64" y="55" text-anchor="middle" font-size="10.5" font-weight="800" fill="#334155">预处理</text>
+        <text x="64" y="71" text-anchor="middle" font-size="9" fill="#64748b">mapping+RS</text>
+        <line x1="108" y1="60" x2="124" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="128" y="38" width="82" height="44" rx="7" fill="url(#s3chk)" stroke="#60a5fa" stroke-width="1.4"/>
+        <text x="169" y="56" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">预检</text>
+        <text x="169" y="71" text-anchor="middle" font-size="8.5" fill="#1e40af">脚本·输入齐?</text>
+        <line x1="210" y1="60" x2="226" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="230" y="34" width="88" height="52" rx="8" fill="url(#s3step)" stroke="#2563eb" stroke-width="1.6"/>
+        <text x="274" y="55" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1e3a8a">设计 AI</text>
+        <text x="274" y="71" text-anchor="middle" font-size="9" fill="#1e3a8a">产 TS</text>
+        <line x1="318" y1="60" x2="334" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="338" y="38" width="82" height="44" rx="7" fill="url(#s3chk)" stroke="#60a5fa" stroke-width="1.4"/>
+        <text x="379" y="56" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">TS 校验</text>
+        <text x="379" y="71" text-anchor="middle" font-size="8.5" fill="#1e40af">~40 条结构</text>
+        <line x1="420" y1="60" x2="436" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="440" y="34" width="92" height="52" rx="8" fill="url(#s3gate)" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 2"/>
+        <text x="486" y="55" text-anchor="middle" font-size="10.5" font-weight="800" fill="#92400e">⏸ 闸口①</text>
+        <text x="486" y="71" text-anchor="middle" font-size="9" fill="#92400e">人·方向对?</text>
+        <line x1="532" y1="60" x2="548" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="552" y="34" width="88" height="52" rx="8" fill="url(#s3step)" stroke="#2563eb" stroke-width="1.6"/>
+        <text x="596" y="55" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1e3a8a">编码 AI</text>
+        <text x="596" y="71" text-anchor="middle" font-size="9" fill="#1e3a8a">产 SQL</text>
+        <line x1="640" y1="60" x2="656" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="660" y="38" width="82" height="44" rx="7" fill="url(#s3chk)" stroke="#60a5fa" stroke-width="1.4"/>
+        <text x="701" y="56" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">静态检查</text>
+        <text x="701" y="71" text-anchor="middle" font-size="8.5" fill="#1e40af">脚本·规范?</text>
+        <line x1="742" y1="60" x2="758" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="762" y="38" width="82" height="44" rx="7" fill="url(#s3chk)" stroke="#60a5fa" stroke-width="1.4"/>
+        <text x="803" y="56" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">机械检查</text>
+        <text x="803" y="71" text-anchor="middle" font-size="8.5" fill="#1e40af">脚本·跑通?</text>
+        <line x1="844" y1="60" x2="856" y2="60" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="860" y="38" width="80" height="44" rx="7" fill="url(#s3chk)" stroke="#60a5fa" stroke-width="1.4"/>
+        <text x="900" y="56" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">一致性</text>
+        <text x="900" y="71" text-anchor="middle" font-size="8.5" fill="#1e40af">脚本+AI</text>
+        <text x="20" y="112" font-size="10.5" font-weight="800" fill="#ef4444">↩ 预检不过拦在门口 · TS 校验不过回设计 · 静态/机械/一致性不过回编码</text>
+        <!-- 螺旋回路放大 -->
+        <text x="20" y="148" font-size="12" font-weight="800" fill="#1e293b">以编码为例：代码 + 报错同上下文，改最快（每规则限 3 轮）</text>
+        <rect x="20" y="160" width="920" height="120" rx="10" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.2"/>
+        <rect x="45" y="182" width="160" height="56" rx="8" fill="url(#s3step)" stroke="#2563eb" stroke-width="1.6"/>
+        <text x="125" y="204" text-anchor="middle" font-size="11" font-weight="800" fill="#1e3a8a">编码 AI 写 SQL</text>
+        <text x="125" y="222" text-anchor="middle" font-size="9" fill="#1e3a8a">读 TS 规则切片</text>
+        <line x1="205" y1="210" x2="231" y2="210" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="235" y="182" width="170" height="56" rx="8" fill="url(#s3neu)" stroke="#94a3b8" stroke-width="1.4"/>
+        <text x="320" y="204" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">调执行脚本</text>
+        <text x="320" y="222" text-anchor="middle" font-size="9" fill="#64748b">真库 INSERT · 不干等</text>
+        <line x1="405" y1="210" x2="431" y2="210" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <rect x="435" y="182" width="180" height="56" rx="8" fill="url(#s3neu)" stroke="#94a3b8" stroke-width="1.4"/>
+        <text x="525" y="204" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">结构化结果</text>
+        <text x="525" y="222" text-anchor="middle" font-size="9" fill="#64748b">成功/失败+报错+行数</text>
+        <line x1="615" y1="210" x2="641" y2="210" stroke="#2563eb" stroke-width="1.5" marker-end="url(#s3b)"/>
+        <polygon points="645,186 705,186 675,234" fill="#fff" stroke="#64748b" stroke-width="1.4"/>
+        <text x="675" y="208" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">通过?</text>
+        <line x1="705" y1="200" x2="731" y2="200" stroke="#2563eb" stroke-width="1.6" marker-end="url(#s3b)"/>
+        <text x="716" y="192" font-size="9" font-weight="700" fill="#1d4ed8">是</text>
+        <rect x="735" y="176" width="185" height="52" rx="8" fill="url(#s3step)" stroke="#2563eb" stroke-width="1.6"/>
+        <text x="827" y="198" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1e3a8a">落盘 · 下个规则</text>
+        <text x="827" y="216" text-anchor="middle" font-size="9" fill="#1e3a8a">UT 报告/脚本随件留档</text>
+        <path d="M 675 234 Q 675 262, 400 262 Q 125 262, 125 242" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#s3r)"/>
+        <text x="400" y="252" text-anchor="middle" font-size="9.5" font-weight="700" fill="#b91c1c">否 → 报错原路返回，同上下文自己改，改完再验</text>
+        <text x="30" y="272" font-size="8.5" fill="#94a3b8">大表按规则切片，编排者按依赖串行调度（R1 完成才调 R2）</text>
+        <!-- 确定性分层 -->
+        <text x="20" y="306" font-size="12" font-weight="800" fill="#1e293b">确定性分层：越靠后确定性越强——前靠人，后靠脚本</text>
+        <rect x="20" y="318" width="920" height="58" rx="9" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.2"/>
+        <rect x="36" y="330" width="200" height="36" rx="7" fill="url(#s3gate)" stroke="#f59e0b" stroke-width="1.3"/>
+        <text x="136" y="345" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">前段（设计）</text>
+        <text x="136" y="359" text-anchor="middle" font-size="9" fill="#92400e">依赖 AI + 人闸口</text>
+        <text x="252" y="352" font-size="11" fill="#64748b">→</text>
+        <rect x="268" y="330" width="220" height="36" rx="7" fill="url(#s3step)" stroke="#2563eb" stroke-width="1.3"/>
+        <text x="378" y="345" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">中段（编码）</text>
+        <text x="378" y="359" text-anchor="middle" font-size="9" fill="#1e3a8a">AI 产出 + 脚本校验</text>
+        <text x="502" y="352" font-size="11" fill="#64748b">→</text>
+        <rect x="518" y="330" width="220" height="36" rx="7" fill="url(#s3chk)" stroke="#60a5fa" stroke-width="1.3"/>
+        <text x="628" y="345" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">后段（执行/检查）</text>
+        <text x="628" y="359" text-anchor="middle" font-size="9" fill="#1e40af">确定性脚本为主</text>
+        <text x="752" y="352" font-size="11" fill="#64748b">→</text>
+        <rect x="768" y="330" width="158" height="36" rx="7" fill="url(#s3gate)" stroke="#f59e0b" stroke-width="1.3"/>
+        <text x="847" y="345" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">段外（测试后）</text>
+        <text x="847" y="359" text-anchor="middle" font-size="9" fill="#92400e">人判数据准确性</text>
+        <!-- 底带 -->
+        <rect x="20" y="396" width="920" height="40" rx="8" fill="#1e293b"/>
+        <text x="480" y="421" text-anchor="middle" font-size="11.5" font-weight="700" fill="#fff">AI 生成 · 确定性脚本把关 · 人只在闸口拍板 · 证据全程落盘</text>
+      </svg>
     </div>
-    <div class="strip amber reveal">一句话：<b>它负责把活干完并自证质量；语义你定、生产你推、存量它不碰。</b>这三条写在流程机制里，不是提示词里的承诺。</div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>03 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>03 / 08</span></footer>
 </section>
 
-<!-- ============ S4 AI干活程序质检 ============ -->
+<!-- ============ P4 凭什么信任他 ============ -->
 <section class="slide" id="s4">
   <div class="slide-content">
     <div class="page-head reveal">
-      <div class="page-num">04 · 设计原理 Ⅱ</div>
-      <h1 class="page-title">AI 干活，程序质检：它说「通过」，是有证据的通过</h1>
-      <p class="page-claim">生成者不负责证明自己对——质检全部由<span class="key">确定性脚本</span>完成（不跑大模型，同样输入必得同样结论），证据全部落盘可回溯。</p>
+      <div class="page-num">04 · 凭什么信任</div>
+      <h1 class="page-title">权力写进机制，证据落在盘上</h1>
+      <p class="page-claim">能自动的彻底自动，该人定的拿证据来问——每个结论都有落盘证据，经得起翻查。</p>
     </div>
-    <div class="grid2 reveal" style="flex: 1.35;">
-      <div class="card accent">
-        <h3>确定性质检（每一步都有）</h3>
-        <ul>
-          <li><b>结构校验 ~40 条</b>：设计文档一落盘就查——引用存在性、增量闭合、口径可解析、别名冲突……不合规直接拦截并指出层级</li>
-          <li><b>连库查证</b>：字段存在性、类型对账、值域探测——读真实数据库，不靠猜</li>
-          <li><b>UT 真实执行</b>：INSERT 跑真库 + 主键/空值/行数实锤 + 执行计划门槛，报告留档</li>
-          <li><b>DQ 实跑</b>：违规行探测器——0 行通过，非 0 行告警并带样例数据</li>
-          <li><b>闸口材料 = 脚本产出</b>：你在闸口看到的摘要和实测结果，是确定性脚本从产物里抽的，<b>不是 AI 转述</b></li>
-        </ul>
-      </div>
-      <div class="card danger-top">
-        <h3>失败分流：UT 失败 ≠ 都丢回程序员</h3>
-        <ul>
-          <li><b>SQL 语法错</b> → 恢复编码会话修复，每规则限 3 轮</li>
-          <li><b>数据质量问题</b>（主键重复/空值/行数异常）→ <span class="badge b-warn">绝不给编码</span> 先跑关联诊断定位，带着证据退回设计层</li>
-          <li><b>DQ 告警</b> → 人判三选：SQL 方向反→改码 / 阈值不合理→改口径 / 数据真脏→修源</li>
-          <li><b>环境问题</b> → 停下报告修复指引，不重试不绕过</li>
-          <li>每轮修复的诊断证据都落盘（_internal/diagnose/），<b>改了什么、为什么改，全部有据可查</b></li>
-        </ul>
-      </div>
+    <div class="reveal svg-stage">
+      <svg viewBox="0 0 960 350" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+        <defs>
+          <marker id="s4a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#cbd5e1"/></marker>
+          <linearGradient id="s4auto" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#bfdbfe"/></linearGradient>
+          <linearGradient id="s4gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+        </defs>
+        <text x="20" y="22" font-size="12" font-weight="800" fill="#1e293b">权力光谱：该自动的彻底自动，该交还人的明确交还</text>
+        <rect x="20" y="38" width="380" height="204" rx="12" fill="url(#s4auto)" stroke="#2563eb" stroke-width="2"/>
+        <text x="210" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1e3a8a">智能体自己干（自主区）</text>
+        <rect x="38" y="78" width="344" height="34" rx="6" fill="#fff" stroke="#bfdbfe"/>
+        <text x="50" y="100" font-size="10" font-weight="700" fill="#1e3a8a">生成<tspan fill="#64748b" font-weight="400">　设计 + 编码（AI 子代理）</tspan></text>
+        <rect x="38" y="118" width="344" height="34" rx="6" fill="#fff" stroke="#bfdbfe"/>
+        <text x="50" y="140" font-size="10" font-weight="700" fill="#1e3a8a">校验<tspan fill="#64748b" font-weight="400">　~40 条结构 + 静态/机械/一致性</tspan></text>
+        <rect x="38" y="158" width="344" height="34" rx="6" fill="#fff" stroke="#bfdbfe"/>
+        <text x="50" y="180" font-size="10" font-weight="700" fill="#1e3a8a">实测<tspan fill="#64748b" font-weight="400">　UT 真库执行 + DQ 检查</tspan></text>
+        <rect x="38" y="198" width="344" height="34" rx="6" fill="#fff" stroke="#bfdbfe"/>
+        <text x="50" y="220" font-size="10" font-weight="700" fill="#1e3a8a">自愈<tspan fill="#64748b" font-weight="400">　失败原路返回，改完再验 ≤3 轮</tspan></text>
+        <rect x="412" y="38" width="236" height="204" rx="12" fill="url(#s4gate)" stroke="#f59e0b" stroke-width="2"/>
+        <text x="530" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#92400e">一起定（两道闸口）</text>
+        <rect x="428" y="78" width="204" height="34" rx="6" fill="#fff" stroke="#fde68a"/>
+        <text x="440" y="100" font-size="10" font-weight="700" fill="#92400e">闸口①<tspan fill="#b45309" font-weight="400">　定设计方向</tspan></text>
+        <rect x="428" y="118" width="204" height="34" rx="6" fill="#fff" stroke="#fde68a"/>
+        <text x="440" y="140" font-size="10" font-weight="700" fill="#92400e">闸口②<tspan fill="#b45309" font-weight="400">　定编码质量</tspan></text>
+        <rect x="428" y="158" width="204" height="34" rx="6" fill="#fff" stroke="#fde68a"/>
+        <text x="440" y="180" font-size="10" font-weight="700" fill="#92400e">材料<tspan fill="#b45309" font-weight="400">　脚本产出，非 AI 转述</tspan></text>
+        <rect x="428" y="198" width="204" height="34" rx="6" fill="#fff" stroke="#fde68a"/>
+        <text x="440" y="220" font-size="10" font-weight="700" fill="#92400e">规则<tspan fill="#b45309" font-weight="400">　人拍板，不代答</tspan></text>
+        <rect x="660" y="38" width="280" height="204" rx="12" fill="#fef2f2" stroke="#ef4444" stroke-width="2"/>
+        <text x="800" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#991b1b">人专属（三条红线）</text>
+        <rect x="676" y="78" width="248" height="52" rx="6" fill="#fff" stroke="#fecaca"/>
+        <text x="688" y="98" font-size="10" font-weight="800" fill="#991b1b">红线① 语义判断——人定</text>
+        <text x="688" y="116" font-size="9" fill="#64748b">关联收敛/粒度/主键，拿证据来问</text>
+        <rect x="676" y="136" width="248" height="52" rx="6" fill="#fff" stroke="#fecaca"/>
+        <text x="688" y="156" font-size="10" font-weight="800" fill="#991b1b">红线② 推生产——人推</text>
+        <text x="688" y="174" font-size="9" fill="#64748b">产物只落档案，UT 通过 ≠ 自动上线</text>
+        <rect x="676" y="194" width="248" height="42" rx="6" fill="#fff" stroke="#fecaca"/>
+        <text x="688" y="212" font-size="10" font-weight="800" fill="#991b1b">红线③ 重写存量——禁止</text>
+        <text x="688" y="229" font-size="9" fill="#64748b">只精确修改，双向比对可验证</text>
+        <line x1="20" y1="266" x2="934" y2="266" stroke="#cbd5e1" stroke-width="3" marker-end="url(#s4a)"/>
+        <text x="20" y="290" font-size="10" fill="#64748b">← 越靠左越自动（不占用人的注意力）</text>
+        <text x="940" y="290" text-anchor="end" font-size="10" fill="#64748b">越靠右越不可替代（必须人）→</text>
+        <rect x="20" y="302" width="920" height="40" rx="8" fill="#1e293b"/>
+        <text x="480" y="327" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">证据地基：预检报告 · 诊断证据 · UT 报告，好坏都落盘（_internal/）· 档案入 git 可回溯</text>
+      </svg>
     </div>
-    <div class="strip red reveal"><b>为什么数据问题绝不给编码 agent？</b>真实教训：编码 agent 遇到「主键重复」，会顺手用 ROW_NUMBER 去重「修好」——表面通过，实际关联发散的根因被掩盖，<b>数据悄悄变少</b>。根因在设计层，所以数据问题永远带着证据退设计、回闸口①复审。</div>
+    <div class="strip amber reveal"><b>诚实披露：</b>UT 零告警 = 当前数据上通过，≠ 阈值永远合理——数据分布变了，告警口径可能要调。</div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>04 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>04 / 08</span></footer>
 </section>
 
-<!-- ============ S5 产出内容① ============ -->
+<!-- ============ P5 需要提供什么 ============ -->
 <section class="slide" id="s5">
   <div class="slide-content">
     <div class="page-head reveal">
-      <div class="page-num">05 · 产出内容 Ⅰ</div>
-      <h1 class="page-title">你拿到什么：一套制品 + 一座自解释的档案</h1>
-      <p class="page-claim">每件产物都标了<span class="key">给谁用</span>；目录结构不查文档也一眼看懂——建造现场、资产档案、优化版本各归其位。</p>
+      <div class="page-num">05 · 需要提供什么</div>
+      <h1 class="page-title">两个文件，职责分明</h1>
+      <p class="page-claim">正规路径走端到端：BA 填《SDD》自动生成两份输入；独立试用用 <code>/new-pipe</code> 直接唤起。</p>
     </div>
-    <div class="grid2 reveal" style="flex: 1;">
-      <div class="card accent">
-        <h3>交付清单</h3>
-        <table class="tbl">
-          <tr><th>产物</th><th>是什么</th><th>给谁用</th></tr>
-          <tr><td class="first">ts.md / ts.json</td><td>设计文档：粒度、来源血缘、加工口径、调度、初始化设计（json 机读权威源，md 人读投影）</td><td>评审归档 / 平台</td></tr>
-          <tr><td class="first">create_table_*.sql</td><td>建表 + 对外视图 DDL，含中文注释</td><td>DBA 执行</td></tr>
-          <tr><td class="first">R0001.sql …</td><td>术加 ETL（SELECT），一规则一文件</td><td>平台作业</td></tr>
-          <tr><td class="first">dq_*.sql</td><td>数据质量检查（跟随 RS，有需求才产）</td><td>平台作业</td></tr>
-          <tr><td class="first">ut_report.md</td><td>UT 报告：真实执行结果 + 检查结论</td><td>验收依据</td></tr>
-          <tr><td class="first">export/*.xlsx</td><td>平台制品包（执行任务/调度），UT 通过后才生成</td><td>平台导入</td></tr>
-        </table>
-      </div>
-      <div class="card ok-top">
-        <h3>目录自解释 + 版本可回溯</h3>
-<div class="tree">ddlc_design_dev/
-├─ <span class="d1">build/</span>    建造现场
-│    ├─ ts.json / ts.md / etl/ / dq/ / ddl/
-│    ├─ export/（平台制品包）
-│    └─ _internal/（过程产物：决策、预检、诊断）
-├─ <span class="d2">archive/</span>  资产档案 = 当前态唯一真身
-│    └─ + <b>MANIFEST.md</b> 版本索引
-└─ <span class="d3">opt_202609/</span> 优化版本目录
-     <b>目录数 = 优化次数，留存不删</b></div>
-        <ul>
-          <li>闸口②确认后自动建档，档案入 git 白名单，演进史随提交历史可回溯</li>
-          <li><b>_internal/ 全部过程证据</b>：预检、决策、诊断报告落盘——审计与排障都有的翻</li>
-        </ul>
-      </div>
+    <div class="reveal svg-stage">
+      <svg viewBox="0 0 960 490" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+        <defs>
+          <marker id="s5a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+          <marker id="s5a2" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#b45309"/></marker>
+          <linearGradient id="s5in" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#bfdbfe"/></linearGradient>
+          <linearGradient id="s5map" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+          <linearGradient id="s5rs" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f8fafc"/><stop offset="100%" stop-color="#f1f5f9"/></linearGradient>
+        </defs>
+        <text x="20" y="22" font-size="13" font-weight="800" fill="#1e293b">两种模式，同一个入口：RS + mapping</text>
+        <!-- 模式① 端到端（正规路径） -->
+        <text x="20" y="50" font-size="11.5" font-weight="800" fill="#1e3a8a">模式① 端到端交付（正规路径）—— BA 填 SDD，自动流转进本段</text>
+        <rect x="20" y="58" width="150" height="46" rx="9" fill="#1e3a8a"/>
+        <text x="95" y="78" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">《SDD》</text>
+        <text x="95" y="94" text-anchor="middle" font-size="9" fill="#bfdbfe">BA 填写</text>
+        <line x1="172" y1="81" x2="198" y2="81" stroke="#2563eb" stroke-width="1.8" marker-end="url(#s5a)"/>
+        <text x="185" y="72" text-anchor="middle" font-size="8.5" fill="#64748b">生成</text>
+        <rect x="202" y="58" width="170" height="46" rx="9" fill="url(#s5in)" stroke="#2563eb" stroke-width="1.8"/>
+        <text x="287" y="78" text-anchor="middle" font-size="12" font-weight="800" fill="#1e3a8a">RS + mapping</text>
+        <text x="287" y="94" text-anchor="middle" font-size="9" fill="#1e3a8a">两份输入 ↓</text>
+        <line x1="374" y1="81" x2="400" y2="81" stroke="#2563eb" stroke-width="1.8" marker-end="url(#s5a)"/>
+        <text x="387" y="72" text-anchor="middle" font-size="8.5" fill="#64748b">自动流转</text>
+        <rect x="404" y="58" width="536" height="46" rx="9" fill="url(#s5in)" stroke="#2563eb" stroke-width="1.8"/>
+        <text x="672" y="78" text-anchor="middle" font-size="12" font-weight="800" fill="#1e3a8a">IT 设计开发段（本段）→ 四件套 + 报告</text>
+        <text x="672" y="94" text-anchor="middle" font-size="9" fill="#1e3a8a">过程中人只在两处闸口拍板</text>
+        <!-- 模式② 独立运作（额外能力） -->
+        <text x="20" y="132" font-size="11.5" font-weight="800" fill="#b45309">模式② 独立运作（额外能力）—— 直接用两份输入唤起本段</text>
+        <rect x="20" y="140" width="330" height="46" rx="9" fill="url(#s5rs)" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 2"/>
+        <text x="185" y="160" text-anchor="middle" font-size="12" font-weight="800" fill="#334155">RS + mapping（甚至仅 mapping）</text>
+        <text x="185" y="176" text-anchor="middle" font-size="9" fill="#64748b">仅 mapping 时调度/增量/DQ 走默认兜底</text>
+        <line x1="352" y1="163" x2="378" y2="163" stroke="#b45309" stroke-width="1.8" marker-end="url(#s5a2)"/>
+        <rect x="382" y="140" width="190" height="46" rx="9" fill="#1e293b"/>
+        <text x="477" y="160" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">/new-pipe 直接唤起</text>
+        <text x="477" y="176" text-anchor="middle" font-size="9" fill="#93c5fd">模式 + 文件路径</text>
+        <line x1="574" y1="163" x2="600" y2="163" stroke="#b45309" stroke-width="1.8" marker-end="url(#s5a2)"/>
+        <rect x="604" y="140" width="336" height="46" rx="9" fill="url(#s5rs)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="772" y="160" text-anchor="middle" font-size="12" font-weight="800" fill="#334155">进入同一条龙</text>
+        <text x="772" y="176" text-anchor="middle" font-size="9" fill="#64748b">同一套质检 · 同样的两处闸口</text>
+        <!-- 职责明细 -->
+        <line x1="20" y1="206" x2="940" y2="206" stroke="#e2e8f0" stroke-width="1.5"/>
+        <text x="20" y="230" font-size="13" font-weight="800" fill="#1e293b">两份输入，职责分明</text>
+        <!-- mapping 大框（90%） -->
+        <rect x="20" y="242" width="580" height="150" rx="11" fill="url(#s5map)" stroke="#2563eb" stroke-width="1.8"/>
+        <text x="40" y="270" font-size="13" font-weight="800" fill="#1e3a8a">mapping —— 字段映射（体积的 90%）</text>
+        <text x="40" y="296" font-size="10.5" fill="#1e3a8a">· 源表清单（实体级）</text>
+        <text x="40" y="318" font-size="10.5" fill="#1e3a8a">· 字段映射全量：字段名 + 类型 + 中文名</text>
+        <text x="40" y="340" font-size="10.5" fill="#1e3a8a">· 加工逻辑：人话即可，翻译归智能体</text>
+        <text x="40" y="368" font-size="10.5" font-weight="700" fill="#1e40af">模板：mapping模板.xlsx（列头即格式）</text>
+        <!-- RS 小框（元数据） -->
+        <rect x="620" y="242" width="320" height="150" rx="11" fill="url(#s5rs)" stroke="#94a3b8" stroke-width="1.6"/>
+        <text x="640" y="270" font-size="13" font-weight="800" fill="#334155">RS —— 元数据</text>
+        <text x="640" y="296" font-size="10.5" fill="#475569">· 目标表 schema.table</text>
+        <text x="640" y="318" font-size="10.5" fill="#475569">· 调度 / 增量（驱动表 + 增量字段）</text>
+        <text x="640" y="340" font-size="10.5" fill="#475569">· 初始化范围 · DQ（有就写）</text>
+        <text x="640" y="368" font-size="10.5" font-weight="700" fill="#334155">模板：RS模板.md（分节填空）</text>
+        <!-- 铁律带 -->
+        <rect x="20" y="406" width="920" height="36" rx="8" fill="url(#s5rs)" stroke="#fde68a" stroke-width="1.3"/>
+        <text x="40" y="430" font-size="10.5" font-weight="700" fill="#92400e">输入铁律：声明宁缺勿错——按声明执行，声明错了就错着执行；拿不准写「需业务确认」，智能体来问，不自编</text>
+        <!-- 发起带 -->
+        <rect x="20" y="450" width="920" height="30" rx="8" fill="#1e293b"/>
+        <text x="480" y="470" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">发起：/new-pipe（模式 + 文件路径）· 修复后凭 task id 断点续跑 · 无人值守闸口后人审（人工决策仍阻断）</text>
+      </svg>
     </div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>05 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>05 / 08</span></footer>
 </section>
 
-<!-- ============ S6 真实样例 ============ -->
+<!-- ============ P6 突发状况怎么办 ============ -->
 <section class="slide" id="s6">
   <div class="slide-content">
     <div class="page-head reveal">
-      <div class="page-num">06 · 产出内容 Ⅱ</div>
-      <h1 class="page-title">真实交付物长什么样（案例：合同 pu 分析表）</h1>
-      <p class="page-claim">以下均为真实交付案例 <b>dwl_con_pu_any_f</b> 的文件节选——<span class="key">机器与人看同一份事实</span>：ts.json 权威源，其余全部由它派生。</p>
+      <div class="page-num">06 · 突发状况怎么办</div>
+      <h1 class="page-title">先扛住、先定位，交到人手里的都是有材料的决定</h1>
+      <p class="page-claim">报错、发散、不符合预期——大多数由智能体自己扛下修复；交给人确认的，都是<span class="key">现象 + 证据 + 建议</span>齐备的定位报告。</p>
     </div>
-    <div class="grid4 reveal">
-      <div class="card" style="padding: 0.55em;">
-        <h3 style="font-size: var(--body-size);">① 设计文档 ts.md</h3>
-<pre class="code"><span class="c">## 1. 概述</span>
-F表   fin_dwl_cnb.<span class="hl">dwl_con_pu_any_f</span>
-粒度  每个合同+pu一行
-      (contract_id, pu_id)
-分布键 contract_id, pu_id
-字段  业务12 + 审计4 = 16
-
-<span class="c">来源表：</span>
-dwl_con_pu_mtr_f 合同pu指标表
-dwl_con_any_f    合同分析表
-dwl_inv_mtr_i    发票指标表
-dwr_dim_pu_d     pu维表</pre>
-      </div>
-      <div class="card" style="padding: 0.55em;">
-        <h3 style="font-size: var(--body-size);">② 建表 DDL</h3>
-<pre class="code"><span class="c">/* 表名: …dwl_con_pu_any_f
-   中文名: 合同pu分析表
-   分布键: contract_id, pu_id */</span>
-<span class="k">CREATE TABLE</span> fin_dwl_cnb.
-  dwl_con_pu_any_f (
-  contract_no <span class="s">NVARCHAR(500)</span>,
-    <span class="c">/* 合同号 */</span>
-  equip_org_amt_rmb
-    <span class="s">NUMERIC(38,10)</span>,
-    <span class="c">/* 设备订货rmb金额 */</span>
-  inv_tol_amt_usd
-    <span class="s">NUMERIC(38,10)</span>
-    <span class="c">/* 开票usd金额 */</span>
-  <span class="c">… 共16字段，含注释</span>
-);</pre>
-      </div>
-      <div class="card" style="padding: 0.55em;">
-        <h3 style="font-size: var(--body-size);">③ 术加 ETL（SELECT）</h3>
-<pre class="code"><span class="c">/* 来源: 合同pu指标表(主) +
-   合同分析/发票/pu维表 */</span>
-<span class="k">WITH</span> afr_inv <span class="k">AS</span> (
-  <span class="c">-- 非洲发票排除范围</span>
-  SELECT inv_id, contract_no
-  FROM dwb_inv_head_i …
-), inv_mtr_agg <span class="k">AS</span> (
-  <span class="c">-- 发票指标预聚合，避免</span>
-  <span class="c">-- JOIN 发散</span>
-  … GROUP BY contract_id, pu_id
-), pu_latest <span class="k">AS</span> ( … )
-<span class="k">SELECT</span> … <span class="c">-- 行转列组装宽表</span></pre>
-      </div>
-      <div class="card" style="padding: 0.55em;">
-        <h3 style="font-size: var(--body-size);">④ UT 报告</h3>
-<pre class="code"><span class="c"># 管道测试报告</span>
-DDL 执行    <span class="s">✅ 全部成功</span>
-ETL 执行    <span class="s">✅ 成功</span>
-表结构验证  <span class="s">✅ 17 字段</span>
-            <span class="s">与 DDL 一致</span>
-<span class="c">检查项：</span>
-主键唯一    <span class="s">✅ 0 重复</span>
-空值检查    <span class="s">✅ 通过</span>
-行数对账    <span class="s">✅ 一致</span></pre>
-      </div>
+    <div class="reveal svg-stage">
+      <svg viewBox="0 0 960 420" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+        <defs>
+          <linearGradient id="s6lane" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f8fafc"/><stop offset="100%" stop-color="#eff6ff"/></linearGradient>
+        </defs>
+        <text x="145" y="26" text-anchor="middle" font-size="12.5" font-weight="800" fill="#64748b">突发现象</text>
+        <text x="449" y="26" text-anchor="middle" font-size="12.5" font-weight="800" fill="#1e3a8a">智能体自动处理</text>
+        <text x="790" y="26" text-anchor="middle" font-size="12.5" font-weight="800" fill="#92400e">人要做的（很轻）</text>
+        <!-- L1 -->
+        <rect x="20" y="44" width="920" height="74" rx="10" fill="url(#s6lane)" stroke="#e2e8f0" stroke-width="1.2"/>
+        <text x="40" y="76" font-size="13" font-weight="700" fill="#334155">SQL 报错</text>
+        <text x="40" y="98" font-size="10" fill="#94a3b8">语法 / 类型 / 对象不存在</text>
+        <text x="262" y="88" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="288" y="76" font-size="13" font-weight="700" fill="#1e3a8a">同上下文重写自愈 ≤3 轮</text>
+        <text x="288" y="98" font-size="10" fill="#1e3a8a">结构化结果留档，过程可查</text>
+        <text x="636" y="88" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="660" y="88" font-size="13" font-weight="700" fill="#92400e">不用管——修好有记录</text>
+        <!-- L2 -->
+        <rect x="20" y="136" width="920" height="74" rx="10" fill="url(#s6lane)" stroke="#e2e8f0" stroke-width="1.2"/>
+        <text x="40" y="168" font-size="13" font-weight="700" fill="#334155">主键重复 · 关联发散</text>
+        <text x="40" y="190" font-size="10" fill="#94a3b8">数据对不上预期</text>
+        <text x="262" y="180" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="288" y="168" font-size="13" font-weight="700" fill="#1e3a8a">关联键逐一实测</text>
+        <text x="288" y="190" font-size="10" fill="#1e3a8a">发散定位到具体表 / 具体条件</text>
+        <text x="636" y="180" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="660" y="180" font-size="13" font-weight="700" fill="#92400e">看定位报告确认根因</text>
+        <text x="660" y="198" font-size="10" fill="#92400e">多数场景直接给出根因</text>
+        <!-- L3 -->
+        <rect x="20" y="228" width="920" height="74" rx="10" fill="url(#s6lane)" stroke="#e2e8f0" stroke-width="1.2"/>
+        <text x="40" y="260" font-size="13" font-weight="700" fill="#334155">结果不符合预期（DQ 告警）</text>
+        <text x="40" y="282" font-size="10" fill="#94a3b8">带违规样例数据</text>
+        <text x="262" y="272" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="288" y="260" font-size="13" font-weight="700" fill="#1e3a8a">违规样例打包 + 三种建议</text>
+        <text x="288" y="282" font-size="10" fill="#1e3a8a">改码 / 改阈值 / 修源</text>
+        <text x="636" y="272" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="660" y="272" font-size="13" font-weight="700" fill="#92400e">三选一拍板</text>
+        <text x="660" y="290" font-size="10" fill="#92400e">选完继续跑</text>
+        <!-- L4 -->
+        <rect x="20" y="320" width="920" height="74" rx="10" fill="url(#s6lane)" stroke="#e2e8f0" stroke-width="1.2"/>
+        <text x="40" y="352" font-size="13" font-weight="700" fill="#334155">环境 / 权限卡住</text>
+        <text x="40" y="374" font-size="10" fill="#94a3b8">连库 / 表不存在 / 超时</text>
+        <text x="262" y="364" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="288" y="352" font-size="13" font-weight="700" fill="#1e3a8a">停下 + 修复指引</text>
+        <text x="288" y="374" font-size="10" fill="#1e3a8a">不重试不绕过</text>
+        <text x="636" y="364" text-anchor="middle" font-size="18" font-weight="800" fill="#94a3b8">→</text>
+        <text x="660" y="364" font-size="13" font-weight="700" fill="#92400e">按指引处理</text>
+        <text x="660" y="382" font-size="10" fill="#92400e">断点续跑，不用重来</text>
+      </svg>
     </div>
-    <div class="strip reveal">设计文档不只给人看：粒度、口径、调度全部<b>结构化</b>存在 ts.json 里，后续编码、测试、平台导出、优化都从它派生——<b>改一处，处处一致</b>。</div>
+    <div class="strip reveal"><b>定位报告长这样：</b>「R0003 主键重复 → 实测合同表一对多、关联条件缺失 → 建议：补声明或改关联键」——根因直接摆出来，确认即可，省掉全部排查过程。</div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>06 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>06 / 08</span></footer>
 </section>
 
-<!-- ============ S7 使用方式① 输入 ============ -->
-<section class="slide" id="s7">
-  <div class="slide-content">
-    <div class="page-head reveal">
-      <div class="page-num">07 · 使用方式 Ⅰ</div>
-      <h1 class="page-title">你要准备什么：两个文件，职责分明</h1>
-      <p class="page-claim">mapping 管字段映射（体积的 90%），RS 管元数据——<span class="key">都有模板</span>，照着填即可；输入写得越清楚，预检阶段拦下的问题越多。</p>
-    </div>
-    <div class="reveal" style="flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.7rem;">
-      <table class="tbl" style="flex: 0 0 auto;">
-        <tr><th style="width:16%;">文件</th><th>你提供什么</th><th style="width:38%;">模板</th></tr>
-        <tr>
-          <td class="first">mapping<br><span class="badge b-dim" style="margin-top:0.2em;">90% 体积</span></td>
-          <td>源表清单（实体级）、字段映射全量（源/目标字段名+类型+中文名）、加工逻辑（人话即可，如「按合同+pu 汇总发票金额，排除非洲发票」）、目标表中文名</td>
-          <td><b>mapping模板.xlsx</b>——一行一映射，列头即格式</td>
-        </tr>
-        <tr>
-          <td class="first">RS<br><span class="badge b-dim" style="margin-top:0.2em;">元数据</span></td>
-          <td>目标表 schema.table、调度方案/频率/SLA、增量识别方式+驱动表+增量字段、初始化时间范围、DQ 规则（<b>有需求就写，没有就没有</b>，不强行凑）、数据量级/空值率</td>
-          <td><b>RS模板.md</b>——分节填空，L1.1/L06/L07 对号入座</td>
-        </tr>
-      </table>
-      <div class="grid2" style="flex: 1; min-height: 0;">
-        <div class="card">
-          <h3>没有 RS 也能跑</h3>
-          <ul>
-            <li>mapping 独立驱动核心链路，调度/增量/DQ 用默认兜底（全量调度、T+1、无 DQ）</li>
-            <li>但信息不全，<b>90% 场景建议带上 RS</b>——调度、增量、DQ 的设计质量直接受益</li>
-            <li>RS 里最容易漏的三样：<b>增量驱动表、初始化时间范围、调度 SLA</b>——漏了它会在闸口来问</li>
-          </ul>
-        </div>
-        <div class="card warn-top">
-          <h3>输入铁律：声明宁缺勿错</h3>
-          <ul>
-            <li>它按声明执行——关联条件声明错了，就<b>错着执行</b>；不确定的条件宁可先不写，问到了再补</li>
-            <li>映射逻辑拿不准的写「需业务确认」，它会带着问题到闸口来找你，而不是自己编</li>
-            <li>字段名/类型写错不用怕：<b>预检连库对账，这一步就拦住</b>，进不了设计</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>07 / 10</span></footer>
-</section>
-
-<!-- ============ S8 使用方式② 你的动作 ============ -->
+<!-- ============ P8 能带来什么 ============ -->
 <section class="slide" id="s8">
   <div class="slide-content">
     <div class="page-head reveal">
-      <div class="page-num">08 · 使用方式 Ⅱ</div>
-      <h1 class="page-title">流程中你做什么、怎么发起：全是选择题，不给开放题</h1>
-      <p class="page-claim">人的每次出手都被设计成<span class="key">有材料的快速拍板</span>——证据、选项、后果摆在一起，选一个就行。</p>
+      <div class="page-num">07 · 能带来什么</div>
+      <h1 class="page-title">交付提速、质量有底、责任可溯</h1>
+      <p class="page-claim">四个收益，每个都有机制托底——不是愿景，是已经在跑的流程。</p>
     </div>
-    <div class="grid2 reveal" style="flex: 1;">
-      <div class="card accent">
-        <h3>你的出手清单</h3>
-        <ul>
-          <li><b>预检提问</b>（类型/值域/关联键）：如类型风险三选一——直接复制 / 加安全处理（截取降级）/ 不处理；值域溢出——源端改模型 / 拍板取舍</li>
-          <li><b>闸口①</b>：看设计摘要 + 关联质量实测结果，回答「方向对不对」</li>
-          <li><b>闸口②</b>：看 UT 报告 + DQ 告警样例，确认质量；告警三选——SQL 方向反→改码 / 阈值不合理→改口径 / 数据真脏→修源</li>
-          <li>每次提问都附<b>证据与后果说明</b>；不答流程就停在这里，<b>没有秘密默认值</b></li>
-        </ul>
-      </div>
-      <div class="card ok-top">
-        <h3>发起与恢复</h3>
-        <ul>
-          <li><b>手工发起</b>：<code>/new-pipe</code> + 模式与文件路径（模式：新建 / 优化）</li>
-          <li><b>总控对接</b>：Task 直连编排 agent，参数 = 模式 + 两个文件路径，其余可选</li>
-          <li><b>中断恢复</b>：问题（如源数据修复）处理后凭 task id 续命，<b>从断点继续，不从头重跑</b></li>
-          <li><b>无人值守</b>：non-interactive 模式——闸口不等待、产物留人后审；但人工决策类问题仍会停下问（无安全默认，不代答）</li>
-        </ul>
-      </div>
+    <div class="reveal svg-stage">
+            <svg viewBox="0 0 960 404" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+        <defs>
+          <marker id="s7a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#92400e"/></marker>
+          <linearGradient id="s7hero" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
+          <linearGradient id="s7cell" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+          <linearGradient id="s7manual" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f1f5f9"/><stop offset="100%" stop-color="#e2e8f0"/></linearGradient>
+        </defs>
+        <!-- 焦点：量级对比 -->
+        <text x="20" y="24" font-size="11.5" font-weight="800" fill="#92400e">端到端设计开发段（简单场景 · 当前实测）：</text>
+        <rect x="20" y="36" width="400" height="88" rx="12" fill="url(#s7manual)" stroke="#cbd5e1" stroke-width="1.4"/>
+        <text x="220" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="#475569">以往人工</text>
+        <text x="220" y="106" text-anchor="middle" font-size="26" font-weight="800" fill="#475569">按天计</text>
+        <line x1="436" y1="80" x2="494" y2="80" stroke="#92400e" stroke-width="3" marker-end="url(#s7a)"/>
+        <rect x="500" y="36" width="440" height="88" rx="12" fill="url(#s7hero)"/>
+        <text x="720" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="#dbeafe">智能体模式 · 一次自动跑完</text>
+        <text x="720" y="106" text-anchor="middle" font-size="28" font-weight="800" fill="#fff">小时级</text>
+        <text x="20" y="140" font-size="9.5" fill="#94a3b8">产出后需开发人员在平台完成配置生效——该环节的自动补齐能力持续推进中</text>
+        <!-- 六列对照 -->
+        <text x="20" y="160" font-size="11.5" font-weight="800" fill="#1e293b">六类交付物，逐列对照：</text>
+        <rect x="124" y="168" width="132" height="22" rx="5" fill="#dbeafe" stroke="#bfdbfe"/><text x="190" y="183" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">技术设计文档</text>
+        <rect x="260" y="168" width="132" height="22" rx="5" fill="#dbeafe" stroke="#bfdbfe"/><text x="326" y="183" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">建表 + 视图 DDL</text>
+        <rect x="396" y="168" width="132" height="22" rx="5" fill="#dbeafe" stroke="#bfdbfe"/><text x="462" y="183" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">术加 ETL</text>
+        <rect x="532" y="168" width="132" height="22" rx="5" fill="#dbeafe" stroke="#bfdbfe"/><text x="598" y="183" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">DQ 检查 SQL</text>
+        <rect x="668" y="168" width="132" height="22" rx="5" fill="#dbeafe" stroke="#bfdbfe"/><text x="734" y="183" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">测试与对账</text>
+        <rect x="804" y="168" width="136" height="22" rx="5" fill="#dbeafe" stroke="#bfdbfe"/><text x="872" y="183" text-anchor="middle" font-size="10" font-weight="700" fill="#1e40af">调度与平台配置</text>
+        <!-- 行1 手工模式 -->
+        <rect x="20" y="198" width="96" height="72" rx="8" fill="#e2e8f0"/>
+        <text x="68" y="234" text-anchor="middle" font-size="11.5" font-weight="800" fill="#475569">手工模式</text>
+        <rect x="124" y="198" width="132" height="72" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+        <text x="190" y="239" text-anchor="middle" font-size="10" fill="#64748b">逐字编写，格式各异</text>
+        <rect x="260" y="198" width="132" height="72" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+        <text x="326" y="239" text-anchor="middle" font-size="10" fill="#64748b">字段逐个敲，靠经验</text>
+        <rect x="396" y="198" width="132" height="72" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+        <text x="462" y="239" text-anchor="middle" font-size="10" fill="#64748b">逐表逐规则手工编码</text>
+        <rect x="532" y="198" width="132" height="72" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+        <text x="598" y="239" text-anchor="middle" font-size="10" fill="#64748b">逐条定制，覆盖参差</text>
+        <rect x="668" y="198" width="132" height="72" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+        <text x="734" y="239" text-anchor="middle" font-size="10" fill="#64748b">反复跑数，人工核行</text>
+        <rect x="804" y="198" width="136" height="72" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+        <text x="872" y="239" text-anchor="middle" font-size="10" fill="#64748b">作业逐个注册</text>
+        <!-- 行2 智能体模式 -->
+        <rect x="20" y="278" width="96" height="72" rx="8" fill="url(#s7hero)" stroke="#1e3a8a" stroke-width="1.5"/>
+        <text x="68" y="314" text-anchor="middle" font-size="11.5" font-weight="800" fill="#fff">智能体模式</text>
+        <rect x="124" y="278" width="132" height="72" rx="6" fill="url(#s7cell)" stroke="#93c5fd" stroke-width="1.3"/>
+        <text x="190" y="319" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">全结构化生成，处处一致</text>
+        <rect x="260" y="278" width="132" height="72" rx="6" fill="url(#s7cell)" stroke="#93c5fd" stroke-width="1.3"/>
+        <text x="326" y="319" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">生成即含物理设计</text>
+        <rect x="396" y="278" width="132" height="72" rx="6" fill="url(#s7cell)" stroke="#93c5fd" stroke-width="1.3"/>
+        <text x="462" y="319" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">逐规则切片生成</text>
+        <rect x="532" y="278" width="132" height="72" rx="6" fill="url(#s7cell)" stroke="#93c5fd" stroke-width="1.3"/>
+        <text x="598" y="319" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">跟随 RS 定制，不凑数</text>
+        <rect x="668" y="278" width="132" height="72" rx="6" fill="url(#s7cell)" stroke="#93c5fd" stroke-width="1.3"/>
+        <text x="734" y="319" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">真库实测，报告脚本留档</text>
+        <rect x="804" y="278" width="136" height="72" rx="6" fill="url(#s7cell)" stroke="#93c5fd" stroke-width="1.3"/>
+        <text x="872" y="319" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">生成即可导入</text>
+      </svg>
     </div>
-    <div class="strip reveal">内部回路不需要你盯：SQL 修复自动闭环（每规则限 3 轮）、数据问题自动带证据退设计、环境问题停下报告——<b>只有需要「人的判断」的事才会来找你。</b></div>
+    <div class="strip reveal"><b>流程里还自动发生（不用盯过程）：</b>五层决策骨架 · 物理设计（分布键/分区）· 分段与物化决策 · 初始化双管道 · 执行计划两门槛 · 关联发散定位 · 断点续跑 · 无 RS 模式 · 无人值守 · 过程证据落盘</div>
+    <div class="stat-row reveal">
+      <div class="stat"><div class="num">1310</div><div class="lbl">项自动化测试</div></div>
+      <div class="stat"><div class="num">~40</div><div class="lbl">条设计结构校验</div></div>
+      <div class="stat"><div class="num">6</div><div class="lbl">类检查点层层把关</div></div>
+      <div class="stat"><div class="num">2</div><div class="lbl">处人工闸口</div></div>
+    </div>
+    <div class="strip reveal" style="text-align:center;"><b>上手三步：</b>① BA 填《SDD》走端到端（或 /new-pipe 独立唤起）　② 先看预检报告　③ 两处拍板，拿走四件套 + 档案</div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>08 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>07 / 08</span></footer>
 </section>
 
-<!-- ============ S9 注意事项 ============ -->
-<section class="slide" id="s9">
+<!-- ============ P7 还做不到的 + 共建邀请 ============ -->
+<section class="slide" id="s7">
   <div class="slide-content">
     <div class="page-head reveal">
-      <div class="page-num">09 · 注意事项</div>
-      <h1 class="page-title">边界与预期：它强在哪，不承诺什么</h1>
-      <p class="page-claim">把边界说在前面，用起来才不会失望——<span class="key">它把「做」的活干完并自证质量，「判」的权始终在你。</span></p>
+      <div class="page-num">08 · 还做不到什么</div>
+      <h1 class="page-title">场景只覆盖了一部分——剩下的，等你带过来</h1>
+      <p class="page-claim">离线批量加工的主干场景已跑通、有案例背书；没覆盖的场景不硬做——多用、多提，一起变成能力。</p>
     </div>
-    <div class="grid3 reveal">
-      <div class="card accent">
-        <h3>它不做什么</h3>
-        <ul>
-          <li><b>不替你定业务语义</b>：粒度、主键、关联收敛——材料给你，你拍板</li>
-          <li><b>不推生产</b>：制品到档案为止，上线动作永远是人的</li>
-          <li><b>不重写存量</b>：只精确修改，改了什么可验证</li>
-        </ul>
-      </div>
-      <div class="card warn-top">
-        <h3>输入决定输出</h3>
-        <ul>
-          <li>声明条件宁缺勿错——它按声明执行，声明错就错着执行</li>
-          <li>RS 元数据段（调度/增量/驱动表）要准，这层错会直接进设计</li>
-          <li><b>源表数据脏</b>是失败的最大概率归宿：正确反应是修输入重跑，不是让它改 SQL 掩盖</li>
-        </ul>
-      </div>
-      <div class="card ok-top">
-        <h3>诚实披露</h3>
-        <ul>
-          <li>UT 零告警 = <b>当前数据</b>上通过，≠ 阈值永远合理——数据分布变了告警口径可能要调</li>
-          <li>优化场景存量语义不补（主键/粒度留空走豁免，双跑兜底）</li>
-          <li>环境有前提：目标库连库配置就绪；部署环境不向流程暴露无关的数据库连接（避免它连错库得出错误结论）</li>
-        </ul>
-      </div>
+    <div class="reveal svg-stage">
+      <svg viewBox="0 0 960 380" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+        <defs>
+          <linearGradient id="s7cov" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+        </defs>
+        <text x="20" y="22" font-size="13" font-weight="800" fill="#1e293b">场景覆盖：主干已跑通，更多场景等你带过来</text>
+        <rect x="20" y="36" width="560" height="270" rx="12" fill="url(#s7cov)" stroke="#2563eb" stroke-width="2"/>
+        <text x="300" y="62" text-anchor="middle" font-size="12.5" font-weight="800" fill="#1e3a8a">已覆盖：离线批量加工的主干场景</text>
+        <rect x="40" y="80" width="255" height="52" rx="8" fill="#fff" stroke="#bfdbfe"/>
+        <text x="167" y="111" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">多源 JOIN 宽表</text>
+        <rect x="305" y="80" width="255" height="52" rx="8" fill="#fff" stroke="#bfdbfe"/>
+        <text x="432" y="111" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">聚合加工</text>
+        <rect x="40" y="142" width="255" height="52" rx="8" fill="#fff" stroke="#bfdbfe"/>
+        <text x="167" y="173" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">增量 · 拉链</text>
+        <rect x="305" y="142" width="255" height="52" rx="8" fill="#fff" stroke="#bfdbfe"/>
+        <text x="432" y="173" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">多源整合</text>
+        <rect x="40" y="204" width="255" height="52" rx="8" fill="#fff" stroke="#bfdbfe"/>
+        <text x="167" y="235" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">DQ 检查</text>
+        <rect x="305" y="204" width="255" height="52" rx="8" fill="#fff" stroke="#bfdbfe"/>
+        <text x="432" y="235" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e3a8a">初始化设计</text>
+        <text x="300" y="290" text-anchor="middle" font-size="9.5" fill="#64748b">以上均有评测案例背书 · 闸口、质检、档案全流程一致</text>
+        <rect x="600" y="36" width="340" height="72" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="4 2"/>
+        <text x="770" y="62" text-anchor="middle" font-size="12" font-weight="800" fill="#92400e">存量优化交付 —— 开发调试中</text>
+        <text x="770" y="84" text-anchor="middle" font-size="9.5" fill="#92400e">精确增量 · 存量零接触 · 同一套质检</text>
+        <rect x="600" y="120" width="340" height="72" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="4 2"/>
+        <text x="770" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#92400e">平台侧配置自动补齐 —— 推进中</text>
+        <text x="770" y="168" text-anchor="middle" font-size="9.5" fill="#92400e">当前这部分需手工配置</text>
+        <rect x="600" y="204" width="340" height="104" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="770" y="230" text-anchor="middle" font-size="12" font-weight="800" fill="#475569">还没覆盖——等你定义</text>
+        <text x="770" y="262" text-anchor="middle" font-size="11" fill="#64748b">？ 更复杂加工形态 · ？ 新资产类型</text>
+        <text x="770" y="290" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">？ 你的场景</text>
+        <rect x="20" y="322" width="920" height="42" rx="9" fill="#1e293b"/>
+        <text x="480" y="350" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">多使用 → 提场景 → 进评测集 → 能力固化：每一个新场景，都会变成下一个能力</text>
+      </svg>
     </div>
-    <div class="strip amber reveal">期望管理一句话：<b>它是「证据充分的助手」，不是「免责的黑盒」</b>——每个结论都能翻到落盘的证据，每个判断点都留在你手里。</div>
+    <div class="strip reveal" style="text-align:center;"><b>Q&amp;A：设计开发组</b>　·　存量优化专题：开发调试中，敬请期待</div>
   </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>09 / 10</span></footer>
-</section>
-
-<!-- ============ S10 收尾 ============ -->
-<section class="slide" id="s10">
-  <div class="slide-content" style="gap: clamp(0.6rem, 1.8vh, 1.3rem);">
-    <div class="page-head reveal">
-      <div class="page-num">10 · 收尾</div>
-      <h1 class="page-title">成绩单与上手三步</h1>
-      <p class="page-claim">质量不是口号，是数字与机制；上手不需要培训课，两个模板 + 一个小表即可开跑。</p>
-    </div>
-    <div class="stat-row reveal">
-      <div class="stat"><div class="num">1310</div><div class="lbl">项自动化测试<br>（流程校验全量回归）</div></div>
-      <div class="stat"><div class="num">~40</div><div class="lbl">条设计结构校验<br>（落盘即查，分五层报错）</div></div>
-      <div class="stat"><div class="num">12</div><div class="lbl">个评测案例跑通<br>（宽表/拉链/增量/聚合）</div></div>
-      <div class="stat"><div class="num">2</div><div class="lbl">处人工闸口<br>（设计方向 + 编码质量）</div></div>
-    </div>
-    <div class="grid3 reveal" style="flex: 1;">
-      <div class="card accent">
-        <h3><span class="numchip">1</span> 拿模板</h3>
-        <p>找我们要 <b>RS 模板</b>（.md）和 <b>mapping 模板</b>（.xlsx），按列头填空；第一次建议挑一个来源简单的小表——<b>别一上来就啃最复杂的宽表</b>。</p>
-      </div>
-      <div class="card accent">
-        <h3><span class="numchip">2</span> 发起</h3>
-        <p>手工 <code>/new-pipe</code> 给模式 + 两个文件路径；或接入总控由平台直连发起。连库配置我们协助就绪。<b>发起后先看预检报告</b>——大多数输入问题在这一步就暴露。</p>
-      </div>
-      <div class="card accent">
-        <h3><span class="numchip">3</span> 两处拍板</h3>
-        <p>闸口①确认设计方向，闸口②确认编码质量——中间它会自己跑测试、自己闭环修复。<b>拿走四件套 + 档案。</b>两闸口之间的回路不需要你盯。</p>
-      </div>
-    </div>
-    <div class="strip reveal" style="text-align:center;"><b>Q&amp;A</b>　·　模板与演示环境：设计开发组　·　存量优化专题：开发调试中，敬请期待</div>
-  </div>
-  <footer class="foot"><span>设计开发智能体宣讲</span><span>10 / 10</span></footer>
+  <footer class="foot"><span>设计开发智能体宣讲</span><span>08 / 08</span></footer>
 </section>
 
 <script>
@@ -575,28 +653,134 @@ ETL 执行    <span class="s">✅ 成功</span>
   var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
   var dots = document.getElementById('navDots');
   var fill = document.getElementById('progressFill');
+
+  function nearestIdx(){
+    var best = 0, bd = Infinity;
+    slides.forEach(function(s, i){
+      var d = Math.abs(s.getBoundingClientRect().top);
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+  }
+  // nav dots：封面不放 dot，从第 2 页开始
   slides.forEach(function(s, i){
+    if (i === 0) return;
     var d = document.createElement('div');
     d.className = 'nav-dot';
     d.title = (i+1) + ' / ' + slides.length;
-    d.addEventListener('click', function(){ s.scrollIntoView({behavior:'smooth'}); });
+    d.addEventListener('click', function(){ pageTo(i); });
     dots.appendChild(d);
   });
   var dotEls = Array.prototype.slice.call(dots.children);
-  function update(){
-    var h = window.innerHeight || 1;
-    var idx = Math.round(window.scrollY / h);
-    dotEls.forEach(function(d, i){ d.classList.toggle('active', i === idx); });
-    var max = document.documentElement.scrollHeight - h;
-    fill.style.width = (max > 0 ? (window.scrollY / max) * 100 : 0) + '%';
-    slides.forEach(function(s){ 
-      var r = s.getBoundingClientRect();
-      if (r.top < h * 0.5 && r.bottom > h * 0.5) s.classList.add('visible');
-    });
+  function paint(){
+    var idx = nearestIdx();
+    dotEls.forEach(function(d, i){ d.classList.toggle('active', i === idx - 1); });
+    var doc = document.documentElement;
+    var max = Math.max(1, doc.scrollHeight - window.innerHeight);
+    var y = window.scrollY || window.pageYOffset || 0;
+    fill.style.width = (Math.min(1, Math.max(0, y / max)) * 100) + '%';
   }
-  window.addEventListener('scroll', update, {passive:true});
-  window.addEventListener('resize', update);
-  update();
+  function show(i){ slides[i].classList.add('visible'); }
+
+  // 内容可见性主路径：IntersectionObserver，不依赖滚动事件（WebView/滚动被接管时仍可靠）
+  if ('IntersectionObserver' in window) {
+    document.documentElement.classList.add('js-anim');
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.isIntersecting) en.target.classList.add('visible');
+      });
+    }, { threshold: 0, rootMargin: '12% 0px 12% 0px' });
+    slides.forEach(function(s){ io.observe(s); });
+  }
+  // 兜底：滚动/锚点/resize 时把当前页及之前所有页标记可见（只增不减）
+  function revealUpTo(){
+    var idx = nearestIdx();
+    for (var i = 0; i <= idx; i++) show(i);
+    paint();
+  }
+  window.addEventListener('scroll', revealUpTo, {passive:true});
+  window.addEventListener('resize', revealUpTo);
+  window.addEventListener('load', revealUpTo);
+  revealUpTo();
+
+  // 键盘/翻页：自绘补间 + 补间期间临时关闭滚动吸附（吸附打断程序滚动是按键失灵根因）
+  var tweenToken = 0;
+  function pageTo(i){
+    var target = slides[i].offsetTop;
+    var from = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+    if (Math.abs(target - from) < 2) { window.scrollTo(0, target); return; }
+    var token = ++tweenToken;
+    var dur = 420, t0 = performance.now();
+    var de = document.documentElement;
+    de.style.scrollBehavior = 'auto';
+    de.style.scrollSnapType = 'none';
+    (function frame(now){
+      if (token !== tweenToken) return;
+      var p = Math.min(1, ((now || performance.now()) - t0) / dur);
+      var e = 1 - Math.pow(1 - p, 3);
+      window.scrollTo(0, from + (target - from) * e);
+      if (p < 1) { requestAnimationFrame(frame); }
+      else {
+        window.scrollTo(0, target);
+        setTimeout(function(){ de.style.scrollSnapType = ''; de.style.scrollBehavior = ''; }, 80);
+      }
+    })(t0);
+  }
+  function go(step){
+    pageTo(Math.min(slides.length - 1, Math.max(0, nearestIdx() + step)));
+  }
+  // 键盘事件挂 window：部分内嵌浏览器不向 document 派发按键
+  window.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); go(1); }
+    else if (e.key === 'ArrowRight') { go(1); }
+    else if (e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); go(-1); }
+    else if (e.key === 'ArrowLeft') { go(-1); }
+    else if (e.key === 'Home') { e.preventDefault(); pageTo(0); }
+    else if (e.key === 'End') { e.preventDefault(); pageTo(slides.length-1); }
+  });
+  // 屏幕翻页按钮兜底：环境完全不送键盘事件时也能点击翻页
+  document.getElementById('btnPrev').addEventListener('click', function(){ go(-1); });
+  document.getElementById('btnNext').addEventListener('click', function(){ go(1); });
+
+  // 聚光灯光标（按 P 开关）
+  (function() {
+    var cursor = document.getElementById('presCursor');
+    var hint = document.getElementById('presCursorHint');
+    var enabled = false, mouseX = -200, mouseY = -200;
+    var curX = -200, curY = -200, hideTimer = null, rafId = null;
+    function showHint(text, dur) {
+      hint.textContent = text; hint.classList.add('show');
+      setTimeout(function(){ hint.classList.remove('show'); }, dur || 2000);
+    }
+    function animate() {
+      curX += (mouseX - curX) * 0.25; curY += (mouseY - curY) * 0.25;
+      cursor.style.left = curX + 'px'; cursor.style.top = curY + 'px';
+      if (enabled) rafId = requestAnimationFrame(animate);
+    }
+    document.addEventListener('mousemove', function(e) {
+      mouseX = e.clientX; mouseY = e.clientY;
+      if (!enabled) return;
+      cursor.classList.add('active'); cursor.classList.remove('fading');
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function(){ cursor.classList.add('fading'); }, 2000);
+    });
+    window.addEventListener('keydown', function(e) {
+      if ((e.key === 'p' || e.key === 'P') && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        enabled = !enabled;
+        if (enabled) {
+          document.body.style.cursor = 'none';
+          cursor.classList.add('active'); cursor.classList.remove('fading');
+          showHint('演示光标已开启 · 按 P 关闭', 2000);
+          rafId = requestAnimationFrame(animate);
+        } else {
+          document.body.style.cursor = '';
+          cursor.classList.remove('active', 'fading');
+          cancelAnimationFrame(rafId);
+          showHint('演示光标已关闭', 1500);
+        }
+      }
+    });
+  })();
 })();
 </script>
 </body>

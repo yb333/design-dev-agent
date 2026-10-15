@@ -1,0 +1,1392 @@
+<!DOCTYPE html>
+<!-- deck-studio 试用构建 v3（双模式）：浏览模式=无缝长页滚动（stage 容器内，像 PDF 阅读器，每页独立投影卡片），
+     放映模式（F/工具条）=全屏单页 letterbox + reveal 节拍步进，末页两次确认退出；
+     左上角 ☰ 页面目录（DOM 克隆缩略图）；固定 1920×1080 画布缩放适配，根文档零滚动零 IO；
+     px 排版刻度（eyebrow 18 mono / 标题 40 / 正文 21 地板）；色板宪法与 data-label 契约同 v1。
+     五个内容页为自绘 SVG（页型库之外的场景），坐标与内容与原版一致。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据交付 Agent：设计开发这段怎么做</title>
+<style>
+:root {
+    --c-info: #3b82f6; --c-exec: #2563eb; --c-guard: #60a5fa;
+    --bg-card: #f8fafc; --border-card: #e2e8f0; --bg-block: #f1f5f9;
+    --text: #1e293b; --text-sub: #64748b; --text-faint: #94a3b8;
+    --c-gate: #f59e0b; --c-gate-bg: #fef3c7; --c-gate-border: #fde68a; --c-gate-text: #92400e;
+    --c-pass: #1d4ed8; --c-pass-bg: #dbeafe;
+    --c-danger: #ef4444; --c-danger-bg: #fee2e2; --c-danger-text: #991b1b;
+    --ease-out-expo: cubic-bezier(.16,1,.3,1);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body { background: #e8eaf0; font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif; color: var(--text); }
+
+/* 舞台：放映=单页居中；浏览=长页滚动容器 */
+.deck-stage { position: fixed; inset: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.deck-fit { width: 1920px; height: 1080px; flex: 0 0 auto; position: relative; overflow: hidden;
+    background: #fff; box-shadow: 0 12px 48px rgba(15,23,42,.18); border-radius: 8px; }
+.slide { width: 1920px; height: 1080px; padding: 56px 90px; display: flex; flex-direction: column;
+    overflow: hidden; background: #fff; flex: 0 0 auto; }
+.reveal { transition: opacity .5s var(--ease-out-expo), transform .5s var(--ease-out-expo); }
+body.presenting .slide.current .reveal:not(.shown) { opacity: 0 !important; transform: translateY(18px) !important; }
+body:not(.browse) .deck-fit { transform-origin: center center; }
+body:not(.browse) .slide { position: absolute; inset: 0; visibility: hidden; opacity: 0;
+    transition: opacity .35s ease, visibility 0s linear .35s; }
+body:not(.browse) .slide.current { visibility: visible; opacity: 1; transition: opacity .35s ease; }
+body.browse .deck-stage { display: block; overflow-y: auto; overflow-x: hidden; padding: 16px 0 40px; }
+body.browse .deck-fit { height: auto; transform-origin: top left; box-shadow: none; border-radius: 0; background: transparent; }
+body.browse .slide { position: relative; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 10px 32px rgba(15,23,42,.12); }
+
+/* 排版刻度（px） */
+.slide-content { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: 14px; }
+.page-head { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.page-num { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 18px; letter-spacing: .2em; color: var(--c-exec); font-weight: 600; }
+.page-title { font-size: 40px; font-weight: 700; color: var(--text); line-height: 1.2; }
+.page-claim { font-size: 21px; color: var(--text-sub); font-weight: 500; line-height: 1.4; }
+.key { font-weight: 700; color: var(--c-exec); }
+.svg-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.svg-stage svg { width: 100%; height: 100%; max-height: 100%; }
+
+/* 封面 */
+.cover { padding: 108px 130px; background: linear-gradient(135deg,#fff 0%, #eff6ff 100%); }
+.cover .slide-content { justify-content: center; }
+.cover .tag { font-family: ui-monospace, monospace; font-size: 18px; color: var(--c-exec); font-weight: 700; letter-spacing: .2em; margin-bottom: 22px; }
+.cover h1 { font-size: 76px; font-weight: 900; line-height: 1.15; color: var(--text); margin-bottom: 28px; }
+.cover h1 .accent { color: var(--c-exec); }
+.cover .sub { font-size: 27px; color: var(--text-sub); font-weight: 500; line-height: 1.5; max-width: 78%; border-left: 6px solid var(--c-exec); padding-left: 24px; }
+.cover .meta { position: absolute; bottom: 40px; left: 130px; right: 130px; display: flex; justify-content: space-between; font-size: 18px; color: var(--text-faint); }
+
+/* ===== 液态玻璃 chrome（材质 token：暗色预设整体覆盖 --glass-* 即可） ===== */
+:root {
+  --glass-bg: rgba(255,255,255,.58);
+  --glass-bg-strong: rgba(248,250,252,.84);
+  --glass-border: rgba(255,255,255,.65);
+  --glass-rim: inset 0 1px 0 rgba(255,255,255,.75), inset 0 0 0 .5px rgba(255,255,255,.35), inset 0 -1px 0 rgba(15,23,42,.05);
+  --glass-shadow: 0 8px 32px rgba(15,23,42,.14), 0 2px 8px rgba(15,23,42,.06);
+  --glass-blur: saturate(180%) blur(20px);
+  --glass-spring: cubic-bezier(.34,1.56,.64,1);
+}
+.deck-progress { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); width: min(42vw, 420px); height: 6px;
+  z-index: 100; border-radius: 999px; background: rgba(15,23,42,.08); border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-rim); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); overflow: hidden; }
+#progressBar { height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--c-info), var(--c-exec));
+  box-shadow: 0 0 12px rgba(59,130,246,.55); transition: width .4s var(--glass-spring); }
+/* 单一 chrome 聚合（左上角）：☰ 目录 + 页码 + 放映；玻璃材质 + 顶面高光 + 弹簧微交互 */
+.deck-bar { position: fixed; top: 14px; left: 16px; z-index: 110; display: flex; align-items: center; gap: 4px;
+  border-radius: 999px; padding: 6px 8px; font-size: 13px; color: var(--text-sub, #64748b);
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-rim), var(--glass-shadow);
+  transition: transform .45s var(--glass-spring), opacity .4s ease; }
+.deck-bar:hover { transform: translateY(-1px); }
+.deck-bar::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(135deg, rgba(255,255,255,.45) 0%, rgba(255,255,255,.08) 30%, transparent 55%); }
+.deck-page { font-variant-numeric: tabular-nums; letter-spacing: .06em; padding: 0 6px; }
+.deck-menu { border: none; background: transparent; cursor: pointer; font-size: 15px; line-height: 1;
+  color: var(--text-sub, #64748b); padding: 4px 9px; border-radius: 999px;
+  transition: transform .25s var(--glass-spring), background .2s ease; }
+.deck-menu:hover { background: rgba(37,99,235,.1); transform: scale(1.06); }
+.deck-menu:active { transform: scale(.94); }
+.deck-present-btn { border: 1px solid rgba(255,255,255,.35); cursor: pointer; border-radius: 999px; padding: 6px 14px;
+  font-size: 13px; font-weight: 600; color: #fff;
+  background: linear-gradient(180deg, rgba(59,130,246,.92), rgba(37,99,235,.92));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 2px 10px rgba(37,99,235,.35);
+  transition: transform .25s var(--glass-spring), filter .2s ease; }
+.deck-present-btn:hover { filter: brightness(1.07); transform: scale(1.04); }
+.deck-present-btn:active { transform: scale(.96); }
+.deck-menu:focus-visible, .deck-present-btn:focus-visible { outline: 2px solid var(--c-info, #3b82f6); outline-offset: 2px; }
+
+.deck-sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; width: 320px;
+  display: flex; flex-direction: column;
+  background: var(--glass-bg-strong); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  border-right: 1px solid var(--glass-border);
+  transform: translateX(-100%); transition: transform .4s var(--ease-out-expo, cubic-bezier(.16,1,.3,1)); }
+.deck-sidebar.open { transform: none; }
+.deck-sidebar::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(115deg, rgba(255,255,255,.35) 0%, transparent 30%); }
+.deck-sidebar-head { position: relative; display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; font-size: 15px; font-weight: 700; color: var(--text, #1e293b);
+  border-bottom: 1px solid rgba(15,23,42,.06); }
+.deck-sidebar-close { border: none; background: transparent; font-size: 20px; cursor: pointer;
+  color: var(--text-faint, #94a3b8); line-height: 1; border-radius: 999px; padding: 2px 8px;
+  transition: background .2s ease, transform .25s var(--glass-spring); }
+.deck-sidebar-close:hover { background: rgba(15,23,42,.06); transform: scale(1.1); }
+.deck-thumbs { position: relative; flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.thumb-item { cursor: pointer; border: 2px solid transparent; border-radius: 12px;
+  transition: transform .25s var(--glass-spring), border-color .2s ease; }
+.thumb-item:hover { transform: scale(1.02); }
+.thumb-item.active { border-color: var(--c-exec, #2563eb); }
+.thumb-box { width: 100%; height: 162px; overflow: hidden; border-radius: 10px; position: relative; background: #fff;
+  border: 1px solid rgba(255,255,255,.6); box-shadow: 0 2px 10px rgba(15,23,42,.08), inset 0 1px 0 rgba(255,255,255,.6); }
+.thumb-inner { width: 1920px; height: 1080px; transform: scale(0.15); transform-origin: top left; position: relative; }
+.thumb-page { position: absolute !important; inset: 0 !important; width: 1920px !important; height: 1080px !important;
+  display: flex !important; flex-direction: column; padding: 56px 90px !important;
+  visibility: visible !important; opacity: 1 !important; background: #fff; overflow: hidden;
+  box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; }
+.thumb-page.cover { padding: 108px 130px !important; }
+.thumb-page .reveal { opacity: 1 !important; transform: none !important; }
+.thumb-label { font-size: 12px; color: var(--text-sub, #64748b); padding: 6px 4px; }
+
+.pres-cursor { position: fixed; pointer-events: none; z-index: 9999; width: 0; height: 0; opacity: 0; transition: opacity .4s ease; }
+.pres-cursor.active { opacity: 1; }
+.pres-cursor.fading .pres-spotlight { opacity: .04; }
+.pres-cursor.fading .pres-dot { opacity: .4; }
+.pres-spotlight { position: absolute; width: 220px; height: 220px; top: 50%; left: 50%;
+  transform: translate(-50%,-50%); border-radius: 50%;
+  background: radial-gradient(circle, rgba(59,130,246,.16) 0%, rgba(59,130,246,.09) 35%, rgba(59,130,246,.03) 60%, transparent 80%);
+  opacity: .14; transition: opacity .6s ease; }
+.pres-dot { position: absolute; width: 8px; height: 8px; top: 50%; left: 50%;
+  transform: translate(-50%,-50%); border-radius: 50%; background: var(--c-info, #3b82f6);
+  box-shadow: 0 0 8px rgba(59,130,246,.5); transition: opacity .6s ease; }
+.pres-cursor-hint, .player-hint { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: var(--text-sub, #64748b); padding: 7px 16px; border-radius: 999px;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-rim), var(--glass-shadow);
+  z-index: 9999; opacity: 0; transition: opacity .3s ease; pointer-events: none; white-space: nowrap; }
+.pres-cursor-hint.show, .player-hint.show { opacity: 1; }
+body.presenting { cursor: pointer; }
+body.presenting .deck-bar, body.presenting .deck-menu,
+body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; pointer-events: none; }
+
+/* ===== 动画步进程序 fx 层（终态清空即还原静态页） ===== */
+.fx-layer .fx-veil { fill: #fff; opacity: 0; transition: opacity .45s ease; }
+.fx-layer .fx-veil.on { opacity: .78; }
+.fx-layer .fx-lit { fill: rgba(59,130,246,.3); stroke: rgba(37,99,235,.9); stroke-width: 1.6; }
+.fx-layer .fx-state { fill: rgba(29,78,216,.18); stroke: #1d4ed8; stroke-width: 2; }
+.fx-layer .fx-gate { fill: none; stroke: #f59e0b; stroke-width: 3; animation: fxgate 1s ease-in-out infinite; }
+@keyframes fxgate { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+.fx-layer .fx-pulse { fill: rgba(239,68,68,.16); stroke: #ef4444; stroke-width: 2; animation: fxpulse .9s ease-out 1 forwards; }
+@keyframes fxpulse { 0% { opacity: .85; } 100% { opacity: 0; } }
+/* ===== 常驻流转（ambient）：回路机制页试点 ===== */
+.ambient-layer .fpulse { fill: none; stroke: var(--c-info, #3b82f6); stroke-width: 2; opacity: 0; transform-box: fill-box; transform-origin: center; animation: fnodep .7s ease-out 1 forwards; }
+@keyframes fnodep { 0% { opacity: .9; transform: scale(.5); } 100% { opacity: 0; transform: scale(1.6); } }
+.ambient-layer .fgate { fill: none; stroke: #f59e0b; stroke-width: 3; animation: fxgate 1s ease-in-out infinite; }
+.ambient-layer .fstate { fill: rgba(29,78,216,.15); stroke: #1d4ed8; stroke-width: 1.5; opacity: 0; transition: opacity .4s ease; }
+.ambient-layer .fstate.on { opacity: 1; }
+.ambient-layer .ftoken { transition: fill .3s ease, opacity .4s ease; }
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .2s !important; }
+}
+</style>
+</head>
+<body class="browse">
+<div class="deck-stage" id="deckStage">
+<div class="deck-fit" id="deckFit">
+
+<!-- ============ 封面 ============ -->
+<section class="slide cover" data-label="封面">
+    <div class="slide-content" style="justify-content:center;">
+        <div class="tag">设计开发阶段 · 人机交互与协同</div>
+        <h1>数据交付 Agent<br><span class="accent">设计开发阶段：方案与架构</span></h1>
+        <p class="sub">Agent 自己跑流水线，人只在闸口拍板——<br>从 RS+US 到五件套制品（DDL/术加/调度/DQ/集成），<span class="key">一段流程、一份 spec、两个闸口</span>。</p>
+    </div>
+    <div class="meta"><span>主题：设计开发的人机交互 · 展开讲协同与场景</span><span>2026</span></div>
+</section>
+
+<!-- ============ 形态 ============ -->
+<section class="slide" data-label="形态">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">01 / 形态</div>
+            <div class="page-title">形态：一条<span class="key">流水线</span>，人在闸口决策</div>
+            <div class="page-claim">吃 RS+US（需求spec+用户故事），吐五件套制品（DDL/术加/调度/DQ/集成）。UT 是收尾工序，代码稳定后交付下游。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 500" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="n1a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <marker id="n1y" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#f59e0b"/></marker>
+                <marker id="n1g" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#1d4ed8"/></marker>
+                <linearGradient id="n1m" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
+                <linearGradient id="n1gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+                <linearGradient id="n1agent" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+            </defs>
+            <!-- spec 演化带（三段：RS+US→TS→五件套制品）-->
+            <text x="30" y="22" font-size="10" font-weight="800" fill="#1e3a8a">spec 演化链（一份 spec 从头贯穿，形态在演化）</text>
+            <rect x="30" y="30" width="270" height="34" rx="7" fill="#1e3a8a"/>
+            <text x="155" y="47" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">《RS》+《US》</text>
+            <text x="155" y="59" text-anchor="middle" font-size="7" fill="#bfdbfe">需求spec+用户故事 · BA产出</text>
+            <line x1="300" y1="47" x2="336" y2="47" stroke="#2563eb" stroke-width="1.8" marker-end="url(#n1a)"/>
+            <text x="318" y="42" text-anchor="middle" font-size="7" fill="#64748b">agent</text><text x="318" y="60" text-anchor="middle" font-size="7" fill="#64748b">转化</text>
+            <rect x="340" y="30" width="290" height="34" rx="7" fill="#2563eb"/>
+            <text x="485" y="47" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">《TS》</text>
+            <text x="485" y="59" text-anchor="middle" font-size="8" fill="#bfdbfe">技术spec · agent生成+人确认</text>
+            <line x1="630" y1="47" x2="666" y2="47" stroke="#2563eb" stroke-width="1.8" marker-end="url(#n1a)"/>
+            <text x="648" y="42" text-anchor="middle" font-size="7" fill="#64748b">agent</text><text x="648" y="60" text-anchor="middle" font-size="7" fill="#64748b">编码</text>
+            <rect x="670" y="30" width="340" height="34" rx="7" fill="#3b82f6"/>
+            <text x="840" y="47" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">五件套制品</text>
+            <text x="840" y="59" text-anchor="middle" font-size="7" fill="#dbeafe">《DDL》《术加》《LTS》《DQ》《集成》</text>
+
+            <!-- 人行（闸口在上方，显示人的动作）-->
+            <rect x="30" y="72" width="980" height="24" rx="6" fill="#fffbeb" opacity="0.5"/>
+            <rect x="30" y="72" width="60" height="20" rx="10" fill="#f59e0b"/>
+            <text x="60" y="86" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">人</text>
+            <rect x="120" y="74" width="115" height="20" rx="5" fill="url(#n1gate)" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2"/>
+            <text x="177" y="88" text-anchor="middle" font-size="7" font-weight="700" fill="#92400e">⏸闸口① 审视粗设计 ✅/💬/❌</text>
+            <rect x="720" y="74" width="115" height="20" rx="5" fill="url(#n1gate)" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2"/>
+            <text x="777" y="88" text-anchor="middle" font-size="7" font-weight="700" fill="#92400e">⏸闸口② 审视代码 ✅/💬/❌</text>
+
+            <!-- Agent 大框（y=130起，给上面留空间）-->
+            <rect x="30" y="130" width="980" height="172" rx="12" fill="url(#n1agent)" stroke="#2563eb" stroke-width="2.4"/>
+            <rect x="30" y="130" width="130" height="20" rx="10" fill="#2563eb"/>
+            <text x="95" y="144" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">一个 Agent</text>
+            <text x="168" y="144" font-size="8" font-weight="700" fill="#1e3a8a">·设计+开发+UT 不拆</text>
+            <!-- 工位：粗设计（核心）-->
+            <rect x="50" y="160" width="95" height="50" rx="7" fill="url(#n1m)" stroke="#2563eb" stroke-width="2"/>
+            <text x="97" y="178" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">粗设计</text>
+            <text x="97" y="192" text-anchor="middle" font-size="7" fill="#1e3a8a">RS→粗TS</text>
+            <text x="97" y="202" text-anchor="middle" font-size="6" fill="#1e3a8a">分几段·每段干啥</text>
+            <!-- 闸口①向下箭头（从人行到粗设计右侧间隙）-->
+            <line x1="177" y1="94" x2="177" y2="157" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2" marker-end="url(#n1y)"/>
+            <line x1="145" y1="185" x2="258" y2="185" stroke="#2563eb" stroke-width="1.4" marker-end="url(#n1a)"/>
+            <!-- 细设计+编码一体（核心·大格）-->
+            <rect x="260" y="154" width="155" height="62" rx="8" fill="url(#n1m)" stroke="#2563eb" stroke-width="2.2"/>
+            <text x="337" y="172" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">细设计 + 编码</text>
+            <text x="337" y="186" text-anchor="middle" font-size="7" fill="#1e3a8a">逐字段想逻辑→直接落SQL</text>
+            <text x="337" y="198" text-anchor="middle" font-size="6" fill="#1e3a8a">业务逻辑(无规范约束) + 套规范写SQL</text>
+            <text x="337" y="209" text-anchor="middle" font-size="6" font-style="italic" fill="#60a5fa">细TS事后从代码提取</text>
+            <line x1="415" y1="185" x2="428" y2="185" stroke="#2563eb" stroke-width="1.4" marker-end="url(#n1a)"/>
+            <!-- 静态自检 -->
+            <rect x="430" y="160" width="90" height="50" rx="7" fill="url(#n1m)" stroke="#2563eb" stroke-width="1.4"/>
+            <text x="475" y="178" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">静态自检</text>
+            <text x="475" y="192" text-anchor="middle" font-size="7" fill="#1e3a8a">语法+规范</text>
+            <text x="475" y="202" text-anchor="middle" font-size="6" fill="#1e3a8a">合规检查</text>
+            <line x1="520" y1="185" x2="533" y2="185" stroke="#2563eb" stroke-width="1.6" marker-end="url(#n1a)"/>
+            <!-- UT（收尾工序）-->
+            <rect x="535" y="154" width="120" height="62" rx="8" fill="url(#n1m)" stroke="#2563eb" stroke-width="2.2"/>
+            <text x="595" y="172" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">UT（收尾）</text>
+            <text x="595" y="186" text-anchor="middle" font-size="7" fill="#1e3a8a">连开发环境·动态验证</text>
+            <text x="595" y="198" text-anchor="middle" font-size="6" fill="#1e3a8a">建表·跑ETL·机械校验</text>
+            <text x="595" y="209" text-anchor="middle" font-size="6" fill="#1e3a8a">主键/非空/行数/格式</text>
+            <line x1="655" y1="185" x2="668" y2="185" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#n1g)"/>
+            <!-- 代码稳定 -->
+            <rect x="670" y="160" width="85" height="50" rx="7" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.8"/>
+            <text x="712" y="178" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">代码稳定</text>
+            <text x="712" y="192" text-anchor="middle" font-size="7" fill="#1e3a8a">→闸口②</text>
+            <text x="712" y="202" text-anchor="middle" font-size="6" fill="#1e3a8a">人审</text>
+            <!-- 闸口②向下箭头 -->
+            <line x1="777" y1="94" x2="777" y2="157" stroke="#f59e0b" stroke-width="1.4" stroke-dasharray="3 2" marker-end="url(#n1y)"/>
+            <line x1="755" y1="185" x2="801" y2="185" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#n1g)"/>
+            <!-- 制品产出（五件套）-->
+            <rect x="803" y="154" width="100" height="62" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+            <text x="853" y="172" text-anchor="middle" font-size="9" font-weight="800" fill="#1e3a8a">五件套制品</text>
+            <text x="853" y="185" text-anchor="middle" font-size="6" fill="#1e3a8a">DDL·术加·调度</text>
+            <text x="853" y="196" text-anchor="middle" font-size="6" fill="#1e3a8a">DQ·集成(可选)</text>
+            <text x="853" y="208" text-anchor="middle" font-size="6" fill="#64748b">→部署上线</text>
+
+            <!-- 自愈循环 -->
+            <path d="M 475 160 Q 475 146, 360 146 Q 337 146, 337 154" fill="none" stroke="#2563eb" stroke-width="1.3" stroke-dasharray="3 2" marker-end="url(#n1a)"/>
+            <text x="410" y="142" text-anchor="middle" font-size="6" font-weight="600" fill="#2563eb">自愈：自检不过→回改→再查</text>
+            <path d="M 595 154 Q 595 140, 400 140 Q 337 140, 337 154" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#n1a)" opacity="0.6"/>
+            <text x="470" y="136" text-anchor="middle" font-size="6" font-weight="600" fill="#2563eb" opacity="0.7">UT不过→回改</text>
+            <!-- 段标注（去掉横线，只留文字标签）-->
+            <text x="232" y="225" text-anchor="middle" font-size="8" font-weight="700" fill="#2563eb">设计（粗TS→闸口①→细设计：业务逻辑·无规范约束）</text>
+            <text x="542" y="225" text-anchor="middle" font-size="8" font-weight="700" fill="#64748b">开发（编码套规范→自检→UT）</text>
+            <text x="754" y="225" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">稳定→闸口②→制品</text>
+            <!-- TS 冻结说明 -->
+            <rect x="30" y="243" width="980" height="20" rx="5" fill="#fffbeb" opacity="0.5"/>
+            <text x="520" y="257" text-anchor="middle" font-size="8" font-weight="600" fill="#92400e">闸口①前粗TS是草稿 · 闸口①确认后粗TS冻结=细设计+编码的依据 · 细TS从代码事后提取 · 闸口②确认后代码冻结=产出制品</text>
+
+            <!-- UT 清单（y=320起，避开Agent框底302）-->
+            <text x="30" y="320" font-size="10" font-weight="800" fill="#1e293b">UT 测什么（静态自检 + 开发环境动态验证，全归 agent 自动跑）</text>
+            <rect x="30" y="328" width="120" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="90" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">DDL字段类型自检</text>
+            <rect x="158" y="328" width="110" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="213" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">SQL语法静态检查</text>
+            <rect x="276" y="328" width="110" height="24" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="331" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">开发环境建表冒烟</text>
+            <rect x="394" y="328" width="110" height="24" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+            <text x="449" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#92400e">ETL执行+影响行数</text>
+            <rect x="512" y="328" width="100" height="24" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+            <text x="562" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#92400e">主键唯一性</text>
+            <rect x="620" y="328" width="100" height="24" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+            <text x="670" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#92400e">非空校验</text>
+            <rect x="728" y="328" width="100" height="24" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+            <text x="778" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#92400e">行数合理性</text>
+            <rect x="836" y="328" width="100" height="24" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+            <text x="886" y="344" text-anchor="middle" font-size="8" font-weight="700" fill="#92400e">格式正则</text>
+            <text x="946" y="344" font-size="7" fill="#94a3b8">←静态　动态→</text>
+            <!-- 五件套交付物 -->
+            <text x="30" y="365" font-size="10" font-weight="800" fill="#1e293b">交付物五件套（产出制品 → 进开发环境运行 → 稳定后交付部署）</text>
+            <rect x="30" y="373" width="185" height="28" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="40" y="391" font-size="8" font-weight="700" fill="#475569">《DDL》：</text><text x="85" y="391" font-size="7" fill="#64748b">建表语句·自行部署</text>
+            <rect x="225" y="373" width="185" height="28" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="235" y="391" font-size="8" font-weight="700" fill="#475569">《术加》：</text><text x="280" y="391" font-size="7" fill="#64748b">ETL代码·执行平台制品</text>
+            <rect x="420" y="373" width="185" height="28" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="430" y="391" font-size="8" font-weight="700" fill="#475569">《LTS》：</text><text x="475" y="391" font-size="7" fill="#64748b">调度制品·开发段配置</text>
+            <rect x="615" y="373" width="185" height="28" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="625" y="391" font-size="8" font-weight="700" fill="#475569">《DQ》：</text><text x="660" y="391" font-size="7" fill="#64748b">质量检查SQL·只产出</text>
+            <rect x="810" y="373" width="140" height="28" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3 2"/>
+            <text x="820" y="391" font-size="8" font-weight="700" fill="#92400e">《集成》：</text><text x="870" y="391" font-size="7" fill="#92400e">可选·跨库</text>
+            <!-- 底部总结 -->
+            <rect x="30" y="415" width="980" height="30" rx="7" fill="#1e293b"/>
+            <text x="520" y="435" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">一段流程 · 一份 spec 贯穿 · 两个闸口（三档力度）· UT 是收尾工序 · 制品进开发环境稳定后交付</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ 场景 ============ -->
+<section class="slide" data-label="场景">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">02 / 场景</div>
+            <div class="page-title">场景：新建与优化，<span class="key">共用一条主干</span></div>
+            <div class="page-claim">差异只在"进入IT设计前怎么拿到spec"。优化时 RS和现状spec 并行产出、串行合并。优化只精确修改。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="n2b" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <marker id="n2s" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#94a3b8"/></marker>
+                <linearGradient id="n2new" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
+                <linearGradient id="n2opt" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+                <linearGradient id="n2main" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
+                <linearGradient id="n2spec" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#d97706"/></linearGradient>
+            </defs>
+            <text x="30" y="22" font-size="11" font-weight="800" fill="#1e293b">入口不同，主干合一</text>
+            <!-- 新建入口 -->
+            <rect x="30" y="40" width="200" height="56" rx="8" fill="url(#n2new)" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="130" y="60" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">新建入口</text>
+            <text x="130" y="76" text-anchor="middle" font-size="8" fill="#1e3a8a">需求Agent产出</text>
+            <text x="130" y="88" text-anchor="middle" font-size="8" fill="#1e3a8a">完整《RS》</text>
+            <rect x="240" y="54" width="44" height="18" rx="4" fill="url(#n2spec)"/>
+            <text x="262" y="67" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">《RS》</text>
+            <text x="292" y="67" font-size="7" fill="#64748b">1个输入</text>
+            <!-- 优化入口 -->
+            <text x="30" y="116" font-size="10" font-weight="800" fill="#92400e">优化入口（两个并行产出，互不依赖）</text>
+            <rect x="30" y="126" width="200" height="48" rx="7" fill="url(#n2opt)" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="130" y="144" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">① 需求Agent → 《变更RS》</text>
+            <text x="130" y="160" text-anchor="middle" font-size="7" fill="#92400e">增量·只描述"要改什么"</text>
+            <rect x="240" y="140" width="64" height="18" rx="4" fill="url(#n2spec)"/>
+            <text x="272" y="153" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">《变更RS》</text>
+            <rect x="30" y="182" width="200" height="48" rx="7" fill="url(#n2opt)" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="130" y="200" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">② 代码理解Agent → 《现状spec》</text>
+            <text x="130" y="216" text-anchor="middle" font-size="7" fill="#92400e">存量代码→现状+改动边界</text>
+            <rect x="240" y="196" width="70" height="18" rx="4" fill="url(#n2spec)"/>
+            <text x="275" y="209" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">《现状spec》</text>
+            <text x="284" y="178" font-size="7" font-weight="700" fill="#f59e0b">↕并行</text>
+            <text x="284" y="188" font-size="7" fill="#64748b">2个输入</text>
+            <!-- 合流 -->
+            <line x1="276" y1="63" x2="340" y2="150" stroke="#3b82f6" stroke-width="1.6" marker-end="url(#n2b)"/>
+            <line x1="300" y1="150" x2="340" y2="155" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#n2b)"/>
+            <line x1="300" y1="205" x2="340" y2="160" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#n2b)"/>
+            <circle cx="345" cy="155" r="10" fill="#1e293b"/>
+            <text x="345" y="159" text-anchor="middle" font-size="8" font-weight="800" fill="#fff">合</text>
+            <text x="345" y="180" text-anchor="middle" font-size="7" font-weight="700" fill="#1e293b">流</text>
+            <!-- 共用主干 -->
+            <rect x="370" y="126" width="630" height="62" rx="10" fill="url(#n2main)" stroke="#1e3a8a" stroke-width="2"/>
+            <line x1="358" y1="157" x2="368" y2="157" stroke="#1e293b" stroke-width="2"/>
+            <text x="685" y="148" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">共用主干（完全一样）</text>
+            <text x="685" y="164" text-anchor="middle" font-size="8" fill="#bfdbfe">IT设计 → 编码 → 静态自检 → UT → 代码稳定 → 闸口② → 四件套制品</text>
+            <text x="685" y="178" text-anchor="middle" font-size="7" fill="#93c5fd">优化时只精确修改，禁止从零重写 · 改动边界由代码理解Agent定</text>
+
+            <!-- 优化铁律 -->
+            <rect x="30" y="248" width="970" height="48" rx="7" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.3"/>
+            <text x="515" y="266" text-anchor="middle" font-size="9" font-weight="700" fill="#92400e">优化铁律：生产SQL是唯一真相源 · 如有《旧TS》，作为可溯源、可解释的校准参考</text>
+            <text x="515" y="282" text-anchor="middle" font-size="8" fill="#92400e">《旧TS》帮助理解设计本意 → 发现代码与设计意图的偏差 → 标记潜在风险（非随动描述，是校准器）</text>
+
+            <!-- 三条红线 -->
+            <text x="30" y="308" font-size="11" font-weight="800" fill="#1e293b">能力边界：三条红线</text>
+            <rect x="30" y="318" width="310" height="56" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="45" y="336" font-size="9" font-weight="800" fill="#991b1b">红线① 语义判断不自主</text>
+            <text x="45" y="350" font-size="7" fill="#991b1b">数据合理性·模式选择·字段语义 → 给材料，人定</text>
+            <text x="45" y="364" font-size="7" fill="#64748b">agent 把证据摆好，人拍板</text>
+            <rect x="350" y="318" width="310" height="56" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="365" y="336" font-size="9" font-weight="800" fill="#991b1b">红线② 推到生产不自主</text>
+            <text x="365" y="350" font-size="7" fill="#991b1b">写生产库·推规则上线·发布 → 生成制品，人推</text>
+            <text x="365" y="364" font-size="7" fill="#64748b">推到开发环境是正常的</text>
+            <rect x="670" y="318" width="330" height="56" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="685" y="336" font-size="9" font-weight="800" fill="#991b1b">红线③ 重写不自主</text>
+            <text x="685" y="350" font-size="7" fill="#991b1b">优化推倒重来 → 只精确修改，想重写走新建</text>
+            <text x="685" y="364" font-size="7" fill="#64748b">改动边界由代码理解Agent定</text>
+            <!-- 待讨论（元数据已不需要，RS自带字段类型）-->
+            <text x="30" y="394" font-size="11" font-weight="800" fill="#1e293b">待讨论</text>
+            <rect x="30" y="404" width="970" height="30" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.3"/>
+            <text x="515" y="424" text-anchor="middle" font-size="9" font-weight="600" fill="#2563eb">当前无待讨论项 — RS自带来源目标字段类型，不需连元数据平台</text>
+            <!-- 底部总结 -->
+            <rect x="30" y="446" width="970" height="22" rx="7" fill="#1e293b"/>
+            <text x="515" y="461" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">边界越清晰 agent 越可信——该自动的彻底自动，该交还人的明确交还</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ 协同 ============ -->
+<section class="slide" data-label="协同">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">03 / 协同</div>
+            <div class="page-title">协同：与上下游<span class="key">靠 spec 交接</span>，<span class="key">制品推到各平台</span></div>
+            <div class="page-claim">多个专业 agent 靠 spec 交接。读用 MCP 连，制品推到对应平台开发环境运行。下游接测试Agent。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="n3b" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <marker id="n3s" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#94a3b8"/></marker>
+                <linearGradient id="n3ag" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
+                <linearGradient id="n3core" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
+                <linearGradient id="n3spec" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#d97706"/></linearGradient>
+            </defs>
+            <!-- 左半：Agent 协作（上下排列）-->
+            <text x="30" y="22" font-size="11" font-weight="800" fill="#1e293b">Agent 协作：靠 spec 交接</text>
+            <rect x="30" y="38" width="155" height="52" rx="9" fill="url(#n3ag)" stroke="#3b82f6" stroke-width="1.6"/>
+            <text x="107" y="58" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">需求 Agent</text>
+            <text x="107" y="72" text-anchor="middle" font-size="7" fill="#1e3a8a">需求→拆解→需求设计</text>
+            <text x="107" y="84" text-anchor="middle" font-size="6" fill="#64748b">BA 主产</text>
+            <rect x="195" y="52" width="36" height="20" rx="4" fill="url(#n3spec)"/>
+            <text x="213" y="66" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">《RS》</text>
+            <rect x="30" y="100" width="155" height="52" rx="9" fill="url(#n3ag)" stroke="#3b82f6" stroke-width="1.6"/>
+            <text x="107" y="120" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">代码理解 Agent</text>
+            <text x="107" y="134" text-anchor="middle" font-size="7" fill="#1e3a8a">存量代码 → 现状+边界</text>
+            <text x="107" y="146" text-anchor="middle" font-size="6" fill="#64748b">优化时参与</text>
+            <rect x="195" y="114" width="56" height="20" rx="4" fill="url(#n3spec)"/>
+            <text x="223" y="128" text-anchor="middle" font-size="7" font-weight="800" fill="#fff">《现状spec》</text>
+            <text x="107" y="99" text-anchor="middle" font-size="7" font-weight="700" fill="#f59e0b">↕ 并行产出</text>
+            <line x1="231" y1="62" x2="332" y2="98" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#n3s)"/>
+            <line x1="251" y1="124" x2="332" y2="104" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#n3s)"/>
+            <!-- 设计开发Agent -->
+            <rect x="338" y="70" width="170" height="70" rx="10" fill="url(#n3core)" stroke="#1e3a8a" stroke-width="2.4"/>
+            <text x="423" y="92" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">设计开发 Agent</text>
+            <text x="423" y="108" text-anchor="middle" font-size="7" fill="#bfdbfe">IT设计→开发→UT</text>
+            <text x="423" y="120" text-anchor="middle" font-size="7" fill="#bfdbfe">→四件套制品</text>
+            <text x="423" y="132" text-anchor="middle" font-size="6" fill="#93c5fd">← 我们管的这段</text>
+            <!-- 下游：测试Agent -->
+            <line x1="508" y1="105" x2="556" y2="105" stroke="#f59e0b" stroke-width="1.6" marker-end="url(#n3s)"/>
+            <rect x="520" y="88" width="80" height="16" rx="4" fill="url(#n3spec)"/>
+            <text x="560" y="100" text-anchor="middle" font-size="6" font-weight="800" fill="#fff">《TS》+制品</text>
+            <rect x="562" y="82" width="130" height="48" rx="9" fill="url(#n3ag)" stroke="#3b82f6" stroke-width="1.6" stroke-dasharray="4 2"/>
+            <text x="627" y="102" text-anchor="middle" font-size="9" font-weight="800" fill="#1e3a8a">测试 Agent</text>
+            <text x="627" y="116" text-anchor="middle" font-size="6" fill="#64748b">下游·跑测试环境</text>
+            <!-- 核心理念 -->
+            <rect x="710" y="38" width="300" height="92" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <text x="860" y="56" text-anchor="middle" font-size="10" font-weight="800" fill="#1e293b">核心理念</text>
+            <text x="722" y="76" font-size="8" fill="#475569">▸ agent 之间不直接调用、不共享上下文</text>
+            <text x="722" y="92" font-size="8" fill="#475569">▸ 只交接 spec——结构必须对齐</text>
+            <text x="722" y="108" font-size="8" font-weight="700" fill="#2563eb">▸ spec 是人↔agent 也是</text>
+            <text x="722" y="120" font-size="8" font-weight="700" fill="#2563eb">　agent↔agent 的语言</text>
+
+            <!-- 下半：平台协同表（重构：平台=制品目的地，去掉独立列）-->
+            <text x="30" y="162" font-size="11" font-weight="800" fill="#1e293b">平台协同：每个平台是制品的目的地，读连写递</text>
+            <text x="530" y="162" font-size="9" fill="#64748b">读用 MCP 连 · 制品推到对应平台开发环境</text>
+            <rect x="30" y="172" width="980" height="222" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1.2"/>
+            <!-- 表头 -->
+            <rect x="30" y="172" width="130" height="28" rx="8" fill="#f1f5f9"/>
+            <text x="95" y="191" text-anchor="middle" font-size="9" font-weight="800" fill="#1e293b">平台</text>
+            <rect x="160" y="172" width="560" height="14" fill="#eff6ff"/>
+            <text x="440" y="184" text-anchor="middle" font-size="8" font-weight="800" fill="#2563eb">设计开发段（平台在各阶段的参与）</text>
+            <rect x="160" y="186" width="180" height="14" fill="#dbeafe"/>
+            <text x="250" y="197" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">IT设计</text>
+            <rect x="340" y="186" width="180" height="14" fill="#dbeafe"/>
+            <text x="430" y="197" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">开发（编码+自检）</text>
+            <rect x="520" y="186" width="200" height="14" fill="#dbeafe"/>
+            <text x="620" y="197" text-anchor="middle" font-size="8" font-weight="700" fill="#1e3a8a">UT + 制品推到平台开发环境</text>
+            <rect x="720" y="172" width="290" height="28" rx="8" fill="#fef3c7"/>
+            <text x="865" y="191" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">协同原则 / 制品去向</text>
+            <line x1="30" y1="200" x2="1010" y2="200" stroke="#e2e8f0" stroke-width="1"/>
+            <!-- 开发环境数据库（建表+查结构）-->
+            <text x="95" y="220" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">开发环境数据库</text>
+            <rect x="165" y="210" width="170" height="18" rx="4" fill="#dbeafe"/>
+            <text x="250" y="223" text-anchor="middle" font-size="8" fill="#1e3a8a">读（查源表结构）</text>
+            <rect x="345" y="210" width="170" height="18" rx="4" fill="#dbeafe"/>
+            <text x="430" y="223" text-anchor="middle" font-size="8" fill="#1e3a8a">读（验证字段类型）</text>
+            <rect x="525" y="210" width="190" height="18" rx="4" fill="#fef3c7"/>
+            <text x="620" y="223" text-anchor="middle" font-size="8" fill="#92400e">读+写（DDL建表到开发环境）</text>
+            <text x="865" y="220" text-anchor="middle" font-size="8" fill="#475569">DDL制品→开发环境建表</text>
+            <line x1="30" y1="232" x2="1010" y2="232" stroke="#f1f5f9"/>
+            <!-- 术加（只管ETL运行+日志回传）-->
+            <text x="95" y="252" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">术加(执行平台)</text>
+            <text x="250" y="252" text-anchor="middle" font-size="8" fill="#94a3b8">—</text>
+            <text x="430" y="252" text-anchor="middle" font-size="8" fill="#94a3b8">—</text>
+            <rect x="525" y="242" width="190" height="18" rx="4" fill="#fef3c7"/>
+            <text x="620" y="255" text-anchor="middle" font-size="8" fill="#92400e">部署ETL制品→运行→捞日志</text>
+            <text x="865" y="252" text-anchor="middle" font-size="8" fill="#475569">术加制品→术加开发环境跑</text>
+            <line x1="30" y1="264" x2="1010" y2="264" stroke="#f1f5f9"/>
+            <!-- 调度LTS -->
+            <text x="95" y="284" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">调度(LTS)</text>
+            <text x="250" y="284" text-anchor="middle" font-size="8" fill="#94a3b8">—</text>
+            <text x="430" y="284" text-anchor="middle" font-size="8" fill="#94a3b8">—</text>
+            <rect x="525" y="274" width="190" height="18" rx="4" fill="#fef3c7"/>
+            <text x="620" y="287" text-anchor="middle" font-size="8" fill="#92400e">配置调度（开发段做）</text>
+            <text x="865" y="284" text-anchor="middle" font-size="8" fill="#475569">LTS制品→调度开发环境配置</text>
+            <line x1="30" y1="296" x2="1010" y2="296" stroke="#f1f5f9"/>
+            <!-- DQ质量 -->
+            <text x="95" y="316" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">DQ(质量检查)</text>
+            <text x="250" y="316" text-anchor="middle" font-size="8" fill="#94a3b8">—</text>
+            <rect x="345" y="306" width="370" height="18" rx="4" fill="#dbeafe"/>
+            <text x="530" y="319" text-anchor="middle" font-size="8" fill="#1e3a8a">产出DQ制品（不管运行，无开发环境，后续去测试环境）</text>
+            <text x="865" y="316" text-anchor="middle" font-size="8" fill="#475569">DQ制品→只产出</text>
+            <line x1="30" y1="328" x2="1010" y2="328" stroke="#f1f5f9"/>
+            <!-- 代码仓 -->
+            <text x="95" y="348" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">代码仓</text>
+            <rect x="165" y="338" width="550" height="18" rx="4" fill="#dbeafe"/>
+            <text x="440" y="351" text-anchor="middle" font-size="8" fill="#1e3a8a">版本管理：代码（DDL+ETL）推到代码仓做版本控制</text>
+            <text x="865" y="348" text-anchor="middle" font-size="8" fill="#475569">版本管理</text>
+            <line x1="30" y1="360" x2="1010" y2="360" stroke="#f1f5f9"/>
+            <!-- 云链 -->
+            <text x="95" y="380" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">云链(需求)</text>
+            <rect x="165" y="370" width="550" height="18" rx="4" fill="#dbeafe"/>
+            <text x="440" y="383" text-anchor="middle" font-size="8" fill="#1e3a8a">关联：US（用户故事）与制品包的关联记录</text>
+            <text x="865" y="380" text-anchor="middle" font-size="8" fill="#475569">US+制品关联</text>
+            <!-- 底部总结 -->
+            <rect x="30" y="405" width="980" height="42" rx="8" fill="#1e293b"/>
+            <text x="520" y="423" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">每个制品推到对应平台开发环境运行，稳定后交付部署 · DQ只产出不管运行 · 下游接测试Agent</text>
+            <text x="520" y="439" text-anchor="middle" font-size="8" fill="#93c5fd">Agent 是造车厂不是车队——造完代码交付，代码的运行是别人的事。但交付前要螺旋到开发环境稳定。</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ 机制 ============ -->
+<section class="slide" data-label="机制">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">04 / 机制</div>
+            <div class="page-title">机制：与开发环境<span class="key">螺旋迭代</span>，直到稳定</div>
+            <div class="page-claim">不是"造完交付走"，是螺旋迭代：改→部署开发环境→跑→捞结果→改。代码稳定（agent判）+ 数据准确（人判），两层分开。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="n4b" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <marker id="n4r" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#ef4444"/></marker>
+                <marker id="n4g" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#1d4ed8"/></marker>
+                <marker id="n4y" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#f59e0b"/></marker>
+                <marker id="n4s" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#94a3b8"/></marker>
+                <linearGradient id="n4m" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
+                <linearGradient id="n4plat" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f1f5f9"/><stop offset="100%" stop-color="#e2e8f0"/></linearGradient>
+                <linearGradient id="n4gate" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#fde68a"/></linearGradient>
+            </defs>
+            <text x="30" y="22" font-size="11" font-weight="800" fill="#1e293b">螺旋回路：agent ↔ 开发环境 咬着转</text>
+            <rect x="50" y="50" width="110" height="48" rx="8" fill="url(#n4m)" stroke="#2563eb" stroke-width="1.6"/>
+            <text x="105" y="72" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">agent 改代码</text>
+            <text x="105" y="86" text-anchor="middle" font-size="7" fill="#1e3a8a">编码/修bug</text>
+            <line x1="160" y1="74" x2="186" y2="74" stroke="#2563eb" stroke-width="1.5" marker-end="url(#n4b)"/>
+            <rect x="188" y="56" width="86" height="40" rx="7" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="3 2"/>
+            <text x="231" y="72" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">接点①部署</text>
+            <text x="231" y="84" text-anchor="middle" font-size="7" fill="#92400e">→开发环境</text>
+            <line x1="274" y1="74" x2="300" y2="74" stroke="#2563eb" stroke-width="1.5" marker-end="url(#n4b)"/>
+            <rect x="302" y="50" width="120" height="48" rx="8" fill="url(#n4plat)" stroke="#64748b" stroke-width="1.6"/>
+            <text x="362" y="72" text-anchor="middle" font-size="10" font-weight="800" fill="#334155">开发环境</text>
+            <text x="362" y="86" text-anchor="middle" font-size="7" fill="#64748b">建表·跑ETL·机械校验</text>
+            <line x1="362" y1="98" x2="362" y2="118" stroke="#2563eb" stroke-width="1.5" marker-end="url(#n4b)"/>
+            <rect x="318" y="120" width="88" height="40" rx="7" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="3 2"/>
+            <text x="362" y="136" text-anchor="middle" font-size="8" font-weight="800" fill="#92400e">接点②捞结果</text>
+            <text x="362" y="148" text-anchor="middle" font-size="7" fill="#92400e">执行结果/错误</text>
+            <line x1="318" y1="140" x2="290" y2="140" stroke="#2563eb" stroke-width="1.4" marker-end="url(#n4b)"/>
+            <polygon points="250,124 290,124 270,154" fill="#fff" stroke="#64748b" stroke-width="1.4"/>
+            <text x="270" y="142" text-anchor="middle" font-size="8" font-weight="700" fill="#334155">报错?</text>
+            <path d="M 250 140 Q 190 140, 170 110 Q 150 90, 160 80" fill="none" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="4 2" marker-end="url(#n4r)"/>
+            <text x="200" y="128" font-size="7" font-weight="700" fill="#ef4444">是→改</text>
+            <line x1="270" y1="154" x2="270" y2="176" stroke="#1d4ed8" stroke-width="1.4" marker-end="url(#n4g)"/>
+            <text x="285" y="168" font-size="7" font-weight="700" fill="#1d4ed8">否</text>
+            <polygon points="235,178 305,178 270,206" fill="#fff" stroke="#64748b" stroke-width="1.4"/>
+            <text x="270" y="196" text-anchor="middle" font-size="7" font-weight="700" fill="#334155">校验过?</text>
+            <path d="M 235 192 Q 170 192, 130 150 Q 105 110, 105 98" fill="none" stroke="#ef4444" stroke-width="1.3" stroke-dasharray="3 2" marker-end="url(#n4r)"/>
+            <text x="155" y="180" font-size="7" font-weight="600" fill="#ef4444">否→改</text>
+            <line x1="270" y1="206" x2="270" y2="226" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#n4g)"/>
+            <text x="285" y="220" font-size="7" font-weight="700" fill="#1d4ed8">是</text>
+            <rect x="210" y="228" width="120" height="32" rx="7" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+            <text x="270" y="249" text-anchor="middle" font-size="10" font-weight="800" fill="#1e3a8a">✓ 代码稳定</text>
+            <line x1="270" y1="260" x2="270" y2="280" stroke="#f59e0b" stroke-width="1.8" marker-end="url(#n4y)"/>
+            <rect x="200" y="282" width="140" height="42" rx="8" fill="url(#n4gate)" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 2"/>
+            <text x="270" y="300" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">⏸ 摆给人判数据</text>
+            <text x="270" y="314" text-anchor="middle" font-size="7" fill="#92400e">数据符合业务预期?</text>
+            <line x1="270" y1="324" x2="270" y2="344" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#n4g)"/>
+            <rect x="215" y="346" width="110" height="30" rx="7" fill="#1e293b"/>
+            <text x="270" y="366" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">✓ 交付部署</text>
+            <path d="M 340 303 Q 400 303, 400 200 Q 400 80, 160 80" fill="none" stroke="#ef4444" stroke-width="1.3" stroke-dasharray="3 2" marker-end="url(#n4r)"/>
+            <text x="415" y="160" font-size="7" font-weight="600" fill="#ef4444">否（语义问题）</text>
+            <text x="415" y="172" font-size="7" font-weight="600" fill="#ef4444">→agent接着改</text>
+            <line x1="500" y1="30" x2="500" y2="400" stroke="#e2e8f0" stroke-width="1.5" stroke-dasharray="4 3"/>
+            <!-- 右半 -->
+            <rect x="520" y="36" width="490" height="112" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <rect x="520" y="36" width="490" height="22" rx="10" fill="#f1f5f9"/>
+            <text x="765" y="52" text-anchor="middle" font-size="10" font-weight="800" fill="#1e293b">代码稳定 vs 数据准确：两层分开</text>
+            <rect x="534" y="66" width="225" height="76" rx="7" fill="#eff6ff" stroke="#2563eb" stroke-width="1.4"/>
+            <text x="646" y="84" text-anchor="middle" font-size="9" font-weight="800" fill="#1e3a8a">代码稳定（技术层）</text>
+            <text x="646" y="99" text-anchor="middle" font-size="7" fill="#64748b">建表成功 · ETL跑通</text>
+            <text x="646" y="111" text-anchor="middle" font-size="7" fill="#64748b">无报错 · 机械校验过</text>
+            <text x="646" y="130" text-anchor="middle" font-size="8" font-weight="700" fill="#2563eb">→ agent 自己判，能喊停</text>
+            <rect x="769" y="66" width="225" height="76" rx="7" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="881" y="84" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">数据准确（语义层）</text>
+            <text x="881" y="99" text-anchor="middle" font-size="7" fill="#64748b">金额汇总对不对</text>
+            <text x="881" y="111" text-anchor="middle" font-size="7" fill="#64748b">状态转换对不对</text>
+            <text x="881" y="130" text-anchor="middle" font-size="8" font-weight="700" fill="#f59e0b">→ 人判，agent 判不了</text>
+            <rect x="520" y="160" width="490" height="50" rx="10" fill="#1e293b"/>
+            <text x="765" y="180" text-anchor="middle" font-size="10" font-weight="800" fill="#93c5fd">Agent 的结束点</text>
+            <text x="765" y="198" text-anchor="middle" font-size="9" fill="#fff">= 代码在开发环境稳定 + 数据已摆给人。准确与否是人的判断。</text>
+            <rect x="520" y="222" width="490" height="120" rx="10" fill="#fff" stroke="#e2e8f0" stroke-width="1.4"/>
+            <rect x="520" y="222" width="490" height="22" rx="10" fill="#fef3c7"/>
+            <text x="765" y="238" text-anchor="middle" font-size="10" font-weight="800" fill="#92400e">三个接点：打通了回路自动转</text>
+            <text x="534" y="260" font-size="8" font-weight="700" fill="#2563eb">接点① 部署</text>
+            <text x="600" y="260" font-size="8" fill="#64748b">代码 → 开发环境</text>
+            <text x="780" y="260" font-size="8" fill="#1d4ed8">agent 直推开发环境</text>
+            <line x1="534" y1="268" x2="996" y2="268" stroke="#f1f5f9"/>
+            <text x="534" y="284" font-size="8" font-weight="700" fill="#2563eb">接点② 捞结果</text>
+            <text x="600" y="284" font-size="8" fill="#64748b">跑完 → 捞执行结果</text>
+            <text x="780" y="284" font-size="8" fill="#1d4ed8">agent 自动读结果/错误</text>
+            <line x1="534" y1="292" x2="996" y2="292" stroke="#f1f5f9"/>
+            <text x="534" y="308" font-size="8" font-weight="700" fill="#2563eb">接点③ 判断</text>
+            <text x="600" y="308" font-size="8" fill="#64748b">错误信息 → 怎么改</text>
+            <text x="780" y="308" font-size="8" fill="#1d4ed8">agent 读报错 → 定位 → 改</text>
+            <text x="534" y="330" font-size="8" font-weight="600" fill="#64748b">三个接点全打通 → 螺旋自动转：改→推→跑→捞→判→改，直到稳定。</text>
+            <rect x="520" y="354" width="490" height="42" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+            <text x="765" y="372" text-anchor="middle" font-size="9" font-weight="800" fill="#92400e">判断边界的简单标准</text>
+            <text x="765" y="388" text-anchor="middle" font-size="8" fill="#92400e">"这是在造代码，还是在代码造完之后的事？" 造代码→agent管；造完之后→下游段</text>
+        </svg>
+        </div>
+    </div>
+</section>
+
+<!-- ============ 能力矩阵 ============ -->
+<section class="slide" data-label="能力矩阵">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">05 / 全貌</div>
+            <div class="page-title">能力矩阵：<span class="key">这个 agent 由什么构成</span></div>
+            <div class="page-claim">纵轴=实现种类（Skill/Command/Protocol/MCP），横轴=战略层次。核心居中，基础在左，增强在右。格子高度=投入量。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <!-- ══ 列标题（横轴：基础→核心→增强，核心居中）══ -->
+            <rect x="130" y="6" width="270" height="22" rx="5" fill="#60a5fa"/>
+            <text x="265" y="22" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">基础（规范性实现）</text>
+            <rect x="410" y="6" width="300" height="22" rx="5" fill="#1e3a8a"/>
+            <text x="560" y="22" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">核心壁垒（必须守住）</text>
+            <rect x="720" y="6" width="290" height="22" rx="5" fill="#94a3b8"/>
+            <text x="865" y="22" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">增强（提升上限·补短板）</text>
+            <text x="265" y="40" text-anchor="middle" font-size="7" fill="#64748b">被TS和规范锁定判断空间</text>
+            <text x="560" y="40" text-anchor="middle" font-size="7" font-weight="700" fill="#1e3a8a">投入大·价值高·壁垒</text>
+            <text x="865" y="40" text-anchor="middle" font-size="7" fill="#64748b">每补一项能力扩一圈</text>
+
+            <!-- ══════════ Skill 行（y=46~210）══════════ -->
+            <rect x="30" y="46" width="92" height="164" rx="6" fill="#f1f5f9"/>
+            <text x="76" y="122" text-anchor="middle" font-size="11" font-weight="800" fill="#475569">Skill</text>
+            <text x="76" y="138" text-anchor="middle" font-size="7" fill="#94a3b8">能力实现</text>
+
+            <!-- Skill-基础（浅蓝灰，编码已并入核心·不单列）-->
+            <rect x="130" y="48" width="270" height="50" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="140" y="66" font-size="8" font-weight="700" fill="#1e3a8a">静态自检</text>
+            <text x="140" y="80" font-size="7" fill="#1e40af">语法检查+规范合规</text>
+            <text x="140" y="92" font-size="6" fill="#1e40af">确定性规则·谁实现都一样</text>
+
+            <rect x="130" y="104" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="140" y="120" font-size="8" font-weight="700" fill="#1e3a8a">DDL制品产出</text>
+            <text x="140" y="132" font-size="6" fill="#1e40af">建表语句→制品</text>
+
+            <rect x="270" y="104" width="130" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="280" y="120" font-size="8" font-weight="700" fill="#1e3a8a">术加制品产出</text>
+            <text x="280" y="132" font-size="6" fill="#1e40af">ETL→术加格式</text>
+
+            <rect x="130" y="146" width="270" height="36" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="140" y="162" font-size="8" font-weight="700" fill="#1e3a8a">LTS调度制品产出</text>
+            <text x="140" y="174" font-size="6" fill="#1e40af">调度配置→LTS格式</text>
+            <rect x="130" y="188" width="270" height="18" rx="4" fill="#fffbeb"/>
+            <text x="265" y="201" text-anchor="middle" font-size="6" font-weight="600" fill="#92400e">↑ 基础层：静态自检+制品格式转换·判断空间被规范锁定</text>
+
+            <!-- Skill-核心（粗设计 + 细设计&编码一体）-->
+            <rect x="410" y="48" width="145" height="80" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2.4"/>
+            <text x="422" y="68" font-size="10" font-weight="800" fill="#1e3a8a">粗设计</text>
+            <text x="422" y="82" font-size="7" fill="#475569">RS → 粗TS</text>
+            <text x="422" y="94" font-size="7" fill="#475569">步骤划分·每段干啥</text>
+            <text x="422" y="106" font-size="7" fill="#475569">场景识别·表级血缘</text>
+            <text x="422" y="120" font-size="7" font-weight="700" fill="#2563eb">骨架方向决策</text>
+
+            <rect x="565" y="48" width="145" height="80" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2.4"/>
+            <text x="577" y="64" font-size="9" font-weight="800" fill="#1e3a8a">细设计 + 编码</text>
+            <text x="589" y="76" text-anchor="middle" font-size="6" font-style="italic" fill="#60a5fa">（一体·不拆）</text>
+            <text x="577" y="90" font-size="6" fill="#475569">逐字段想逻辑→直接落SQL</text>
+            <text x="577" y="101" font-size="6" fill="#475569">业务逻辑(无规范约束)</text>
+            <text x="577" y="112" font-size="6" fill="#475569">+套规范写SQL</text>
+            <text x="577" y="122" font-size="6" font-weight="700" fill="#2563eb">核心智能·非基础</text>
+            <rect x="410" y="134" width="300" height="18" rx="4" fill="#eff6ff"/>
+            <text x="560" y="147" text-anchor="middle" font-size="6" font-weight="600" fill="#2563eb">↑ 闸口①确认粗TS后·细设计+编码一体完成·细TS从代码事后提取</text>
+
+            <!-- Skill-增强 -->
+            <rect x="720" y="48" width="135" height="50" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+            <text x="730" y="66" font-size="8" font-weight="700" fill="#1e3a8a">UT-开发环境冒烟 ✓</text>
+            <text x="730" y="80" font-size="7" fill="#64748b">连开发环境建表+跑ETL</text>
+            <text x="730" y="92" font-size="6" fill="#64748b">已有·验证层</text>
+
+            <rect x="865" y="48" width="145" height="50" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+            <text x="875" y="66" font-size="8" font-weight="700" fill="#92400e">UT-机械校验 ⚠</text>
+            <text x="875" y="80" font-size="7" fill="#92400e">主键唯一/非空/行数/格式</text>
+            <text x="875" y="92" font-size="6" fill="#92400e">未干·确定性SQL·补短板</text>
+
+            <rect x="720" y="104" width="290" height="50" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+            <text x="730" y="122" font-size="8" font-weight="700" fill="#92400e">DQ质量检查制品产出 ⚠未干</text>
+            <text x="730" y="136" font-size="7" fill="#92400e">质量检查SQL+制品</text>
+            <text x="730" y="148" font-size="6" fill="#92400e">涉及SQL开发·本来是开发的活·增强交付完整性</text>
+            <rect x="720" y="160" width="290" height="46" rx="5" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+            <text x="730" y="176" font-size="7" font-weight="700" fill="#1e3a8a">自愈循环（部分·接点没打通转不起来）</text>
+            <text x="730" y="188" font-size="6" fill="#64748b">自检/UT不过→自动回改→再验</text>
+            <text x="730" y="200" font-size="6" fill="#64748b">让agent更聪明·依赖三个接点打通</text>
+
+            <!-- ══════════ Command 行（y=216~320）══════════ -->
+            <rect x="30" y="216" width="92" height="104" rx="6" fill="#f1f5f9"/>
+            <text x="76" y="260" text-anchor="middle" font-size="10" font-weight="800" fill="#475569">Command</text>
+            <text x="76" y="274" text-anchor="middle" font-size="7" fill="#94a3b8">流程编排</text>
+            <!-- Command-基础 -->
+            <rect x="130" y="218" width="270" height="46" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="140" y="236" font-size="8" font-weight="700" fill="#1e3a8a">闸口机制（三档力度：确认/对话/打回）</text>
+            <text x="140" y="250" font-size="6" fill="#1e40af">流程控制基础·有编排自然有·question()阻塞</text>
+            <rect x="130" y="270" width="270" height="46" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="140" y="288" font-size="8" font-weight="700" fill="#1e3a8a">解析+预检（Excel→mapping→结构化）</text>
+            <text x="140" y="302" font-size="6" fill="#1e40af">入口处理·把RS变成agent可消费的结构</text>
+            <!-- Command-核心 -->
+            <rect x="410" y="218" width="145" height="98" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2.4"/>
+            <text x="422" y="240" font-size="10" font-weight="800" fill="#1e3a8a">新建编排</text>
+            <text x="422" y="256" font-size="7" fill="#475569">9阶段状态机</text>
+            <text x="422" y="270" font-size="7" fill="#475569">粗设计→闸口→细设计</text>
+            <text x="422" y="284" font-size="7" fill="#475569">→编码→UT→制品</text>
+            <text x="422" y="302" font-size="7" font-weight="700" fill="#2563eb">agent的灵魂</text>
+            <text x="422" y="312" font-size="6" font-weight="600" fill="#2563eb">整体性的体现</text>
+            <rect x="565" y="218" width="145" height="98" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2.4"/>
+            <text x="577" y="240" font-size="10" font-weight="800" fill="#1e3a8a">优化编排</text>
+            <text x="577" y="256" font-size="7" fill="#475569">反向→确认</text>
+            <text x="577" y="270" font-size="7" fill="#475569">→精确修改→制品</text>
+            <text x="577" y="284" font-size="7" fill="#475569">与新建共享主干</text>
+            <text x="577" y="302" font-size="7" font-weight="700" fill="#2563eb">入口不同</text>
+            <text x="577" y="312" font-size="6" font-weight="600" fill="#2563eb">主干合一</text>
+            <!-- Command-增强 -->
+            <rect x="720" y="218" width="290" height="46" rx="5" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="730" y="236" font-size="8" font-weight="700" fill="#1e3a8a">动态闸口（agent主动叫人）</text>
+            <text x="730" y="250" font-size="6" fill="#64748b">表不存在/字段缺/依赖不满足→停下问人</text>
+            <rect x="720" y="270" width="290" height="46" rx="5" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="730" y="288" font-size="8" font-weight="700" fill="#1e3a8a">spec演化链编排·TS冻结/代码冻结状态机</text>
+            <text x="730" y="302" font-size="6" fill="#64748b">RS→粗TS→细TS→制品 全程状态管理</text>
+
+            <!-- ══════════ Protocol 行（y=326~390）══════════ -->
+            <rect x="30" y="326" width="92" height="64" rx="6" fill="#f1f5f9"/>
+            <text x="76" y="354" text-anchor="middle" font-size="10" font-weight="800" fill="#475569">Protocol</text>
+            <text x="76" y="368" text-anchor="middle" font-size="7" fill="#94a3b8">协议规范</text>
+            <!-- Protocol-核心（居中大格）-->
+            <rect x="410" y="328" width="300" height="60" rx="6" fill="#1e3a8a" stroke="#1e3a8a" stroke-width="2"/>
+            <text x="422" y="350" font-size="11" font-weight="800" fill="#fff">spec 协议规范</text>
+            <text x="422" y="366" font-size="8" fill="#bfdbfe">《RS》《粗TS》《细TS》结构定义 + 对齐</text>
+            <text x="422" y="380" font-size="7" font-weight="600" fill="#93c5fd">整个体系的地基·定协议=定规则·agent之间能接上的前提</text>
+
+            <!-- ══════════ MCP 行（y=396~470）══════════ -->
+            <rect x="30" y="396" width="92" height="74" rx="6" fill="#f1f5f9"/>
+            <text x="76" y="428" text-anchor="middle" font-size="10" font-weight="800" fill="#475569">MCP</text>
+            <text x="76" y="442" text-anchor="middle" font-size="7" fill="#94a3b8">平台连接</text>
+            <!-- MCP-基础 -->
+            <rect x="130" y="398" width="270" height="32" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+            <text x="140" y="418" font-size="8" font-weight="700" fill="#1e3a8a">开发环境数据库连接（MCP）✓</text>
+            <text x="300" y="418" font-size="6" fill="#1e40af">查结构/建表/跑SQL</text>
+            <!-- MCP-核心 -->
+            <rect x="410" y="398" width="300" height="32" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="5 3"/>
+            <text x="422" y="418" font-size="8" font-weight="800" fill="#92400e">代码理解（输入能力·独立Agent）</text>
+            <text x="422" y="428" font-size="6" fill="#92400e">反向工程·壁垒·运维/影响分析共用基础</text>
+            <!-- MCP-增强 -->
+            <rect x="720" y="398" width="135" height="32" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+            <text x="730" y="418" font-size="8" font-weight="700" fill="#92400e">术加连接 ⚠</text>
+            <text x="730" y="428" font-size="6" fill="#92400e">部署ETL+捞日志</text>
+            <rect x="865" y="398" width="145" height="32" rx="5" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+            <text x="875" y="418" font-size="8" font-weight="700" fill="#92400e">调度/云链/代码仓 ⚠</text>
+            <text x="875" y="428" font-size="6" fill="#92400e">LTS配置/US关联/版本管理</text>
+            <rect x="720" y="436" width="290" height="32" rx="5" fill="#fee2e2" stroke="#ef4444" stroke-width="1.4"/>
+            <text x="730" y="456" font-size="8" font-weight="700" fill="#991b1b">⚡ 阻塞项：打通三个接点（部署/捞结果/回传）</text>
+            <text x="730" y="466" font-size="6" fill="#991b1b">接点通了·自愈和螺旋才能转起来</text>
+
+        </svg>
+        </div>
+    </div>
+</section>
+</div>
+</div>
+
+<div class="deck-progress"><div id="progressBar"></div></div>
+<header class="deck-bar">
+    <button class="deck-menu" id="deckMenu" title="页面目录">☰</button>
+    <span class="deck-page" id="deckPage">1 / 6</span>
+    <button class="deck-present-btn" id="presentBtn" title="放映模式 (F)">▶ 放映</button></header>
+<aside class="deck-sidebar" id="deckSidebar" aria-label="页面目录">
+    <div class="deck-sidebar-head"><span>页面目录</span><button class="deck-sidebar-close" id="tocClose" title="关闭 (Esc)">×</button></div>
+    <div class="deck-thumbs" id="deckThumbs"></div>
+</aside>
+<div class="pres-cursor" id="presCursor">
+    <div class="pres-spotlight"></div>
+    <div class="pres-dot"></div>
+</div>
+<div class="pres-cursor-hint" id="presCursorHint">按 P 开关演示光标</div>
+<div class="player-hint" id="playerHint">滚动浏览 · F 放映 · P 聚光灯</div>
+
+<script>
+const DECK_GAP = 24;
+class DeckPlayer {
+    constructor() {
+        this.stageEl = document.getElementById('deckStage');
+        this.fitEl = document.getElementById('deckFit');
+        this.slides = [...this.fitEl.querySelectorAll('section.slide')];
+        this.current = 0; this.mode = 'browse'; this.presenting = false; this.cursorOn = false;
+        this.endArm = false; this.scale = 1;
+        this.wheelAcc = 0; this.wheelQuiet = null; this.scrollRaf = null;
+        this.hideTimer = null; this.rafId = null;
+        this.mx = -200; this.my = -200; this.cx = -200; this.cy = -200;
+        this.buildThumbs(); this.applyMode(); this.applyCurrent(0); this.syncChrome();
+        addEventListener('resize', () => this.fit());
+        this.bindKeys(); this.bindWheel(); this.bindScroll(); this.bindClick(); this.bindPresent(); this.bindCursor();
+        document.getElementById('deckMenu').addEventListener('click', () => this.toggleToc());
+        document.getElementById('tocClose').addEventListener('click', () => this.closeToc());
+        this.flashHint('playerHint', '滚动浏览 · ←→ 定位 · F 放映 · P 聚光灯', 4000);
+    }
+    pitch() { return 1080 * this.scale + DECK_GAP; }
+    fit() {
+        this.scale = Math.min(innerWidth / 1920, innerHeight / 1080);
+        this.fitEl.style.transform = `scale(${this.scale})`;
+        if (this.mode === 'browse') {
+            this.fitEl.style.transformOrigin = 'top left';
+            this.fitEl.style.marginLeft = Math.max(0, (innerWidth - 1920 * this.scale) / 2) + 'px';
+            const flowH = this.slides.length * 1080 + (this.slides.length - 1) * DECK_GAP;
+            this.fitEl.style.marginBottom = (flowH * this.scale - flowH) + 'px';
+            this.stageEl.scrollTop = this.current * this.pitch();
+        } else {
+            this.fitEl.style.transformOrigin = 'center center';
+            this.fitEl.style.marginLeft = '';
+            this.fitEl.style.marginBottom = '';
+        }
+    }
+    applyMode() {
+        document.body.classList.toggle('browse', this.mode === 'browse');
+        document.body.classList.toggle('presenting', this.mode === 'present');
+        this.fit();
+        if (this.mode === 'browse') this.stageEl.scrollTop = this.current * this.pitch();
+    }
+    applyCurrent(i) { this.slides.forEach((s, k) => s.classList.toggle('current', k === i)); }
+    syncChrome() {
+        document.dispatchEvent(new CustomEvent('deckpage'));
+        document.getElementById('progressBar').style.width = ((this.current + 1) / this.slides.length * 100) + '%';
+        document.getElementById('deckPage').textContent = `${this.current + 1} / ${this.slides.length}`;
+        this.thumbs?.forEach((t, k) => t.classList.toggle('active', k === this.current));
+    }
+    buildThumbs() {
+        const wrap = document.getElementById('deckThumbs');
+        this.thumbs = this.slides.map((s, i) => {
+            const item = document.createElement('div');
+            item.className = 'thumb-item';
+            const clone = s.cloneNode(true);
+            clone.classList.remove('slide');
+            clone.classList.add('thumb-page');
+            clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+            const box = document.createElement('div');
+            box.className = 'thumb-box';
+            const inner = document.createElement('div');
+            inner.className = 'thumb-inner';
+            inner.appendChild(clone);
+            box.appendChild(inner);
+            const label = document.createElement('div');
+            label.className = 'thumb-label';
+            label.textContent = `${i + 1}. ${s.dataset.label || ''}`;
+            item.append(box, label);
+            item.addEventListener('click', () => this.show(i));   // 跳页但保持侧栏打开，便于连续预览
+            wrap.appendChild(item);
+            return item;
+        });
+    }
+    toggleToc() {
+        const sb = document.getElementById('deckSidebar');
+        sb.classList.toggle('open');
+        if (sb.classList.contains('open')) this.thumbs[this.current]?.scrollIntoView({ block: 'nearest' });
+        this.thumbs.forEach((t, k) => t.classList.toggle('active', k === this.current));
+    }
+    closeToc() { document.getElementById('deckSidebar').classList.remove('open'); }
+    show(i) {
+        i = Math.max(0, Math.min(this.slides.length - 1, i));
+        if (this.mode === 'present') {
+            if (i === this.current && this.slides[i].classList.contains('current')) return;
+            this.current = i;
+            this.applyCurrent(i);
+            if (this.initProgram) this.initProgram();
+            if (this.presenting) this.slides[i].querySelectorAll('.shown').forEach(e => e.classList.remove('shown'));
+        } else {
+            this.current = i;
+            this.stageEl.scrollTo({ top: i * this.pitch(), behavior: 'smooth' });
+        }
+        this.syncChrome();
+    }
+    step() {
+        if (this.presenting) {
+            if (this.programStep && this.programStep()) return;  // 申报程序优先（animation.md）
+            const hidden = this.slides[this.current].querySelectorAll('.reveal:not(.shown)');
+            if (hidden.length) { hidden[0].classList.add('shown'); this.endArm = false; return; }
+            if (this.current < this.slides.length - 1) { this.show(this.current + 1); this.endArm = false; return; }
+            if (!this.endArm) { this.endArm = true; this.flashHint('playerHint', '已是最后一页 · 再按一次结束放映', 2600); return; }
+            this.endArm = false;
+            this.endPresent();
+            this.flashHint('playerHint', '放映结束', 2200);
+            return;
+        }
+        if (this.current < this.slides.length - 1) { this.show(this.current + 1); this.endArm = false; }
+        else this.flashHint('playerHint', '已是最后一页', 1800);
+    }
+    back() {
+        this.endArm = false;
+        if (this.presenting) {
+            const shown = this.slides[this.current].querySelectorAll('.shown');
+            if (shown.length) { shown[shown.length - 1].classList.remove('shown'); return; }
+            if (this.current > 0) { this.show(this.current - 1); return; }
+            this.flashHint('playerHint', '已是第一页', 1800);
+            return;
+        }
+        if (this.current > 0) this.show(this.current - 1);
+        else this.flashHint('playerHint', '已是第一页', 1800);
+    }
+    bindKeys() {
+        document.addEventListener('keydown', e => {
+            if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+            if (e.key === 'Escape') { this.closeToc(); return; }
+            if (e.key === 'f' || e.key === 'F') { this.togglePresent(); return; }
+            if (e.key === 'p' || e.key === 'P') { this.toggleCursor(); return; }
+            if (['ArrowRight','ArrowDown','PageDown',' '].includes(e.key)) { e.preventDefault(); this.step(); }
+            else if (['ArrowLeft','ArrowUp','PageUp'].includes(e.key)) { e.preventDefault(); this.back(); }
+            else if (e.key === 'Home') { e.preventDefault(); this.show(0); }
+            else if (e.key === 'End') { e.preventDefault(); this.show(this.slides.length - 1); }
+        });
+    }
+    bindWheel() {
+        addEventListener('wheel', e => {
+            if (!this.presenting || e.ctrlKey || e.metaKey) return;
+            e.preventDefault();
+            clearTimeout(this.wheelQuiet);
+            this.wheelAcc += e.deltaY;
+            this.wheelQuiet = setTimeout(() => {
+                if (Math.abs(this.wheelAcc) >= 48) this.wheelAcc > 0 ? this.step() : this.back();
+                this.wheelAcc = 0;
+            }, 180);
+        }, { passive: false });
+    }
+    bindScroll() {
+        this.stageEl.addEventListener('scroll', () => {
+            if (this.mode !== 'browse' || this.scrollRaf) return;
+            this.scrollRaf = requestAnimationFrame(() => {
+                this.scrollRaf = null;
+                const i = Math.max(0, Math.min(this.slides.length - 1, Math.round(this.stageEl.scrollTop / this.pitch())));
+                if (i !== this.current) { this.current = i; this.applyCurrent(i); this.syncChrome(); }
+            });
+        }, { passive: true });
+    }
+    bindClick() {
+        document.addEventListener('click', e => {
+            const sb = document.getElementById('deckSidebar');
+            if (sb?.classList.contains('open') && !e.target.closest('.deck-sidebar, .deck-menu')) { this.closeToc(); return; } // 点侧栏外即关闭
+            if (!this.presenting) return;
+            if (e.target.closest('a,button,input,textarea,select,.deck-bar,.deck-menu,.nav-dots,.deck-sidebar')) return;
+            this.step();
+        });
+    }
+    togglePresent() {
+        if (this.presenting) { this.endPresent(); return; }
+        this.mode = 'present'; this.presenting = true; this.endArm = false;
+        this.applyMode();
+        this.applyCurrent(this.current);
+        if (this.initProgram) this.initProgram();
+        this.slides[this.current].querySelectorAll('.shown').forEach(el => el.classList.remove('shown'));
+        document.documentElement.requestFullscreen?.().catch(() => {})
+        this.flashHint('playerHint', '放映中 · →/单击 逐条推进 · F 退出', 3000);
+    }
+    endPresent() {
+        this.mode = 'browse'; this.presenting = false; this.endArm = false;
+        document.body.classList.remove('presenting');
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        this.applyMode();
+        if (this.initProgram) this.initProgram();
+    }
+    bindPresent() {
+        document.getElementById('presentBtn').addEventListener('click', () => this.togglePresent());
+    }
+    bindCursor() {
+        this.cursor = document.getElementById('presCursor');
+        document.addEventListener('mousemove', e => {
+            this.mx = e.clientX; this.my = e.clientY;
+            if (!this.cursorOn) return;
+            this.cursor.classList.add('active');
+            this.cursor.classList.remove('fading');
+            clearTimeout(this.hideTimer);
+            this.hideTimer = setTimeout(() => this.cursor.classList.add('fading'), 2000);
+        });
+    }
+    toggleCursor() {
+        this.cursorOn = !this.cursorOn;
+        if (this.cursorOn) {
+            document.body.style.cursor = 'none';
+            this.cursor.classList.add('active');
+            this.cursor.classList.remove('fading');
+            this.rafId = requestAnimationFrame(() => this.cursorLoop());
+            this.flashHint('presCursorHint', '演示光标已开启 · 按 P 关闭', 2000);
+        } else {
+            document.body.style.cursor = '';
+            this.cursor.classList.remove('active', 'fading');
+            cancelAnimationFrame(this.rafId);
+            this.flashHint('presCursorHint', '演示光标已关闭', 1500);
+        }
+    }
+    cursorLoop() {
+        this.cx += (this.mx - this.cx) * .25;
+        this.cy += (this.my - this.cy) * .25;
+        this.cursor.style.left = this.cx + 'px';
+        this.cursor.style.top = this.cy + 'px';
+        if (this.cursorOn) this.rafId = requestAnimationFrame(() => this.cursorLoop());
+    }
+    flashHint(id, text, dur) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = text; el.classList.add('show');
+        setTimeout(() => el.classList.remove('show'), dur || 2000);
+    }
+}
+const DECK_STEPS_DATA = {
+  '形态': [
+    ['t', [
+      ['veil', [25,15,990,290]],
+      ['lit',  [30,30,270,34]],
+      ['move', 155,47, 485,47, 650],
+      ['lit',  [340,30,290,34]],
+      ['move', 485,47, 840,47, 650],
+      ['lit',  [670,30,340,34]],
+      ['move', 840,55, 177,84, 700],
+      ['gate', 177,66],
+      ['move', 177,92, 97,185, 500],
+      ['lit',  [50,160,95,50]],
+      ['move', 147,185, 260,185, 450],
+      ['lit',  [260,154,155,62]],
+      ['move', 417,185, 430,185, 300],
+      ['lit',  [430,160,90,50]],
+      ['move', 522,185, 535,185, 300],
+      ['lit',  [535,154,120,62]],
+      ['move', 657,185, 670,185, 300],
+      ['lit',  [670,160,85,50]],
+      ['move', 757,185, 777,90, 450],
+      ['gate', 777,66],
+      ['move', 777,92, 853,185, 450],
+      ['lit',  [803,154,100,62]],
+    ]],
+    ['w', [28,324,362,32]],
+    ['w', [390,324,550,32]],
+  ],
+  '场景': [
+    ['t', [
+      ['veil', [25,30,330,210]],
+      ['lit',  [30,40,200,56]],
+      ['move2', 130,68, 130,206, 345,155, 700],
+      ['lit',  [334,144,22,22]],
+      ['move', 345,155, 500,157, 500],
+      ['lit',  [370,126,630,62]],
+    ]],
+    ['w', [30,318,310,56]],
+    ['w', [350,318,310,56]],
+    ['w', [670,318,330,56]],
+  ],
+  '协同': [
+    ['t', [
+      ['veil', [25,30,675,130]],
+      ['lit',  [30,38,155,52]],
+      ['lit',  [30,100,155,52]],
+      ['move2', 213,62, 223,124, 423,105, 700],
+      ['lit',  [338,70,170,70]],
+      ['move', 508,96, 627,106, 500],
+      ['lit',  [562,82,130,48]],
+    ]],
+    ['w', [35,202,970,28]],
+    ['w', [35,234,970,28]],
+    ['w', [35,266,970,28]],
+    ['w', [35,298,970,28]],
+    ['w', [35,330,970,28]],
+    ['w', [35,362,970,28]],
+  ],
+  '能力矩阵': [
+    ['w', [125,42,885,172]],
+    ['w', [125,214,885,108]],
+    ['w', [125,324,885,68]],
+    ['w', [125,394,885,76]],
+    ['pulse', [718,434,294,36]],
+  ],
+};
+
+/* ===== 动画步进程序执行器（StepFX）：申报见 animation.md；终态=静态整页 ===== */
+Object.assign(DeckPlayer.prototype, {
+    initProgram() {
+        this.prog = null; this.progLabel = null; this.pi = 0;
+        this.tourActive = false; this.tourWait = false; this.tourSkip = false;
+        this.clearFx();
+    },
+    clearFx() {
+        if (this.fxRaf) { cancelAnimationFrame(this.fxRaf); this.fxRaf = null; }
+        if (this.fx) this.fx.remove();
+        this.fx = null; this.fxSvg = null; this.fxToken = null; this.fxVeilEl = null;
+        this.walkEl = null; this.walkEl2 = null; this.gateRing = null;
+    },
+    programStep() {
+        if (this.tourWait) { const r = this.tourResolve; this.tourWait = false; this.busy = true; if (r) r(); return true; }
+        if (this.tourActive) { this.tourSkip = true; return true; }
+        const label = this.slides[this.current].dataset.label;
+        if (this.progLabel !== label) {
+            this.progLabel = label;
+            this.prog = (window.DECK_STEPS || {})[label] || null;
+            this.pi = 0;
+        }
+        if (!this.prog) return false;
+        if (this.pi >= this.prog.length) return false;
+        const a = this.prog[this.pi++];
+        this.busy = true;
+        Promise.resolve(this.runAction(a)).then(() => { this.busy = false; });
+        return true;
+    },
+    fxLayer() {
+        const svg = this.slides[this.current].querySelector('svg');
+        if (!svg) return null;
+        if (!this.fx || this.fxSvg !== svg) {
+            this.fx = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            this.fx.setAttribute('class', 'fx-layer');
+            svg.appendChild(this.fx);
+            this.fxSvg = svg;
+        }
+        return this.fx;
+    },
+    fxEl(tag, attrs, cls) {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        for (const k in attrs) el.setAttribute(k, attrs[k]);
+        if (cls) el.setAttribute('class', cls);
+        this.fx.appendChild(el);
+        return el;
+    },
+    wait(ms) { return new Promise(r => setTimeout(r, ms)); },
+    async runAction(a) {
+        const fx = this.fxLayer();
+        if (!fx) return;
+        const kind = a[0];
+        if (kind === 't') return this.runTour(a[1]);
+        if (kind === 'w') {
+            if (this.walkEl) this.walkEl.remove();
+            if (this.walkEl2) this.walkEl2.remove();
+            const r = a[1];
+            this.walkEl = this.fxEl('rect', { x: r[0], y: r[1], width: r[2], height: r[3], rx: 8, class: 'fx-lit' });
+            if (a[2]) this.walkEl2 = this.fxEl('rect', { x: a[2][0], y: a[2][1], width: a[2][2], height: a[2][3], rx: 8, class: 'fx-lit' });
+            await this.wait(140);
+            return;
+        }
+        if (kind === 'pulse') {
+            const r = a[1];
+            const el = this.fxEl('rect', { x: r[0], y: r[1], width: r[2], height: r[3], rx: 10, class: 'fx-pulse' });
+            await this.wait(950);
+            el.remove();
+            return;
+        }
+    },
+    async runTour(micros) {
+        this.tourActive = true; this.tourSkip = false;
+        for (const m of micros) {
+            if (this.tourSkip && m[0] !== 'gate') { this.skipMicro(m); continue; }
+            switch (m[0]) {
+                case 'veil': this.fxVeil(m[1]); await this.wait(420); break;
+                case 'lit': this.fxGlow(m[1], 'fx-lit'); await this.wait(160); break;
+                case 'state': this.fxGlow(m[1], 'fx-state'); await this.wait(160); break;
+                case 'move': await this.fly(m[1], m[2], m[3], m[4], m[5] || 550, '#2563eb'); break;
+                case 'move2': await this.fly2(m[1], m[2], m[3], m[4], m[5], m[6] || 700); break;
+                case 'back': await this.fly(m[1], m[2], m[3], m[4], m[5] || 480, '#ef4444'); break;
+                case 'pulse': { const el = this.fxEl('rect', { x: m[1][0], y: m[1][1], width: m[1][2], height: m[1][3], rx: 10, class: 'fx-pulse' }); await this.wait(900); el.remove(); break; }
+                case 'gate': if (this.tourSkip) break; await this.waitGate(m[1], m[2]); break;
+            }
+        }
+        this.tourActive = false; this.tourSkip = false;
+        await this.endTour();
+    },
+    skipMicro(m) {
+        if (m[0] === 'veil') { this.fxVeil(m[1]); this.fxVeilEl.classList.add('on'); }
+        else if (m[0] === 'lit') this.fxGlow(m[1], 'fx-lit');
+        else if (m[0] === 'state') this.fxGlow(m[1], 'fx-state');
+    },
+    fxVeil(rect) {
+        if (!this.fxVeilEl) this.fxVeilEl = this.fxEl('rect', { x: rect[0], y: rect[1], width: rect[2], height: rect[3], rx: 10, class: 'fx-veil' });
+        requestAnimationFrame(() => this.fxVeilEl.classList.add('on'));
+    },
+    fxGlow(rect, cls) {
+        this.fxEl('rect', { x: rect[0], y: rect[1], width: rect[2], height: rect[3], rx: 8, class: cls });
+    },
+    newToken(color) {
+        if (!this.fxToken) this.fxToken = this.fxEl('circle', { r: 9, fill: color, opacity: .95, stroke: '#fff', 'stroke-width': 2 });
+        this.fxToken.setAttribute('fill', color);
+        this.fxToken.setAttribute('opacity', .95);
+        return this.fxToken;
+    },
+    fly(x1, y1, x2, y2, dur, color) {
+        return new Promise(res => {
+            const token = this.newToken(color);
+            const t0 = performance.now();
+            const tick = now => {
+                if (!this.tourActive) { res(); return; }
+                const k = this.tourSkip ? 1 : Math.min(1, (now - t0) / dur);
+                const e = 1 - Math.pow(1 - k, 3);
+                token.setAttribute('cx', x1 + (x2 - x1) * e);
+                token.setAttribute('cy', y1 + (y2 - y1) * e);
+                if (k < 1) this.fxRaf = requestAnimationFrame(tick); else res();
+            };
+            this.fxRaf = requestAnimationFrame(tick);
+        });
+    },
+    fly2(ax, ay, bx, by, tx, ty, dur) {
+        return new Promise(res => {
+            const ta = this.fxEl('circle', { r: 8, fill: '#f59e0b', opacity: .95, stroke: '#fff', 'stroke-width': 2 });
+            const tb = this.fxEl('circle', { r: 8, fill: '#f59e0b', opacity: .95, stroke: '#fff', 'stroke-width': 2 });
+            const t0 = performance.now();
+            const tick = now => {
+                if (!this.tourActive) { ta.remove(); tb.remove(); res(); return; }
+                const k = this.tourSkip ? 1 : Math.min(1, (now - t0) / dur);
+                const e = 1 - Math.pow(1 - k, 3);
+                ta.setAttribute('cx', ax + (tx - ax) * e); ta.setAttribute('cy', ay + (ty - ay) * e);
+                tb.setAttribute('cx', bx + (tx - bx) * e); tb.setAttribute('cy', by + (ty - by) * e);
+                if (k < 1) this.fxRaf = requestAnimationFrame(tick); else { ta.remove(); tb.remove(); res(); }
+            };
+            this.fxRaf = requestAnimationFrame(tick);
+        });
+    },
+    waitGate(x, y) {
+        this.gateRing = this.fxEl('circle', { cx: x, cy: y, r: 16, class: 'fx-gate' });
+        this.flashHint('playerHint', '单击确认，继续', 1600);
+        this.tourWait = true;
+        this.busy = false;
+        return new Promise(res => { this.tourResolve = () => { if (this.gateRing) { this.gateRing.remove(); this.gateRing = null; } res(); }; });
+    },
+    async endTour() {
+        if (this.fxVeilEl) { this.fxVeilEl.classList.remove('on'); await this.wait(450); }
+        if (this.fxToken) this.fxToken.setAttribute('opacity', 0);
+        await this.wait(200);
+        this.clearFx();
+    },
+});
+
+const DECK_STEPS = DECK_STEPS_DATA;
+window.DECK_STEPS = DECK_STEPS;
+window.__deck = new DeckPlayer();
+
+/* ===== 常驻流转试点 v3：机制页活流程 —— 每周期走完全部回路（报错回改→校验回改→人判语义回改→通过交付），
+   交付后呼吸停顿再开新周期。节奏依据：平滑追踪舒适区 ~30°/s 视角（3m 观看/2.5m 宽幕 ≈ 全屏 2~4s 横穿）、
+   节点识读 ≥400ms、闸口语义停留 ~1s；无叠加线条（原图有线，动画只动光点）；
+   离页自动暂停；reduced-motion 静态 ===== */
+(function () {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const deck = window.__deck;
+    const IDX = deck.slides.findIndex(s => s.dataset.label === '机制');
+    if (IDX < 0) return;
+    const SPEED = 200;      // 光点速度（单位/秒）：追踪舒适区下限——回路沿线需读节点标签
+    const DECIDE_MS = 500;  // 判定菱形停留：识读"报错?/校验过?"标签 ≥400ms
+    const GATE_MS = 950;    // 人判闸口：语义是"等人"，停留需明显长于判定
+    const REST_MS = 1800;   // 整周期交付后的呼吸停顿
+    const ROUTES = [
+        { kind: 'fail1', backFrom: 4, decide: { at: 4, ms: DECIDE_MS, then: 'red' },
+          wp: [[105,74],[231,76],[362,74],[362,140],[270,139],[190,118],[105,74]] },
+        { kind: 'fail2', backFrom: 5, decide: { at: 5, ms: DECIDE_MS, then: 'red' },
+          wp: [[105,74],[231,76],[362,74],[362,140],[270,139],[270,192],[160,168],[105,74]] },
+        { kind: 'fail3', backFrom: 8, decide: { at: 7, ms: GATE_MS, gate: true, then: 'red' },
+          wp: [[105,74],[231,76],[362,74],[362,140],[270,139],[270,192],[270,244],[270,303],[400,303],[400,80],[160,80],[105,74]] },
+        { kind: 'pass', backFrom: 99, decide: { at: 7, ms: GATE_MS, gate: true, then: 'blue' },
+          wp: [[105,74],[231,76],[362,74],[362,140],[270,139],[270,192],[270,244],[270,303],[270,361]] },
+    ];
+    const NODES = {0:[50,50,110,48],1:[188,56,86,40],2:[302,50,120,48],3:[318,120,88,40],4:[250,124,40,30],5:[235,178,70,28],6:[210,228,120,32],7:[200,282,140,42],8:[215,346,110,30]};
+    const NS = 'http://www.w3.org/2000/svg';
+    let layer, token, stateEl, gateEl;
+    let cycleIdx = 0, ri = 0, segT = 0;
+    let phase = 'move', phaseT = 0, afterPhase = null, last = 0, raf = 0, poll = 0;
+
+    const kind = () => ROUTES[cycleIdx].kind;
+    const route = () => ROUTES[cycleIdx].wp;
+    const active = () => deck.current === IDX && !document.hidden;
+    function el(tag, attrs, cls) {
+        const n = document.createElementNS(NS, tag);
+        for (const k in attrs) n.setAttribute(k, attrs[k]);
+        if (cls) n.setAttribute('class', cls);
+        layer.appendChild(n);
+        return n;
+    }
+    function build() {
+        const svg = deck.slides[IDX].querySelector('svg');
+        layer = document.createElementNS(NS, 'g');
+        layer.setAttribute('class', 'ambient-layer');
+        svg.appendChild(layer);
+        stateEl = el('rect', { x: 210, y: 228, width: 120, height: 32, rx: 8 }, 'fstate');
+        token = el('circle', { cx: 105, cy: 74, r: 8 }, 'ftoken');
+        token.setAttribute('fill', '#2563eb');
+        token.setAttribute('stroke', '#fff');
+        token.setAttribute('stroke-width', 2);
+    }
+    function nodePulse(i) {
+        const r = NODES[i];
+        if (!r) return;
+        const c = el('circle', { cx: r[0] + r[2] / 2, cy: r[1] + r[3] / 2, r: 12 }, 'fpulse');
+        setTimeout(() => c.remove(), 750);
+    }
+    function setPos(pt) { token.setAttribute('cx', pt[0]); token.setAttribute('cy', pt[1]); }
+    function setToken(fill) { token.setAttribute('fill', fill); }
+    function pause(ms, after) { phase = 'pause'; phaseT = ms; afterPhase = after || null; }
+    function arrive(i) {
+        nodePulse(i);
+        const R = ROUTES[cycleIdx];
+        setToken(i >= R.backFrom ? '#ef4444' : '#2563eb');
+        const d = R.decide;
+        if (d && i === d.at) {                                     // 判定停顿：先推进索引再停（杜绝折返卡死）
+            setToken(d.gate ? '#f59e0b' : '#ef4444');
+            if (!gateEl) gateEl = el('circle', { cx: 270, cy: 303, r: 16 }, 'fgate');
+            gateEl.style.opacity = 1;
+            ri++;
+            return pause(d.ms, () => {
+                if (gateEl) { gateEl.remove(); gateEl = null; }    // 移除元素（内联 opacity 压不过无限动画）
+                if (d.then === 'red') { setToken('#ef4444'); stateEl.classList.remove('on'); }
+                else setToken('#2563eb');
+            });
+        }
+        if (kind() === 'pass' && i === 6) stateEl.classList.add('on');
+        ri++;
+        if (ri >= R.wp.length - 1) endRoute();
+    }
+    function endRoute() {
+        const k = kind();
+        if (k === 'pass') {                                         // 全回路走完 → 交付产出，休息后开新周期
+            phase = 'rest'; phaseT = REST_MS;
+            token.setAttribute('opacity', 0);
+            afterPhase = () => { stateEl.classList.remove('on'); nextRoute(); token.setAttribute('opacity', .95); };
+        } else {                                                    // 打回路线走完：改代码处重启脉冲
+            nodePulse(0);
+            phase = 'pause'; phaseT = 450;
+            afterPhase = () => { nextRoute(); setToken('#2563eb'); };
+        }
+    }
+    function nextRoute() { cycleIdx = (cycleIdx + 1) % ROUTES.length; ri = 0; segT = 0; }
+    function step(dt) {
+        if (phase !== 'move') {
+            phaseT -= dt;
+            if (phaseT <= 0) { const f = afterPhase; afterPhase = null; phase = 'move'; if (f) f(); }
+            return;
+        }
+        const wp = route();
+        const A = wp[ri], B = wp[ri + 1];
+        const len = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+        segT += dt / 1000 * SPEED;
+        const k = Math.min(1, segT / len);
+        setPos([A[0] + (B[0] - A[0]) * k, A[1] + (B[1] - A[1]) * k]);
+        if (k >= 1) { segT = 0; arrive(ri + 1); }
+    }
+    function frame(now) {
+        if (!active()) { raf = 0; poll = setTimeout(schedule, 400); return; }
+        if (!last) last = now;
+        step(Math.min(50, now - last));
+        last = now;
+        raf = requestAnimationFrame(frame);
+    }
+    function schedule() {
+        cancelAnimationFrame(raf); clearTimeout(poll);
+        if (active()) { if (!layer) build(); last = 0; raf = requestAnimationFrame(frame); }
+        else poll = setTimeout(schedule, 400);
+    }
+    document.addEventListener('deckpage', schedule);
+    schedule();
+})();
+
+</script>
+</body>
+</html>
