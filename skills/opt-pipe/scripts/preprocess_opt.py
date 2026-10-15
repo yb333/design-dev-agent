@@ -8,7 +8,7 @@
 
 v3 输入格式（mapping-format.md「变更记录页签」规范——变更事实主源在 mapping）：
   - 实体级/属性级两页签结构不变，内容 = 当前需求下最全最新（当前态）
-  - 「变更记录」页签八列：变更序号/变更时间/变更页签(实体级|属性级)/变更key
+  - 「变更记录」页签八列：变更序号/变更时间/变更页签(实体级|属性级)/变更KEY(列名匹配大小写不敏感)
     （实体级=分组|源表别名，属性级=分组|目标字段名——锚定唯一行）/变更列/变更类型
     (MODIFY|ADD|DELETE)/变更前/变更后
   - 历史批次累积，按变更时间归一 YYYYMM 区分（默认取最新批次）
@@ -36,8 +36,10 @@ import pandas as pd
 
 from preprocess import ExcelMappingParser
 
-# 变更记录页签八列（规格见 mapping-format.md）
-CHANGE_SHEET_COLS = ["变更序号", "变更时间", "变更页签", "变更key", "变更列", "变更类型", "变更前", "变更后"]
+# 变更记录页签八列（规格见 mapping-format.md；列名按真实模板——「变更KEY」KEY 为大写，
+# 匹配大小写不敏感：列头 strip+lower 归一后对标准名查找，变更KEY/变更key 均命中）
+CHANGE_SHEET_COLS = ["变更序号", "变更时间", "变更页签", "变更KEY", "变更列", "变更类型", "变更前", "变更后"]
+_CHANGE_COL_LOOKUP = {c.lower(): c for c in CHANGE_SHEET_COLS}
 # 变更列约定值：整行新增（新字段/新来源——不逐列列举）
 WHOLE_ROW_MARK = "资产字段"
 # 第一刀全流程仅支持属性级整行 ADD；其余识别+报告待扩展
@@ -193,8 +195,9 @@ def read_change_sheet(xlsx_path: Path) -> List[dict]:
     col_idx = {}
     for c in df.columns:
         name = str(c).strip()
-        if name in CHANGE_SHEET_COLS and name not in col_idx:
-            col_idx[name] = c
+        std = _CHANGE_COL_LOOKUP.get(name.lower())
+        if std and std not in col_idx:
+            col_idx[std] = c
     missing = [c for c in CHANGE_SHEET_COLS if c not in col_idx]
     if missing:
         raise ValueError(f"「变更记录」页签缺列：{missing}（八列规格见 mapping-format.md）")
@@ -207,7 +210,7 @@ def read_change_sheet(xlsx_path: Path) -> List[dict]:
             continue  # 空行
         page_raw = get("变更页签")
         page = "entity" if "实体" in page_raw else ("attr" if "属性" in page_raw else "")
-        group, _, key_name = get("变更key").partition("|")
+        group, _, key_name = get("变更KEY").partition("|")
         # 标识符归一小写（DWS=PG 内核 foldcase；变更页签 key 常为大写形态，
         # 属性级当前态字段名为小写——归一后同表对齐，大小写差异不构成不同字段）
         group, key_name = group.strip().lower(), key_name.strip().lower()

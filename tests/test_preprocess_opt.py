@@ -26,7 +26,7 @@ ENTITY_COLS = ["源表schema", "源表物理表名", "源表别名", "目标表�
                "目标表物理名称", "关联&限定条件", "备注"]
 ATTR_COLS = ["分组", "源表别名", "源表物理表名", "源表字段名", "映射规则", "映射表达式",
              "目标字段名", "目标字段中文名", "目标字段类型", "备注"]
-CHANGE_COLS = ["变更序号", "变更时间", "变更页签", "变更key", "变更列", "变更类型", "变更前", "变更后"]
+CHANGE_COLS = ["变更序号", "变更时间", "变更页签", "变更KEY", "变更列", "变更类型", "变更前", "变更后"]  # 真实模板形态（KEY 大写）
 
 RS_MD = """# 某资产需求规格
 
@@ -53,7 +53,7 @@ def chg(seq, time_, page, key, column, ctype, before="", after=""):
     """变更记录行：page='entity'|'attr'；key='分组|名'；column='资产字段' 表示整行新增。"""
     page_cn = "实体级" if page == "entity" else "属性级"
     return {"变更序号": seq, "变更时间": time_, "变更页签": page_cn,
-            "变更key": key, "变更列": column, "变更类型": ctype,
+            "变更KEY": key, "变更列": column, "变更类型": ctype,
             "变更前": before, "变更后": after}
 
 
@@ -109,7 +109,7 @@ def _to_entry(c: dict) -> dict:
     """chg 中文行 → read_change_sheet 归一后的 entry 同构形态（extract 单测直喂）——
     含标识符小写归一（与生产 read_change_sheet 同口径）。"""
     from preprocess_opt import normalize_yyyymm
-    group, _, key_name = c["变更key"].partition("|")
+    group, _, key_name = c["变更KEY"].partition("|")
     return {"seq": c["变更序号"], "time": normalize_yyyymm(c["变更时间"]),
             "page": "entity" if "实体" in c["变更页签"] else "attr",
             "group": group.strip().lower(), "key": key_name.strip().lower(),
@@ -164,6 +164,18 @@ class TestChangeSheetParsing:
                  [chg(1, "不知道", "attr", "default|x", "资产字段", "ADD")])
         with pytest.raises(ValueError, match="归一失败"):
             read_change_sheet(tmp_path / PKG_XLSX)
+
+    def test_column_name_case_insensitive(self, tmp_path):
+        """列名大小写混合形态（变更Key）也能命中标准列（真实模板为「变更KEY」大写）。"""
+        pkg = make_pkg(tmp_path, [ent(), ent(table="dim_channel", alias="c")], [attr()],
+                       [chg(2, "2026-10-14", "attr", "default|channel_name", "资产字段", "ADD")])
+        from openpyxl import load_workbook
+        wb = load_workbook(pkg / PKG_XLSX)
+        ws = wb["变更记录"]
+        ws.cell(row=1, column=4).value = "变更Key"      # 标准名外的混合大小写
+        wb.save(pkg / PKG_XLSX)
+        entries = read_change_sheet(pkg / PKG_XLSX)
+        assert entries[0]["key"] == "channel_name"
 
     def test_uppercase_key_normalized(self, tmp_path):
         """真实填写形态：变更 key 全大写 → read_change_sheet 归一为小写（标识符 foldcase）。"""
