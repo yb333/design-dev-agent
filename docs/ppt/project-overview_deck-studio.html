@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- deck-studio 构建（数据交付 Agent 设计开发段 · 项目总览，15 页）：
+<!-- deck-studio 构建（数据交付 Agent 设计开发段 · 项目总览，16 页·四章骨架）：
      主线整合自四份历史 deck（tech-review / quality 防线框架版 / quality-stages 环节实例版 / user-briefing），
      壳与引擎取自 quality-stages（deck-studio 1.5.0）。逐页来源见 project-overview_deck-studio.plan.md。
      动画申报（animation.md 申报制；reduced-motion 全静态）：流转/人的位置 = 常驻流转（数组声明，两页各一处）；
@@ -218,11 +218,103 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
       </div>
     </div>
   </section>
+<section class="slide" data-label="导览">
+    <div class="slide-content">
+        <div class="page-head">
+            <div class="page-num">00 · 导览</div>
+            <div class="page-title">AI 承担数据资产的设计开发，<span class="key">人守住判断权</span></div>
+            <div class="page-claim">交付提速 3~5×（内部口径 · 试点观察），质量有机制底座——四章讲清这件事，先看体系全景。</div>
+        </div>
+        <div class="svg-stage">
+        <svg viewBox="0 0 1040 470" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC,Microsoft YaHei,sans-serif">
+            <defs>
+                <marker id="pNa" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#2563eb"/></marker>
+                <linearGradient id="pNmain" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1e3a8a"/></linearGradient>
+                <linearGradient id="pNch" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#1d4ed8"/></linearGradient>
+            </defs>
+            <!-- 体系主带：输入 → 流水线 → 交付 -->
+            <text x="30" y="20" font-size="10.6" font-weight="800" fill="#1e293b">体系一页图：两份输入进流水线，三层防线贯穿，交付一次齐套</text>
+            <rect x="30" y="30" width="150" height="68" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+            <text x="105" y="54" text-anchor="middle" font-size="9.4" font-weight="800" fill="#1e293b">两份输入</text>
+            <text x="105" y="72" text-anchor="middle" font-size="7.7" fill="#64748b">《RS》+《mapping》</text>
+            <text x="105" y="87" text-anchor="middle" font-size="7" fill="#94a3b8">BA 产出 · 职责分明</text>
+            <line x1="184" y1="64" x2="206" y2="64" stroke="#2563eb" stroke-width="1.6" marker-end="url(#pNa)"/>
+            <rect x="212" y="30" width="556" height="68" rx="10" fill="url(#pNmain)" stroke="#1e3a8a" stroke-width="1.6"/>
+            <text x="490" y="48" text-anchor="middle" font-size="9.4" font-weight="800" fill="#fff">agent 流水线 —— 编排岗统筹 · 三专业岗执行</text>
+            <rect x="226" y="58" width="58" height="22" rx="4" fill="#eff6ff"/><text x="255" y="72" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1e3a8a">预处理</text>
+            <text x="290" y="72" text-anchor="middle" font-size="7" fill="#93c5fd">→</text>
+            <rect x="296" y="58" width="58" height="22" rx="4" fill="#eff6ff"/><text x="325" y="72" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1e3a8a">预检</text>
+            <text x="360" y="72" text-anchor="middle" font-size="7" fill="#93c5fd">→</text>
+            <rect x="366" y="58" width="58" height="22" rx="4" fill="#eff6ff"/><text x="395" y="72" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1e3a8a">设计</text>
+            <text x="430" y="72" text-anchor="middle" font-size="7" fill="#fde68a">⏸①</text>
+            <rect x="436" y="58" width="66" height="22" rx="4" fill="#eff6ff"/><text x="469" y="72" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1e3a8a">建造∥质检</text>
+            <text x="508" y="72" text-anchor="middle" font-size="7" fill="#93c5fd">→</text>
+            <rect x="514" y="58" width="58" height="22" rx="4" fill="#eff6ff"/><text x="543" y="72" text-anchor="middle" font-size="6.8" font-weight="700" fill="#1e3a8a">UT 实测</text>
+            <text x="578" y="72" text-anchor="middle" font-size="7" fill="#fde68a">⏸②</text>
+            <text x="646" y="72" text-anchor="middle" font-size="7.7" font-weight="700" fill="#fde68a">⏸＝人判闸口</text>
+            <line x1="772" y1="64" x2="794" y2="64" stroke="#2563eb" stroke-width="1.6" marker-end="url(#pNa)"/>
+            <rect x="800" y="30" width="210" height="68" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+            <text x="905" y="54" text-anchor="middle" font-size="9.4" font-weight="800" fill="#1e293b">交付 · 一次齐套</text>
+            <text x="905" y="72" text-anchor="middle" font-size="7.7" fill="#64748b">《TS》+ 四件套 + UT 报告</text>
+            <text x="905" y="87" text-anchor="middle" font-size="7" fill="#94a3b8">平台制品包 · 确认后归档</text>
+
+            <!-- 防线带 -->
+            <text x="30" y="122" font-size="9" font-weight="800" fill="#1e293b">三层防线贯穿全程（第 3 章展开）：</text>
+            <rect x="238" y="108" width="244" height="22" rx="5" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+            <text x="360" y="123" text-anchor="middle" font-size="7.7" font-weight="700" fill="#1e3a8a">防线① 确定性脚本「拦」· 秒级可复现</text>
+            <rect x="492" y="108" width="244" height="22" rx="5" fill="#eff6ff" stroke="#2563eb" stroke-width="1"/>
+            <text x="614" y="123" text-anchor="middle" font-size="7.7" font-weight="700" fill="#1d4ed8">防线② 有边界自治「修」· 分钟级限位</text>
+            <rect x="746" y="108" width="264" height="22" rx="5" fill="#fffbeb" stroke="#f59e0b" stroke-width="1"/>
+            <text x="878" y="123" text-anchor="middle" font-size="7.7" font-weight="700" fill="#92400e">防线③ 人守闸口「裁」· 停等终裁</text>
+
+            <!-- 底座带 -->
+            <rect x="30" y="140" width="980" height="26" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="520" y="157" text-anchor="middle" font-size="7.7" fill="#475569">底座：51 条装配校验 · 1540 测试用例 · 53 管线脚本 · 全程产物落盘可回溯　｜　三条红线：语义判断 / 推生产 / 重写 不自主</text>
+
+            <!-- 四章导航 -->
+            <text x="30" y="196" font-size="10.6" font-weight="800" fill="#1e293b">四章导览——每章回答一个问题</text>
+            <rect x="30" y="206" width="235" height="128" rx="9" fill="#fff" stroke="#bfdbfe" stroke-width="1.4"/>
+            <rect x="30" y="206" width="235" height="26" rx="9" fill="url(#pNch)"/>
+            <text x="147" y="224" text-anchor="middle" font-size="9.4" font-weight="800" fill="#fff">第 1 章 · 为什么要做</text>
+            <text x="147" y="252" text-anchor="middle" font-size="8.3" font-weight="700" fill="#1e293b">现在的活，痛在哪？</text>
+            <text x="147" y="274" text-anchor="middle" font-size="7.7" fill="#475569">1-1 背景</text>
+            <text x="147" y="292" text-anchor="middle" font-size="7.2" fill="#94a3b8">人肉七步 · 三条红线预览</text>
+            <rect x="285" y="206" width="235" height="128" rx="9" fill="#fff" stroke="#bfdbfe" stroke-width="1.4"/>
+            <rect x="285" y="206" width="235" height="26" rx="9" fill="url(#pNch)"/>
+            <text x="402" y="224" text-anchor="middle" font-size="9.4" font-weight="800" fill="#fff">第 2 章 · 做成了什么</text>
+            <text x="402" y="252" text-anchor="middle" font-size="8.3" font-weight="700" fill="#1e293b">方案什么样、怎么转、谁在干？</text>
+            <text x="402" y="274" text-anchor="middle" font-size="7.7" fill="#475569">2-1 形态 · 2-2 流转 · 2-3 编排</text>
+            <text x="402" y="292" text-anchor="middle" font-size="7.2" fill="#94a3b8">流水线 · 回路动画 · 四岗位</text>
+            <rect x="540" y="206" width="235" height="128" rx="9" fill="#fffbeb" stroke="#fde68a" stroke-width="1.4"/>
+            <rect x="540" y="206" width="235" height="26" rx="9" fill="#d97706"/>
+            <text x="657" y="224" text-anchor="middle" font-size="9.4" font-weight="800" fill="#fff">第 3 章 · 凭什么可信</text>
+            <text x="657" y="252" text-anchor="middle" font-size="8.3" font-weight="700" fill="#1e293b">AI 干的活，凭什么敢交？</text>
+            <text x="657" y="272" text-anchor="middle" font-size="7.7" fill="#475569">3-1 质量总纲 · 3-2 校验</text>
+            <text x="657" y="289" text-anchor="middle" font-size="7.7" fill="#475569">3-3 失败分流 · 3-4 人的位置</text>
+            <text x="657" y="308" text-anchor="middle" font-size="7.2" fill="#92400e">整套材料的核心章</text>
+            <rect x="795" y="206" width="235" height="128" rx="9" fill="#fff" stroke="#bfdbfe" stroke-width="1.4"/>
+            <rect x="795" y="206" width="235" height="26" rx="9" fill="url(#pNch)"/>
+            <text x="912" y="224" text-anchor="middle" font-size="9.4" font-weight="800" fill="#fff">第 4 章 · 怎么用、值多少</text>
+            <text x="912" y="252" text-anchor="middle" font-size="8.3" font-weight="700" fill="#1e293b">怎么上手、能干啥、快多少？</text>
+            <text x="912" y="272" text-anchor="middle" font-size="7.7" fill="#475569">4-1 使用方式 · 4-2 场景</text>
+            <text x="912" y="289" text-anchor="middle" font-size="7.7" fill="#475569">4-3 实效边界 · 4-4 成果 · 4-5 进展</text>
+            <text x="912" y="308" text-anchor="middle" font-size="7.2" fill="#94a3b8">含诚实边界：哪些还是人的</text>
+
+            <!-- 抽页路线 -->
+            <rect x="30" y="348" width="980" height="30" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+            <text x="520" y="367" text-anchor="middle" font-size="8.3" font-weight="700" fill="#1d4ed8">抽页路线：赶时间 → 本页 + 2-1 形态 + 4-3 实效边界　｜　技术评审 → 第 3 章全读　｜　想上手 → 4-1/4-2（/new-pipe 直接唤起）</text>
+
+            <rect x="30" y="392" width="980" height="30" rx="7" fill="#1e293b"/>
+            <text x="520" y="412" text-anchor="middle" font-size="11.2" font-weight="700" fill="#fff">该自动的彻底自动，该交还人的明确交还——每一步产物落盘可回溯</text>
+        </svg>
+        </div>
+    </div>
+</section>
 <section class="slide" data-label="背景">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">01 / 背景</div>
-            <div class="page-title">设计开发段：重做功、重经验，<span class="key">agent 接管「做」，人守住「判」</span></div>
+            <div class="page-num">1-1 · 背景</div>
+            <div class="page-title">为什么要做：设计开发段重做功、重经验，<span class="key">agent 接管「做」，人守住「判」</span></div>
             <div class="page-claim">整套体系基于公司 codeagent 平台（agent 运行环境）搭建：接 BA 的《RS》+《mapping》，交设计文档与四件套制品——替代今天一段段的人肉工序。</div>
         </div>
         <div class="svg-stage">
@@ -291,8 +383,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="形态">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">02 / 形态</div>
-            <div class="page-title">一条流水线八道工序，人只在<span class="key">两个闸口</span>出手</div>
+            <div class="page-num">2-1 · 形态</div>
+            <div class="page-title">做成了什么：一条流水线八道工序，<span class="key">人只在两个闸口出手</span></div>
             <div class="page-claim">吃 RS+mapping（需求 spec + 字段映射），吐 TS + 四件套制品。UT 直连开发库两阶段收尾，代码稳定后交付下游。</div>
         </div>
         <div class="svg-stage">
@@ -419,7 +511,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="流转">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">03 / 流转</div>
+            <div class="page-num">2-2 · 流转</div>
             <div class="page-title">一条主链五条回路：<span class="key">失败回岗，人判在闸口</span></div>
             <div class="page-claim">动画即运行语义：光点沿主链流转；三类失败按根因打回对应岗；两个闸口人判——不收就打回重做。</div>
         </div>
@@ -520,7 +612,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="编排">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">04 / 编排</div>
+            <div class="page-num">2-3 · 编排</div>
             <div class="page-title">编排岗加三个专业岗：<span class="key">职责边界写进权限</span>，问题沿路由上交</div>
             <div class="page-claim">一个编排岗（engineer）起三个专业岗（designer / dq-producer / coder），Task 直连；每个岗只能写自己的产物，越界落不了盘。</div>
         </div>
@@ -603,8 +695,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="总纲">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">05 / 质量总纲</div>
-            <div class="page-title">三层质量防线：<span class="key">能算的脚本算，能修的 AI 修，该裁的让人裁</span></div>
+            <div class="page-num">3-1 · 质量总纲</div>
+            <div class="page-title">凭什么可信——三层质量防线：<span class="key">能算的脚本算，能修的 AI 修，该裁的让人裁</span></div>
             <div class="page-claim">三道防线递进：受理范围与能力越来越大，代价也越来越高——能拦在便宜的层，就不上推到贵的层。</div>
         </div>
         <div class="svg-stage">
@@ -717,7 +809,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="校验">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">06 / 校验</div>
+            <div class="page-num">3-2 · 校验</div>
             <div class="page-title">AI 生成、脚本把关：<span class="key">五道确定性校验</span>贯穿全程</div>
             <div class="page-claim">质检独立性来自「生成者 = LLM，把关者 = 确定性脚本」——同一脚本跑两遍结果必然相同，收卷对账即可，不重验。</div>
         </div>
@@ -814,7 +906,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="制品开发">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">07 / 制品开发 · 失败分流</div>
+            <div class="page-num">3-3 · 制品开发 · 失败分流</div>
             <div class="page-title">制品开发：<span class="key">从 TS 到四件套，失败按根因分流</span></div>
             <div class="page-claim">TS 切片给编码岗逐规则写加工 SQL，DDL、调度随之生成，质检岗并行出质检 SQL；口径对账、执行预检、UT 实测层层过——失败不裸报也不空转，按根因分流修复。</div>
         </div>
@@ -933,7 +1025,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="人的位置">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">08 / 人的位置 · 人守闸口</div>
+            <div class="page-num">3-4 · 人的位置 · 人守闸口</div>
             <div class="page-title">人守两个闸口：<span class="key">自动化的是「做」，不自动的是「判」</span></div>
             <div class="page-claim">人在指挥位：定边界＝三条红线，守终裁＝两个闸口。拒绝两种失败形态——步步请示人成瓶颈，全程盯梢盯不住等于没人盯。</div>
         </div>
@@ -1057,8 +1149,8 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="使用方式">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">09 / 使用方式</div>
-            <div class="page-title">两种用法，同一条龙：<span class="key">给两份文件，拿齐套交付</span></div>
+            <div class="page-num">4-1 · 使用方式</div>
+            <div class="page-title">怎么用、值多少：两种用法同一条龙，<span class="key">给两份文件，拿齐套交付</span></div>
             <div class="page-claim">输入职责分明：mapping 管字段事实、RS 管调度与增量元数据；输出一次齐套——TS、四件套、UT 报告、制品包。</div>
         </div>
         <div class="svg-stage">
@@ -1124,7 +1216,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="场景">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">10 / 场景</div>
+            <div class="page-num">4-2 · 场景</div>
             <div class="page-title">新建与优化<span class="key">共用一条主干</span>，优化只精确修改</div>
             <div class="page-claim">差异只在入口材料。优化场景已建成：档案做底本、围栏守边界、影响分析定重做范围——变更恰好等于声明。</div>
         </div>
@@ -1207,7 +1299,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="实效边界">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">11 / 实效边界</div>
+            <div class="page-num">4-3 · 实效边界</div>
             <div class="page-title">一周多的活，1~2 天交付——<span class="key">且清楚哪些还是人的</span></div>
             <div class="page-claim">提效的来源、防线自己的质量底座、还没验证的部分——这一页一并交代。</div>
         </div>
@@ -1274,7 +1366,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="成果">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">12 / 成果</div>
+            <div class="page-num">4-4 · 成果</div>
             <div class="page-title">全链路能力建成：<span class="key">五层实现、一套技术底座</span></div>
             <div class="page-claim">五层实现：编排剧本、agent 岗位、知识包、确定性脚本、公共设施——每一件都在工具注册表和测试守护下。</div>
         </div>
@@ -1356,7 +1448,7 @@ body.presenting .deck-progress, body.presenting .deck-sidebar { opacity: 0; poin
 <section class="slide" data-label="进展">
     <div class="slide-content">
         <div class="page-head">
-            <div class="page-num">13 / 进展</div>
+            <div class="page-num">4-5 · 进展</div>
             <div class="page-title">主干已在<span class="key">codeagent 平台</span>真实案例运行，验证与扩充在继续</div>
             <div class="page-claim">三栏看状态：建成即用、真环境验证、下一步清单——每项都有明确判据，不写愿景。</div>
         </div>
