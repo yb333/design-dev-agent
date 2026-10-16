@@ -21,7 +21,9 @@ from jsonschema import Draft202012Validator
 #   provenance[].sheets 定位（2026-10-14 编排合入波次，消费方同步指南 §七）
 # "1.3"：产物更名 asset_facts.json + facts 两路径入口（--dir/--output）+ 分拣三修正
 #   （混放不阻断进 warnings / .sql·.ddl 后缀即型 / DQ 两态化）——2026-10-14 12 章 v3 全量落地
-SUPPORTED_VERSIONS = {"1.0", "1.1", "1.2", "1.3"}
+# "1.4"：交付门波——顶层 self_check 三态（pass/pass_with_noise/review，由 warnings
+#   severity[structural|noise] 纯派生）+ 制品间一致性交叉（crosscheck 披露不阻断）
+SUPPORTED_VERSIONS = {"1.0", "1.1", "1.2", "1.3", "1.4"}
 
 # vendor schema 路径：opt-pipe/schemas/asset_facts.schema.json（v1.3 起随产物更名；旧产物按 version 字段兼容校验）
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schemas" / "asset_facts.schema.json"

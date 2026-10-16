@@ -16,6 +16,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 from audit_ingest import audit, ROUTES, main
 
 FACTS = json.loads((FIXTURES / "asset_facts_v13_full.json").read_text(encoding="utf-8"))
+FACTS_V14 = json.loads((FIXTURES / "asset_facts_v14_review.json").read_text(encoding="utf-8"))
 
 ENTITY_COLS = ["分组", "源表schema", "源表物理表名", "源表别名", "目标表逻辑schema", "目标表物理名称", "关联&限定条件", "备注"]
 ATTR_COLS = ["分组", "源表别名", "源表物理表名", "源表字段名", "源表字段类型", "映射规则", "映射表达式",
@@ -84,6 +85,24 @@ class TestAudit:
         errors, warns, _ = audit(FACTS, "dws.dwb_cust_asset_d", m)
         assert errors == []
         assert any(w["code"] == "ledger_lag" for w in warns)
+
+    def test_v14_review_verdict_blocked_then_released(self, tmp_path):
+        """v1.4 结论通道：review（结构级矛盾）→ 拦截带三选一路由；--accept-review → 放行过。"""
+        errors, warns, lines = audit(FACTS_V14, "dws.dwb_cust_asset_d", None)
+        assert [e["code"] for e in errors] == ["structural_review"]
+        assert "全景可查" in ROUTES["structural_review"]
+        f = tmp_path / "facts14.json"
+        f.write_text(json.dumps(FACTS_V14, ensure_ascii=False), encoding="utf-8")
+        assert main(["--facts", str(f), "--asset", "dws.dwb_cust_asset_d"]) == 2
+        assert main(["--facts", str(f), "--asset", "dws.dwb_cust_asset_d",
+                     "--accept-review"]) == 0     # 人审放行（裁决留痕在命令行）
+
+    def test_v13_legacy_degrades_gracefully(self):
+        """旧产物（v1.3 无 self_check）→ 降级折叠披露不拦截（向后兼容）。"""
+        assert "self_check" not in FACTS
+        errors, warns, lines = audit(FACTS, "dws.dwb_cust_asset_d", None)
+        assert errors == []
+        assert any("降级折叠披露" in l for l in lines)
 
     def test_main_exit_codes(self, tmp_path):
         f = tmp_path / "facts.json"; f.write_text(json.dumps(FACTS, ensure_ascii=False), encoding="utf-8")

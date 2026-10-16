@@ -10,8 +10,9 @@
      属性级整行 ADD 字段 vs 产物目标表字段集——已存在=制品新鲜度冲突，三选一路由）
   4. 反向对账（产物目标表字段 - mapping 属性级当前态 - 本批次新增 → 多出的字段=
      台账滞后/制品新于台账，warn 披露）
-  5. 自检结论消费（结构级待审拦截）——★结论通道待逆向侧按 12 章 §八交付，当前降级：
-     不做 hold 拦截，产物 warnings 折叠进审核报告披露（波次交付后补分支）
+  5. 自检结论消费（v1.4 交付门波已接入）：self_check.verdict=review（结构级矛盾）
+     → 拦截待人审（放行通道 --accept-review，裁决留痕在命令行）；pass/pass_with_noise
+     照常（噪音计数披露）。旧产物无 self_check 字段 → 降级折叠披露（向后兼容）
 
 exit 0=过（可建档）；2=拦（报错带路由，处置后重来——archive 未诞生，零残留）。
 """
@@ -37,6 +38,10 @@ ROUTES = {
         "① 换变更前导出的旧版制品重跑；② 清理变更记录页签的已执行批次行；"
         "③ 确认这是另一次变更（改变更记录后重来）"),
     "change_sheet_invalid": "变更记录页签格式问题——按 mapping-format.md 八列规范改输入",
+    "structural_review": (
+        "结构级矛盾待人审——reverse/asset_facts.json 全景可查（排查：逆向到底解析出了什么）。"
+        "处置三选一：① 料给错了 → 换对制品重跑 facts；② 矛盾已知悉（存量历史债）→ 显式放行："
+        "audit_ingest 重跑带 --accept-review（裁决留痕）；③ 存疑 → 上报人定"),
 }
 
 
@@ -102,16 +107,30 @@ def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[d
         except ValueError as e:
             errors.append({"code": "change_sheet_invalid", "detail": str(e)})
 
-    # 5. 自检结论消费（结构级待审拦截）——12 章 §八结论通道待逆向侧交付，当前降级：
-    #    不做 hold 拦截，warnings 折叠披露（波次交付后在此补分支）
+    # 5. 自检结论消费（v1.4 结论通道：self_check 三态）
     ws = facts.get("warnings") or []
-    if ws:
-        lines.append(f"产物 warnings: {len(ws)} 条（自检结论通道未接入——全部折叠披露，"
-                     f"结构级拦截待逆向侧 12 章 §八交付后启用）")
-        for w in ws[:5]:
-            lines.append(f"  · {json.dumps(w, ensure_ascii=False)[:120]}")
-        if len(ws) > 5:
-            lines.append(f"  · …（共 {len(ws)} 条，全文见产物）")
+    sc = facts.get("self_check") or {}
+    verdict = sc.get("verdict")
+    if verdict == "review":
+        structurals = [w for w in ws if w.get("severity") == "structural"]
+        errors.append({"code": "structural_review",
+                       "detail": f"逆向自检结论=待审（结构级矛盾 {sc.get('structural_count', len(structurals))} 条）"
+                                 f"——产物全景在 reverse/ 可查："
+                                 + "；".join(str(w.get("title") or w)[:60] for w in structurals[:3])})
+    elif verdict in ("pass", "pass_with_noise"):
+        lines.append(f"自检结论: {verdict}（结构级 {sc.get('structural_count', 0)} / 噪音级 "
+                     f"{sc.get('noise_count', len(ws))}）")
+        noise = [w for w in ws if w.get("severity") != "structural"]
+        for w in noise[:3]:
+            lines.append(f"  · 噪音: {str(w.get('title') or w)[:80]}")
+        if len(noise) > 3:
+            lines.append(f"  · …（共 {len(noise)} 条噪音，全文见产物）")
+    else:
+        # 旧产物（v1.3 无 self_check）→ 降级折叠披露（向后兼容）
+        if ws:
+            lines.append(f"产物 warnings: {len(ws)} 条（旧产物无自检结论——降级折叠披露）")
+            for w in ws[:5]:
+                lines.append(f"  · {json.dumps(w, ensure_ascii=False)[:120]}")
     return errors, warns, lines
 
 
@@ -120,6 +139,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--facts", required=True, help="reverse/ 暂存区的 asset_facts.json 路径")
     ap.add_argument("--asset", required=True, help="资产标识 schema.table（probe 推出——资产对账基准）")
     ap.add_argument("--mapping", default="", help="mapping xlsx 路径（可选：给了做变更冲突/台账对账；纯逆向建档场景省略）")
+    ap.add_argument("--accept-review", action="store_true",
+                    help="结构级待审的人审放行标记（矛盾已知悉——存量历史债场景；裁决留痕在命令行）")
     args = ap.parse_args(argv)
 
     facts_path = Path(args.facts)
@@ -133,6 +154,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     errors, warns, lines = audit(facts, args.asset, mapping_path)
+    if args.accept_review:
+        errors = [e for e in errors if e["code"] != "structural_review"]
+        print("自检待审已放行（--accept-review，人裁决：矛盾已知悉）")
     for l in lines:
         print(l)
     for w in warns:
