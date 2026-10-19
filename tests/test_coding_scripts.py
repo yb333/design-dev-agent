@@ -1121,3 +1121,142 @@ class TestColumnOrderCheck:
                "FROM ods.ods_src t")
         issues = check_sql(sql, ts, "R0001")
         assert not any("[列序]" in i for i in issues)
+
+
+# ============================================================
+# FROM 别名门禁 + 别名→表绑定（2026-10-19 内网反馈）
+# ============================================================
+
+class TestFromBindings:
+    """extract_from_bindings：FROM/JOIN 表引用 → (引用原文, 别名|"") 绑定原语。"""
+
+    def test_from_with_alias(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("SELECT a.x FROM dws.t a") == [("dws.t", "a")]
+
+    def test_join_with_alias(self):
+        from sql_parse import extract_from_bindings
+        binds = extract_from_bindings("SELECT * FROM dws.t a JOIN ods.b b ON a.id=b.id")
+        assert binds == [("dws.t", "a"), ("ods.b", "b")]
+
+    def test_from_without_alias_where(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("SELECT x FROM dws.t WHERE x=1") == [("dws.t", "")]
+
+    def test_join_without_alias_on(self):
+        from sql_parse import extract_from_bindings
+        binds = extract_from_bindings("SELECT * FROM dws.t a JOIN ods.b ON a.id=b.id")
+        assert binds == [("dws.t", "a"), ("ods.b", "")]
+
+    def test_as_alias_form(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("SELECT x FROM dws.t AS a") == [("dws.t", "a")]
+
+    def test_lower_case_as(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("select x from dws.t as a") == [("dws.t", "a")]
+
+    def test_subquery_exempt(self):
+        """FROM (子查询) 不是表引用——别名属于子查询整体，豁免。"""
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("SELECT x FROM (SELECT 1 AS x) s") == []
+
+    def test_table_function_exempt(self):
+        """FROM func(...) 表函数形态（括号后是参数）不是表引用——豁免防误报。"""
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("SELECT * FROM unnest(ARRAY[1,2]) u") == []
+        assert extract_from_bindings("SELECT * FROM generate_series(1,3) g") == []
+
+    def test_cte_ref_also_needs_alias(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("WITH c AS (SELECT 1 AS x) SELECT x FROM c") == [("c", "")]
+
+    def test_cte_ref_with_alias(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("WITH c AS (SELECT 1 AS x) SELECT x FROM c t") == [("c", "t")]
+
+    def test_string_literal_from_not_parsed(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("SELECT 'a FROM b' AS s FROM dws.t t") == [("dws.t", "t")]
+
+    def test_is_distinct_from_not_table_pos(self):
+        from sql_parse import extract_from_bindings
+        binds = extract_from_bindings("SELECT a.x FROM dws.t a WHERE a.x IS DISTINCT FROM 1")
+        assert binds == [("dws.t", "a")]
+
+    def test_reserved_word_after_ref_means_no_alias(self):
+        from sql_parse import extract_from_bindings
+        assert extract_from_bindings("SELECT x FROM t1 GROUP BY x") == [("t1", "")]
+        binds = extract_from_bindings("SELECT * FROM dws.t a JOIN ods.b b USING(id)")
+        assert binds == [("dws.t", "a"), ("ods.b", "b")]
+
+    def test_inner_subquery_table_still_checked(self):
+        """子查询内的表引用同样要有别名（规范一致适用，不因子查询豁免漏检）。"""
+        from sql_parse import extract_from_bindings
+        binds = extract_from_bindings("SELECT * FROM (SELECT x FROM ods.t2) s")
+        assert binds == [("ods.t2", "")]
+
+
+class TestFromAliasGate:
+    """FROM/JOIN 表引用必须显式声明别名（团队规范）。真实链路契约：增量两规则
+    装配→切片→coder 两种写法→check_sql——内网反馈场景（2026-10-19）：merge 规则
+    切片 direct 串限定符=表短名（reads 未声明 alias 时伪源表别名=表短名），coder
+    直搬产出 FROM 无别名+表名当限定符，此前全链无校验畅通到 UT。"""
+
+    @pytest.fixture
+    def inc_ts(self):
+        from assemble_ts import assemble_ts
+        from conftest import make_incremental_rs_input, make_incremental_decisions
+        rs = make_incremental_rs_input()
+        dec = make_incremental_decisions([{"key": "update_time", "table": "ods_test_f", "seq": 1}])
+        ts, _, _ = assemble_ts(rs, dec)
+        return ts
+
+    def test_unaliased_from_flagged(self, inc_ts):
+        """coder 直搬切片限定符（FROM 无别名+表名当限定符）→ 拦。"""
+        from check_sql import check_sql
+        sql = ("SELECT tmp_ods_test_f.id AS id, 'N' AS del_flag, "
+               "${P_CYCLE_ID} AS crt_cycle_id, ${P_CYCLE_ID} AS last_upd_cycle_id, "
+               "CURRENT_TIMESTAMP AS dw_last_update_date "
+               "FROM dws.tmp_ods_test_f")
+        issues = check_sql(sql, inc_ts, "R0002")
+        hits = [i for i in issues if "[别名]" in i]
+        assert hits and "dws.tmp_ods_test_f" in hits[0], issues
+
+    def test_aliased_from_passes(self, inc_ts):
+        """规范写法（FROM 带别名 t1）→ 无别名 issue。"""
+        from check_sql import check_sql
+        sql = ("SELECT t1.id AS id, 'N' AS del_flag, "
+               "${P_CYCLE_ID} AS crt_cycle_id, ${P_CYCLE_ID} AS last_upd_cycle_id, "
+               "CURRENT_TIMESTAMP AS dw_last_update_date "
+               "FROM dws.tmp_ods_test_f t1")
+        issues = check_sql(sql, inc_ts, "R0002")
+        assert not any("[别名]" in i for i in issues), issues
+
+    def test_self_created_alias_field_check_now_works(self, inc_ts):
+        """6.3 绑定增强回归：自创别名（非 ts 声明的表短名）的字段核对不再静默失效——
+        此前规范写法反丢一层核对（绑不上跳过不猜）。"""
+        from check_sql import check_sql
+        sql = ("SELECT t1.id AS id, t1.idxx AS del_flag, "
+               "${P_CYCLE_ID} AS crt_cycle_id, ${P_CYCLE_ID} AS last_upd_cycle_id, "
+               "CURRENT_TIMESTAMP AS dw_last_update_date "
+               "FROM dws.tmp_ods_test_f t1")
+        issues = check_sql(sql, inc_ts, "R0002")
+        hits = [i for i in issues if "[字段引用]" in i and "idxx" in i]
+        assert hits, issues
+
+    def test_join_unaliased_flagged(self, ts_data):
+        """JOIN 的表引用无别名（ON 直接跟表）→ 拦。"""
+        from check_sql import check_sql
+        sql = ("SELECT t.contract_no AS contract_no, 'N' AS del_flag "
+               "FROM fin_dwl_cnb.dwl_con_pu_mtr_f t "
+               "LEFT JOIN fin_dwl_cnb.dwl_con_any_f ON t.contract_key = dwl_con_any_f.contract_key")
+        issues = check_sql(sql, ts_data, "R0001")
+        hits = [i for i in issues if "[别名]" in i and "dwl_con_any_f" in i]
+        assert hits, issues
+
+    def test_valid_select_no_alias_issue(self, ts_data):
+        """存量规范 SELECT（全部带别名）不受新检查影响。"""
+        from check_sql import check_sql
+        issues = check_sql(TestCheckSql.VALID_SELECT, ts_data, "R0001")
+        assert not any("[别名]" in i for i in issues), issues

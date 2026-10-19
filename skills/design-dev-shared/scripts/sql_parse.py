@@ -371,6 +371,45 @@ def extract_table_refs_raw(sql: str) -> list[str]:
     return refs
 
 
+# FROM/JOIN 表引用后随位置不可能是别名的保留字——出现即"表引用后无别名"
+_ALIAS_POS_RESERVED = {
+    "on", "where", "group", "order", "join", "left", "right", "inner", "outer",
+    "cross", "full", "union", "all", "using", "lateral", "as", "for", "window",
+    "limit", "offset", "fetch", "set", "when", "then", "and", "or", "not",
+    "having", "returning", "into", "values", "except", "intersect", "minus",
+}
+
+
+def extract_from_bindings(sql: str) -> list[tuple[str, str]]:
+    """FROM/JOIN 表引用 → (表引用原文, 别名) 绑定对，按出现序；未声明别名 → ""。
+
+    别名=表引用后紧跟的裸标识符（FROM dws.t a）或 AS 形态（FROM dws.t AS a）；
+    后随保留字（ON/WHERE/GROUP/JOIN/…）/标点/结尾 → 别名=""。子查询 FROM (…)
+    与表函数 FROM func(…) 不是表引用形态，天然不产出条目（豁免）。
+    消费方：check_sql 表别名校验（团队规范：表名当限定符的写法不允许）与
+    别名→表绑定（自创别名的字段存在性核对）。
+    """
+    s = _strip_sql_noise(sql)
+    s = re.sub(r'(?i)\bIS\s+DISTINCT\s+FROM\b', ' IS_DISTINCT_FROM ', s)
+    hits = []
+    for pattern in (r'\bFROM\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)',
+                    r'\bJOIN\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)'):
+        for m in re.finditer(pattern, s, re.IGNORECASE):
+            hits.append((m.start(), m))
+    out = []
+    for _, m in sorted(hits, key=lambda h: h[0]):
+        ref = m.group(1)
+        rest = s[m.end():]
+        if rest.lstrip().startswith("("):
+            continue  # 表函数形态 FROM func(...)——不是表引用（括号后是参数不是别名）
+        am = re.match(r'\s+(?:AS\s+)?([A-Za-z_]\w*)', rest, re.IGNORECASE)
+        alias = ""
+        if am and am.group(1).lower() not in _ALIAS_POS_RESERVED:
+            alias = am.group(1)
+        out.append((ref, alias))
+    return out
+
+
 def parse_cte_bodies(sql: str) -> dict[str, str]:
     """解析 WITH 子句里每个 CTE 的定义体：{cte名: 体文本}。
 

@@ -123,7 +123,7 @@ LEFT JOIN (
         pu_name,
         pu_key,
         ROW_NUMBER() OVER (PARTITION BY pu_id ORDER BY update_time DESC) AS rn
-    FROM {schema}.{dim_table}
+    FROM {schema}.{dim_table} d
     WHERE del_flag = 'N'
 ) pu ON t.pu_id = pu.pu_id AND pu.rn = 1
 WHERE t.del_flag = 'N';
@@ -145,7 +145,7 @@ WITH inv_agg AS (
         pu_id,
         COALESCE(SUM(inv_inst_amt_usd), 0) AS inv_tol_amt_usd,
         COALESCE(SUM(inv_inst_amt_rmb), 0) AS inv_tol_amt_rmb
-    FROM {schema}.{source_table}
+    FROM {schema}.{source_table} s
     WHERE del_flag = 'N'
       AND region != 'AFRICA'  /* 排除非洲发票 */
     GROUP BY contract_id, pu_id
@@ -194,7 +194,7 @@ main_pivot AS (
         pu_id,
         SUM(CASE WHEN rpt_code = 'fbt_0001' THEN rpt_value_usd ELSE 0 END) AS equip_org_amt_usd,
         SUM(CASE WHEN rpt_code = 'fbt_0002' THEN rpt_value_usd ELSE 0 END) AS equip_cfm_amt_usd
-    FROM {schema}.{main_table}
+    FROM {schema}.{main_table} m
     WHERE del_flag = 'N'
     GROUP BY contract_id, pu_id
 ),
@@ -204,7 +204,7 @@ inv_agg AS (
         contract_id,
         pu_id,
         COALESCE(SUM(inv_inst_amt_usd), 0) AS inv_tol_amt_usd
-    FROM {schema}.{inv_table}
+    FROM {schema}.{inv_table} v
     WHERE del_flag = 'N' AND region != 'AFRICA'
     GROUP BY contract_id, pu_id
 ),
@@ -214,7 +214,7 @@ pu_latest AS (
         pu_id,
         pu_key,
         ROW_NUMBER() OVER (PARTITION BY pu_id ORDER BY update_time DESC) AS rn
-    FROM {schema}.{dim_table}
+    FROM {schema}.{dim_table} d
     WHERE del_flag = 'N'
 )
 

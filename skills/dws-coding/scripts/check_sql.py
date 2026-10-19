@@ -10,6 +10,7 @@ SELECT 静态对比: SELECT 语句 vs ts.json 规则切片
 2. SELECT 引用的 FROM 表在 ts.json 的 source_tables 里（不瞎引用）
 3. 括号/引号平衡（基本语法）
 4. 没有 SELECT *
+5. FROM/JOIN 表引用必须显式声明别名（表名当限定符的写法不允许）
 
 用法:
   python check_sql.py --sql R0001_select.sql --ts ts.json --rule R0001
@@ -26,7 +27,7 @@ from pathlib import Path
 
 # SQL 文本解析原语沉在 shared（run_ut 也要用）；此处 import 保持旧引用名不变
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
-from sql_parse import read_sql, split_cte_main, extract_select_aliases, extract_from_tables
+from sql_parse import read_sql, split_cte_main, extract_select_aliases, extract_from_tables, extract_from_bindings
 
 # 提示级前缀（不阻断）：表达式口径对账匹配不上可能是保语义的方言机械转写
 # （decode→case when 等，契约允许），与真错误同权输出会让 coder 误以为必须改回。
@@ -216,6 +217,19 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
             f"{bare_refs}"
         )
 
+    # 6.1b FROM 别名：FROM/JOIN 的表引用必须显式声明别名（团队规范——表名当限定符
+    # 的写法 DB 能跑但不允许）。真实案例（2026-10-19 内网反馈）：增量 merge 规则切片
+    # direct 串限定符=表短名（reads 未声明 alias 时伪源表别名=表短名），coder 直搬产出
+    # `FROM dws.tmp_x`（无别名）+ tmp_x.col 引用，此前一路畅通到 UT。子查询/表函数
+    # （FROM (...) / FROM func(...)）不是表引用形态，天然豁免。
+    from_bindings = extract_from_bindings(sql_text)
+    unaliased = sorted({ref for ref, alias in from_bindings if not alias})
+    if unaliased:
+        issues.append(
+            f"[别名] FROM/JOIN 表引用必须显式声明别名（如 FROM {unaliased[0]} t1）: "
+            f"{unaliased}（表名当限定符的写法不允许——给每张表起短别名，引用一律用 别名.列）"
+        )
+
     # 6.2 CTE 投影一致性：引用 cte.x 但该 CTE 定义体的投影里没有 x → 报错
     # 真实教训：coder 写 CTE 漏投影字段，外层仍引用，字段别名错到 UT 才炸。
     from sql_parse import parse_cte_bodies, cte_projection_names
@@ -235,7 +249,14 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
     # 源表别名 → schema_cache；tmp 别名 → ts.tables.fields；CTE 别名 → 上面已查不重复；
     # 绑不到的（子查询别名等）→ 跳过不猜（宁放过）。真实教训：designer 错引字段
     # （未连库时 N30 降 warn 漏掉）到 UT 才炸——coder 侧缓存核对接住（防御纵深）。
+    # 绑定基准两层（2026-10-19）：ts source_tables 声明的别名 ∪ SQL 实际 FROM/JOIN
+    # 绑定对——coder 按规范给表起自创别名（FROM dws.tmp_x t1）时 ts 声明（表短名）
+    # 绑不上，此前字段核对静默失效（规范写法反丢一层核对），SQL 实际绑定补上。
     from sql_parse import extract_qualified_refs
+    sql_ref_by_alias = {}
+    for _ref, _al in from_bindings:
+        if _al and _al.lower() not in sql_ref_by_alias:
+            sql_ref_by_alias[_al.lower()] = _ref
     if cache_path is not None:
         try:
             _cp = Path(cache_path)
@@ -255,7 +276,11 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
         st_entry = next((s for s in rule.get("source_tables", [])
                          if (s.get("alias") or "").lower() == al), None)
         if st_entry is None:
-            continue  # 子查询别名/函数名等 → 跳过不猜
+            _ref = sql_ref_by_alias.get(al)
+            if not _ref:
+                continue  # 子查询别名/函数名等 → 跳过不猜
+            st_entry = {"schema": _ref.split(".")[0] if "." in _ref else "",
+                        "table": _ref, "alias": al}
         t_short = (st_entry.get("table") or "").split(".")[-1].lower()
         schema = (st_entry.get("schema") or "").strip().lower()
         if t_short in ts_tables_fields and t_short not in cache_tables:

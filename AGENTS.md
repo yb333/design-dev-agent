@@ -184,7 +184,7 @@ designer 判断：关联该收敛→改 joins/join_safety；主键标错→改 b
 | designer→ts | 设计结构闭合 ~40 条 | assemble_ts | 组装时 | 脚本定罪，硬阻断 |
 | designer→闸口① | 任务目标对照 | gate_summary | 闸口①前 | 人判材料 |
 | designer→闸口① | **关联质量**：逐表键唯一性（主判据——通过一句话，不唯一才展开：条件原文+输入声明对照[宁缺勿错]+**join_safety 断言对照**[证伪最高优先/已知接受不重复弹]+重复组差异列+命中）+ 整体试算严重性（膨胀/丢行/空关联率；全通过却膨胀=矛盾信号贴条件原文）——只反馈事实不猜收敛。与 designer 评估层自查构成断言-实证闭环（maker 断言 join_key_unique，闸口①实测） | diagnose_fanout --all | 闸口①前 | 披露不阻断（人判归属与收敛） |
-| coder→SQL | 静态（字段覆盖/引用/口径对账） | check_sql | 每规则写完 | error 硬阻断 / 提示级 |
+| coder→SQL | 静态（字段覆盖/引用/口径对账/FROM 别名[2026-10-19：FROM/JOIN 表引用必须显式声明别名——表名当限定符 DB 能跑但团队不允许；字段存在性核对绑定=ts 声明 ∪ SQL 实际 FROM 绑定，自创别名不丢核对]） | check_sql | 每规则写完 | error 硬阻断 / 提示级 |
 | coder→UT | 执行可跑性（EXPLAIN ANALYZE 全量真实执行一次[替代采样 SELECT]+顶层实际行数 0 行告警）+ **执行计划两门槛**（不下推=官方判据 Data Node Scan/_REMOTE_TABLE_QUERY_ / STREAM 算子数≤50——同一计划文本，含 actual 值落盘可回溯；字段级 NULL 归 6b 空值检查）+ **列序对账**（`SELECT * FROM (…) LIMIT 0` describe 实际输出列 vs ts 结构源字段序，多/缺列/乱序都拦——按位置对齐的 INSERT 乱序=静默错位数据最危险；权威解释器是数据库，2026-09-11 列清单改结构源后 coder 输出漂移的唯一守卫；describe 无列返回跳过披露） | ut_precheck 6a | INSERT 前 | 跑通/列序对账=硬阻断（列序 FAIL 归 coder）；计划门槛=披露不阻断（性能人判） |
 | UT 装载后 | 数据质量实锤+DQ+发散深查 | ut_execute 6b + diagnose_fanout --rule + ut_diagnose | 6b | 实败按分流表路由 |
 | 环境 | 指纹/关键文件/python/依赖（开关式） | check_env | 步骤0 | 硬阻断 |
