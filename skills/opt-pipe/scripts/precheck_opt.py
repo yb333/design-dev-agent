@@ -216,6 +216,74 @@ def _check_type_risks(cr: dict, outdir: Path, result: PrecheckResult) -> None:
         ensure_ascii=False))
 
 
+def _check_modify_type_risks(cr: dict, outdir: Path, result: PrecheckResult) -> None:
+    """目标字段类型修改的方向风险（2026-10-22 场景 B）：assess_type_risk(旧→新) 唯一
+    源——None（扩容/同义，如 varchar(64)→128）放行；收窄（length_overflow/
+    precision_loss）/跨大类/字符语义 → TYPE_MODIFY_RISK_PENDING 人决策三选：
+    确认转换（ALTER 自动转换存量值，UT 抽查新类型列）/重选兼容类型（改 mapping
+    当前态类型后重跑 preprocess_opt+precheck_opt）/放弃该条变更（删变更记录行重跑）。
+    决策回写 modify_type_fields[].decision（designer 读见『决策』标记勿推翻）。"""
+    from type_compat import assess_type_risk, RISK_LABEL_CN
+    mods = cr.get("modify_type_fields") or []
+    if not mods:
+        return
+    pending = []
+    for m in mods:
+        risk = assess_type_risk(m.get("old_type", ""), m.get("new_type", ""))
+        if risk is None:
+            m["decision"] = "扩容/兼容方向，ALTER 自动转换即可"
+            continue
+        pending.append({"field": m["field"], "old_type": m.get("old_type", ""),
+                        "new_type": m.get("new_type", ""), "risk": risk,
+                        "risk_cn": RISK_LABEL_CN.get(risk, risk)})
+    if not pending:
+        result.add_pass(f"类型修改 {len(mods)} 项均为扩容/兼容方向，无需决策")
+        return
+
+    decision = outdir / "modify_type_decision.yaml"
+    if decision.exists():
+        import yaml
+        dec = yaml.safe_load(decision.read_text(encoding="utf-8")) or {}
+        items = {it.get("字段", ""): (it.get("处置") or "").strip()
+                 for it in (dec.get("类型修改风险字段") or []) if isinstance(it, dict)}
+        missing = [p["field"] for p in pending if not items.get(p["field"])]
+        bad = [f for f, a in items.items()
+               if a and a not in ("确认转换", "重选兼容类型", "放弃该条变更")]
+        if missing or bad:
+            result.add_error(f"类型修改决策未填全或处置非法（缺: {missing}，非法: {bad}）"
+                             f"——处置三选：确认转换/重选兼容类型/放弃该条变更")
+        else:
+            drop = [f for f, a in items.items() if a == "放弃该条变更"]
+            rework = [f for f, a in items.items() if a == "重选兼容类型"]
+            if drop or rework:
+                result.add_error(
+                    f"类型修改决策含回输入处置（放弃: {drop or '无'}，重选: {rework or '无'}）"
+                    f"——放弃=删变更记录对应行；重选=改 mapping 当前态类型；改完重跑"
+                    f" preprocess_opt+precheck_opt")
+                return
+            n = 0
+            for m in mods:
+                if items.get(m["field"]) == "确认转换":
+                    m["decision"] = ("类型修改已人定确认（跨大类/收窄方向，ALTER 自动转换"
+                                     "存量值——UT 抽查新类型列质量）勿推翻")
+                    n += 1
+            result.add_pass(f"类型修改决策已回写 change_request：{n} 个字段带『决策』标记")
+            return
+    else:
+        result.add_error(f"检测到类型修改风险待人工决策（决策文件将生成于：{decision}）")
+    decision.write_text(
+        "# 类型修改风险决策（处置三选：确认转换 / 重选兼容类型 / 放弃该条变更）\n"
+        "# 确认转换=接受转换口径（ALTER 自动转换存量值，UT 抽查新类型列）\n"
+        "# 重选兼容类型=改 mapping 属性级'目标字段类型'列后重跑\n"
+        "# 放弃该条变更=删变更记录页签对应行后重跑\n"
+        "类型修改风险字段:\n" + "".join(
+            f"  - 字段: {p['field']}\n    旧类型: {p['old_type']}\n"
+            f"    新类型: {p['new_type']}\n    风险: {p['risk_cn']}\n    处置: \n"
+            for p in pending), encoding="utf-8")
+    print("TYPE_MODIFY_RISK_PENDING " + json.dumps(
+        {"fields": pending, "decision_file": str(decision)}, ensure_ascii=False))
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="优化预检：只检新增子集（对齐 new-pipe 1b）")
     ap.add_argument("--change-request", required=True)
@@ -241,6 +309,9 @@ def main(argv=None) -> int:
     # 3. 类型风险决策（库类型已回填；无库跳过）
     if tables is not None:
         _check_type_risks(cr, outdir, result)
+
+    # 3.5 类型修改方向风险（场景 B：modify_type_fields——离线判定不依赖库）
+    _check_modify_type_risks(cr, outdir, result)
 
     # 4. 值域探测（原语自管连库；用回填后的库类型）
     _check_value_range({

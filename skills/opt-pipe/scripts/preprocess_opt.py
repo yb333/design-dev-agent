@@ -254,25 +254,12 @@ def baseline_facts(ts_baseline: dict) -> dict:
             "field_types": field_types, "source_tables": sources}
 
 
-def field_type_drift(attr_rows: List[dict], baseline_types: Dict[str, str],
-                     skip: set) -> List[dict]:
-    """存量字段类型对账（同名异容，2026-10-21 三方一致性补位）：mapping 属性级当前态
-    vs 基线字段类型。检查矩阵里漏标扫描（名字正向）/台账滞后（名字反向）之外的
-    内容级——mapping 改存量字段类型而无变更记录=账面静默失真（执行由围栏锁存量
-    兜底不受影响，此处是账面对账）。
-
-    归一比（type_compat.parse_type_info：family/base/length/scale）——书写形态差异
-    （NUMBER(18,2) vs numeric(18,2)）天然消除；中文名不对账（人写格式自由全是噪音）。
-    skip=本批新增/改名字段（新字段不走存量对账）；任一侧类型空=跳过不猜（宁放过）。
-    返回 warn 级 diags。消费方：preprocess_opt（有档链）+ audit_ingest（入料链，同
-    一文案单点）。
-    """
+def types_compatible(a: str, b: str) -> bool:
+    """类型归一比（账面对账口径，2026-10-22 自 field_type_drift 抽出单点——MODIFY
+    三方对账复用）：parse_type_info 四元组 + base 同义归一（number/decimal/numeric
+    同义；varchar/varchar2 字节组同义；nvarchar 系字符组同义）；**字节 vs 字符跨组
+    是真实语义差**（DWS 截取单位 SUBSTRB/SUBSTR）不归一。"""
     from type_compat import parse_type_info
-
-    # 账面对账的 base 同义归一（type_compat 的 base 供类型风险判定用保留原写法——
-    # 两消费者口径不同，此处局部归一）：Oracle 兼容别名 number/decimal/numeric 同义、
-    # varchar/varchar2（字节）同义、nvarchar/nvarchar2（字符）同义；**字节 vs 字符
-    # 跨组是真实语义差**（DWS 截取单位 SUBSTRB/SUBSTR），保留差异不归一。
     base_syn = {"number": "numeric", "decimal": "numeric",
                 "varchar": "varchar2", "nvarchar": "nvarchar2"}
 
@@ -281,6 +268,23 @@ def field_type_drift(attr_rows: List[dict], baseline_types: Dict[str, str],
         return (t.get("family"), base_syn.get(t.get("base"), t.get("base")),
                 t.get("length"), t.get("scale"))
 
+    return _norm(a) == _norm(b)
+
+
+def field_type_drift(attr_rows: List[dict], baseline_types: Dict[str, str],
+                     skip: set) -> List[dict]:
+    """存量字段类型对账（同名异容，2026-10-21 三方一致性补位）：mapping 属性级当前态
+    vs 基线字段类型。检查矩阵里漏标扫描（名字正向）/台账滞后（名字反向）之外的
+    内容级——mapping 改存量字段类型而无变更记录=账面静默失真（执行由围栏锁存量
+    兜底不受影响，此处是账面对账）。
+
+    归一比（types_compatible 单点：family/base 同义/length/scale）——书写形态差异
+    （NUMBER(18,2) vs numeric(18,2)）天然消除；中文名不对账（人写格式自由全是噪音）。
+    skip=本批新增/改名/**已申报 MODIFY** 的字段（申报的类型变更是预期变更不是漂移——
+    未申报的照报，引导走正路）；任一侧类型空=跳过不猜（宁放过）。
+    返回 warn 级 diags。消费方：preprocess_opt（有档链）+ audit_ingest（入料链，同
+    一文案单点）。
+    """
     out: List[dict] = []
     for i, row in enumerate(attr_rows, start=2):
         tcol = (row.get("target_column") or "").strip().lower()
@@ -290,7 +294,7 @@ def field_type_drift(attr_rows: List[dict], baseline_types: Dict[str, str],
         base_t = (baseline_types or {}).get(tcol, "")
         if not base_t:
             continue  # 不在基线（漏标扫描管）/基线类型空
-        if _norm(declared) != _norm(base_t):
+        if not types_compatible(declared, base_t):
             out.append({"level": "warn", "code": "field_type_drift",
                         "message": f"属性级第{i}行：存量字段 {tcol!r} 类型与基线不一致——"
                                    f"mapping {declared!r} vs 基线 {base_t!r}（归一比较）。"
@@ -330,13 +334,18 @@ def _existence_note(key: str, attr_target_cols: set, baseline_fields: set) -> st
 
 def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str, List[dict]],
                       facts: dict, version: str, rs_section: str
-                      ) -> Tuple[List[dict], List[dict], List[dict]]:
-    """返回 (add_fields, unsupported, diagnostics)。
+                      ) -> Tuple[List[dict], List[dict], List[dict], List[dict], List[dict]]:
+    """返回 (add_fields, new_sources, modify_fields, unsupported, diagnostics)。
 
     add_fields = 本批次属性级整行 ADD（变更列=资产字段）且 key 不在 baseline → 字段详情
     从属性级当前态取（变更页签只说"哪些变了"，内容取当前态 mapping）；
-    unsupported = 识别为其他变更形态（rename/MODIFY/DELETE/实体级 ADD/列级 ADD）——
-    识别+报告"待扩展"（附目标存在性事实），不拒收为非法（识别是一回事，支持是另一回事）。
+    new_sources = 实体级整行 ADD（新增来源表声明，2026-10-22 第二刀场景 A——内网第
+    一案例综合场景）：新表取数链路第一刀已通（新字段附属），此处升级为显式声明消费；
+    modify_fields = 属性级 MODIFY 且变更列=目标字段类型（2026-10-22 第二刀场景 B：
+    目标字段类型修改）——三方对账（变更前≈baseline 旧类型/变更后≈mapping 当前态新
+    类型，types_compatible 归一比）；其他列的 MODIFY（口径/表达式变更）仍待扩展；
+    unsupported = 识别为其他变更形态（rename/DELETE/其他列 MODIFY/列级 ADD/实体级
+    其他类型）——识别+报告"待扩展"（附目标存在性事实），不拒收为非法。
     """
     diags: List[dict] = []
     unsupported: List[dict] = []
@@ -353,6 +362,10 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
     batch_declared_adds = {e["key"] for e in batch
                            if e["page"] == "attr" and e["ctype"] == "ADD"
                            and e["column"] == WHOLE_ROW_MARK}
+    # 本批次声明的类型修改字段集（modify 事实集——同声明/通过分离原则 + 漂移豁免）
+    batch_declared_modifies = {e["key"] for e in batch
+                               if e["page"] == "attr" and e["ctype"] == "MODIFY"
+                               and (e["column"] or "").strip() == "目标字段类型"}
 
     for rn in renames:
         unsupported.append({"level": "attr", "change_type": "rename",
@@ -362,8 +375,38 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
 
     add_fields: List[dict] = []
     add_keys: Dict[str, dict] = {}
+    new_sources: List[dict] = []
+    declared_source_aliases: set = set()
+    modify_fields: List[dict] = []
     for e in batch:
         if e["page"] == "entity":
+            if e["ctype"] == "ADD" and e["column"] == WHOLE_ROW_MARK:
+                # 场景 A（第二刀）：新增来源表声明——校验实体级当前态有行，进 new_sources
+                hit = next((r for r in entity_rows
+                            if (r.get("source_alias") or "").strip().lower() == e["key"]
+                            and (not e["group"]
+                                 or not (r.get("scene_group") or "").strip()
+                                 or (r.get("scene_group") or "").strip().lower() == e["group"])), None)
+                if hit is None:
+                    diags.append({"level": "error", "code": "add_source_row_missing",
+                                  "message": f"变更记录序号 {e['seq']!r}：新增来源表 "
+                                             f"{e['key']!r} 在实体级当前态找不到对应行"
+                                             f"（key=分组|源表别名）"})
+                    continue
+                if hit.get("source_table", "") in facts["source_tables"]:
+                    diags.append({"level": "warn", "code": "add_source_already_in_baseline",
+                                  "message": f"变更记录序号 {e['seq']!r}：声明新增来源表 "
+                                             f"{hit.get('source_table')!r} 已在 baseline "
+                                             f"存量来源中（确认是否重复申报）"})
+                new_sources.append({
+                    "alias": hit.get("source_alias", ""),
+                    "schema": hit.get("source_schema", ""),
+                    "table": hit.get("source_table", ""),
+                    "join_condition": hit.get("join_condition", ""),
+                    "change_entry": {"seq": e["seq"], "before": e["before"], "after": e["after"]},
+                })
+                declared_source_aliases.add((hit.get("source_alias") or "").strip().lower())
+                continue
             ctype = "add_source" if e["ctype"] == "ADD" else e["ctype"].lower()
             _ent_hit = e["key"] in {a.lower() for a in alias_index} \
                 or e["key"] in {(r.get("scene_group") or "").strip().lower() for r in attr_rows}
@@ -372,6 +415,52 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                                 "note": "" if _ent_hit else "｜key 不在实体级当前态（别名/分组未命中）"})
             continue
         # 属性级
+        if e["ctype"] == "MODIFY" and (e["column"] or "").strip() == "目标字段类型":
+            # 场景 B（第二刀）：目标字段类型修改——三方对账后进 modify_fields
+            hits = _match_attr_rows(attr_rows, e)
+            if not hits:
+                diags.append({"level": "error", "code": "modify_field_row_missing",
+                              "message": f"变更记录序号 {e['seq']!r}：修改字段 {e['key']!r} "
+                                         f"在属性级当前态找不到对应行（key=分组|目标字段名）"})
+                continue
+            if e["key"] not in facts["target_fields"]:
+                diags.append({"level": "error", "code": "modify_field_not_in_baseline",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 不在 baseline "
+                                         f"存量字段中——新字段直接在 ADD 行写对类型，不需要 MODIFY"})
+                continue
+            if e["key"] in batch_declared_adds:
+                diags.append({"level": "error", "code": "modify_add_conflict",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 同批次既 ADD 又 "
+                                         f"MODIFY（新增字段直接写对类型，两者矛盾）"})
+                continue
+            row = hits[0]
+            new_type = (row.get("target_type") or "").strip()
+            old_type = facts.get("field_types", {}).get(e["key"], "")
+            before, after = (e["before"] or "").strip(), (e["after"] or "").strip()
+            if not new_type:
+                diags.append({"level": "error", "code": "modify_target_type_empty",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 属性级当前态的"
+                                         f"目标字段类型为空"})
+                continue
+            if before and old_type and not types_compatible(before, old_type):
+                diags.append({"level": "error", "code": "modify_before_mismatch",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 变更前类型 "
+                                         f"{before!r} 与 baseline 类型 {old_type!r} 不一致"
+                                         f"（归一比较）——变更前应填基线当前类型"})
+                continue
+            if after and not types_compatible(after, new_type):
+                diags.append({"level": "error", "code": "modify_after_mismatch",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 变更后类型 "
+                                         f"{after!r} 与属性级当前态类型 {new_type!r} 不一致"
+                                         f"（归一比较）——当前态应为变更后的终态"})
+                continue
+            modify_fields.append({
+                "field": e["key"],
+                "old_type": old_type or before,
+                "new_type": new_type,
+                "change_entry": {"seq": e["seq"], "before": before, "after": after},
+            })
+            continue
         if e["ctype"] != "ADD":
             unsupported.append({"level": "attr", "change_type": e["ctype"].lower(),
                                 "name": e["key"] or "?", "detail": e,
@@ -437,6 +526,19 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             "new_source_table": ent.get("source_table", "") not in facts["source_tables"],
         })
 
+    # 场景 A 联动校验（2026-10-22 第二刀）：新来源表的声明（实体级 ADD）与引用
+    # （新字段来源）两向对齐——隐式引用放行+warn 提示补申报（台账完整），无用声明提示
+    _referenced_new_aliases = {(f["source"]["alias"] or "").strip().lower()
+                               for f in add_fields if f.get("new_source_table")}
+    for al in sorted(_referenced_new_aliases - declared_source_aliases):
+        diags.append({"level": "warn", "code": "new_source_undeclared",
+                      "message": f"新字段的来源表别名 {al!r} 不在 baseline 且无实体级 ADD 声明"
+                                 f"（隐式放行——建议在变更记录补实体级 ADD 行，台账完整）"})
+    for al in sorted(declared_source_aliases - _referenced_new_aliases):
+        diags.append({"level": "warn", "code": "new_source_unreferenced",
+                      "message": f"声明的新来源表 {al!r} 无任何新增字段引用"
+                                 f"（无用声明？确认本次是否真需要该表）"})
+
     # 漏标扫描：属性级当前态字段不在 baseline、且不在本批次声明/ADD/Rename 新名清单 → 漏标
     # （豁免 batch_declared_adds 声明集——校验失败的字段仍是变更范围，见头部注释）
     rename_new = {rn["new"] for rn in renames}
@@ -449,9 +551,10 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                                      f"变更记录中（历史漏入档 or 漏标）——请业务确认"})
 
     # 存量字段类型对账（同名异容，2026-10-21）：与漏标扫描（名字级）互补的内容级——
-    # skip=本批新增/改名字段（新字段不走存量对账）；旧调用方无 field_types → 空跳过
+    # skip=本批新增/改名/**已申报 MODIFY** 字段（申报的类型变更是预期变更不是漂移，
+    # 未申报的照报引导走正路）；旧调用方无 field_types → 空跳过
     diags.extend(field_type_drift(attr_rows, facts.get("field_types") or {},
-                                  set(add_keys) | rename_new))
+                                  set(add_keys) | rename_new | batch_declared_modifies))
 
     # 资产定位一致性（F/I 镜像归一：mapping 目标表写 I 视图、baseline 记 F 表是常态）
     for t in sorted({r.get("target_table", "") for r in entity_rows if r.get("target_table")}):
@@ -466,7 +569,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             if f["field"] not in rs_section:
                 diags.append({"level": "warn", "code": "rs_field_not_mentioned",
                               "message": f"新增字段 {f['field']!r} 未在 RS 正文提及——口径请人确认"})
-    return add_fields, unsupported, diags
+    return add_fields, new_sources, modify_fields, unsupported, diags
 
 
 # ---------------------------------------------------------------------------
@@ -474,15 +577,20 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
 # ---------------------------------------------------------------------------
 
 def build_change_request(facts: dict, version: str, add_fields: List[dict],
+                         new_sources: List[dict], modify_fields: List[dict],
                          unsupported: List[dict], change_entries: List[dict],
                          renames: List[dict], rs_section: str, files: dict) -> dict:
     return {
+        # change_type 兼容保留 "add_field"（fence/slice/gate 等消费方按段取所需；
+        # 多类型场景下以 new_sources/modify_type_fields 段为准）
         "change_type": "add_field",
         "version": version,
         "asset": facts["asset"],
         "change_entries": change_entries,       # 本批次变更记录页签全量规范化行（含 before/after——闸口①'并排材料）
         "renames": renames,                     # 改名合成对（待扩展形态，闸口可见）
-        "unsupported_changes": unsupported,     # 识别+归类但流程待扩展（modify/drop/rename/add_source/add_column…）
+        "unsupported_changes": unsupported,     # 识别+归类但流程待扩展（modify/drop/rename/add_column…）
+        "new_sources": new_sources,             # 新增来源表声明（2026-10-22 场景 A：实体级整行 ADD）
+        "modify_type_fields": modify_fields,    # 目标字段类型修改（2026-10-22 场景 B：属性级 MODIFY·目标字段类型）
         "source_files": files,
         "fields": add_fields,
         "backfill": "pending",
@@ -536,8 +644,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     static_diags = [{"level": d["level"], "code": "mapping_static", "message": d["message"]}
                     for d in check_mapping_static(mapping["attr"], mapping["entity"])]
     renames, rest = synth_renames(batch)
-    add_fields, unsupported, diags = extract_and_check(rest, renames, mapping, facts,
-                                                       version, rs_section)
+    add_fields, new_sources, modify_fields, unsupported, diags = extract_and_check(
+        rest, renames, mapping, facts, version, rs_section)
     diags = static_diags + diags
 
     errors = [d for d in diags if d["level"] == "error"]
@@ -575,15 +683,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not view_path.exists():
         view_path.write_text(render_baseline_view_from_ts(ts_baseline), encoding="utf-8")
         print(f"baseline_view: {view_path}（档案 ts 简化版）")
-    cr = build_change_request(facts, version, add_fields, unsupported, batch, renames,
-                              rs_section,
+    cr = build_change_request(facts, version, add_fields, new_sources, modify_fields,
+                              unsupported, batch, renames, rs_section,
                               {"mapping": str(mapping_path), "rs": str(rs_path),
                                "ts_baseline": str(args.ts_baseline)})
     (out / "change_request.json").write_text(
         json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"change_request: {out / 'change_request.json'}")
-    print(f"version: {version}, add_fields: {len(add_fields)}, "
-          f"unsupported: {len(unsupported)}, warns: {len(warns)}")
+    print(f"version: {version}, add_fields: {len(add_fields)}, new_sources: {len(new_sources)}, "
+          f"modify_type: {len(modify_fields)}, unsupported: {len(unsupported)}, warns: {len(warns)}")
     return 1 if warns else 0
 
 

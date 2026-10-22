@@ -181,3 +181,58 @@ class TestJoinRisk:
         result2 = PrecheckResult()
         _check_join_risks(cr, mk_ts(), tables, tmp_path, tmp_path / "cr.json", result2)
         assert any("改关联键" in e for e in result2.errors)
+
+
+class TestModifyTypeDecision:
+    """场景 B 类型修改方向决策（2026-10-22 第二刀）：扩容放行 / 收窄·跨大类
+    PENDING 人决策三选（确认转换/重选兼容类型/放弃该条变更）回写。"""
+
+    def _cr(self, old="varchar(64)", new="varchar(128)"):
+        cr = mk_cr([])
+        cr["modify_type_fields"] = [{"field": "order_id", "old_type": old,
+                                     "new_type": new, "change_entry": {}}]
+        return cr
+
+    def test_widening_passes_silent(self, tmp_path, capsys):
+        from precheck_opt import _check_modify_type_risks
+        cr = self._cr()
+        result = PrecheckResult()
+        _check_modify_type_risks(cr, tmp_path, result)
+        assert not result.errors
+        assert cr["modify_type_fields"][0]["decision"]
+        assert "TYPE_MODIFY_RISK_PENDING" not in capsys.readouterr().out
+
+    def test_cross_category_pending_then_confirm_written_back(self, tmp_path):
+        from precheck_opt import _check_modify_type_risks
+        cr = self._cr(old="varchar(32)", new="int")  # 跨大类（塞不进去方向：存量 varchar 值未必是数字）
+        result = PrecheckResult()
+        _check_modify_type_risks(cr, tmp_path, result)
+        assert any("待人工决策" in e for e in result.errors)
+        assert (tmp_path / "modify_type_decision.yaml").exists()
+
+        import yaml
+        decision = tmp_path / "modify_type_decision.yaml"
+        dec = yaml.safe_load(decision.read_text(encoding="utf-8"))
+        for it in dec.get("类型修改风险字段", []):
+            it["处置"] = "确认转换"
+        decision.write_text(yaml.dump(dec, allow_unicode=True), encoding="utf-8")
+        result2 = PrecheckResult()
+        _check_modify_type_risks(cr, tmp_path, result2)
+        assert not result2.errors
+        assert "确认" in cr["modify_type_fields"][0]["decision"]
+        assert "勿推翻" in cr["modify_type_fields"][0]["decision"]
+
+    def test_drop_decision_routes_back_to_input(self, tmp_path):
+        from precheck_opt import _check_modify_type_risks
+        cr = self._cr(old="varchar(32)", new="int")
+        result = PrecheckResult()
+        _check_modify_type_risks(cr, tmp_path, result)
+        import yaml
+        decision = tmp_path / "modify_type_decision.yaml"
+        dec = yaml.safe_load(decision.read_text(encoding="utf-8"))
+        for it in dec.get("类型修改风险字段", []):
+            it["处置"] = "放弃该条变更"
+        decision.write_text(yaml.dump(dec, allow_unicode=True), encoding="utf-8")
+        result2 = PrecheckResult()
+        _check_modify_type_risks(cr, tmp_path, result2)
+        assert any("放弃" in e and "重跑" in e for e in result2.errors)
