@@ -33,7 +33,7 @@ skills/
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
 │   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py(含DQ段:重做条目真跑读arc_tmp的dq.json,2026-09-14补环) dq_impact.py(★DQ影响分析:变更字段∩锚定/变更来源∩compare_sources→重做清单,确定性集合运算,步骤3.5)
-                         #   assemble_ddl_opt.py audit_ingest.py(★入料审核门:契约/资产对账/变更冲突前移三选一路由/台账对账) assemble_ts_baseline.py(审核后建档:守门确认档/MANIFEST首条v1/asset_facts随档/provenance拷export) artifact_patcher.py baseline_contract.py(契约校验库,支持1.0-1.2) diagnose_fanout_opt.py(关联发散定位:逐表键唯一性+断言对照)
+                         #   assemble_ddl_opt.py audit_ingest.py(★入料审核门:契约/资产对账/变更冲突前移三选一路由/台账对账[名字反向往账滞后+正向类型对账同名异容2026-10-21]) assemble_ts_baseline.py(审核后建档:守门确认档/MANIFEST首条v1/asset_facts随档/provenance拷export) artifact_patcher.py baseline_contract.py(契约校验库,支持1.0-1.2) diagnose_fanout_opt.py(关联发散定位:逐表键唯一性+断言对照)
 │   └── schemas/         # baseline_v1.schema.json(随 baseline_contract 归 opt)
 └── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
     └── scripts/         # ★ 共用入口（>1 消费者才留这，2026-09 按消费者归位定调）：

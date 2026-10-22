@@ -108,9 +108,9 @@
 |------|------|--------------|------------|------|
 | `opt-pipe/schemas/baseline_v1.schema.json` | 契约 vendor 拷贝（权威在 analyzer 仓） | 步骤 0 入料 | baseline_v1.json 的校验基准 | ✅ 阶段一 |
 | `baseline_contract.py` | 契约校验（schema+版本+语义条件） | 步骤 0 入料 | baseline_v1.json → 违规清单 | ✅ 阶段一 |
-| `audit_ingest.py` ★2026-10-14 | 入料审核门（交付门模型）：facts 产物（reverse/ 暂存区）→ 契约/资产对账/变更冲突前移（三选一路由：制品新鲜度冲突）/台账反向对账/自检结论消费（结论通道待逆向 12 章 §八，当前降级折叠披露）；报错自带处置路由 | opt 步骤 0（facts 之后、建档之前） | asset_facts.json + mapping → 过/拦（带路由） | ✅ |
+| `audit_ingest.py` ★2026-10-14 | 入料审核门（交付门模型）：facts 产物（reverse/ 暂存区）→ 契约/资产对账/变更冲突前移（三选一路由：制品新鲜度冲突）/台账反向对账（名字级）/正向类型对账（2026-10-21 同名异容：mapping 存量字段类型 vs 产物，归一比 warn——与台账滞后互补的内容级，执行由围栏兜底）/自检结论消费（v1.4 三态）；报错自带处置路由 | opt 步骤 0（facts 之后、建档之前） | asset_facts.json + mapping → 过/拦（带路由） | ✅ |
 | `assemble_ts_baseline.py` | 审核后建档：守门（确认档拒绝覆盖）/MANIFEST 首条 v1/asset_facts 随档/制品按 provenance 入 export/；档案件（ts.json + etl/{rule}.sql）落 archive/、过程件（baseline_view + exemptions）落 opt/_internal/；provenance 落 ts._baseline；kind→load_mode 映射、词表外待定不硬映射 | opt 步骤 0 入料 | baseline_v1.json → archive/ + opt/_internal/ | ✅ |
-| `preprocess_opt.py` | **现场就绪**（清场重建 build/ 增量现场 + cp archive→archive_tmp 临时档案）+ 标注解析 → change_request + 一致性校验（冲突/漏标/配对/资产一致[I/F 镜像归一]/RS 对账 warn）；契约参数直传 --mapping/--rs | opt 步骤 1 | mapping xlsx + RS md + archive/ts.json → build/_internal/change_request.json | ✅ |
+| `preprocess_opt.py` | **现场就绪**（清场重建 build/ 增量现场 + cp archive→archive_tmp 临时档案）+ 标注解析 → change_request + 一致性校验（冲突/漏标/配对/资产一致[I/F 镜像归一]/存量字段类型对账[2026-10-21 同名异容 field_type_drift——mapping 改存量类型无变更记录=账面失真，归一比 warn，audit_ingest 同函数复用]/unsupported 目标存在性事实[分辨笔误 vs 真待支持]/RS 对账 warn）；契约参数直传 --mapping/--rs | opt 步骤 1 | mapping xlsx + RS md + archive/ts.json → build/_internal/change_request.json | ✅ |
 | `precheck_opt.py` | 步骤 1b 优化预检（只检新增子集）：命名规范/连库存在性+类型对账（以库为准回填）/类型风险决策（回写 fields『decision』标记）/值域探测/新来源 JOIN 键对账；复用 shared 原语（risk_checks/schema_cache）；无库降 warn | opt 步骤 1b | change_request + archive/ts.json → 决策回写 change_request + PENDING 摘要 | ✅ |
 | `gate_summary_opt.py` | 闸口①'材料确定性产出（逐字段落位表/新 JOIN/决策标记/回刷/预检汇总——不 AI 摘要） | opt 步骤 3 | ts_v2 + baseline + change_request → gate_summary_opt.md | ✅ |
 | `diagnose_fanout_opt.py` | opt 关联发散定位（逐表键唯一性主判据 + join_safety 断言对照 + 重复键样例；轻量版——不做 join-count/解剖） | opt 步骤 5 对比 FAIL 后 | ts_v2 → diagnose/fanout_{rule}.md | ✅ |

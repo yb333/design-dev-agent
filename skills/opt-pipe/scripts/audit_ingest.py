@@ -10,6 +10,8 @@
      属性级整行 ADD 字段 vs 产物目标表字段集——已存在=制品新鲜度冲突，三选一路由）
   4. 反向对账（产物目标表字段 - mapping 属性级当前态 - 本批次新增 → 多出的字段=
      台账滞后/制品新于台账，warn 披露）
+  4b. 正向类型对账（2026-10-21）：mapping 存量字段类型 vs 产物字段类型（归一比，
+      同名异容——台账改类型无变更记录=账面失真；warn 披露，执行由围栏兜底）
   5. 自检结论消费（v1.4 交付门波已接入）：self_check.verdict=review（结构级矛盾）
      → 拦截待人审（放行通道 --accept-review，裁决留痕在命令行）；pass/pass_with_noise
      照常（噪音计数披露）。旧产物无 self_check 字段 → 降级折叠披露（向后兼容）
@@ -27,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from baseline_contract import norm_asset, validate_baseline_v1
-from preprocess_opt import pick_batch_version, read_change_sheet, read_full_mapping, WHOLE_ROW_MARK
+from preprocess_opt import (pick_batch_version, read_change_sheet, read_full_mapping,
+                            field_type_drift, WHOLE_ROW_MARK)
 
 # 每类拦截自带处置路由（"结案陈词"——AI 上报即止，不侦探）
 ROUTES = {
@@ -45,18 +48,21 @@ ROUTES = {
 }
 
 
-def _target_fields(facts: dict, asset: str) -> Tuple[str, set]:
-    """产物目标表字段集（资产归一对齐；返回 (产物资产名, 字段集)）。"""
+def _target_fields(facts: dict, asset: str) -> Tuple[str, set, Dict[str, str]]:
+    """产物目标表字段集+类型集（资产归一对齐；返回 (产物资产名, 字段集, {字段: 类型})）。"""
     a = facts.get("asset") or {}
     got = f"{a.get('schema', '')}.{a.get('table', '')}"
     t_short = (a.get("table") or "").rsplit(".", 1)[-1]
     fields: set = set()
+    types: Dict[str, str] = {}
     for t in (facts.get("tables") or []):
         name = (t.get("name") or t.get("table") or "")
         if norm_asset(name) == norm_asset(t_short):
-            fields.update(str(f.get("name") or f.get("target_field") or "").lower()
-                          for f in (t.get("fields") or []))
-    return got, fields
+            for f in (t.get("fields") or []):
+                fname = str(f.get("name") or f.get("target_field") or "").lower()
+                fields.add(fname)
+                types[fname] = str(f.get("type") or "").strip()
+    return got, fields, types
 
 
 def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[dict], List[dict], List[str]]:
@@ -72,7 +78,7 @@ def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[d
         return errors, warns, lines
 
     # 2. 资产对账
-    got, tfields = _target_fields(facts, asset)
+    got, tfields, ttypes = _target_fields(facts, asset)
     lines.append(f"产物资产: {got}｜目标表字段 {len(tfields)} 个")
     if norm_asset(got) != norm_asset(asset):
         errors.append({"code": "asset_mismatch",
@@ -104,6 +110,10 @@ def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[d
                               "detail": f"产物有 {len(lag)} 个字段不在 mapping 当前态台账"
                                         f"（制品新于台账/台账缺登记）：{', '.join(lag[:10])}"
                                         + ("…" if len(lag) > 10 else "")})
+            # 正向类型对账（同名异容，2026-10-21）：mapping 存量字段类型 vs 产物字段类型
+            # ——与 ledger_lag（名字反向）互补的内容级；warn 披露（围栏/冻结列兜底执行）
+            for d in field_type_drift(mapping["attr"], ttypes, set(batch_add)):
+                warns.append({"code": d["code"], "detail": d["message"]})
         except ValueError as e:
             errors.append({"code": "change_sheet_invalid", "detail": str(e)})
 

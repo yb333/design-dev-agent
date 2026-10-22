@@ -109,3 +109,42 @@ class TestAudit:
         assert main(["--facts", str(f), "--asset", "dws.dwb_cust_asset_d"]) == 0
         assert main(["--facts", str(f), "--asset", "dws.dwb_trade_order_d"]) == 2
         assert main(["--facts", str(tmp_path / "nope.json"), "--asset", "x.y"]) == 2
+
+
+class TestFieldTypeDrift:
+    """正向类型对账（同名异容，2026-10-21）：mapping 存量字段类型 vs 产物——与
+    ledger_lag（名字反向）互补的内容级；warn 披露不拦。"""
+
+    def test_drift_warns(self, tmp_path):
+        """mapping 台账 cust_id 类型 VARCHAR(128) vs 产物 VARCHAR(64) → warn 带两侧类型
+        （变更页签带一条无害 DELETE 行——类型对账在批次解析之后，空批次会先拦）。"""
+        m = make_mapping(tmp_path / "m.xlsx",
+                         attr_rows=[["default", "b", "ods_acct_balance_di", "cust_id", "VARCHAR(64)",
+                                     "直取", "-", "cust_id", "客户号", "VARCHAR(128)", ""]],
+                         change_rows=[[1, "2026-10-20", "属性级", "DEFAULT|GONE_X",
+                                       "目标字段名", "DELETE", "gone_x", ""]])
+        errors, warns, _ = audit(FACTS, "dws.dwb_cust_asset_d", m)
+        drift = [w for w in warns if w["code"] == "field_type_drift"]
+        assert drift and "VARCHAR(128)" in drift[0]["detail"] and "VARCHAR(64)" in drift[0]["detail"]
+
+    def test_normalized_form_not_warned(self, tmp_path):
+        """书写形态差异（产物 NUMERIC(18,2) vs 台账 decimal(18,2)）归一后不报。"""
+        m = make_mapping(tmp_path / "m.xlsx",
+                         attr_rows=[["default", "b", "ods_acct_balance_di", "total_balance",
+                                     "NUMERIC(18,2)", "直取", "-", "total_balance", "总余额",
+                                     "decimal(18,2)", ""]],
+                         change_rows=[[1, "2026-10-20", "属性级", "DEFAULT|GONE_X",
+                                       "目标字段名", "DELETE", "gone_x", ""]])
+        errors, warns, _ = audit(FACTS, "dws.dwb_cust_asset_d", m)
+        assert not any(w["code"] == "field_type_drift" for w in warns)
+
+    def test_batch_add_not_compared(self, tmp_path):
+        """本批 ADD 字段不走存量对账（新增字段的类型与产物无关——产物里本就不该有）。"""
+        m = make_mapping(tmp_path / "m.xlsx",
+                         attr_rows=[["default", "b", "ods_acct_balance_di", "cust_id", "VARCHAR(64)",
+                                     "直取", "-", "cust_id", "客户号", "VARCHAR(64)", ""]],
+                         change_rows=[[1, "2026-10-20", "属性级", "DEFAULT|CUST_ID",
+                                       "资产字段", "ADD", "", ""]])
+        errors, warns, _ = audit(FACTS, "dws.dwb_cust_asset_d", m)
+        # cust_id 标新增→add_field_conflict 拦（既另有测试）；类型对账不对其产出
+        assert [e["code"] for e in errors] == ["add_field_conflict"]

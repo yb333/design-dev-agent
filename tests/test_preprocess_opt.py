@@ -416,3 +416,77 @@ class TestWorkspaceReady:
               "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
         assert not stale.exists()                       # 开工清场
         assert (tmp_path / "archive_tmp" / "ts.json").exists()   # 临时档案=档案副本起步
+
+
+class TestFieldTypeDrift:
+    """存量字段类型对账（同名异容，2026-10-21 三方一致性补位）+ unsupported 存在性事实。"""
+
+    def test_drift_warns_on_type_change(self, facts):
+        """mapping 改存量字段类型（VARCHAR(64)→128）无变更记录 → warn 披露两侧类型。"""
+        from preprocess_opt import field_type_drift
+        rows = [{"target_column": "order_id", "target_type": "VARCHAR(128)"}]
+        diags = field_type_drift(rows, facts["field_types"], set())
+        assert [d["code"] for d in diags] == ["field_type_drift"]
+        assert "VARCHAR(128)" in diags[0]["message"] and "VARCHAR(64)" in diags[0]["message"]
+        assert diags[0]["level"] == "warn"
+
+    def test_normalized_form_not_warned(self, facts):
+        """书写形态差异（NUMBER(18,2) vs 基线 DECIMAL(18,2)；小写 varchar）归一后不报。"""
+        from preprocess_opt import field_type_drift
+        rows = [{"target_column": "total_amount", "target_type": "NUMBER(18,2)"},
+                {"target_column": "order_id", "target_type": "varchar(64)"}]
+        assert field_type_drift(rows, facts["field_types"], set()) == []
+
+    def test_family_change_warned(self, facts):
+        from preprocess_opt import field_type_drift
+        rows = [{"target_column": "order_id", "target_type": "numeric(20,0)"}]
+        diags = field_type_drift(rows, facts["field_types"], set())
+        assert [d["code"] for d in diags] == ["field_type_drift"]
+
+    def test_skip_and_empty_sides(self, facts):
+        """skip（本批新增/改名）跳过；任一侧类型空=宁放过；不在基线=漏标扫描的领地。"""
+        from preprocess_opt import field_type_drift
+        rows = [{"target_column": "order_id", "target_type": "VARCHAR(128)"},   # 命中 skip
+                {"target_column": "cust_id", "target_type": ""},                # 声明侧空
+                {"target_column": "channel_name", "target_type": "INT"}]       # 不在基线
+        assert field_type_drift(rows, facts["field_types"], {"order_id"}) == []
+
+    def test_extract_chain_emits_drift(self, facts):
+        """真实链路：extract_and_check 对存量字段类型漂移产 warn（本批 ADD 不受影响）。"""
+        extra_attr = [attr(tcol="order_id", alias="a", stable="ods_trade_order_di",
+                           scol="order_id", ttype="VARCHAR(200)")]
+        mapping, batch = self._std(extra_attr=extra_attr) if hasattr(self, "_std") else (None, None)
+        std = TestExtract()
+        mapping, batch = std._std(extra_attr=extra_attr)
+        renames, rest = synth_renames(batch)
+        add_fields, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        drift = [d for d in diags if d["code"] == "field_type_drift"]
+        assert drift and "order_id" in drift[0]["message"]
+        assert [f["field"] for f in add_fields] == ["channel_name"]  # 本批 ADD 照常
+
+    def test_unsupported_existence_note(self, facts):
+        """unsupported 报告的目标存在性事实：笔误/台账滞后/两侧都有（真待支持）三分。"""
+        extra = [chg(3, "2026-10-14", "attr", "default|typo_f", "映射表达式", "MODIFY"),      # 两侧都无
+                 chg(4, "2026-10-14", "attr", "default|total_amount", "目标字段类型", "MODIFY"),  # 基线有当前态无
+                 chg(5, "2026-10-14", "attr", "default|order_id", "备注", "ADD")]            # 两侧都有
+        std = TestExtract()
+        mapping, batch = std._std(extra_changes=extra)
+        renames, rest = synth_renames(batch)
+        _, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        notes = {u["name"]: u.get("note", "") for u in unsupported}
+        assert "疑似笔误" in notes["typo_f"]
+        assert "台账滞后" in notes["total_amount"]
+        assert notes.get("order_id", "") == "" or "order_id.备注" not in notes
+        # 列级 ADD 的 note 键名是 "order_id.备注"（key 是字段名——两侧都有 → 空 note）
+        col_add = next(u for u in unsupported if u["change_type"] == "add_column")
+        assert col_add.get("note", "") == ""
+
+    def test_entity_unsupported_note(self, facts):
+        """实体级 unsupported：key 未命中实体级当前态（别名/分组）→ 事实附加。"""
+        extra = [chg(6, "2026-10-14", "entity", "default|ghost_src", "资产字段", "ADD")]
+        std = TestExtract()
+        mapping, batch = std._std(extra_changes=extra)
+        renames, rest = synth_renames(batch)
+        _, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        ent = next(u for u in unsupported if u["level"] == "entity")
+        assert "实体级当前态" in ent.get("note", "")
