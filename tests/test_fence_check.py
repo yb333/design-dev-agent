@@ -224,3 +224,60 @@ class TestUnsupported:
         v2["change"]["change_type"] = "drop_field"
         vs = check(baseline, v2, make_cr())
         assert any(v["type"] == "unsupported" for v in vs)
+
+
+def _cr_mod():
+    """纯类型修改场景的 change_request（与 _mod 的声明一致）。"""
+    return {"change_type": "add_field", "asset": "dws.dwb_trade_order_d", "fields": [],
+            "modify_type_fields": [{"field": "order_id", "old_type": "VARCHAR(64)",
+                                    "new_type": "VARCHAR(128)"}], "backfill": "pending"}
+
+
+class TestModifyTypeFence:
+    """场景 B（2026-10-22 第二刀）：类型修改恰好性——声明的(表,字段)允许
+    field_type 变且恰好=声明新类型；非类型键变仍冻结；未声明照拦；漏改=missing。"""
+
+    def _mod(self, v2, field="order_id", new_type="VARCHAR(128)", also_comment=False):
+        for f in v2["tables"]["dwb_trade_order_d"]["fields"]:
+            if f["target_field"] == field:
+                f["field_type"] = new_type
+                if also_comment:
+                    f["field_comment"] = "被顺手改了"
+        v2["change"] = {"change_type": "add_field", "backfill": "no", "fields": [],
+                        "modify_types": [{"field": field, "target_table": "dwb_trade_order_d",
+                                          "old_type": "VARCHAR(64)", "new_type": new_type}]}
+
+    def test_declared_type_change_passes(self, baseline):
+        v2 = copy.deepcopy(baseline)
+        self._mod(v2)
+        violations = check(baseline, v2, _cr_mod())
+        assert not [v for v in violations if "order_id" in v["message"]], violations
+
+    def test_comment_also_changed_blocks(self, baseline):
+        v2 = copy.deepcopy(baseline)
+        self._mod(v2, also_comment=True)
+        violations = check(baseline, v2, _cr_mod())
+        assert any("非类型键" in v["message"] for v in violations), violations
+
+    def test_undeclared_type_change_blocks(self, baseline):
+        v2 = copy.deepcopy(baseline)
+        self._mod(v2)
+        v2["change"]["modify_types"] = []  # 撤声明
+        violations = check(baseline, v2, _cr_mod())
+        assert any("存量字段定义被修改" in v["message"] and "order_id" in v["message"]
+                   for v in violations), violations
+
+    def test_declared_no_landing_missing(self, baseline):
+        v2 = copy.deepcopy(baseline)
+        v2["change"] = {"change_type": "add_field", "backfill": "no", "fields": [],
+                        "modify_types": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                          "old_type": "VARCHAR(64)", "new_type": "VARCHAR(128)"}]}
+        violations = check(baseline, v2, _cr_mod())
+        assert any(v["type"] == "missing" and "order_id" in v["message"] for v in violations)
+
+    def test_landing_type_differs_from_declaration_blocks(self, baseline):
+        v2 = copy.deepcopy(baseline)
+        self._mod(v2, new_type="VARCHAR(256)")
+        v2["change"]["modify_types"][0]["new_type"] = "VARCHAR(128)"  # 落地 256 ≠ 声明 128
+        violations = check(baseline, v2, _cr_mod())
+        assert any("恰好性" in v["message"] for v in violations), violations

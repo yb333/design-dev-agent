@@ -128,6 +128,22 @@ def patch_xlsx(src: Path, dst: Path, ts_v2: dict, etl_dir: Path, notes: List[str
             cell.border = copy(src_cell.border)
             cell.alignment = copy(src_cell.alignment)
         notes.append(f"[追加行] TargetFields ({rc}, {field})")
+
+    # --- TargetFields：类型修改列的「字段类型」单元格更新（场景 B·2026-10-22——
+    #     modify 字段已有行，只更新类型单元格；存量其他列不动） ---
+    for m in (ts_v2.get("change") or {}).get("modify_types", []):
+        field, new_type = m.get("field", ""), m.get("new_type", "")
+        hit = 0
+        for r in tf_ws.iter_rows(min_row=2):
+            if r[th["目标字段名称"] - 1].value is None:
+                continue
+            if str(r[th["目标字段名称"] - 1].value).strip().lower() == field.lower():
+                tf_ws.cell(row=r[0].row, column=th["字段类型"]).value = new_type
+                hit += 1
+        if hit:
+            notes.append(f"[类型更新] TargetFields.字段类型 {field} → {new_type}（{hit} 行）")
+        else:
+            notes.append(f"[缺失] TargetFields 找不到类型修改字段 {field}——定位失败，人工核查")
     dst.parent.mkdir(parents=True, exist_ok=True)
     wb.save(dst)
 

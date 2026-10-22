@@ -254,21 +254,9 @@ def baseline_facts(ts_baseline: dict) -> dict:
             "field_types": field_types, "source_tables": sources}
 
 
-def types_compatible(a: str, b: str) -> bool:
-    """类型归一比（账面对账口径，2026-10-22 自 field_type_drift 抽出单点——MODIFY
-    三方对账复用）：parse_type_info 四元组 + base 同义归一（number/decimal/numeric
-    同义；varchar/varchar2 字节组同义；nvarchar 系字符组同义）；**字节 vs 字符跨组
-    是真实语义差**（DWS 截取单位 SUBSTRB/SUBSTR）不归一。"""
-    from type_compat import parse_type_info
-    base_syn = {"number": "numeric", "decimal": "numeric",
-                "varchar": "varchar2", "nvarchar": "nvarchar2"}
-
-    def _norm(s: str) -> tuple:
-        t = parse_type_info(str(s or ""))
-        return (t.get("family"), base_syn.get(t.get("base"), t.get("base")),
-                t.get("length"), t.get("scale"))
-
-    return _norm(a) == _norm(b)
+# types_compatible（类型归一比）已归位 shared/type_compat（2026-10-22 第二刀：
+# assemble_ts_opt/fence_check 跨 pipe 不可 import 此处——类型判定唯一源在 type_compat）
+from type_compat import types_compatible  # noqa: F401  re-export 保旧引用（audit_ingest/测试）
 
 
 def field_type_drift(attr_rows: List[dict], baseline_types: Dict[str, str],

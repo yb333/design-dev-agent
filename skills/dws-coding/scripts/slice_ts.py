@@ -206,15 +206,23 @@ def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
             })
             joins.extend([{k: j[k] for k in ("table", "alias", "on") if k in j}
                           for j in f.get("new_joins", []) if j.get("rule") == rule_code])
+    _rule_target_short = ((ts.get("rules", {}).get(rule_code, {})
+                           .get("target_table") or "").rsplit(".", 1)[-1])
     sliced["opt"] = {
         "mode": "optimization",
         "change_type": change.get("change_type", "add_field"),
         "declared_new_fields": fields,
         "declared_new_joins": joins,
+        "declared_modify_types": [
+            {k: m.get(k, "") for k in ("field", "old_type", "new_type")}
+            for m in change.get("modify_types", [])
+            if (m.get("target_table") or "").rsplit(".", 1)[-1] == _rule_target_short
+        ],
         "baseline_sql": baseline_sql,
         "hard_constraints": [
             "老列投影一个字符都不许动（AST 级结构等价比对；格式差异可，等价改写如 ='N' 改 <>'Y' 也算越界）",
             "只许追加 change 段声明的新列；声明的新列必须出现",
+            "类型修改列（declared_modify_types）：SELECT 里给该列加 cast(老表达式 AS 新类型) 包裹——内层老表达式原文不动；其余一切照旧",
             "FROM/JOIN/WHERE/GROUP BY/CTE 冻结；新 JOIN 只允许声明过的（别名+表名）",
             "改法：以 baseline_sql 为底稿加列，不从零重写；产出走 pipe 的 SQL 围栏闸门",
         ],

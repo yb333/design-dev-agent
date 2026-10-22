@@ -101,3 +101,16 @@ class TestAuditBackfill:
         assert rc == 0, "审计补齐是底层标准——对称 normalize 后围栏式校验不该拦"
         alter = (tmp_path / "ddl/alter_table_dwb_trade_order_d.sql").read_text(encoding="utf-8")
         assert "del_flag" in alter and "ADD COLUMN del_flag" in alter
+
+
+class TestModifyTypeDdl:
+    """场景 B（2026-10-22）：类型修改进 ALTER 变更单（DWS MODIFY 语法）。"""
+
+    def test_alter_contains_modify(self):
+        from assemble_ddl_opt import build_alter_ddl
+        sql = build_alter_ddl("dws", "t1", [{"field": "c1", "field_type": "varchar(64)"}],
+                              modifies=[{"field": "order_id", "old_type": "varchar(64)",
+                                         "new_type": "varchar(128)"}])
+        assert "ALTER TABLE dws.t1 ADD COLUMN c1 varchar(64);" in sql
+        assert "ALTER TABLE dws.t1 MODIFY (order_id varchar(128));" in sql
+        assert "类型修改 1 列" in sql

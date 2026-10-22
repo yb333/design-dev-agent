@@ -44,6 +44,16 @@ def _projection_names(select) -> Dict[str, str]:
     return out
 
 
+def _projection_nodes(select) -> Dict[str, object]:
+    """输出列名 → 表达式节点（cast 包裹判定用——场景 B）。"""
+    out: Dict[str, object] = {}
+    for e in select.expressions:
+        if isinstance(e, exp.Star):
+            return {"*": e}
+        out[e.alias_or_name] = e
+    return out
+
+
 def _join_key(j: exp.Join) -> Optional[tuple]:
     """JOIN 身份 = (表名, 别名)。"""
     table = j.this
@@ -52,14 +62,37 @@ def _join_key(j: exp.Join) -> Optional[tuple]:
     return None
 
 
-def rule_declaration(v2_change: dict, rule_code: str) -> dict:
-    """从 ts_v2.change 段派生单规则的许可声明。"""
+def rule_declaration(v2_change: dict, rule_code: str, rule_target: str = "") -> dict:
+    """从 ts_v2.change 段派生单规则的许可声明（modify_types 按规则目标表过滤——
+    场景 B·2026-10-22：类型修改列允许 cast 包裹）。"""
     fields, joins = [], []
     for f in (v2_change or {}).get("fields", []):
         if rule_code in f.get("placed_rules", []):
             fields.append(f["field"])
             joins.extend(j for j in f.get("new_joins", []) if j.get("rule") == rule_code)
-    return {"rule": rule_code, "fields": fields, "new_joins": joins}
+    t_short = (rule_target or "").rsplit(".", 1)[-1].lower()
+    mods = {}
+    for m in (v2_change or {}).get("modify_types", []):
+        if (m.get("target_table") or "").rsplit(".", 1)[-1].lower() == t_short:
+            mods[str(m.get("field", "")).lower()] = m.get("new_type", "")
+    return {"rule": rule_code, "fields": fields, "new_joins": joins, "modify_types": mods}
+
+
+def _cast_wrap_matches(new_node, b_node, new_type: str) -> bool:
+    """新投影表达式是否为 cast(老表达式 AS 新类型) 包裹（AST 判定：剥别名后是 Cast
+    节点 + **内层归一==baseline 投影的内层**（别名不参与——内层一个字符不许动的
+    围栏语义在 AST 层兑现）+ 目标类型匹配）。`::` 短写法 parse 后同是 Cast。"""
+    def _inner(n):
+        return n.this if isinstance(n, exp.Alias) else n
+    ni = _inner(new_node) if new_node is not None else None
+    if not isinstance(ni, exp.Cast):
+        return False
+    bi = _inner(b_node) if b_node is not None else None
+    if _norm(ni.this) != _norm(bi):
+        return False
+    to = ni.args.get("to")
+    _nt = str(new_type or "").lower().replace(" ", "")
+    return to is not None and str(to).lower().replace(" ", "") == _nt
 
 
 def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[dict]:
@@ -119,11 +152,20 @@ def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[di
         bad("SELECT * 无法逐列审计——存量含 * 请先改写为显式列清单（另立变更）")
         return v
     declared_fields = set(rule_decl.get("fields", []))
+    declared_mods = rule_decl.get("modify_types") or {}
+    n_nodes = _projection_nodes(n_sel)
+    b_nodes = _projection_nodes(b_sel)
     for name, b_expr in b_cols.items():
         if name not in n_cols:
             bad(f"老列 {name!r} 丢失")
         elif n_cols[name] != b_expr:
-            bad(f"老列 {name!r} 表达式被修改：{b_expr!r} → {n_cols[name]!r}")
+            # 场景 B（2026-10-22）：类型修改列允许 cast(老表达式 AS 新类型) 包裹——
+            # AST 判定内层归一必须==baseline 原文（cast 之外的任何改写照拦）
+            _nty = declared_mods.get(str(name).lower())
+            if _nty and _cast_wrap_matches(n_nodes.get(name), b_nodes.get(name), _nty):
+                pass
+            else:
+                bad(f"老列 {name!r} 表达式被修改：{b_expr!r} → {n_cols[name]!r}")
     for name in n_cols:
         if name not in b_cols and name not in declared_fields:
             bad(f"未声明的新列 {name!r}（新列只允许 change 声明的字段）")

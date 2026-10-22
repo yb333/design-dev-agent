@@ -119,8 +119,9 @@ def decompose_diff(baseline: dict, v2: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _declaration_index(change: dict) -> dict:
-    """change 段 → 许可索引：{(表, 字段): 声明} / {rule: 声明集合}。"""
-    idx = {"fields": {}, "rules": {}}
+    """change 段 → 许可索引：{(表, 字段): 声明} / {rule: 声明集合} /
+    {(表, 字段): 类型修改声明}（场景 B·2026-10-22）。"""
+    idx = {"fields": {}, "rules": {}, "modify": {}}
     for f in change.get("fields", []):
         key = (f.get("target_table", ""), f["field"])
         idx["fields"][key] = f
@@ -128,6 +129,8 @@ def _declaration_index(change: dict) -> dict:
             idx["rules"].setdefault(r, []).append(f)
         for t in f.get("intermediate_tables", []):
             idx["fields"][(t, f["field"])] = f
+    for m in change.get("modify_types", []):
+        idx["modify"][(m.get("target_table", ""), m.get("field", ""))] = m
     return idx
 
 
@@ -150,8 +153,33 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
             over(f"[围栏][字段] 新增字段 {t}.{fname} 未在 change 段声明——越界")
     for t, fname in diff["removed_fields"]:
         over(f"[围栏][字段] 删除存量字段 {t}.{fname}——add_field 不允许删字段")
+    # 场景 B（2026-10-22）：类型修改恰好性——声明的 (表,字段) 允许 field_type 变且
+    # 必须恰好变为声明的新类型（types_compatible 归一比）；注释等其他键变仍冻结；
+    # 未声明的存量字段定义修改照拦
+    from type_compat import types_compatible
     for t, fname in diff["modified_fields"]:
-        over(f"[围栏][字段] 存量字段定义被修改 {t}.{fname}——存量冻结（含类型/注释/血缘/口径）")
+        mdecl = idx["modify"].get((t, fname))
+        if mdecl is None:
+            over(f"[围栏][字段] 存量字段定义被修改 {t}.{fname}——存量冻结（含类型/注释/血缘/口径；"
+                 f"类型修改走变更记录 MODIFY·目标字段类型申报）")
+            continue
+        bf = {x["target_field"]: x for x in baseline.get("tables", {}).get(t, {}).get("fields", [])}
+        vf = {x["target_field"]: x for x in v2.get("tables", {}).get(t, {}).get("fields", [])}
+        changed_keys = sorted(k for k in set(bf.get(fname, {})) | set(vf.get(fname, {}))
+                              if bf.get(fname, {}).get(k) != vf.get(fname, {}).get(k))
+        bad_keys = [k for k in changed_keys if k != "field_type"]
+        if bad_keys:
+            over(f"[围栏][字段] {t}.{fname} 类型修改声明下非类型键也被改 {bad_keys}——冻结")
+        new_ty = (vf.get(fname) or {}).get("field_type", "")
+        if not types_compatible(new_ty, mdecl.get("new_type", "")):
+            over(f"[围栏][字段] {t}.{fname} 落地类型 {new_ty!r} ≠ 声明新类型 "
+                 f"{mdecl.get('new_type')!r}（归一比较）——恰好性")
+    # 声明了 modify 但 diff 无落点（漏改=missing）
+    _modified_pairs = set(diff["modified_fields"])
+    for key, m in idx["modify"].items():
+        if key not in _modified_pairs:
+            missing(f"[围栏][字段] modify_types 声明 {key[0]}.{key[1]} 在 diff 中无落点"
+                    f"——tables 类型未更新（漏改）")
     for t in diff["added_tables"]:
         over(f"[围栏][表] 新增表 {t}——add_field 不允许加表")
     for t in diff["removed_tables"]:
@@ -261,7 +289,8 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
     # ---- 反向：声明的每条必须有落点 ----
     cr_fields = {f["field"] for f in change_request.get("fields", [])}
     declared = change.get("fields", [])
-    if not declared:
+    declared_mods = change.get("modify_types", [])
+    if not declared and not declared_mods:
         missing("[围栏][声明] change 段为空——ts_v2 缺设计落位声明")
     for f in declared:
         fname = f["field"]
@@ -285,6 +314,16 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
     for f in change_request.get("fields", []):
         if f["field"] not in {d["field"] for d in declared}:
             missing(f"[围栏][声明] change_request 的 {f['field']!r} 未被 change 段落位——漏接")
+    # 类型修改同款双向（场景 B）：ts.change.modify_types ↔ change_request.modify_type_fields
+    cr_mods = {m["field"] for m in change_request.get("modify_type_fields", [])}
+    for m in declared_mods:
+        if m["field"] not in cr_mods:
+            over(f"[围栏][声明] modify_types 声明的字段 {m['field']!r} 不在"
+                 f" change_request（设计夹带）")
+    for f in change_request.get("modify_type_fields", []):
+        if f["field"] not in {m["field"] for m in declared_mods}:
+            missing(f"[围栏][声明] change_request 的类型修改 {f['field']!r} 未被"
+                    f" change 段接住——漏接")
     return violations
 
 

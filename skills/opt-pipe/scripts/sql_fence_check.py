@@ -26,13 +26,17 @@ def main(argv: Optional[list] = None) -> int:
     import json
     ts_v2 = json.loads(Path(args.ts_v2).read_text(encoding="utf-8"))
     change = ts_v2.get("change") or {}
-    if not change.get("fields"):
+    if not change.get("fields") and not change.get("modify_types"):
         print("SQL_FENCE_ERROR: ts_v2 无 change 段", file=sys.stderr)
         return 2
 
     etl_dir, baseline_dir = Path(args.etl_dir), Path(args.baseline_dir)
     all_violations = []
-    touched = sorted({r for f in change.get("fields", []) for r in f.get("placed_rules", [])})
+    touched = sorted({r for f in change.get("fields", []) for r in f.get("placed_rules", [])}
+                     | {rc for rc, r in (ts_v2.get("rules") or {}).items()
+                        if any((m.get("target_table") or "").rsplit(".", 1)[-1].lower()
+                               == (r.get("target_table") or "").rsplit(".", 1)[-1].lower()
+                               for m in change.get("modify_types", []))})
     for rc in touched:
         old_sql = read_select(baseline_dir, rc)
         new_sql = read_select(etl_dir, rc)
@@ -40,7 +44,10 @@ def main(argv: Optional[list] = None) -> int:
             all_violations.append({"type": "missing",
                                    "message": f"[SQL围栏][{rc}] 缺 {'baseline' if not old_sql else '新'} SQL 文件——漏改"})
             continue
-        all_violations.extend(check_sql_fence(old_sql, new_sql, rule_declaration(change, rc)))
+        all_violations.extend(check_sql_fence(
+            old_sql, new_sql,
+            rule_declaration(change, rc,
+                             (ts_v2.get("rules") or {}).get(rc, {}).get("target_table", ""))))
 
     # 结果落盘（ut_opt 开跑校验围栏时效——"产物变→围栏重跑→才进 UT"从剧本纪律变机器闸门）
     result_path = etl_dir.parent / "_internal" / "sql_fence_result.json"

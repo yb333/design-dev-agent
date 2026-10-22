@@ -262,6 +262,23 @@ def join_key_pair_risky(type_a: str, type_b: str) -> bool:
     return True
 
 
+def types_compatible(a: str, b: str) -> bool:
+    """类型归一比（账面对账口径，2026-10-22：preprocess_opt 的 MODIFY 三方对账/
+    field_type_drift 与 assemble_ts_opt/fence_check 的类型恰好性共用单点）：
+    parse_type_info 四元组 + base 同义归一（number/decimal/numeric 同义；varchar/
+    varchar2 字节组同义；nvarchar 系字符组同义）；**字节 vs 字符跨组是真实语义差**
+    （DWS 截取单位 SUBSTRB/SUBSTR）不归一。"""
+    base_syn = {"number": "numeric", "decimal": "numeric",
+                "varchar": "varchar2", "nvarchar": "nvarchar2"}
+
+    def _norm(s: str) -> tuple:
+        t = parse_type_info(str(s or ""))
+        return (t.get("family"), base_syn.get(t.get("base"), t.get("base")),
+                t.get("length"), t.get("scale"))
+
+    return _norm(a) == _norm(b)
+
+
 # 风险类型 → 中文标签（给决策文件用）
 RISK_LABEL_CN = {
     "length_overflow": "长度超长",

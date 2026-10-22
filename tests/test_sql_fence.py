@@ -126,4 +126,36 @@ class TestRuleDeclaration:
         d2 = rule_declaration(change, "R0002")
         assert d2["fields"] == ["channel_name"] and d2["new_joins"] == []
         d3 = rule_declaration(change, "R0009")
-        assert d3 == {"rule": "R0009", "fields": [], "new_joins": []}
+        assert d3 == {"rule": "R0009", "fields": [], "new_joins": [], "modify_types": {}}
+
+
+class TestCastWrap:
+    """场景 B（2026-10-22 第二刀）：类型修改列允许 cast(老表达式 AS 新类型) 包裹——
+    AST 判定内层归一==baseline 原文+目标类型匹配；cast 之外的一切改写照拦。"""
+
+    BASE = "SELECT a.x AS x, a.y AS y FROM ods.t a"
+    DECL = {"rule": "R1", "fields": [], "new_joins": [],
+            "modify_types": {"x": "varchar(128)"}}
+
+    def test_cast_wrap_passes(self):
+        new_sql = "SELECT cast(a.x AS varchar(128)) AS x, a.y AS y FROM ods.t a"
+        assert check_sql_fence(self.BASE, new_sql, self.DECL) == []
+
+    def test_pg_cast_shorthand_passes(self):
+        new_sql = "SELECT a.x::varchar(128) AS x, a.y AS y FROM ods.t a"
+        assert check_sql_fence(self.BASE, new_sql, self.DECL) == []
+
+    def test_non_cast_rewrite_blocks(self):
+        new_sql = "SELECT a.x || '' AS x, a.y AS y FROM ods.t a"
+        v = check_sql_fence(self.BASE, new_sql, self.DECL)
+        assert any("表达式被修改" in x["message"] for x in v)
+
+    def test_cast_to_wrong_type_blocks(self):
+        new_sql = "SELECT cast(a.x AS varchar(256)) AS x, a.y AS y FROM ods.t a"
+        v = check_sql_fence(self.BASE, new_sql, self.DECL)
+        assert any("表达式被修改" in x["message"] for x in v)
+
+    def test_undeclared_column_cast_blocks(self):
+        new_sql = "SELECT a.x AS x, cast(a.y AS varchar(128)) AS y FROM ods.t a"
+        v = check_sql_fence(self.BASE, new_sql, self.DECL)
+        assert any("表达式被修改" in x["message"] and "y" in x["message"] for x in v)

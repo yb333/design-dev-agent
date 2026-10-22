@@ -57,3 +57,13 @@ fields:
           strategy: 直接关联
           join_filter: ""
           reason: dim_channel 主键即 order_id，关联不发散
+
+# ---- 场景 B（2026-10-22 第二刀）：目标字段类型修改 ----
+# 变更记录页签「属性级 MODIFY·目标字段类型」的条目（change_request.modify_type_fields）
+# 照抄到此处（含 decision 标记——precheck_opt 已人定的方向勿推翻）；无类型修改则整段省略。
+modify_types:
+  - field: order_id               # baseline 存量字段（类型修改只针对存量；新字段在 fields 段直接写对类型）
+    target_table: dwb_trade_order_d
+    old_type: VARCHAR(64)         # 照抄 change_request（须与 baseline 归一一致——校验拦）
+    new_type: VARCHAR(128)        # 照抄 change_request（mapping 当前态=终态——校验拦）
+    decision: "扩容/兼容方向，ALTER 自动转换即可"   # 照抄 precheck_opt 回写的决策标记（有则带）

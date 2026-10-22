@@ -25,7 +25,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from sql_parse import (parse_join_pairs, find_unqualified_refs, find_three_part_refs,
                        extract_qualified_refs)
-from type_compat import join_key_pair_risky
+from type_compat import join_key_pair_risky, types_compatible
 
 # decisions 必填键（缺 = fail loud，防 designer 漏声明）
 FIELD_REQUIRED_KEYS = ("field", "target_table", "placed_rules", "field_type",
@@ -44,10 +44,35 @@ def _fail(msg: str) -> None:
 def load_decisions(path: Path) -> dict:
     d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if d.get("change_type") != "add_field":
-        _fail(f"decisions.change_type = {d.get('change_type')!r}，本刀仅支持 add_field")
-    if not d.get("fields"):
-        _fail("decisions.fields 为空——没有要落的字段")
+        _fail(f"decisions.change_type = {d.get('change_type')!r}，本刀仅支持 add_field"
+              f"（modify_types 作为并行段声明——change_type 保持 add_field 兼容锚）")
+    if not d.get("fields") and not d.get("modify_types"):
+        _fail("decisions.fields 与 modify_types 均为空——没有要落的变更")
     return d
+
+
+def validate_modify_types(decisions: dict, ts_baseline: dict) -> None:
+    """modify_types 段合法性（场景 B·2026-10-22）：字段必须是 baseline 存量、
+    新旧类型归一比必须不同（同类型无意义）、目标表合法。"""
+    fields = ts_baseline.get("tables", {})
+    for i, m in enumerate(decisions.get("modify_types") or [], start=1):
+        for k in ("field", "target_table", "old_type", "new_type"):
+            if not m.get(k):
+                _fail(f"modify_types[{i}] 缺必填项 {k!r}（照抄 change_request.modify_type_fields，"
+                      f"含 decision 标记勿推翻）")
+        if m["target_table"] not in fields:
+            _fail(f"modify_types[{i}].target_table {m['target_table']!r} 不在 baseline 表集")
+        bf = {x["target_field"]: x for x in fields[m["target_table"]].get("fields", [])}
+        if m["field"] not in bf:
+            _fail(f"modify_types[{i}].field {m['field']!r} 不在 {m['target_table']} 存量字段"
+                  f"——类型修改只针对存量（新字段在 fields 段直接写对类型）")
+        if not types_compatible(m["old_type"], bf[m["field"]].get("field_type", "")):
+            _fail(f"modify_types[{i}].old_type {m['old_type']!r} 与 baseline 类型不一致"
+                  f"（{bf[m['field']].get('field_type')!r}，归一比较）——照抄"
+                  f" change_request 的 old_type")
+        if types_compatible(m["old_type"], m["new_type"]):
+            _fail(f"modify_types[{i}] 新旧类型归一后相同（{m['old_type']!r} vs {m['new_type']!r}）"
+                  f"——无意义的类型修改")
 
 
 def validate_decisions(decisions: dict, ts_baseline: dict, cache: dict | None = None) -> None:
@@ -217,6 +242,19 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
     _bf = decisions.get("backfill", "pending")
     _bf = "no" if _bf is False else (str(_bf) if _bf else "pending")
     v2["change"] = {"change_type": "add_field", "backfill": _bf, "fields": change_fields}
+
+    # 6. 场景 B（2026-10-22）：类型修改落地——tables 当前态=终态（field_type 更新），
+    # change.modify_types 留声明（围栏恰好性/DDL 变更单/切片 coder cast/patch 的锚）
+    _mods = []
+    for m in decisions.get("modify_types") or []:
+        _tf = {x["target_field"]: x for x in v2["tables"][m["target_table"]]["fields"]}
+        if m["field"] in _tf:
+            _tf[m["field"]]["field_type"] = m["new_type"]
+        _mods.append({k: m.get(k, "") for k in ("field", "target_table",
+                                                "old_type", "new_type")}
+                     | {"decision": m.get("decision", "")})
+    if _mods:
+        v2["change"]["modify_types"] = _mods
     return v2
 
 
@@ -244,6 +282,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("WARN: 无 schema_cache——新 JOIN 键类型比对降级跳过（precheck_opt 连库后会落缓存）",
               file=sys.stderr)
     validate_decisions(decisions, ts_baseline, cache)
+    validate_modify_types(decisions, ts_baseline)
     v2 = apply_decisions(ts_baseline, decisions)
 
     out = Path(args.output)

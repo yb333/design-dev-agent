@@ -271,3 +271,48 @@ class TestStableOrdering:
             if "channel_name" in got:
                 assert got[:-1] == base_ft, f"{code}: 存量序被重排（diff 噪音）"
                 assert got[-1] == "channel_name", "新字段固定尾部追加"
+
+
+class TestModifyTypes:
+    """场景 B（2026-10-22 第二刀）：decisions.modify_types → tables 终态类型更新 +
+    change.modify_types 声明 + fence 集成（组装器与围栏同一契约两端）。"""
+
+    def _dec_mod(self):
+        d = dec_direct()
+        d["modify_types"] = [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                              "old_type": "VARCHAR(64)", "new_type": "VARCHAR(128)",
+                              "decision": "扩容/兼容方向，ALTER 自动转换即可"}]
+        return d
+
+    def test_apply_lands_type_and_change_section(self, baseline):
+        d = self._dec_mod()
+        validate_decisions(d, baseline)
+        from assemble_ts_opt import validate_modify_types
+        validate_modify_types(d, baseline)
+        v2 = apply_decisions(baseline, d)
+        f = next(x for x in v2["tables"]["dwb_trade_order_d"]["fields"]
+                 if x["target_field"] == "order_id")
+        assert f["field_type"] == "VARCHAR(128)"
+        assert v2["change"]["modify_types"][0]["field"] == "order_id"
+        # fence 集成：声明与落地恰好 → 零违规
+        cr = {"change_type": "add_field", "asset": "dws.dwb_trade_order_d",
+              "fields": [{"field": "pay_channel", "cn": "", "type": "VARCHAR(64)",
+                          "source": {"table": "ods.ods_trade_order_di", "alias": "a",
+                                     "field": "pay_channel"}, "new_source_table": False}],
+              "modify_type_fields": [{"field": "order_id", "old_type": "VARCHAR(64)",
+                                      "new_type": "VARCHAR(128)"}], "backfill": "pending"}
+        assert not check(baseline, v2, cr), "声明与落地恰好应零违规"
+
+    def test_old_type_mismatch_blocks(self, baseline):
+        from assemble_ts_opt import validate_modify_types
+        d = self._dec_mod()
+        d["modify_types"][0]["old_type"] = "numeric(10,2)"  # baseline 是 varchar
+        with pytest.raises(SystemExit):
+            validate_modify_types(d, baseline)
+
+    def test_same_type_blocks(self, baseline):
+        from assemble_ts_opt import validate_modify_types
+        d = self._dec_mod()
+        d["modify_types"][0]["new_type"] = "varchar(64)"  # 归一同类型
+        with pytest.raises(SystemExit):
+            validate_modify_types(d, baseline)

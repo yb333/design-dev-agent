@@ -20,17 +20,37 @@ from typing import Dict, List, Optional
 from assemble_ddl import generate_ddl
 
 
-def build_alter_ddl(schema: str, table: str, additions: List[dict]) -> str:
-    """一表一份 ALTER 变更单。additions: [{field, field_type, field_comment}]。"""
+def build_alter_ddl(schema: str, table: str, additions: List[dict],
+                    modifies: List[dict] | None = None) -> str:
+    """一表一份 ALTER 变更单。additions: [{field, field_type, field_comment}]；
+    modifies（场景 B·2026-10-22）: [{field, old_type, new_type}]——DWS 的 MODIFY
+    语法自动转换存量值（跨大类/收窄已在 precheck_opt 人决策）。"""
     full = f"{schema}.{table}" if schema else table
-    lines = [f"-- ALTER 变更单：{full} 新增 {len(additions)} 列（add_field）",
+    modifies = modifies or []
+    head = f"新增 {len(additions)} 列"
+    if modifies:
+        head += f" + 类型修改 {len(modifies)} 列"
+    lines = [f"-- ALTER 变更单：{full} {head}（add_field"
+             + (" + modify_type" if modifies else "") + "）",
              "-- 由 assemble_ddl_opt 生成；执行时机与顺序由人/平台决定（推生产不自主）"]
     for f in additions:
         ftype = f.get("field_type") or "VARCHAR(200)"
         lines.append(f"ALTER TABLE {full} ADD COLUMN {f['field']} {ftype};")
         if f.get("field_comment"):
             lines.append(f"COMMENT ON COLUMN {full}.{f['field']} IS '{f['field_comment']}';")
+    for m in modifies:
+        lines.append(f"ALTER TABLE {full} MODIFY ({m['field']} {m.get('new_type', '')});")
     return "\n".join(lines) + "\n"
+
+
+def declared_modifies_by_table(ts_v2: dict) -> Dict[str, List[dict]]:
+    """change.modify_types 段 → {表: 类型修改清单}（场景 B·2026-10-22——变更单锚）。"""
+    out: Dict[str, List[dict]] = {}
+    for m in (ts_v2.get("change") or {}).get("modify_types", []):
+        out.setdefault(m.get("target_table", ""), []).append(
+            {"field": m.get("field", ""), "old_type": m.get("old_type", ""),
+             "new_type": m.get("new_type", "")})
+    return out
 
 
 def audit_additions_by_table(raw_baseline: dict, ts_v2: dict) -> Dict[str, List[dict]]:
@@ -127,10 +147,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     _adds_by_table = declared_additions_by_table(v2)
     for t, audit_adds in audit_additions_by_table(baseline, v2).items():
         _adds_by_table.setdefault(t, []).extend(audit_adds)
-    for t, adds in sorted(_adds_by_table.items()):
+    _mods_by_table = declared_modifies_by_table(v2)
+    for t in sorted(set(_adds_by_table) | set(_mods_by_table)):
         (out / "ddl" / f"alter_table_{t}.sql").write_text(
-            build_alter_ddl(schema, t, adds), encoding="utf-8")
-        n_alters += len(adds)
+            build_alter_ddl(schema, t, _adds_by_table.get(t, []),
+                            _mods_by_table.get(t, [])), encoding="utf-8")
+        n_alters += len(_adds_by_table.get(t, [])) + len(_mods_by_table.get(t, []))
 
     # 2. I 视图重建 DDL（F 表加列后镜像须同步——CREATE OR REPLACE 全量重建是语法
     #    结构决定的真交付物；复用 generate_i_view 单源，ts_v2.tables 已含新列）

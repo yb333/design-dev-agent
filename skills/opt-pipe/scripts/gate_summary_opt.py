@@ -23,10 +23,16 @@ def render(v2: dict, baseline: dict, cr: dict) -> str:
     lines.append("")
     new_sources = sorted({f["source"]["table"] for f in cr.get("fields", [])
                           if f.get("new_source_table")})
+    # 场景 A：显式声明的新来源（实体级 ADD）——并集呈现（隐式派生+显式声明）
+    declared_sources = sorted({ns.get("table", "") for ns in cr.get("new_sources", [])
+                               if ns.get("table")})
+    new_sources = sorted(set(new_sources) | set(declared_sources))
+    mods = change.get("modify_types") or []
     inter = sorted({t for f in fields for t in f.get("intermediate_tables", [])})
     lines.append("## 变更概览")
     lines.append(f"- 版本：{cr.get('version','')}（{cr.get('change_type','')}）"
-                 f"｜新增字段 {len(fields)} 个｜新来源 {len(new_sources)} 张｜中间表加列 {len(inter)} 张")
+                 f"｜新增字段 {len(fields)} 个｜新来源 {len(new_sources)} 张｜中间表加列 {len(inter)} 张"
+                 f"｜类型修改 {len(mods)} 列")
     if new_sources:
         lines.append(f"- 新来源：{', '.join(new_sources)}")
     if inter:
@@ -35,6 +41,17 @@ def render(v2: dict, baseline: dict, cr: dict) -> str:
     if row:
         lines.append(f"- RS 变更记录：{row.get('date','')} {row.get('ver','')}——{row.get('desc','')}")
     lines.append("")
+
+    if mods:
+        lines.append("## 类型修改（场景 B：ALTER 自动转换存量值，UT 抽查新列）")
+        lines.append("")
+        lines.append("| 字段 | 旧类型 | 新类型 | 决策标记 |")
+        lines.append("|------|--------|--------|----------|")
+        for m in mods:
+            dec = "✔已人定" if m.get("decision") else "扩容/兼容"
+            lines.append(f"| {m.get('field','')} | {m.get('old_type','')} "
+                         f"| {m.get('new_type','')} | {dec} |")
+        lines.append("")
 
     lines.append("## 逐字段落位")
     lines.append("")

@@ -55,7 +55,7 @@ def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
     change = ts_v2.get("change") or {}
     frozen_by_rule = _frozen_columns(ts_v2, change)
     for rule_code, rule in ts_v2.get("rules", {}).items():
-        decl = rule_declaration(change, rule_code)
+        decl = rule_declaration(change, rule_code, rule.get("target_table", ""))
         new_sql = read_select(etl_dir, rule_code)   # {code}.sql 或 {code}_描述_模式.sql
         if not new_sql:
             continue   # 视图/未产出规则跳过（dispatch 层已保证清单）
@@ -132,24 +132,40 @@ def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
 
 def check_new_column_nulls(executor, ts_v2: dict, schema: str) -> List[dict]:
     """新列空值检查（写路径后真实数据）：逐目标表统计新列 NULL——兑现 06 §一
-    '空值只查新列'的承诺；全 NULL = 疑似新 JOIN 关联不上的信号（LEFT JOIN 常态形态）。"""
+    '空值只查新列'的承诺；全 NULL = 疑似新 JOIN 关联不上的信号（LEFT JOIN 常态形态）。
+    类型修改列（场景 B·2026-10-22）同款抽查：MINUS 豁免后由空值/转换异常守——
+    ALTER 自动转换失败的存量脏值落 NULL（PG 语义）→ 空值率异常即转换事故信号。"""
     change = ts_v2.get("change") or {}
     by_table: Dict[str, List[str]] = {}
     for f in change.get("fields", []):
         by_table.setdefault(f.get("target_table", ""), []).append(f["field"])
+    _mod_by_table: Dict[str, List[str]] = {}
+    for m in change.get("modify_types", []):
+        _mod_by_table.setdefault(m.get("target_table", ""), []).append(m.get("field", ""))
     out = []
-    for table, cols in sorted(by_table.items()):
-        null_exprs = ", ".join(f"COUNT(*) - COUNT(\"{c}\") AS null_{c}" for c in cols)
+    for table, cols in sorted({**by_table, **{t: [] for t in _mod_by_table}}.items()):
+        cols = sorted(set(by_table.get(table, [])))
+        mod_cols = sorted(set(_mod_by_table.get(table, [])))
+        all_check = cols + mod_cols
+        if not all_check:
+            continue
+        null_exprs = ", ".join(f'COUNT(*) - COUNT("{c}") AS null_{c}' for c in all_check)
         try:
             rows = executor.fetch_all(
                 f'SELECT COUNT(*) AS total, {null_exprs} FROM {schema}.{table}') or [{}]
             r = rows[0]
             total = int(r.get("total") or 0)
-            for c in cols:
+            for c in all_check:
                 nulls = int(r.get(f"null_{c}") or 0)
                 rate = (nulls / total) if total else 0
                 note = ""
-                if total and nulls == total:
+                if c in mod_cols:
+                    if total and nulls > 0:
+                        note = (f" ⚠ 类型修改列存量转换出现 {nulls} 个 NULL——"
+                                f"ALTER 自动转换失败的脏值落 NULL（转换事故信号，闸口②'人判）")
+                    else:
+                        note = "（类型修改列：转换零 NULL）"
+                elif total and nulls == total:
                     note = " ⚠ 全 NULL——疑似新 JOIN 关联不上（LEFT JOIN 关联不上的常态形态），核对 ON 条件"
                 elif rate > 0.5:
                     note = " ⚠ 过半 NULL——抽查关联条件"
@@ -157,17 +173,21 @@ def check_new_column_nulls(executor, ts_v2: dict, schema: str) -> List[dict]:
                             "nulls": nulls, "rate": f"{rate:.1%}".rstrip("0").rstrip("."),
                             "note": note.strip()})
         except Exception as e:
-            out.append({"table": table, "col": ",".join(cols), "total": 0, "nulls": 0,
+            out.append({"table": table, "col": ",".join(all_check), "total": 0, "nulls": 0,
                         "rate": "-", "note": f"查询失败: {str(e)[:120]}"})
     return out
 
 
 def _frozen_columns(ts_v2: dict, change: dict) -> Dict[str, List[str]]:
-    """每规则参与比对的冻结列 = 该规则 field_targets - 声明新列。"""
+    """每规则参与比对的冻结列 = 该规则 field_targets - 声明新列 - **类型修改列**
+    （场景 B·2026-10-22：modify 列的值转换本身是变更——MINUS 对比豁免，改由
+    新类型列质量抽查[空值率]守）。"""
     out: Dict[str, List[str]] = {}
     declared_all = {f["field"] for f in change.get("fields", [])}
+    modified_all = {m.get("field") for m in change.get("modify_types", [])}
     for code, rule in ts_v2.get("rules", {}).items():
-        out[code] = [c for c in (rule.get("field_targets") or []) if c not in declared_all]
+        out[code] = [c for c in (rule.get("field_targets") or [])
+                     if c not in declared_all and c not in modified_all]
     return out
 
 

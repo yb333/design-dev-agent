@@ -103,11 +103,15 @@ def render_md(result: dict, has_baseline_dq: bool) -> str:
 
 
 def _collect_change_sets(change_request: dict):
-    """从 change_request 提取变更字段/来源集（键形态按 preprocess_opt 的产出）。"""
+    """从 change_request 提取变更字段/来源集（键形态按 preprocess_opt 的产出）。
+    类型修改字段（modify_type_fields·2026-10-22 场景 B）并入变更字段集——被 DQ
+    锚定/引用的字段类型变了，相关检查同样要重审视。"""
     fields = []
     for f in (change_request.get("fields") or []):
         # 形态兼容：{target_column|column|field}
         fields.append(f.get("target_column") or f.get("column") or f.get("field") or "")
+    for m in (change_request.get("modify_type_fields") or []):
+        fields.append(m.get("field") or "")
     sources = []
     for s in (change_request.get("new_sources") or change_request.get("sources") or []):
         sources.append(s.get("table") or s.get("source_table") or str(s))
