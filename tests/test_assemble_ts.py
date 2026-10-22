@@ -2815,3 +2815,64 @@ class TestDqSectionRender:
         """旧档无 meta.dq_required 键但有 ts.dq_rules（拆分前形态）——保守走占位。"""
         md = self._md(lambda ts: ts.update(dq_rules=[{"rule_name": "x"}]))
         assert "由 dws-dq-producer 独立设计后经 assemble_dq 追加" in md
+
+
+class TestMultiValueSourceFields:
+    """mapping 多值格拆解（2026-10-22）：别名/字段格分号多值等长一一配对；不等长
+    丢弃格内条目（血缘交给口径引用补全——格是提示）。"""
+
+    def test_paired_split(self):
+        from assemble_ts import _mapping_row_source_fields
+        row = {"source_table": "ods_a", "source_alias": "a;b", "source_column": "x;emp"}
+        assert _mapping_row_source_fields(row) == [
+            {"table": "ods_a", "field": "x", "alias": "a"},
+            {"table": "ods_a", "field": "emp", "alias": "b"},
+        ]
+
+    def test_unequal_dropped(self):
+        from assemble_ts import _mapping_row_source_fields
+        assert _mapping_row_source_fields(
+            {"source_table": "ods_a", "source_alias": "a;b", "source_column": "x"}) == []
+        assert _mapping_row_source_fields(
+            {"source_table": "ods_a", "source_alias": "a", "source_column": "-"}) == []
+
+    def test_single_value_unchanged(self):
+        from assemble_ts import _mapping_row_source_fields
+        assert _mapping_row_source_fields(
+            {"source_table": "ods_a", "source_alias": "a", "source_column": "x"}) == [
+            {"table": "ods_a", "field": "x", "alias": "a"}]
+
+    def test_assembly_chain_multi_alias_refs_clean(self):
+        """链路：加工字段 mapping alias=a;b col=x;emp + designer logic 引用 a.x/b.emp
+        → processed.refs 无畸形 'a;b.' 串（格内等长配对 + 口径补全并存）。"""
+        rs = make_rs_input(fields=[
+            {"source_table": "ods_test_f", "source_column": "id", "source_type": "bigint",
+             "transform_rule": "直接复制", "transform_detail": "-",
+             "target_column": "id", "target_column_cn": "ID", "target_type": "bigint",
+             "source_alias": "t", "remark": ""},
+            {"source_table": "ods_test_f", "source_column": "x;emp", "source_type": "numeric",
+             "transform_rule": "数据加工",
+             "transform_detail": "case when t.x is null then cast(-99999 as numeric) else coalesce(b.emp,cast(-99999 as numeric)) end",
+             "target_column": "s", "target_column_cn": "指标", "target_type": "numeric",
+             "source_alias": "t;b", "remark": ""},
+        ], sources=[
+            {"source_schema": "ods", "source_table": "ods_test_f", "source_table_cn": "源A",
+             "source_alias": "t", "target_schema": "dws", "target_table": "dwb_test_f"},
+            {"source_schema": "ods", "source_table": "ods_emp_f", "source_table_cn": "源B",
+             "source_alias": "b", "target_schema": "dws", "target_table": "dwb_test_f"},
+        ])
+        logic = ("case when t.x is null then cast(-99999 as numeric) "
+                 "else coalesce(b.emp,cast(-99999 as numeric)) end")
+        dd = make_design_decisions(rules=[{
+            "rule_code": "R0001", "rule_name": "测试", "scenario": "default",
+            "exec_sequence": 1, "target_table": "dws.dwb_test_f", "design_intent": "测试",
+            "field_targets": ["id", "s", "del_flag", "crt_cycle_id", "last_upd_cycle_id", "dw_last_update_date"],
+            "field_logics": {"s": logic},
+            "grain": {"input": "t.id", "output": "id", "change": "无"},
+        }])
+        from assemble_ts import assemble_ts
+        ts, _, _ = assemble_ts(rs, dd)
+        processed = [p for p in ts["rules"]["R0001"]["fields"]["processed"] if p["target"] == "s"]
+        refs = processed[0]["refs"]
+        assert not any(";" in r for r in refs), f"refs 含畸形多值串: {refs}"
+        assert "t.x" in refs and "b.emp" in refs, refs

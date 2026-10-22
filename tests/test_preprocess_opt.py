@@ -490,3 +490,47 @@ class TestFieldTypeDrift:
         _, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
         ent = next(u for u in unsupported if u["level"] == "entity")
         assert "实体级当前态" in ent.get("note", "")
+
+
+class TestMultiAliasAddField:
+    """多别名形态（2026-10-22 内网反馈）：新增加工字段的源表别名列填多别名分号隔开
+    （提示性登记不保证完整）——拆分号任一命中实体级即过；全不命中 → dangling error
+    且**漏标扫描不误报**（声明集与通过集分离：变更记录明确写了 ADD 的字段不会被说
+    "不在本次变更记录中"）。"""
+
+    def _mapping_with(self, alias):
+        """channel_name 行用指定别名形态（替掉默认行——同名行会让 hits 取首行失真）。"""
+        entity = [ent(), ent(table="dim_channel", alias="c")]
+        attrs = [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                 attr(tcol="channel_name", alias=alias, stable="dim_channel", scol="channel_name")]
+        mapping = mapping_of(entity, attrs)
+        batch = [_to_entry(c) for c in STD_CHANGES if "10-14" in c["变更时间"]]
+        return mapping, batch
+
+    def test_multi_alias_first_hit_used(self, facts):
+        """别名 'a;b'（a 命中实体级，b 不存在）→ 无 dangling；source.alias=首个命中 a。"""
+        mapping, batch = self._mapping_with("a;b")
+        renames, rest = synth_renames(batch)
+        add_fields, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        assert not [d for d in diags if d["code"] == "source_alias_dangling"], diags
+        assert add_fields and add_fields[0]["source"]["alias"] == "a"
+
+    def test_full_width_semicolon_also_splits(self, facts):
+        """全角分号 'a；c'（a 命中、c 是实体级 dim_channel 的别名）→ 命中即过。"""
+        mapping, batch = self._mapping_with("a；c")
+        renames, rest = synth_renames(batch)
+        add_fields, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        assert not [d for d in diags if d["code"] == "source_alias_dangling"], diags
+        assert add_fields[0]["source"]["alias"] == "a"
+
+    def test_dangling_not_misreported_as_unmarked(self, facts):
+        """连带问题回归：别名全不命中 → dangling error 照报，但该字段是变更记录
+        明确声明的 ADD——漏标扫描不得再说它'不在本次变更记录中'。"""
+        mapping, batch = self._mapping_with("xx;yy")
+        renames, rest = synth_renames(batch)
+        add_fields, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        dangling = [d for d in diags if d["code"] == "source_alias_dangling"]
+        unmarked = [d for d in diags if d["code"] == "unmarked_new_field"
+                    and "channel_name" in d["message"]]
+        assert dangling, "全不命中应报 dangling"
+        assert not unmarked, f"变更记录已声明 ADD 的字段不得被漏标误报: {unmarked}"

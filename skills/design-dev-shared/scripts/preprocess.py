@@ -100,6 +100,16 @@ class ExcelMappingParser:
         '备注': 'remark',
         '分组': 'scene_group',
     }
+
+    @staticmethod
+    def split_multi_values(s: str) -> list:
+        """mapping 格多值拆分（2026-10-22 内网反馈）：加工字段涉及多表时 BA 常在
+        「源表别名」格填多别名分号隔开（提示性登记，不保证完整）——"a;b"→["a","b"]；
+        「源表字段名」格同款分隔符形态。单值→[值]，空→[]。消费方：precheck 分级
+        校验 / assemble_ts source_fields 拆解 / preprocess_opt 别名查找，单点拆分
+        不各写各的。分隔符只认分号（全半角）——逗号实遇再扩（YAGNI）。
+        """
+        return [p.strip() for p in re.split(r'[;；]', str(s or "")) if p.strip()]
     
     def __init__(self, filepath: str):
         self.filepath = filepath

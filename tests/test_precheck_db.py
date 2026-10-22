@@ -1643,3 +1643,49 @@ class TestDbVerifiedMarker:
         from preprocess import build_compact
         view = build_compact(_make_rs_input([_biz_field(source_column="id")]))
         assert all("precheck已核" not in t for t in view["tables"])
+
+
+class TestAliasGrading:
+    """源表别名校验分级（2026-10-22 内网反馈）：直接复制的格=权威（严格 error），
+    数据加工的格=提示性登记（多别名分号形态合法、不保证完整——降 warn）。"""
+
+    def _run(self, fields, sources=None, monkeypatch=None):
+        def boom(schema, config_path=""):
+            raise ImportError("skip db")
+        if monkeypatch:
+            monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
+        return precheck(_make_rs_input(fields, sources))
+
+    def test_processed_multi_alias_partial_unknown_warns(self, monkeypatch):
+        """加工字段多别名 a;b（b 不在实体级）→ warn 不 error。"""
+        f = dict(_biz_field(rule="数据加工"), source_alias="a;b")
+        result = self._run([f], monkeypatch=monkeypatch)
+        alias_errs = [e for e in result.errors if "来源别名" in e or "source_alias" in e]
+        assert alias_errs == [], f"多别名加工字段不应 error: {alias_errs}"
+        assert any("提示性登记" in w for w in result.warnings), result.warnings
+
+    def test_processed_empty_alias_warns(self, monkeypatch):
+        """加工字段空别名 → 降 warn（真实来源以映射表达式引用为准）。"""
+        f = dict(_biz_field(rule="数据加工"), source_alias="")
+        result = self._run([f], monkeypatch=monkeypatch)
+        alias_errs = [e for e in result.errors if "source_alias 为空" in e]
+        assert alias_errs == [], f"加工字段空别名不应 error: {alias_errs}"
+        assert any("source_alias 为空" in w for w in result.warnings)
+
+    def test_processed_known_alias_silent(self, monkeypatch):
+        """加工字段单别名命中实体级 → 无 warn 无 error。"""
+        f = dict(_biz_field(rule="数据加工"))
+        result = self._run([f], monkeypatch=monkeypatch)
+        assert not [w for w in result.warnings if "提示性登记" in w]
+
+    def test_direct_multi_alias_blocks(self, monkeypatch):
+        """直接复制多值别名 → error（直取来源必须唯一）。"""
+        f = dict(_biz_field(), source_alias="t;x")
+        result = self._run([f], monkeypatch=monkeypatch)
+        assert any("唯一单别名" in e for e in result.errors), result.errors
+
+    def test_direct_unknown_alias_still_blocks(self, monkeypatch):
+        """直接复制单别名不在实体级 → error（现行为不变）。"""
+        f = dict(_biz_field(), source_alias="zz")
+        result = self._run([f], monkeypatch=monkeypatch)
+        assert any("实体级 mapping 中不存在" in e for e in result.errors)

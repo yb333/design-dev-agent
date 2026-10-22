@@ -30,6 +30,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from config_paths import lts_config_path
+from preprocess import ExcelMappingParser  # split_multi_values（mapping 多值格拆分单点）
 
 try:
     import yaml
@@ -1759,6 +1760,23 @@ def _rule_tmp_aliases(rule: dict) -> dict:
 # ============================================================
 # 组装 ts.json
 # ============================================================
+def _mapping_row_source_fields(r: dict) -> list:
+    """mapping 行 → source_fields 条目（多值格拆解，2026-10-22）：「源表别名」/
+    「源表字段名」格分号多值**等长一一配对**（a;b × x;emp → (a,x)(b,emp)——多表
+    加工的合法登记形态）；不等长/字段格空或占位('-') → 丢弃格内条目——加工字段的
+    格只是提示（多表来源常填不全），血缘权威=design_logic 的口径引用补全
+    （extract_logic_refs → source_alias_map 查表，见 build_field 尾部）。表名取
+    行内格不猜（补全条目带按别名查出的正确表）。直接复制字段单值行为不变。"""
+    cols = ExcelMappingParser.split_multi_values(r.get("source_column", ""))
+    aliases = ExcelMappingParser.split_multi_values(r.get("source_alias", ""))
+    if not cols or all(c in ("-", "—", "–") for c in cols):
+        return []
+    if len(aliases) != len(cols):
+        return []
+    return [{"table": r.get("source_table", ""), "field": c, "alias": a}
+            for a, c in zip(aliases, cols)]
+
+
 def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None,
                 all_source_rows=None, tmp_source="", tmp_alias="", source_alias_map=None):
     """从 rs_input 的 field_mapping 记录 + design_logic 组装 ts 的 field 对象。
@@ -1844,19 +1862,9 @@ def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=
         _tbl = tmp_source or (reads_tables[0] if reads_tables else "临时表")
         source_fields_list = [{"table": _tbl, "field": target_column, "alias": tmp_alias or _tbl}]
     elif all_source_rows:
-        source_fields_list = [
-            {
-                "table": r.get("source_table", ""),
-                "field": r.get("source_column", ""),
-                "alias": r.get("source_alias", ""),
-            }
-            for r in all_source_rows
-            if r.get("source_column")  # 跳过无来源的（赋值/序列）
-        ]
+        source_fields_list = [sf for r in all_source_rows for sf in _mapping_row_source_fields(r)]
     else:
-        source_fields_list = [
-            {"table": source_table, "field": source_column, "alias": alias}
-        ] if source_column else []
+        source_fields_list = _mapping_row_source_fields(field_rec)
 
     # 口径引用补全：design_logic 的限定引用是加工字段的真来源（mapping 源字段单元格
     # 对加工字段只是提示，常写不全）。表归属从 source_tables 解析（完整权威——引用字段

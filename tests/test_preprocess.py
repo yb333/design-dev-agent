@@ -1597,3 +1597,25 @@ class TestAllPrefilledDirectRunHint:
               "field_mappings": []}
         view = build_compact(rs)
         assert "填空" in view["评估清单"]["用法"]            # 填空指引仍在
+
+
+class TestSplitMultiValues:
+    """mapping 格多值拆分原语（2026-10-22 内网反馈：加工字段源表别名列分号多别名）。"""
+
+    def test_basic_split(self):
+        from preprocess import ExcelMappingParser
+        assert ExcelMappingParser.split_multi_values("a;b") == ["a", "b"]
+
+    def test_full_width_and_spaces(self):
+        from preprocess import ExcelMappingParser
+        assert ExcelMappingParser.split_multi_values(" a ； b ; c ") == ["a", "b", "c"]
+
+    def test_single_and_empty(self):
+        from preprocess import ExcelMappingParser
+        assert ExcelMappingParser.split_multi_values("t") == ["t"]
+        assert ExcelMappingParser.split_multi_values("") == []
+        assert ExcelMappingParser.split_multi_values("-") == ["-"]
+
+    def test_empty_segments_dropped(self):
+        from preprocess import ExcelMappingParser
+        assert ExcelMappingParser.split_multi_values("a;;b；") == ["a", "b"]

@@ -366,6 +366,13 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
         if row.get("source_alias"):
             alias_index[row["source_alias"]] = row
     attr_target_cols = {(r.get("target_column") or "").strip().lower() for r in attr_rows}
+    # 本批次声明的整行新增字段集（变更事实——与"校验通过集"add_keys 分离，2026-10-22
+    # 内网反馈连带修复）：任何校验失败 continue 的条目仍是变更范围，漏标扫描豁免它
+    # ——否则"在变更记录中明确写了 ADD"的字段被误报"不在本次变更记录中"，误导处置
+    # 方向（error 已准确报了该条目的问题，warn 不需要再错位复述）。
+    batch_declared_adds = {e["key"] for e in batch
+                           if e["page"] == "attr" and e["ctype"] == "ADD"
+                           and e["column"] == WHOLE_ROW_MARK}
 
     for rn in renames:
         unsupported.append({"level": "attr", "change_type": "rename",
@@ -414,11 +421,20 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                           "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 标本次新增"
                                      f"但 baseline 已存在（若为改口径/加源请改用 MODIFY）"})
             continue
-        row, ent = hits[0], alias_index.get(hits[0].get("source_alias", ""))
+        # 多别名形态（2026-10-22 内网反馈）：加工字段的源表别名列常填多别名分号隔开
+        # （提示性登记不保证完整）——拆分号后任一命中实体级即过（取首个命中配详情）
+        row = hits[0]
+        raw_alias = (row.get("source_alias") or "").strip()
+        ent, hit_alias = None, ""
+        for _al in ExcelMappingParser.split_multi_values(raw_alias):
+            ent = alias_index.get(_al)
+            if ent is not None:
+                hit_alias = _al
+                break
         if ent is None:
             diags.append({"level": "error", "code": "source_alias_dangling",
-                          "message": f"新增字段 {e['key']!r}：源表别名 "
-                                     f"{hits[0].get('source_alias', '')!r} 在实体级找不到"})
+                          "message": f"新增字段 {e['key']!r}：源表别名 {raw_alias!r} "
+                                     f"在实体级找不到（多别名已按分号拆开逐个查）"})
             continue
         add_keys[e["key"]] = e
         add_fields.append({
@@ -427,7 +443,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             "type": row.get("target_type", ""), "scene_group": row.get("scene_group", ""),
             "change_entry": {"seq": e["seq"], "before": e["before"], "after": e["after"]},
             "source": {"schema": ent.get("source_schema", ""),
-                       "table": ent.get("source_table", ""), "alias": hits[0].get("source_alias", ""),
+                       "table": ent.get("source_table", ""), "alias": hit_alias,
                        "field": row.get("source_column", ""),
                        # mapping 声明源类型（precheck_opt 连库以库为准对账修正）
                        "source_type": row.get("source_type", ""),
@@ -437,11 +453,13 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             "new_source_table": ent.get("source_table", "") not in facts["source_tables"],
         })
 
-    # 漏标扫描：属性级当前态字段不在 baseline、且不在本批次 ADD/Rename 新名清单 → 漏标
+    # 漏标扫描：属性级当前态字段不在 baseline、且不在本批次声明/ADD/Rename 新名清单 → 漏标
+    # （豁免 batch_declared_adds 声明集——校验失败的字段仍是变更范围，见头部注释）
     rename_new = {rn["new"] for rn in renames}
     for i, row in enumerate(attr_rows, start=2):
         tcol = row.get("target_column", "")
-        if tcol and tcol not in facts["target_fields"] and tcol not in add_keys and tcol not in rename_new:
+        if tcol and tcol not in facts["target_fields"] and tcol not in batch_declared_adds \
+                and tcol not in rename_new:
             diags.append({"level": "warn", "code": "unmarked_new_field",
                           "message": f"属性级第{i}行：{tcol!r} 不在 baseline 存量且不在本次"
                                      f"变更记录中（历史漏入档 or 漏标）——请业务确认"})

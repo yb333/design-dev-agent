@@ -242,23 +242,52 @@ def precheck(
     # 6. 别名一致性 + 表别名重复 + 字段级/表级一致性
     # 跳过赋值/序列字段——它们无真实来源表，source_alias 留空是正常的
     # 标识符（表/字段/别名/schema）大小写不敏感——值（过滤/关联/加工里的字面量）才敏感
+    # ★ 按字段类型分级（2026-10-22 内网反馈）：直接复制的别名格=权威（来源唯一，严格
+    # error）；数据加工的别名格=提示性登记（多表加工常填多别名分号隔开且不保证完整，
+    # 真实来源以映射表达式引用为准——装配时口径引用补全兜底）→ 拆分号逐个查，异常降
+    # warn 不阻断（与装配侧"格是提示"定调对齐——此前检测比装配严，合法形态被卡）。
+    from preprocess import ExcelMappingParser
     entity_aliases = {(st.get("source_alias") or "").strip().lower()
                       for st in source_tables if (st.get("source_alias") or "").strip()}
     for fm in field_mappings:
         fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
         if fm_rule in ("赋值", "序列"):
             continue
-        fm_alias = (fm.get("source_alias") or "").strip().lower()
-        if not fm_alias:
+        raw_alias = (fm.get("source_alias") or "").strip()
+        aliases = ExcelMappingParser.split_multi_values(raw_alias)
+        is_processed = (fm_rule == "数据加工")
+        if is_processed:
+            if not aliases:
+                result.add_warn(
+                    f"字段 {fm.get('target_column', '?')}（数据加工）的 source_alias 为空——"
+                    f"提示性登记建议补全；真实来源以映射表达式引用为准（装配时口径引用补全兜底）"
+                )
+                continue
+            unknown = [a for a in aliases if a.lower() not in entity_aliases]
+            if unknown:
+                result.add_warn(
+                    f"字段 {fm.get('target_column', '?')}（数据加工）的来源别名 {unknown} "
+                    f"不在实体级 mapping——别名格是提示性登记（多表加工常填不全），"
+                    f"真实来源以映射表达式引用为准；建议在实体级补登记或修正拼写"
+                )
+            continue
+        # 直接复制：来源唯一单别名（格=权威）
+        if not aliases:
             # 直接复制/数据加工字段该填 source_alias 没填 → error（多表 JOIN 会歧义，单表也无法定位来源）
             result.add_error(
                 f"字段 {fm.get('target_column', '?')} 的 source_alias 为空"
                 f"（映射规则='{fm_rule}'）——在 mapping.xlsx 属性级'源表别名'列填"
                 f"（须与实体级定义一致）"
             )
-        elif fm_alias not in entity_aliases:
+        elif len(aliases) > 1:
             result.add_error(
-                f"字段 {fm.get('target_column', '?')} 的来源别名 '{fm_alias}' 在实体级 mapping 中不存在"
+                f"字段 {fm.get('target_column', '?')}（直接复制）的来源必须唯一单别名，"
+                f"发现多值 '{raw_alias}'——直取字段来源不能多值"
+                f"（多表来源是加工字段形态：映射规则改'数据加工'并写映射表达式）"
+            )
+        elif aliases[0].lower() not in entity_aliases:
+            result.add_error(
+                f"字段 {fm.get('target_column', '?')} 的来源别名 '{raw_alias}' 在实体级 mapping 中不存在"
                 f"——在 mapping.xlsx 属性级'源表别名'列改（须与实体级定义一致）"
             )
 
