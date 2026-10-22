@@ -23,9 +23,9 @@ PKG_RS = "RS_需求文档.md"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
 ENTITY_COLS = ["源表schema", "源表物理表名", "源表别名", "目标表逻辑schema",
-               "目标表物理名称", "关联&限定条件", "备注"]
+               "目标表物理名称", "关联&限定条件", "备注", "源表中文名", "目标表中文名"]
 ATTR_COLS = ["分组", "源表别名", "源表物理表名", "源表字段名", "映射规则", "映射表达式",
-             "目标字段名", "目标字段中文名", "目标字段类型", "备注"]
+             "目标字段名", "目标字段中文名", "目标字段类型", "备注", "源schema", "源表字段类型"]
 CHANGE_COLS = ["变更序号", "变更时间", "变更页签", "变更KEY", "变更列", "变更类型", "变更前", "变更后"]  # 真实模板形态（KEY 大写）
 
 RS_MD = """# 某资产需求规格
@@ -534,3 +534,53 @@ class TestMultiAliasAddField:
                     and "channel_name" in d["message"]]
         assert dangling, "全不命中应报 dangling"
         assert not unmarked, f"变更记录已声明 ADD 的字段不得被漏标误报: {unmarked}"
+
+
+class TestMappingSheetsConverged:
+    """opt 全量 mapping 解析收敛（2026-10-22）：read_full_mapping 退役——
+    内网坑回归锁：大写列头「源表Schema」在 opt 链路同样命中（此前 source.schema
+    恒空一路漏到 change_request）。"""
+
+    def _bigcase_pkg(self, tmp_path):
+        """列头大写驼峰形态的真实风 mapping（用户现场形态）。"""
+        entity_cols = ["源表Schema", "源表物理表名", "源表中文名", "源表别名",
+                       "目标表逻辑Schema", "目标表中文名", "目标表物理名称", "关联&限定条件", "备注"]
+        attr_cols = ["源Schema", "源表物理表名", "源表别名", "源表字段名", "源表字段中文名",
+                     "源表字段类型", "映射规则", "映射表达式", "目标字段名", "目标字段中文名",
+                     "目标字段类型", "备注"]
+        pkg = tmp_path / "pkg"
+        pkg.mkdir(parents=True)
+        wb = Workbook()
+        ws1 = wb.active; ws1.title = "实体级mapping"; ws1.append(entity_cols)
+        ws1.append(["ods", "ods_trade_order_di", "订单", "a", "dws", "宽表", "dwb_trade_order_d", "", ""])
+        ws2 = wb.create_sheet("属性级mapping"); ws2.append(attr_cols)
+        ws2.append(["ods", "ods_trade_order_di", "a", "order_id", "订单号", "bigint",
+                    "直取", "-", "order_id", "订单号", "bigint", ""])
+        ws3 = wb.create_sheet("变更记录"); ws3.append(CHANGE_COLS)
+        ws3.append([1, "2026-10-14", "属性级", "default|order_id", "备注", "MODIFY", "", ""])
+        wb.save(pkg / PKG_XLSX)
+        (pkg / PKG_RS).write_text(RS_MD, encoding="utf-8")
+        return pkg
+
+    def test_uppercase_columns_flow_through_opt(self, tmp_path, monkeypatch):
+        """大写列头 mapping 走 opt 预处理全链：解析/静态检查/变更匹配均正常
+        （不再 source_schema 恒空/缺列误炸）。"""
+        import preprocess_opt as popt
+        pkg = self._bigcase_pkg(tmp_path)
+        entries = popt.read_change_sheet(pkg / PKG_XLSX)
+        assert entries and entries[0]["key"] == "order_id"
+        mapping = popt.parse_mapping_sheets(pkg / PKG_XLSX)
+        assert mapping["entity"][0]["source_schema"] == "ods", "大写 Schema 列头必须命中"
+        assert mapping["attr"][0]["source_schema"] == "ods"
+        diags = popt.check_mapping_static(mapping["attr"], mapping["entity"])
+        assert not [d for d in diags if d["level"] == "error"], diags
+
+    def test_static_check_shared_semantics_in_opt(self, tmp_path):
+        """opt 接静态检查=同一实现同一语义：直接复制字段别名不在实体级 → error 阻断。"""
+        import preprocess_opt as popt
+        from preprocess import parse_mapping_sheets, check_mapping_static
+        pkg = self._bigcase_pkg(tmp_path)
+        mapping = parse_mapping_sheets(pkg / PKG_XLSX)
+        mapping["attr"][0]["source_alias"] = "ghost"  # 不在实体级
+        diags = check_mapping_static(mapping["attr"], mapping["entity"])
+        assert any(d["level"] == "error" and "ghost" in d["message"] for d in diags)

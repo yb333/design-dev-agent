@@ -18,9 +18,9 @@ from audit_ingest import audit, ROUTES, main
 FACTS = json.loads((FIXTURES / "asset_facts_v13_full.json").read_text(encoding="utf-8"))
 FACTS_V14 = json.loads((FIXTURES / "asset_facts_v14_review.json").read_text(encoding="utf-8"))
 
-ENTITY_COLS = ["分组", "源表schema", "源表物理表名", "源表别名", "目标表逻辑schema", "目标表物理名称", "关联&限定条件", "备注"]
+ENTITY_COLS = ["分组", "源表schema", "源表物理表名", "源表别名", "目标表逻辑schema", "目标表物理名称", "关联&限定条件", "备注", "源表中文名", "目标表中文名"]
 ATTR_COLS = ["分组", "源表别名", "源表物理表名", "源表字段名", "源表字段类型", "映射规则", "映射表达式",
-             "目标字段名", "目标字段中文名", "目标字段类型", "备注"]
+             "目标字段名", "目标字段中文名", "目标字段类型", "备注", "源schema"]
 CHANGE_COLS = ["变更序号", "变更时间", "变更页签", "变更KEY", "变更列", "变更类型", "变更前", "变更后"]
 
 
@@ -148,3 +148,40 @@ class TestFieldTypeDrift:
         errors, warns, _ = audit(FACTS, "dws.dwb_cust_asset_d", m)
         # cust_id 标新增→add_field_conflict 拦（既另有测试）；类型对账不对其产出
         assert [e["code"] for e in errors] == ["add_field_conflict"]
+
+
+class TestMappingSheetsConverged:
+    """入料链 mapping 解析收敛（2026-10-22）：大写列头命中 + 缺列独立路由
+    mapping_sheet_invalid（不再与 change_sheet_invalid 混淆语义）。"""
+
+    def test_uppercase_columns_parse_ok(self, tmp_path):
+        """大写「源表Schema」列头：台账读得到 source_schema（不再恒空错位）。"""
+        from preprocess import parse_mapping_sheets
+        m = make_mapping(tmp_path / "m.xlsx",
+                         attr_rows=[["default", "b", "ods_acct_balance_di", "cust_id", "VARCHAR(64)",
+                                     "直取", "-", "cust_id", "客户号", "VARCHAR(64)", "", "ods"]],
+                         change_rows=[[1, "2026-10-20", "属性级", "DEFAULT|GONE_X",
+                                       "目标字段名", "DELETE", "gone_x", ""]])
+        from openpyxl import load_workbook
+        wb = load_workbook(m); ws = wb["属性级mapping"]; ws.cell(1, 12, "源Schema"); wb.save(m)
+        mapping = parse_mapping_sheets(m)
+        assert mapping["attr"][0]["source_schema"] == "ods"
+
+    def test_missing_required_column_routes_independently(self, tmp_path):
+        """缺必要列 → mapping_sheet_invalid（独立 code 与路由，不冒充变更页签问题）。"""
+        from openpyxl import Workbook
+        p = tmp_path / "m.xlsx"
+        wb = Workbook()
+        ws1 = wb.active; ws1.title = "实体级mapping"
+        ws1.append([c for c in ENTITY_COLS if c != "源表中文名"])  # 缺必要列
+        ws1.append(["default", "ods", "ods_acct_balance_di", "b", "dws", "dwb_cust_asset_d", "", "", "目标中文名"])
+        ws2 = wb.create_sheet("属性级mapping"); ws2.append(ATTR_COLS)
+        ws2.append(["default", "b", "ods_acct_balance_di", "cust_id", "VARCHAR(64)", "直取", "-",
+                    "cust_id", "客户号", "VARCHAR(64)", "", "ods"])
+        ws3 = wb.create_sheet("变更记录"); ws3.append(CHANGE_COLS)
+        ws3.append([1, "2026-10-20", "属性级", "DEFAULT|GONE_X", "目标字段名", "DELETE", "gone_x", ""])
+        wb.save(p)
+        errors, warns, _ = audit(FACTS, "dws.dwb_cust_asset_d", p)
+        assert [e["code"] for e in errors] == ["mapping_sheet_invalid"]
+        assert "源表中文名" in errors[0]["detail"]
+        assert "mapping 模板" in ROUTES["mapping_sheet_invalid"]

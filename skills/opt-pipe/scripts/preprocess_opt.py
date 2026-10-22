@@ -36,7 +36,8 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from preprocess import ExcelMappingParser
+from preprocess import (ExcelMappingParser, parse_mapping_sheets, check_mapping_static,
+                        clean_excel_column)
 
 # 变更记录页签八列（规格见 mapping-format.md；列名按真实模板——「变更KEY」KEY 为大写，
 # 匹配大小写不敏感：列头 strip+lower 归一后对标准名查找，变更KEY/变更key 均命中）
@@ -155,32 +156,10 @@ def extract_version_section(rs_text: str, version: str) -> str:
 # 3. 全量 mapping 读取 + 备注标记分类
 # ---------------------------------------------------------------------------
 
-def read_full_mapping(xlsx_path: Path) -> Dict[str, List[dict]]:
-    """读全量 mapping 两 sheet（复用 preprocess 列名映射）→ 规范化行（含 remark 原文）。"""
-    xlsx = pd.ExcelFile(xlsx_path)
-    entity_df = attr_df = None
-    for sheet in xlsx.sheet_names:
-        s = sheet.lower()
-        if any(k in s for k in ("实体级", "entity")):
-            entity_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
-        elif any(k in s for k in ("属性级", "attribute")):
-            attr_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
-
-    def normalize(df, col_map):
-        rows = []
-        if df is None:
-            return rows
-        for _, raw in df.iterrows():
-            row = {}
-            for col, val in raw.items():
-                name = col_map.get(str(col).strip())
-                if name:
-                    row[name] = str(val).strip() if val is not None else ""
-            rows.append(row)
-        return rows
-
-    return {"entity": normalize(entity_df, ExcelMappingParser.ENTITY_COLUMN_MAP),
-            "attr": normalize(attr_df, ExcelMappingParser.ATTRIBUTE_COLUMN_MAP)}
+# read_full_mapping 已退役（2026-10-22 收敛）：全量 mapping 两页签的读取/列名归一/
+# 列完整性校验全仓唯一实现=shared preprocess.parse_mapping_sheets（与主链路同一份
+# 代码——「源表Schema」大写/全角/尾部* 归一命中，缺标准列 ValueError 阻断）。
+# opt 侧自有代码只剩变更记录这个真正的增量（read_change_sheet/批次/合成/匹配/对账）。
 
 
 def read_change_sheet(xlsx_path: Path) -> List[dict]:
@@ -188,6 +167,8 @@ def read_change_sheet(xlsx_path: Path) -> List[dict]:
 
     行结构：{seq, time(YYYYMM), page(entity|attr), group, key, column, ctype, before, after}。
     缺页签/缺列/页签值或类型枚举外/时间无法归一 → ValueError（exit 2 阻断改输入）。
+    列头匹配=clean_excel_column 归一单点（2026-10-22 收敛——此前 name.lower() 是
+    半吊子归一，与全量页签的清洗链口径分裂）。
     """
     xlsx = pd.ExcelFile(xlsx_path)
     sheet = next((s for s in xlsx.sheet_names if "变更记录" in s), None)
@@ -196,8 +177,7 @@ def read_change_sheet(xlsx_path: Path) -> List[dict]:
     df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
     col_idx = {}
     for c in df.columns:
-        name = str(c).strip()
-        std = _CHANGE_COL_LOOKUP.get(name.lower())
+        std = _CHANGE_COL_LOOKUP.get(clean_excel_column(str(c)))
         if std and std not in col_idx:
             col_idx[std] = c
     missing = [c for c in CHANGE_SHEET_COLS if c not in col_idx]
@@ -541,10 +521,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
     facts = baseline_facts(ts_baseline)
-    mapping = read_full_mapping(mapping_path)
+    try:
+        mapping = parse_mapping_sheets(mapping_path)
+    except ValueError as e:
+        print(f"OPT_PRECHECK_ERROR: mapping 两页签解析失败——{e}", file=sys.stderr)
+        return 2
+    # 全量静态检查（shared 单点，2026-10-22 接入）：与主链路 precheck 同一实现同一
+    # 阻断语义（error 照拦 exit 2）——opt 相对主链路的合法差异只在连库检查范围
+    # （precheck_opt 只检新增子集），静态检查零重定义。
+    static_diags = [{"level": d["level"], "code": "mapping_static", "message": d["message"]}
+                    for d in check_mapping_static(mapping["attr"], mapping["entity"])]
     renames, rest = synth_renames(batch)
     add_fields, unsupported, diags = extract_and_check(rest, renames, mapping, facts,
                                                        version, rs_section)
+    diags = static_diags + diags
 
     errors = [d for d in diags if d["level"] == "error"]
     warns = [d for d in diags if d["level"] == "warn"]

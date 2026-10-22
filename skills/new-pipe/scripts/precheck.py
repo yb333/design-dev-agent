@@ -239,125 +239,14 @@ def precheck(
                 f"{len(incremental_tables)} 张增量驱动表——确认是否应为增量"
             )
 
-    # 6. 别名一致性 + 表别名重复 + 字段级/表级一致性
-    # 跳过赋值/序列字段——它们无真实来源表，source_alias 留空是正常的
-    # 标识符（表/字段/别名/schema）大小写不敏感——值（过滤/关联/加工里的字面量）才敏感
-    # ★ 按字段类型分级（2026-10-22 内网反馈）：直接复制的别名格=权威（来源唯一，严格
-    # error）；数据加工的别名格=提示性登记（多表加工常填多别名分号隔开且不保证完整，
-    # 真实来源以映射表达式引用为准——装配时口径引用补全兜底）→ 拆分号逐个查，异常降
-    # warn 不阻断（与装配侧"格是提示"定调对齐——此前检测比装配严，合法形态被卡）。
-    from preprocess import ExcelMappingParser
-    entity_aliases = {(st.get("source_alias") or "").strip().lower()
-                      for st in source_tables if (st.get("source_alias") or "").strip()}
-    for fm in field_mappings:
-        fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
-        if fm_rule in ("赋值", "序列"):
-            continue
-        raw_alias = (fm.get("source_alias") or "").strip()
-        aliases = ExcelMappingParser.split_multi_values(raw_alias)
-        is_processed = (fm_rule == "数据加工")
-        if is_processed:
-            if not aliases:
-                result.add_warn(
-                    f"字段 {fm.get('target_column', '?')}（数据加工）的 source_alias 为空——"
-                    f"提示性登记建议补全；真实来源以映射表达式引用为准（装配时口径引用补全兜底）"
-                )
-                continue
-            unknown = [a for a in aliases if a.lower() not in entity_aliases]
-            if unknown:
-                result.add_warn(
-                    f"字段 {fm.get('target_column', '?')}（数据加工）的来源别名 {unknown} "
-                    f"不在实体级 mapping——别名格是提示性登记（多表加工常填不全），"
-                    f"真实来源以映射表达式引用为准；建议在实体级补登记或修正拼写"
-                )
-            continue
-        # 直接复制：来源唯一单别名（格=权威）
-        if not aliases:
-            # 直接复制/数据加工字段该填 source_alias 没填 → error（多表 JOIN 会歧义，单表也无法定位来源）
-            result.add_error(
-                f"字段 {fm.get('target_column', '?')} 的 source_alias 为空"
-                f"（映射规则='{fm_rule}'）——在 mapping.xlsx 属性级'源表别名'列填"
-                f"（须与实体级定义一致）"
-            )
-        elif len(aliases) > 1:
-            result.add_error(
-                f"字段 {fm.get('target_column', '?')}（直接复制）的来源必须唯一单别名，"
-                f"发现多值 '{raw_alias}'——直取字段来源不能多值"
-                f"（多表来源是加工字段形态：映射规则改'数据加工'并写映射表达式）"
-            )
-        elif aliases[0].lower() not in entity_aliases:
-            result.add_error(
-                f"字段 {fm.get('target_column', '?')} 的来源别名 '{raw_alias}' 在实体级 mapping 中不存在"
-                f"——在 mapping.xlsx 属性级'源表别名'列改（须与实体级定义一致）"
-            )
-
-    # 6a. 表别名重复检查（实体级同别名出现多次 → JOIN 时歧义）
-    alias_count: dict[str, int] = {}
-    for st in source_tables:
-        al = (st.get("source_alias") or "").strip()
-        if al:
-            alias_count[al] = alias_count.get(al, 0) + 1
-    for al, cnt in alias_count.items():
-        if cnt > 1:
-            result.add_error(
-                f"实体级表别名 '{al}' 重复出现 {cnt} 次（JOIN 时会歧义）"
-                f"——在 mapping.xlsx 实体级'源表别名'列改重复别名（每张源表唯一）"
-            )
-
-    # 6b. 字段级与表级一致性：字段级的 source_schema/source_table 应在实体级定义范围内
-    # 跳过赋值/序列字段——它们没有真实来源表（赋值是固定值，如 NULL AS），
-    # preprocess 可能把表达式的字符解析成 source_table='-'，不该校验
-    entity_tables = {
-        ((st.get("source_schema") or "").strip().lower(), (st.get("source_table") or "").strip().lower())
-        for st in source_tables
-    }
-    for fm in field_mappings:
-        fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
-        if fm_rule in ("赋值", "序列"):
-            continue  # 赋值/序列无来源表，跳过
-        fm_sch = (fm.get("source_schema") or "").strip().lower()
-        fm_tbl = (fm.get("source_table") or "").strip().lower()
-        if fm_sch and fm_tbl and (fm_sch, fm_tbl) not in entity_tables:
-            result.add_error(
-                f"字段 {fm.get('target_column', '?')} 的来源表 {fm_sch}.{fm_tbl} "
-                f"在实体级 mapping 中未定义"
-                f"——在 mapping.xlsx 实体级补充该源表，或修正属性级来源表名"
-            )
-
-    # 6c. source_column 不能是中文（应是英文物理列名，中文是另一个字段"源表字段中文名"）
-    import re as _re
-    for fm in field_mappings:
-        sc = (fm.get("source_column") or "").strip()
-        if sc and _re.search(r"[\u4e00-\u9fff]", sc):
-            result.add_error(
-                f"字段 {fm.get('target_column', '?')} 的 source_column '{sc}' 含中文"
-                f"（应为英文物理列名）——在 mapping.xlsx'源表字段名'列改为英文列名，"
-                f"中文写进'源表字段中文名'列"
-            )
-
-    # 7. 映射表达式模糊术语检查
-    biz_terms = ["等等", "之类", "相关", "之类的", "等等等"]
-    for fm in field_mappings:
-        expr = fm.get("transform_detail") or fm.get("mapping_expression") or ""
-        for term in biz_terms:
-            if term in str(expr):
-                result.add_warn(f"字段 {fm.get('target_column', '?')} 的映射表达式含模糊术语: '{term}'")
-
-    # 7.5 join_condition 含 SQL 关键字 → 输入的代码是描述不是规格（designer 翻译归位）
-    #   典型："left join on a.x=b.y and b.status='N'" / 条件里混 where——
-    #   ON 过滤还是行过滤要 designer 归位（joins.filter vs 规则 filter），不能照抄形态
-    import re as _re_kw
-    for st in rs_input.get("source_tables") or []:
-        cond = (st.get("join_condition") or "").strip()
-        if not cond:
-            continue
-        _kw_hits = [kw for kw in ("where", "left join", "inner join", "group by", "order by")
-                    if _re_kw.search(rf'\b{kw}\b', cond, _re_kw.IGNORECASE)]
-        if _kw_hits:
-            result.add_warn(
-                f"表 {st.get('source_table', '?')} 的 join_condition 含 SQL 关键字 {_kw_hits}"
-                f"——输入的代码是描述不是规格：designer 翻译时归位（join 级限定 → joins.filter；"
-                f"行过滤 → 规则级 filter），不照抄代码形态")
+    # 6~7.5. mapping 全量静态检查（shared 单点，2026-10-22 归位）：检查项/文案/阻断
+    # 语义与 opt preprocess_opt 共享同一实现（check_mapping_static——precheck 第 6 系
+    # 整体搬入：别名校验分级[直接复制格=权威/加工格=提示性登记]/表别名重复/字段级表级
+    # 一致性/中文列名/模糊术语/join_condition SQL 关键字）。此处纯投影（error/warn
+    # 各归各的呈现），行为与搬出前零变化。
+    from preprocess import check_mapping_static
+    for _d in check_mapping_static(field_mappings, source_tables):
+        (result.add_error if _d["level"] == "error" else result.add_warn)(_d["message"])
 
     # 8. 审计字段校验
     _check_audit_fields(field_mappings, result)

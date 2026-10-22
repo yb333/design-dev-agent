@@ -1619,3 +1619,75 @@ class TestSplitMultiValues:
     def test_empty_segments_dropped(self):
         from preprocess import ExcelMappingParser
         assert ExcelMappingParser.split_multi_values("a;;b；") == ["a", "b"]
+
+
+class TestParseMappingSheets:
+    """全量 mapping 页签读取（全仓唯一实现，2026-10-22 收敛）：列名归一命中
+    「源表Schema」大写/全角/尾部*——内网反馈坑（read_full_mapping 整串精确匹配
+    时代 source_schema 恒空）的回归锁。"""
+
+    def _xlsx(self, tmp_path, entity_cols, attr_cols, entity_row=None, attr_row=None):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws1 = wb.active; ws1.title = "实体级mapping"; ws1.append(entity_cols)
+        ws1.append(entity_row or ["ods", "ods_a", "源A", "a", "dws", "宽表", "dwb_test_f", "", "", "测试", "宽表"])
+        ws2 = wb.create_sheet("属性级mapping"); ws2.append(attr_cols)
+        ws2.append(attr_row or ["default", "a", "ods_a", "id", "直接复制", "-",
+                                "id", "ID", "bigint", "", "ods", "bigint"])
+        p = tmp_path / "m.xlsx"
+        wb.save(p)
+        return p
+
+    STD_ENTITY = ["源表schema", "源表物理表名", "源表中文名", "源表别名",
+                  "目标表逻辑schema", "目标表中文名", "目标表物理名称", "关联&限定条件", "备注"]
+    STD_ATTR = ["源schema", "源表物理表名", "源表别名", "源表字段名", "源表字段中文名",
+                "源表字段类型", "映射规则", "映射表达式", "目标字段名", "目标字段中文名",
+                "目标字段类型", "备注"]
+
+    def test_uppercase_schema_column_matches(self, tmp_path):
+        """用户报的原始场景：列头「源表Schema」（大写 S）→ source_schema 正确读出。"""
+        from preprocess import parse_mapping_sheets
+        p = self._xlsx(tmp_path, self.STD_ENTITY[:], self.STD_ATTR[:])
+        # 把实体级「源表schema」改成「源表Schema」——重造（列序对应行值）
+        from openpyxl import load_workbook
+        wb = load_workbook(p); ws = wb["实体级mapping"]; ws.cell(1, 1, "源表Schema"); wb.save(p)
+        out = parse_mapping_sheets(p)
+        assert out["entity"][0]["source_schema"] == "ods", \
+            f"大写列头归一命中失败（bug 回归）: {out['entity'][0]}"
+
+    def test_full_width_and_star_suffix_normalized(self, tmp_path):
+        """全角列头「源表ｓｃｈｅｍａ」/尾部*「目标表物理名称*」均归一命中。"""
+        from preprocess import parse_mapping_sheets, clean_excel_column
+        assert clean_excel_column("源表ｓｃｈｅｍａ") == "源表schema"
+        assert clean_excel_column("目标表物理名称*") == "目标表物理名称"
+        p = self._xlsx(tmp_path, self.STD_ENTITY[:], self.STD_ATTR[:])
+        from openpyxl import load_workbook
+        wb = load_workbook(p); ws = wb["实体级mapping"]
+        ws.cell(1, 1, "源表ｓｃｈｅｍａ"); ws.cell(1, 7, "目标表物理名称*"); wb.save(p)
+        out = parse_mapping_sheets(p)
+        assert out["entity"][0]["source_schema"] == "ods"
+        assert out["entity"][0]["target_table"] == "dwb_test_f"
+
+    def test_missing_required_column_blocks(self, tmp_path):
+        """缺必要列（可选列除外）→ ValueError 阻断（主链路 column_missing 即阻断，同一语义）。"""
+        from preprocess import parse_mapping_sheets
+        cols = [c for c in self.STD_ENTITY if c != "源表中文名"]
+        p = self._xlsx(tmp_path, cols, self.STD_ATTR[:])
+        with pytest.raises(ValueError, match="源表中文名"):
+            parse_mapping_sheets(p)
+
+    def test_optional_column_missing_ok(self, tmp_path):
+        """可选列（备注/分组/关联&限定条件）缺失不拦。"""
+        from preprocess import parse_mapping_sheets
+        cols = [c for c in self.STD_ENTITY if c not in ("备注", "关联&限定条件")]
+        p = self._xlsx(tmp_path, cols, self.STD_ATTR[:])
+        out = parse_mapping_sheets(p)
+        assert out["entity"][0]["source_table"] == "ods_a"
+
+    def test_missing_both_sheets_blocks(self, tmp_path):
+        from preprocess import parse_mapping_sheets
+        from openpyxl import Workbook
+        p = tmp_path / "m.xlsx"
+        wb = Workbook(); wb.active.title = "变更记录"; wb.save(p)
+        with pytest.raises(ValueError, match="实体级"):
+            parse_mapping_sheets(p)

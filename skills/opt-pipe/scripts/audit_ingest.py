@@ -29,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from baseline_contract import norm_asset, validate_baseline_v1
-from preprocess_opt import (pick_batch_version, read_change_sheet, read_full_mapping,
+from preprocess import parse_mapping_sheets
+from preprocess_opt import (pick_batch_version, read_change_sheet,
                             field_type_drift, WHOLE_ROW_MARK)
 
 # 每类拦截自带处置路由（"结案陈词"——AI 上报即止，不侦探）
@@ -41,6 +42,9 @@ ROUTES = {
         "① 换变更前导出的旧版制品重跑；② 清理变更记录页签的已执行批次行；"
         "③ 确认这是另一次变更（改变更记录后重来）"),
     "change_sheet_invalid": "变更记录页签格式问题——按 mapping-format.md 八列规范改输入",
+    "mapping_sheet_invalid": (
+        "mapping 实体级/属性级页签缺标准列或列头写错（大小写/全角已归一后仍未命中）"
+        "——按 mapping 模板列名修正后重跑"),
     "structural_review": (
         "结构级矛盾待人审——reverse/asset_facts.json 全景可查（排查：逆向到底解析出了什么）。"
         "处置三选一：① 料给错了 → 换对制品重跑 facts；② 矛盾已知悉（存量历史债）→ 显式放行："
@@ -101,19 +105,24 @@ def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[d
                     errors.append({"code": "add_field_conflict",
                                    "detail": f"变更记录标新增字段 {k!r}，但制品（产物字段集）已存在"})
             # 反向对账：制品有、mapping 当前态没有、也不是本批次新增 → 台账滞后
-            mapping = read_full_mapping(mapping_path)
-            declared = {(r.get("target_column") or "").strip().lower()
-                        for r in mapping["attr"] if r.get("target_column")}
-            lag = sorted(tfields - declared - set(batch_add))
-            if lag:
-                warns.append({"code": "ledger_lag",
-                              "detail": f"产物有 {len(lag)} 个字段不在 mapping 当前态台账"
-                                        f"（制品新于台账/台账缺登记）：{', '.join(lag[:10])}"
-                                        + ("…" if len(lag) > 10 else "")})
-            # 正向类型对账（同名异容，2026-10-21）：mapping 存量字段类型 vs 产物字段类型
-            # ——与 ledger_lag（名字反向）互补的内容级；warn 披露（围栏/冻结列兜底执行）
-            for d in field_type_drift(mapping["attr"], ttypes, set(batch_add)):
-                warns.append({"code": d["code"], "detail": d["message"]})
+            try:
+                mapping = parse_mapping_sheets(mapping_path)
+            except ValueError as ve:
+                errors.append({"code": "mapping_sheet_invalid", "detail": str(ve)})
+                mapping = None
+            if mapping is not None:
+                declared = {(r.get("target_column") or "").strip().lower()
+                            for r in mapping["attr"] if r.get("target_column")}
+                lag = sorted(tfields - declared - set(batch_add))
+                if lag:
+                    warns.append({"code": "ledger_lag",
+                                  "detail": f"产物有 {len(lag)} 个字段不在 mapping 当前态台账"
+                                            f"（制品新于台账/台账缺登记）：{', '.join(lag[:10])}"
+                                            + ("…" if len(lag) > 10 else "")})
+                # 正向类型对账（同名异容，2026-10-21）：mapping 存量字段类型 vs 产物字段类型
+                # ——与 ledger_lag（名字反向）互补的内容级；warn 披露（围栏/冻结列兜底执行）
+                for d in field_type_drift(mapping["attr"], ttypes, set(batch_add)):
+                    warns.append({"code": d["code"], "detail": d["message"]})
         except ValueError as e:
             errors.append({"code": "change_sheet_invalid", "detail": str(e)})
 

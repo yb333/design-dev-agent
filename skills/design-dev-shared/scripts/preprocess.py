@@ -19,6 +19,223 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 # ============================================================
+# Excel 列名归一单点 + 全量 mapping 页签读取/静态检查（全仓唯一实现）
+# ============================================================
+
+def clean_excel_column(col: str) -> str:
+    """Excel 列名归一（全仓单点）：strip 空白/尾部*, 全角->半角, 英文统一小写。
+
+    2026-10-22 自 ExcelMappingParser._clean_column_name 挪出模块级（类内保留
+    staticmethod 别名零破坏）——挪位对症「能力藏在类里不可发现」：opt 侧
+    read_full_mapping 复制实现时只搬了 COLUMN_MAP 没搬这条清洗链（「源表Schema」
+    大写匹配不上「源表schema」→ source_schema 恒空），归一提到模块级后
+    parse_mapping_sheets / read_change_sheet / parser 三消费方共一个口径。
+    """
+    s = str(col).strip()
+    s = s.rstrip('*').strip()
+    s = s.translate(str.maketrans(
+        'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ'
+        'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ'
+        '０１２３４５６７８９＆',
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        'abcdefghijklmnopqrstuvwxyz'
+        '0123456789&',
+    ))
+    s = s.lower()  # 英文统一小写，不区分 Schema/schema
+    return s
+
+
+# 实体级/属性级页签的列完整性口径（可选列缺失不拦——与主链路 _check_column_match 同一）
+_ENTITY_OPTIONAL_CN = {"备注", "分组", "关联&限定条件"}
+_ATTR_OPTIONAL_CN = {"备注", "分组", "源表字段中文名"}
+
+
+def parse_mapping_sheets(xlsx_path) -> Dict[str, List[dict]]:
+    """读全量 mapping 实体级/属性级两页签 → 规范化行 dict（中文列头→英文键）。
+
+    **全仓唯一实现**（2026-10-22 opt read_full_mapping 退役收敛——mapping 全量解析
+    与主链路同一份代码，坑修一处全仓生效）：列名归一=clean_excel_column（「源表
+    Schema」大写/全角/尾部* 均归一命中）；同目标多列首个生效（对齐主链路 rename
+    语义）；缺标准列（可选列除外，口径与主链路同一）→ ValueError 阻断——主链路
+    column_missing 即阻断（RuntimeError 列名校验失败），同一语义零重定义。
+    返回 {"entity": [...], "attr": [...]}（英文键行 dict，值 str 化 strip）。
+    """
+    xlsx = pd.ExcelFile(xlsx_path)
+    entity_df = attr_df = None
+    for sheet in xlsx.sheet_names:
+        s = sheet.lower()
+        if any(k in s for k in ("实体级", "entity")):
+            entity_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
+        elif any(k in s for k in ("属性级", "attribute")):
+            attr_df = pd.read_excel(xlsx, sheet_name=sheet, keep_default_na=False)
+
+    def normalize(df, col_map, optional_cn, sheet_label):
+        if df is None:
+            raise ValueError(f"mapping 缺{sheet_label}页签（实体级/属性级至少其一）")
+        rename: dict = {}
+        used_targets: set = set()
+        for col in df.columns:
+            key = clean_excel_column(col)
+            target = col_map.get(key)
+            if target and target not in used_targets:
+                rename[col] = target
+                used_targets.add(target)
+        missing = sorted(cn for cn, t in col_map.items()
+                         if t not in used_targets and cn not in optional_cn)
+        if missing:
+            raise ValueError(
+                f"{sheet_label}页签缺标准列 {missing}（列名归一[大小写/全角/尾部*]后仍未命中；"
+                f"当前列名: {list(df.columns)}）——按 mapping 模板列名修正后重跑")
+        rows = []
+        for _, raw in df.iterrows():
+            row = {}
+            for col, val in raw.items():
+                name = rename.get(col)
+                if name:
+                    row[name] = str(val).strip() if val is not None else ""
+            rows.append(row)
+        return rows
+
+    return {"entity": normalize(entity_df, ExcelMappingParser.ENTITY_COLUMN_MAP,
+                                 _ENTITY_OPTIONAL_CN, "实体级"),
+            "attr": normalize(attr_df, ExcelMappingParser.ATTRIBUTE_COLUMN_MAP,
+                              _ATTR_OPTIONAL_CN, "属性级")}
+
+
+def check_mapping_static(field_mappings: List[dict], source_tables: List[dict]) -> List[dict]:
+    """mapping 全量静态检查（纯离线确定性，吃英文键行 dict——parse_mapping_sheets
+    产物与 preprocess 的 rs_input.field_mappings 同形态）——**new-pipe precheck 与
+    opt preprocess_opt 共享同一实现同一阻断语义**（error 就 error，零场景映射；
+    2026-10-22 用户定调：opt 相对主链路的合法差异只在连库检查范围，不在阻断语义）。
+
+    检查项（precheck 第 6 系整体归位，文案原样）：
+    6  别名一致性（分级：直接复制的格=权威严格 error；数据加工的格=提示性登记
+       拆分号逐个查、空/未知降 warn——真实来源以映射表达式引用为准）
+    6a 实体级表别名重复（JOIN 歧义）
+    6b 字段级来源表 ⊆ 实体级定义
+    6c source_column 含中文
+    7  映射表达式模糊术语（warn）
+    7.5 join_condition 含 SQL 关键字（warn——输入的代码是描述不是规格，designer 翻译归位）
+    返回 [{"level": "error"|"warn", "message": str}]，消费方各自投影呈现。
+    """
+    diags: List[dict] = []
+
+    def _err(msg):
+        diags.append({"level": "error", "message": msg})
+
+    def _warn(msg):
+        diags.append({"level": "warn", "message": msg})
+
+    # 6. 别名一致性（跳过赋值/序列；标识符大小写不敏感）
+    entity_aliases = {(st.get("source_alias") or "").strip().lower()
+                      for st in source_tables if (st.get("source_alias") or "").strip()}
+    for fm in field_mappings:
+        fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        if fm_rule in ("赋值", "序列"):
+            continue
+        raw_alias = (fm.get("source_alias") or "").strip()
+        aliases = ExcelMappingParser.split_multi_values(raw_alias)
+        is_processed = (fm_rule == "数据加工")
+        if is_processed:
+            if not aliases:
+                _warn(
+                    f"字段 {fm.get('target_column', '?')}（数据加工）的 source_alias 为空——"
+                    f"提示性登记建议补全；真实来源以映射表达式引用为准（装配时口径引用补全兜底）"
+                )
+                continue
+            unknown = [a for a in aliases if a.lower() not in entity_aliases]
+            if unknown:
+                _warn(
+                    f"字段 {fm.get('target_column', '?')}（数据加工）的来源别名 {unknown} "
+                    f"不在实体级 mapping——别名格是提示性登记（多表加工常填不全），"
+                    f"真实来源以映射表达式引用为准；建议在实体级补登记或修正拼写"
+                )
+            continue
+        # 直接复制：来源唯一单别名（格=权威）
+        if not aliases:
+            _err(
+                f"字段 {fm.get('target_column', '?')} 的 source_alias 为空"
+                f"（映射规则='{fm_rule}'）——在 mapping.xlsx 属性级'源表别名'列填"
+                f"（须与实体级定义一致）"
+            )
+        elif len(aliases) > 1:
+            _err(
+                f"字段 {fm.get('target_column', '?')}（直接复制）的来源必须唯一单别名，"
+                f"发现多值 '{raw_alias}'——直取字段来源不能多值"
+                f"（多表来源是加工字段形态：映射规则改'数据加工'并写映射表达式）"
+            )
+        elif aliases[0].lower() not in entity_aliases:
+            _err(
+                f"字段 {fm.get('target_column', '?')} 的来源别名 '{raw_alias}' 在实体级 mapping 中不存在"
+                f"——在 mapping.xlsx 属性级'源表别名'列改（须与实体级定义一致）"
+            )
+
+    # 6a. 表别名重复检查（实体级同别名出现多次 → JOIN 时歧义）
+    alias_count: dict[str, int] = {}
+    for st in source_tables:
+        al = (st.get("source_alias") or "").strip()
+        if al:
+            alias_count[al] = alias_count.get(al, 0) + 1
+    for al, cnt in alias_count.items():
+        if cnt > 1:
+            _err(
+                f"实体级表别名 '{al}' 重复出现 {cnt} 次（JOIN 时会歧义）"
+                f"——在 mapping.xlsx 实体级'源表别名'列改重复别名（每张源表唯一）"
+            )
+
+    # 6b. 字段级与表级一致性（跳过赋值/序列——无真实来源表）
+    entity_tables = {
+        ((st.get("source_schema") or "").strip().lower(), (st.get("source_table") or "").strip().lower())
+        for st in source_tables
+    }
+    for fm in field_mappings:
+        fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
+        if fm_rule in ("赋值", "序列"):
+            continue
+        fm_sch = (fm.get("source_schema") or "").strip().lower()
+        fm_tbl = (fm.get("source_table") or "").strip().lower()
+        if fm_sch and fm_tbl and (fm_sch, fm_tbl) not in entity_tables:
+            _err(
+                f"字段 {fm.get('target_column', '?')} 的来源表 {fm_sch}.{fm_tbl} "
+                f"在实体级 mapping 中未定义"
+                f"——在 mapping.xlsx 实体级补充该源表，或修正属性级来源表名"
+            )
+
+    # 6c. source_column 不能是中文（应是英文物理列名）
+    for fm in field_mappings:
+        sc = (fm.get("source_column") or "").strip()
+        if sc and re.search(r"[\u4e00-\u9fff]", sc):
+            _err(
+                f"字段 {fm.get('target_column', '?')} 的 source_column '{sc}' 含中文"
+                f"（应为英文物理列名）——在 mapping.xlsx'源表字段名'列改为英文列名，"
+                f"中文写进'源表字段中文名'列"
+            )
+
+    # 7. 映射表达式模糊术语检查
+    biz_terms = ["等等", "之类", "相关", "之类的", "等等等"]
+    for fm in field_mappings:
+        expr = fm.get("transform_detail") or fm.get("mapping_expression") or ""
+        for term in biz_terms:
+            if term in str(expr):
+                _warn(f"字段 {fm.get('target_column', '?')} 的映射表达式含模糊术语: '{term}'")
+
+    # 7.5 join_condition 含 SQL 关键字（描述不是规格——designer 翻译归位）
+    for st in source_tables:
+        cond = (st.get("join_condition") or "").strip()
+        if not cond:
+            continue
+        _kw_hits = [kw for kw in ("where", "left join", "inner join", "group by", "order by")
+                    if re.search(rf'\b{kw}\b', cond, re.IGNORECASE)]
+        if _kw_hits:
+            _warn(
+                f"表 {st.get('source_table', '?')} 的 join_condition 含 SQL 关键字 {_kw_hits}"
+                f"——输入的代码是描述不是规格：designer 翻译时归位（join 级限定 → joins.filter；"
+                f"行过滤 → 规则级 filter），不照抄代码形态"
+            )
+
+    return diags
+
+# ============================================================
 # Excel Mapping 解析器
 # ============================================================
 
@@ -498,21 +715,10 @@ class ExcelMappingParser:
             pass
         return str(value).strip()
 
+    # 归一已挪模块级 clean_excel_column（2026-10-22 单点化）——类内别名零破坏
+    _clean_column_name = staticmethod(clean_excel_column)
+
     @staticmethod
-    def _clean_column_name(col: str) -> str:
-        """预处理列名: strip 空白/尾部*, 全角->半角, 英文统一小写"""
-        s = str(col).strip()
-        s = s.rstrip('*').strip()
-        s = s.translate(str.maketrans(
-            'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ'
-            'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ'
-            '０１２３４５６７８９＆',
-            'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-            'abcdefghijklmnopqrstuvwxyz'
-            '0123456789&',
-        ))
-        s = s.lower()  # 英文统一小写，不区分 Schema/schema
-        return s
     def _fuzzy_match(col: str, keys: List[str], threshold: float = 0.75) -> Optional[Tuple[str, float]]:
         best_key = ''
         best_score = 0.0
