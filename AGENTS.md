@@ -32,12 +32,12 @@ skills/
                          #   dispatch_plan.py(执行计划含dq行——读ts.meta.dq_required[装配自rs_input],2026-09-22:DQ内容拆分后在计划中隐形致按清单发起漏4c) assemble_export.py(含LTS制品生成,2026-09重写;跨集群depTaskId直读config dep_task_ids表;dq任务行被动适配读dq.json) ut_precheck.py(6a预检:EXPLAIN全量+计划两门槛+describe列序对账+DQ兜底[RS有需求但dq.json缺失fail loud]) ut_execute.py(DQ段读dq.json,旧ts.dq_rules兼容) ut_diagnose.py(类型诊断,ut_execute用)
                          #   diagnose_fanout.py(关联发散定位,UT回路6b:按声明条件逐表查键唯一+实锤+filter承重墙+驱动表自检)
 ├── opt-pipe/            # ★ 优化编排剧本 skill（dws-engineer 加载执行：基线→增量设计→围栏→SQL围栏→UT→制品patch→归档）
-│   ├── scripts/         # preprocess_opt.py precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py(含DQ段:重做条目真跑读arc_tmp的dq.json,2026-09-14补环) dq_impact.py(★DQ影响分析:变更字段∩锚定/变更来源∩compare_sources→重做清单,确定性集合运算,步骤3.5)
-                         #   assemble_ddl_opt.py audit_ingest.py(★入料审核门:契约/资产对账/变更冲突前移三选一路由/台账对账[名字反向往账滞后+正向类型对账同名异容2026-10-21]) assemble_ts_baseline.py(审核后建档:守门确认档/MANIFEST首条v1/asset_facts随档/provenance拷export) artifact_patcher.py baseline_contract.py(契约校验库,支持1.0-1.2) diagnose_fanout_opt.py(关联发散定位:逐表键唯一性+断言对照)
+│   ├── scripts/         # preprocess_opt.py(步骤1:v3变更记录驱动;全量mapping解析/静态检查已收敛shared单点2026-10-22——自有代码只剩变更维度) precheck_opt.py(步骤1b优化预检:只检新增子集) gate_summary_opt.py(闸口①'材料确定性产出) fence_check.py sql_fence.py(fence库) sql_fence_check.py ut_opt.py(含DQ段:重做条目真跑读arc_tmp的dq.json,2026-09-14补环) dq_impact.py(★DQ影响分析:变更字段∩锚定/变更来源∩compare_sources→重做清单,确定性集合运算,步骤3.5)
+                         #   assemble_ddl_opt.py audit_ingest.py(★入料审核门:契约/资产对账/变更冲突前移三选一路由/台账对账[名字反向往账滞后+正向类型对账同名异容2026-10-21]/mapping页签解析失败独立路由mapping_sheet_invalid[2026-10-22解析收敛]) assemble_ts_baseline.py(审核后建档:守门确认档/MANIFEST首条v1/asset_facts随档/provenance拷export) artifact_patcher.py baseline_contract.py(契约校验库,支持1.0-1.2) diagnose_fanout_opt.py(关联发散定位:逐表键唯一性+断言对照)
 │   └── schemas/         # baseline_v1.schema.json(随 baseline_contract 归 opt)
 └── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
     └── scripts/         # ★ 共用入口（>1 消费者才留这，2026-09 按消费者归位定调）：
-                         #   preprocess.py(两剧本共用) check_db.py(两剧本共用) assemble_ddl.py(new-pipe直调+opt侧assemble_ddl_opt import) resolve_appid.py(查appid,被preprocess/assemble_export import)
+                         #   preprocess.py(两剧本共用;★全仓唯一实现三件2026-10-22:clean_excel_column列名归一/parse_mapping_sheets全量两页签解析/check_mapping_static静态检查——precheck与preprocess_opt同一实现同一语义) check_db.py(两剧本共用) assemble_ddl.py(new-pipe直调+opt侧assemble_ddl_opt import) resolve_appid.py(查appid,被preprocess/assemble_export import)
                          #   ★ 公共库（被多方 import）：
                          #   dws_db.py(连库) config_paths.py(★config路径集中) run_ut.py(UT函数库,无main,含dq_filename/load_dq_rules[dq.json优先,旧ts.dq_rules兜底]) type_compat.py(类型兼容)
                          #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量) ts_compat.py(ts结构兼容:分桶原语+旧结构升级) schema_query.py(字段查询能力层:check_field/pick_fields内核)

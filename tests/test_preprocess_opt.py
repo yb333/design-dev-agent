@@ -94,7 +94,7 @@ ENT_EN = {"源表schema": "source_schema", "源表物理表名": "source_table",
 
 
 def mapping_of(entity_rows, attr_rows):
-    """中文列名行 → extract_and_check 消费的英文键行（与 read_full_mapping 归一后同构）。"""
+    """中文列名行 → extract_and_check 消费的英文键行（与 parse_mapping_sheets 归一后同构）。"""
     to_en = lambda rows, m: [{m.get(k, k): v for k, v in r.items()} for r in rows]
     return {"entity": to_en(entity_rows, ENT_EN), "attr": to_en(attr_rows, ATTR_EN)}
 
