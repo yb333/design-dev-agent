@@ -870,6 +870,14 @@ def _check_db_schema(
     # 从 field_mappings 收集"要用到的来源字段"：{(schema, table): {column: target_field}}
     # 跳过纯派生行（赋值/序列、source_column 空/占位符）和审计字段——这些不查源表
     field_mappings = rs_input.get("field_mappings", [])
+    # 别名→实体级表登记（多值/限定符形态的配对归属从这里查；2026-10-22 配对拆解——
+    # 此前 source_column 整格当列名，'x;emp'/'a.x;b.emp' 形态必误报字段不存在）
+    alias_to_table: dict[str, tuple[str, str]] = {}
+    for st in rs_input.get("source_tables") or []:
+        _al = (st.get("source_alias") or "").strip().lower()
+        if _al:
+            alias_to_table[_al] = ((st.get("source_schema") or "").strip(),
+                                   (st.get("source_table") or "").strip())
     # {(schema, table): {source_column_lower: (原source_column, [target_fields], source_type)}}
     # 同一来源字段映射多个目标时，target_fields 累积成列表（避免覆盖丢失）
     needed: dict[tuple[str, str], dict[str, list]] = {}
@@ -878,24 +886,35 @@ def _check_db_schema(
         rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
         if rule in ("赋值", "序列"):
             continue
-        # source_column 空 或 占位符（-、/、\ 等）都不是真实列名，跳过
-        source_column = (fm.get("source_column") or "").strip()
-        if not source_column or source_column in ("-", "/", "\\", "—", "--"):
-            continue
         if _is_audit_field(fm):
             continue
-        schema = (fm.get("source_schema") or "").strip()
-        table = (fm.get("source_table") or "").strip()
-        if not schema or not table:
+        # 配对拆解（格式错已由 check_mapping_static 拦在先——此处 err 残留防御性跳过）
+        from preprocess import split_source_pairs
+        pairs, _perr = split_source_pairs(fm.get("source_alias") or "",
+                                          fm.get("source_column") or "")
+        if not pairs:
             continue
-        col_key = source_column.lower()
-        # 键统一小写（DWS 元数据小写语义；mapping 写大写不影响任何下游比对/缓存键）
-        tbl_map = needed.setdefault((schema.lower(), table.lower()), {})
-        if col_key not in tbl_map:
-            source_type = (fm.get("source_type") or "").strip()
-            tbl_map[col_key] = [source_column, [], source_type]
-        # 累积目标字段（同一来源字段可能映射到多个目标）
-        tbl_map[col_key][1].append(fm.get("target_column", "?"))
+        row_schema = (fm.get("source_schema") or "").strip()
+        row_table = (fm.get("source_table") or "").strip()
+        for _a, _c in pairs:
+            # 占位符（-、/、\ 等）不是真实列名
+            if not _c or _c in ("-", "/", "\\", "—", "--"):
+                continue
+            # 归属：配对别名→实体级表 优先（多源行的行级格常只填一个表名/占位），
+            # 别名查不到回退行级格（配对校验已拦悬空，这里是防御性兜底）
+            schema, table = alias_to_table.get(_a.lower(), ("", ""))
+            if not schema or not table:
+                schema, table = row_schema, row_table
+            if not schema or not table:
+                continue
+            col_key = _c.lower()
+            # 键统一小写（DWS 元数据小写语义；mapping 写大写不影响任何下游比对/缓存键）
+            tbl_map = needed.setdefault((schema.lower(), table.lower()), {})
+            if col_key not in tbl_map:
+                source_type = (fm.get("source_type") or "").strip()
+                tbl_map[col_key] = [_c, [], source_type]
+            # 累积目标字段（同一来源字段可能映射到多个目标）
+            tbl_map[col_key][1].append(fm.get("target_column", "?"))
 
     # ★ 扩围：实体级 source_tables 全表进校验范围——纯关联表（只在 join_condition 出现、
     # 无字段映射）也要 fetch/缓存，否则 join_condition 的字段核对拿不到表结构，

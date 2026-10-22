@@ -401,20 +401,24 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                           "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 标本次新增"
                                      f"但 baseline 已存在（若为改口径/加源请改用 MODIFY）"})
             continue
-        # 多别名形态（2026-10-22 内网反馈）：加工字段的源表别名列常填多别名分号隔开
-        # （提示性登记不保证完整）——拆分号后任一命中实体级即过（取首个命中配详情）
+        # 来源配对拆解（2026-10-22 单点=split_source_pairs：位置配对 a;b × x;emp /
+        # 字段格自带限定符 a.x;b.emp）：取首个别名命中实体级的对配详情；全不命中 →
+        # dangling（格式错已被 check_mapping_static 输入门拦——此处防御）
+        from preprocess import split_source_pairs
         row = hits[0]
-        raw_alias = (row.get("source_alias") or "").strip()
-        ent, hit_alias = None, ""
-        for _al in ExcelMappingParser.split_multi_values(raw_alias):
-            ent = alias_index.get(_al)
-            if ent is not None:
-                hit_alias = _al
+        pairs, _perr = split_source_pairs(row.get("source_alias") or "",
+                                          row.get("source_column") or "")
+        ent = hit_alias = hit_col = None
+        for _a, _c in pairs:
+            _ent = alias_index.get(_a)
+            if _ent is not None:
+                ent, hit_alias, hit_col = _ent, _a, _c
                 break
         if ent is None:
             diags.append({"level": "error", "code": "source_alias_dangling",
-                          "message": f"新增字段 {e['key']!r}：源表别名 {raw_alias!r} "
-                                     f"在实体级找不到（多别名已按分号拆开逐个查）"})
+                          "message": f"新增字段 {e['key']!r}：来源登记 "
+                                     f"{row.get('source_alias', '')!r}×{row.get('source_column', '')!r} "
+                                     f"配对后无别名命中实体级"})
             continue
         add_keys[e["key"]] = e
         add_fields.append({
@@ -424,7 +428,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             "change_entry": {"seq": e["seq"], "before": e["before"], "after": e["after"]},
             "source": {"schema": ent.get("source_schema", ""),
                        "table": ent.get("source_table", ""), "alias": hit_alias,
-                       "field": row.get("source_column", ""),
+                       "field": hit_col or row.get("source_column", ""),
                        # mapping 声明源类型（precheck_opt 连库以库为准对账修正）
                        "source_type": row.get("source_type", ""),
                        "rule": row.get("mapping_rule", ""),

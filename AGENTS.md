@@ -141,7 +141,7 @@ rs_input.json 的信息来自两个输入，职责分明：
 
 **两边都有的**：目标表 schema/table（mapping 实体级 + RS L1.1），build_rs_input 的 validate_target_table 做分级校验（都缺=阻断，单边缺/不一致=告警）。
 
-> **源表别名列的语义按字段类型分级（2026-10-22 内网反馈定调）**：直接复制字段的别名格=**权威**（来源唯一，多值/未知 error）；数据加工字段的别名格=**提示性登记**（多表加工常填多别名分号隔开且不保证完整——真实来源以映射表达式引用为准，装配时口径引用补全兜底）→ precheck 拆分号逐个查、空/未知降 warn；装配 source_fields 等长配对拆解、不等长丢弃格内条目交补全；opt 侧拆分号任一命中实体级即过。多值拆分原语单点=ExcelMappingParser.split_multi_values（分号全半角）。
+> **源表别名列的语义定调（2026-10-22 两轮内网反馈合并）——「空=提示缺失，填了=显式登记必须自洽」**：加工字段的来源登记为空 → warn（真实来源以映射表达式引用为准，装配时口径引用补全兜底）；填了（单值/多值/限定符形态）就必须**配对自洽且每个别名在实体级找得到**，任何不自洽 → error（多别名×字段数不配/限定符悬空/混合形态=格式错或登记错绑）。两种合法形态：位置配对（`a;b` × `x;emp`）或字段格自带限定符（`a.x;b.emp`，限定符优先、别名格忽略）。直接复制字段=唯一单对（格=权威，多对/悬空/空 error）。拆解原语单点=`split_source_pairs`（design-dev-shared/preprocess.py，check_mapping_static 校验/装配 source_fields/precheck 查库索引/opt add_field 详情四消费方）；多值拆分=`ExcelMappingParser.split_multi_values`（分号全半角）。
 
 > **★ 全量 mapping 的解析与静态检查=全仓唯一实现（2026-10-22 定调，opt read_full_mapping 退役收敛）**：opt 相对主链路的合法增量只有变更记录维度（读变更页签/批次/改名合成/变更匹配/基线对账），mapping 全量两页签的读取、列名归一、列完整性校验、静态检查（别名校验分级/表别名重复/表级一致/中文列名/模糊术语）与主链路是**同一份代码**——`parse_mapping_sheets` + `check_mapping_static` + `clean_excel_column`（皆 design-dev-shared/preprocess.py）。阻断语义零重定义：缺标准列阻断（主链路 column_missing 即阻断）、静态 error 照拦——opt 与主链路的合法差异只在**连库检查范围**（precheck_opt 只检新增子集，围栏+双跑兜底），不在语义。列名归一含大小写/全角/尾部`*`（「源表Schema」命中「源表schema」）。
 

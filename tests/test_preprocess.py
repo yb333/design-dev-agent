@@ -1691,3 +1691,42 @@ class TestParseMappingSheets:
         wb = Workbook(); wb.active.title = "变更记录"; wb.save(p)
         with pytest.raises(ValueError, match="实体级"):
             parse_mapping_sheets(p)
+
+
+class TestSplitSourcePairs:
+    """来源配对拆解原语（2026-10-22 用户定调：填了就必须自洽——别名与字段一一对应
+    或字段自带限定符，每个字段绑上别名）。"""
+
+    def test_positional_pairing(self):
+        from preprocess import split_source_pairs
+        assert split_source_pairs("a;b", "x;emp") == ([("a", "x"), ("b", "emp")], "")
+
+    def test_qualified_form_wins(self):
+        from preprocess import split_source_pairs
+        # 限定符优先：别名格忽略（冗余/空都不比对）
+        assert split_source_pairs("", "a.x;b.emp") == ([("a", "x"), ("b", "emp")], "")
+        assert split_source_pairs("zz", "a.x") == ([("a", "x")], "")
+
+    def test_unequal_blocks(self):
+        from preprocess import split_source_pairs
+        pairs, err = split_source_pairs("a;b", "x")
+        assert pairs == [] and "数量不配" in err
+
+    def test_mixed_form_blocks(self):
+        from preprocess import split_source_pairs
+        pairs, err = split_source_pairs("b", "a.x;emp")
+        assert pairs == [] and "混合形态" in err
+
+    def test_bad_qualified_segment_blocks(self):
+        from preprocess import split_source_pairs
+        assert split_source_pairs("", "a.;b.x")[1]
+        assert split_source_pairs("", ".x")[1]
+        assert split_source_pairs("", "a.x.y")[1]  # 三段式非法
+
+    def test_single_and_empty_and_placeholder(self):
+        from preprocess import split_source_pairs
+        assert split_source_pairs("a", "x") == ([("a", "x")], "")
+        assert split_source_pairs("", "x") == ([], "")      # 别名空（级别调用方定）
+        assert split_source_pairs("a", "") == ([], "")
+        assert split_source_pairs("a", "-") == ([], "")     # 占位符=无真实来源
+        assert split_source_pairs("a;b", "—；–") == ([], "")

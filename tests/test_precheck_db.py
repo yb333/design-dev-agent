@@ -1656,31 +1656,54 @@ class TestAliasGrading:
             monkeypatch.setattr("dws_db.create_executor_for_schema", boom)
         return precheck(_make_rs_input(fields, sources))
 
-    def test_processed_multi_alias_partial_unknown_warns(self, monkeypatch):
-        """加工字段多别名 a;b（b 不在实体级）→ warn 不 error。"""
-        f = dict(_biz_field(rule="数据加工"), source_alias="a;b")
+    def test_processed_paired_alias_unknown_blocks(self, monkeypatch):
+        """加工字段配对自洽但别名不在实体级（a;b × x;emp，b 无登记）→ error
+        （2026-10-22 第二轮定调：填了就应自洽——显式登记错绑是错，不再是提示缺失）。"""
+        f = dict(_biz_field(rule="数据加工"), source_alias="a;b", source_column="x;emp")
         result = self._run([f], monkeypatch=monkeypatch)
-        alias_errs = [e for e in result.errors if "来源别名" in e or "source_alias" in e]
-        assert alias_errs == [], f"多别名加工字段不应 error: {alias_errs}"
-        assert any("提示性登记" in w for w in result.warnings), result.warnings
+        assert any("不在实体级" in e and "自洽" in e for e in result.errors), result.errors
+
+    def test_processed_unequal_pairing_blocks(self, monkeypatch):
+        """加工字段多别名×单字段（数量不配）→ error 格式错。"""
+        f = dict(_biz_field(rule="数据加工"), source_alias="a;b", source_column="x")
+        result = self._run([f], monkeypatch=monkeypatch)
+        assert any("格式错" in e and "数量不配" in e for e in result.errors), result.errors
+
+    def test_processed_qualified_form_ok_and_dangling_blocks(self, monkeypatch):
+        """字段格自带限定符 a.x;b.emp：配对自洽且别名都在实体级 → 过；悬空 → error。"""
+        ok = dict(_biz_field(rule="数据加工", source_column="t.order_id;b.amt"),
+                  source_alias="")  # 别名格冗余忽略（限定符优先）
+        result = self._run([ok], monkeypatch=monkeypatch)
+        assert not [e for e in result.errors if "来源" in e or "格式" in e], result.errors
+
+        bad = dict(_biz_field(rule="数据加工", source_column="t.order_id;ghost.amt"),
+                   source_alias="")
+        result2 = self._run([bad], monkeypatch=monkeypatch)
+        assert any("ghost" in e and "不在实体级" in e for e in result2.errors), result2.errors
+
+    def test_processed_mixed_qualified_form_blocks(self, monkeypatch):
+        """字段格混合形态（a.x;emp 一半限定符一半裸）→ error 格式错。"""
+        f = dict(_biz_field(rule="数据加工", source_column="t.order_id;amt"), source_alias="b")
+        result = self._run([f], monkeypatch=monkeypatch)
+        assert any("混合形态" in e for e in result.errors), result.errors
 
     def test_processed_empty_alias_warns(self, monkeypatch):
-        """加工字段空别名 → 降 warn（真实来源以映射表达式引用为准）。"""
-        f = dict(_biz_field(rule="数据加工"), source_alias="")
+        """加工字段空登记 → 降 warn（真实来源以映射表达式引用为准——空=提示缺失）。"""
+        f = dict(_biz_field(rule="数据加工"), source_alias="", source_column="-")
         result = self._run([f], monkeypatch=monkeypatch)
-        alias_errs = [e for e in result.errors if "source_alias 为空" in e]
-        assert alias_errs == [], f"加工字段空别名不应 error: {alias_errs}"
-        assert any("source_alias 为空" in w for w in result.warnings)
+        alias_errs = [e for e in result.errors if "格式错" in e or "不在实体级" in e]
+        assert alias_errs == [], f"加工字段空登记不应 error: {alias_errs}"
+        assert any("来源登记为空" in w for w in result.warnings)
 
     def test_processed_known_alias_silent(self, monkeypatch):
         """加工字段单别名命中实体级 → 无 warn 无 error。"""
         f = dict(_biz_field(rule="数据加工"))
         result = self._run([f], monkeypatch=monkeypatch)
-        assert not [w for w in result.warnings if "提示性登记" in w]
+        assert not [w for w in result.warnings if "提示性登记" in w or "来源登记为空" in w]
 
     def test_direct_multi_alias_blocks(self, monkeypatch):
-        """直接复制多值别名 → error（直取来源必须唯一）。"""
-        f = dict(_biz_field(), source_alias="t;x")
+        """直接复制多对（数量配上的多值）→ error（直取来源必须唯一）。"""
+        f = dict(_biz_field(), source_alias="t;x", source_column="id;amt")
         result = self._run([f], monkeypatch=monkeypatch)
         assert any("唯一单别名" in e for e in result.errors), result.errors
 

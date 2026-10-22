@@ -50,6 +50,48 @@ _ENTITY_OPTIONAL_CN = {"备注", "分组", "关联&限定条件"}
 _ATTR_OPTIONAL_CN = {"备注", "分组", "源表字段中文名"}
 
 
+def split_source_pairs(alias_cell: str, column_cell: str) -> Tuple[List[Tuple[str, str]], str]:
+    """源表别名格 × 源表字段名格 → 配对列表 [(alias, col), ...]；格式错返回 ([], 说明)。
+
+    满足「字段单元格里的每个字段都绑上别名」的两种形态（2026-10-22 用户定调——
+    填了就必须自洽，不自洽是格式错归预检 error）：
+    - 形态1 位置配对：别名格 'a;b' × 字段格 'x;emp'（等长一一配对）
+    - 形态2 自带限定符：字段格 'a.x;b.emp'（配对关系内嵌，**限定符优先**——别名格
+      忽略不比对，更 explicit 的声明赢）
+    格式错（返回 err 非空）：
+    - 两格多值不等长且字段格无限定符段（'a;b' × 'x'——写了多值是显式意图，配不上
+      没有合理解释）
+    - 字段格混合形态（'a.x;emp' 一半限定符一半裸——含限定符段则全格必须都带）
+    - 限定符段非法（'a.' / '.x'）
+    单值 × 单值 → [("a","x")]；任一侧空 → ([], "")（无配对——空/缺的级别由
+    调用方按字段类型语义定：加工字段空=提示缺失 warn，直接复制=error）。
+    消费方：check_mapping_static（配对校验）/ assemble_ts source_fields /
+    precheck 查库索引 / preprocess_opt add_field 详情——单点拆解。
+    """
+    cols = ExcelMappingParser.split_multi_values(column_cell)
+    if not cols or all(c in ("-", "—", "–", "/", "\\", "--") for c in cols):
+        return [], ""  # 无真实来源（占位符/'-' 常见于加工行——级别由调用方定）
+    if any("." in c for c in cols):
+        # 形态2：字段格自带限定符（含段则全格必须都带——混合形态不可预测）
+        if not all("." in c for c in cols):
+            return [], (f"字段格 {column_cell!r} 混合形态（限定符段与裸段并存）——"
+                        "要么全部 'a.x;b.emp'，要么全部裸列名配别名格")
+        pairs = []
+        for seg in cols:
+            alias, _, col = seg.partition(".")
+            if not alias.strip() or not col.strip() or "." in col:
+                return [], f"字段格限定符段 {seg!r} 非法（须 别名.字段名，不含更多点）"
+            pairs.append((alias.strip(), col.strip()))
+        return pairs, ""
+    aliases = ExcelMappingParser.split_multi_values(alias_cell)
+    if not aliases:
+        return [], ""  # 字段有值但别名空——级别由调用方定
+    if len(aliases) != len(cols):
+        return [], (f"别名格 {alias_cell!r}({len(aliases)}个) 与字段格 {column_cell!r}"
+                    f"({len(cols)}个) 数量不配——多字段须一一对应，或字段格自带限定符")
+    return list(zip(aliases, cols)), ""
+
+
 def parse_mapping_sheets(xlsx_path) -> Dict[str, List[dict]]:
     """读全量 mapping 实体级/属性级两页签 → 规范化行 dict（中文列头→英文键）。
 
@@ -126,47 +168,54 @@ def check_mapping_static(field_mappings: List[dict], source_tables: List[dict]) 
     def _warn(msg):
         diags.append({"level": "warn", "message": msg})
 
-    # 6. 别名一致性（跳过赋值/序列；标识符大小写不敏感）
+    # 6. 别名配对自洽（2026-10-22 两轮定调合并）：「空=提示缺失，填了=显式登记必须
+    # 自洽」——加工字段空别名/空字段 → warn（真实来源以映射表达式引用为准，装配口径
+    # 引用补全兜底）；填了（单/多/限定符形态）就必须配对得上且每个别名在实体级找
+    # 得到，任何不自洽 error（配不上=格式错；别名悬空=登记错绑——填了就应自洽）。
+    # 直接复制：来源唯一单对（格=权威），多对/悬空/空 error。
     entity_aliases = {(st.get("source_alias") or "").strip().lower()
                       for st in source_tables if (st.get("source_alias") or "").strip()}
     for fm in field_mappings:
         fm_rule = (fm.get("transform_rule") or fm.get("mapping_rule") or "").strip()
         if fm_rule in ("赋值", "序列"):
             continue
-        raw_alias = (fm.get("source_alias") or "").strip()
-        aliases = ExcelMappingParser.split_multi_values(raw_alias)
+        pairs, perr = split_source_pairs(fm.get("source_alias") or "",
+                                         fm.get("source_column") or "")
+        if perr:
+            _err(f"字段 {fm.get('target_column', '?')} 的来源登记格式错：{perr}")
+            continue
         is_processed = (fm_rule == "数据加工")
         if is_processed:
-            if not aliases:
+            if not pairs:
                 _warn(
-                    f"字段 {fm.get('target_column', '?')}（数据加工）的 source_alias 为空——"
-                    f"提示性登记建议补全；真实来源以映射表达式引用为准（装配时口径引用补全兜底）"
+                    f"字段 {fm.get('target_column', '?')}（数据加工）的来源登记为空——"
+                    f"提示性登记建议补全（多来源写 a;b × x;emp 或字段格 a.x;b.emp）；"
+                    f"真实来源以映射表达式引用为准（装配时口径引用补全兜底）"
                 )
                 continue
-            unknown = [a for a in aliases if a.lower() not in entity_aliases]
+            unknown = [a for a, _c in pairs if a.lower() not in entity_aliases]
             if unknown:
-                _warn(
-                    f"字段 {fm.get('target_column', '?')}（数据加工）的来源别名 {unknown} "
-                    f"不在实体级 mapping——别名格是提示性登记（多表加工常填不全），"
-                    f"真实来源以映射表达式引用为准；建议在实体级补登记或修正拼写"
+                _err(
+                    f"字段 {fm.get('target_column', '?')}（数据加工）登记的别名 {unknown} "
+                    f"不在实体级 mapping——填了就应自洽：补实体级登记或修正别名"
                 )
             continue
-        # 直接复制：来源唯一单别名（格=权威）
-        if not aliases:
+        # 直接复制：来源唯一单对（格=权威）
+        if not pairs:
             _err(
                 f"字段 {fm.get('target_column', '?')} 的 source_alias 为空"
                 f"（映射规则='{fm_rule}'）——在 mapping.xlsx 属性级'源表别名'列填"
                 f"（须与实体级定义一致）"
             )
-        elif len(aliases) > 1:
+        elif len(pairs) > 1:
             _err(
                 f"字段 {fm.get('target_column', '?')}（直接复制）的来源必须唯一单别名，"
-                f"发现多值 '{raw_alias}'——直取字段来源不能多值"
+                f"发现多对 {pairs}——直取字段来源不能多值"
                 f"（多表来源是加工字段形态：映射规则改'数据加工'并写映射表达式）"
             )
-        elif aliases[0].lower() not in entity_aliases:
+        elif pairs[0][0].lower() not in entity_aliases:
             _err(
-                f"字段 {fm.get('target_column', '?')} 的来源别名 '{raw_alias}' 在实体级 mapping 中不存在"
+                f"字段 {fm.get('target_column', '?')} 的来源别名 '{pairs[0][0]}' 在实体级 mapping 中不存在"
                 f"——在 mapping.xlsx 属性级'源表别名'列改（须与实体级定义一致）"
             )
 
@@ -1645,16 +1694,17 @@ def _registry_context(fms, source_tables):
 
     登记处=mapping 列名（引用字段常无自己的行——只是源表的列，提取是尽力而为，
     门禁不依赖它）；col_alias 只陈述"该列名出现在哪些别名"的事实，归属判断归
-    designer（脚本不猜表）。返回 (reg_cols, col_alias)。
+    designer（脚本不猜表）。来源登记按配对拆解（split_source_pairs，2026-10-22：
+    多值/限定符形态逐对登记——整格当列名登记是噪音）。返回 (reg_cols, col_alias)。
     """
-    reg_cols = {(fm.get("source_column") or "").strip().lower()
-                for fm in fms if (fm.get("source_column") or "").strip()}
+    reg_cols = set()
     col_alias: dict = {}
-    for f in fms:
-        _c = (f.get("source_column") or "").strip().lower()
-        _a = (f.get("source_alias") or "").strip()
-        if _c and _a:
-            col_alias.setdefault(_c, set()).add(_a)
+    for fm in fms:
+        pairs, _err = split_source_pairs(fm.get("source_alias") or "",
+                                         fm.get("source_column") or "")
+        for a, c in pairs:
+            reg_cols.add(c.lower())
+            col_alias.setdefault(c.lower(), set()).add(a)
     return reg_cols, col_alias
 
 

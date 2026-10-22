@@ -1761,20 +1761,16 @@ def _rule_tmp_aliases(rule: dict) -> dict:
 # 组装 ts.json
 # ============================================================
 def _mapping_row_source_fields(r: dict) -> list:
-    """mapping 行 → source_fields 条目（多值格拆解，2026-10-22）：「源表别名」/
-    「源表字段名」格分号多值**等长一一配对**（a;b × x;emp → (a,x)(b,emp)——多表
-    加工的合法登记形态）；不等长/字段格空或占位('-') → 丢弃格内条目——加工字段的
-    格只是提示（多表来源常填不全），血缘权威=design_logic 的口径引用补全
-    （extract_logic_refs → source_alias_map 查表，见 build_field 尾部）。表名取
-    行内格不猜（补全条目带按别名查出的正确表）。直接复制字段单值行为不变。"""
-    cols = ExcelMappingParser.split_multi_values(r.get("source_column", ""))
-    aliases = ExcelMappingParser.split_multi_values(r.get("source_alias", ""))
-    if not cols or all(c in ("-", "—", "–") for c in cols):
-        return []
-    if len(aliases) != len(cols):
-        return []
+    """mapping 行 → source_fields 条目（配对拆解单点=split_source_pairs，2026-10-22）：
+    形态1 位置配对（a;b × x;emp 等长）/形态2 字段格自带限定符（a.x;b.emp）→ 逐对
+    条目；格式错/任一侧空 → []（格式错已由 check_mapping_static 在输入门拦——此处
+    防御性丢弃，加工字段血缘权威=design_logic 的口径引用补全）。表名取行内格不猜
+    （补全条目带按别名查出的正确表）。直接复制字段单值行为不变。"""
+    from preprocess import split_source_pairs
+    pairs, _err = split_source_pairs(r.get("source_alias") or "",
+                                     r.get("source_column") or "")
     return [{"table": r.get("source_table", ""), "field": c, "alias": a}
-            for a, c in zip(aliases, cols)]
+            for a, c in pairs]
 
 
 def build_field(field_rec, logic, rule_aliases, is_assembly=False, reads_tables=None,
