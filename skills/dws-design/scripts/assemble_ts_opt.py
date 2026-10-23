@@ -46,9 +46,55 @@ def load_decisions(path: Path) -> dict:
     if d.get("change_type") != "add_field":
         _fail(f"decisions.change_type = {d.get('change_type')!r}，本刀仅支持 add_field"
               f"（modify_types 作为并行段声明——change_type 保持 add_field 兼容锚）")
-    if not d.get("fields") and not d.get("modify_types"):
-        _fail("decisions.fields 与 modify_types 均为空——没有要落的变更")
+    if not d.get("fields") and not d.get("modify_types") and not d.get("modify_logics"):
+        _fail("decisions.fields / modify_types / modify_logics 均为空——没有要落的变更")
     return d
+
+
+def validate_modify_logics(decisions: dict, ts_baseline: dict) -> None:
+    """modify_logics 段合法性（第三刀·2026-10-22 口径修改）：字段必须是 baseline
+    存量、桶中必须有旧条目（有落点可改）、new_logic 非空且过引用门禁
+    （N36 等价——designer 翻译的新口径必须可结构化解析）。"""
+    fields = ts_baseline.get("tables", {})
+    for i, m in enumerate(decisions.get("modify_logics") or [], start=1):
+        for k in ("field", "target_table", "new_logic"):
+            if not m.get(k):
+                _fail(f"modify_logics[{i}] 缺必填项 {k!r}（新口径=designer 翻译后的"
+                      f" design_logic——人话原文在 change_request.modify_logic_fields）")
+        if m["target_table"] not in fields:
+            _fail(f"modify_logics[{i}].target_table {m['target_table']!r} 不在 baseline 表集")
+        bf = {x["target_field"] for x in fields[m["target_table"]].get("fields", [])}
+        if m["field"] not in bf:
+            _fail(f"modify_logics[{i}].field {m['field']!r} 不在 {m['target_table']} 存量字段"
+                  f"——口径修改只针对存量（新字段在 fields 段直接写对口径）")
+        _old = _locate_logic_entries(ts_baseline, m["field"])
+        if not _old:
+            _fail(f"modify_logics[{i}].field {m['field']!r} 在 baseline 规则桶中无条目"
+                  f"（无落点可改——确认字段归属）")
+        logic = m.get("new_logic") or ""
+        three = find_three_part_refs(logic)
+        if three:
+            _fail(f"modify_logics[{i}].new_logic 含三段式引用 {three}——口径引用一律'别名.字段'两段")
+        bare = find_unqualified_refs(logic)
+        if bare:
+            _fail(f"modify_logics[{i}].new_logic 含未限定标识符 {bare}——字段引用写'别名.字段'"
+                  f"（未限定归属是设计判断，脚本不猜）")
+
+
+def _locate_logic_entries(ts_baseline: dict, field: str) -> list:
+    """baseline 规则桶中该字段的全部条目 [(rule, kind, entry)]——口径修改的落点
+    （processed 条目 logic 替换 / direct 串迁移为 processed）。"""
+    out = []
+    for code, r in (ts_baseline.get("rules") or {}).items():
+        buckets = r.get("fields") or {}
+        for p in (buckets.get("processed") or []):
+            if isinstance(p, dict) and str(p.get("target", "")).lower() == field.lower():
+                out.append((code, "processed", p))
+        for d in (buckets.get("direct") or []):
+            t = str(d).rsplit(" AS ", 1)[-1].strip().lower() if " AS " in str(d) else ""
+            if t == field.lower():
+                out.append((code, "direct", d))
+    return out
 
 
 def validate_modify_types(decisions: dict, ts_baseline: dict) -> None:
@@ -255,6 +301,30 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
                      | {"decision": m.get("decision", "")})
     if _mods:
         v2["change"]["modify_types"] = _mods
+
+    # 7. 第三刀（2026-10-22）：口径修改落地——桶条目自动定位（脚本确定性动作，
+    # designer 只翻新口径）：processed 条目 logic 替换 / direct 串迁移为 processed
+    # （直取→加工，桶归属变化是口径修改的合法形态）
+    _mlogics = []
+    for m in decisions.get("modify_logics") or []:
+        fname = m["field"]
+        for code, kind, entry in _locate_logic_entries(v2, fname):
+            buckets = v2["rules"][code].setdefault(
+                "fields", {"processed": [], "assign": [], "direct": []})
+            if kind == "processed":
+                entry["logic"] = m["new_logic"]
+            else:  # direct 串 → processed 条目（迁移：删 direct 追 processed）
+                buckets["direct"] = [d for d in buckets["direct"] if d != entry]
+                buckets["processed"].append({"target": fname, "logic": m["new_logic"],
+                                             "refs": [str(entry).rsplit(" AS ", 1)[0].strip()]})
+        _mlogics.append({
+            "field": fname, "target_table": m.get("target_table", ""),
+            "old_logic": m.get("old_logic", ""), "new_logic": m["new_logic"],
+            "rules": sorted({c for c, _k, _e in _locate_logic_entries(ts_baseline, fname)}),
+            "reason": m.get("reason", ""),
+        })
+    if _mlogics:
+        v2["change"]["modify_logics"] = _mlogics
     return v2
 
 
@@ -283,6 +353,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
     validate_decisions(decisions, ts_baseline, cache)
     validate_modify_types(decisions, ts_baseline)
+    validate_modify_logics(decisions, ts_baseline)
     v2 = apply_decisions(ts_baseline, decisions)
 
     out = Path(args.output)

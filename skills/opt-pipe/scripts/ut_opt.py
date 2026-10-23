@@ -184,7 +184,8 @@ def _frozen_columns(ts_v2: dict, change: dict) -> Dict[str, List[str]]:
     新类型列质量抽查[空值率]守）。"""
     out: Dict[str, List[str]] = {}
     declared_all = {f["field"] for f in change.get("fields", [])}
-    modified_all = {m.get("field") for m in change.get("modify_types", [])}
+    modified_all = ({m.get("field") for m in change.get("modify_types", [])}
+                    | {m.get("field") for m in change.get("modify_logics", [])})
     for code, rule in ts_v2.get("rules", {}).items():
         out[code] = [c for c in (rule.get("field_targets") or [])
                      if c not in declared_all and c not in modified_all]

@@ -48,7 +48,7 @@ class TestSliceOpt:
         assert opt["baseline_sql"] == B_R2, "baseline SQL 逐字原文"
         assert opt["declared_new_fields"][0]["field"] == "channel_name"
         assert opt["declared_new_joins"][0]["alias"] == "c"
-        assert len(opt["hard_constraints"]) == 5  # 场景B 扩 cast 包裹约束
+        assert len(opt["hard_constraints"]) == 6  # 场景B cast 包裹 + 第三刀口径修改白名单约束
         # 常规切片信息也在（coder 要的字段/关联上下文）
         assert "channel_name" in json.dumps(sliced, ensure_ascii=False)
 

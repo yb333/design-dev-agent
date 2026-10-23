@@ -236,7 +236,7 @@ class TestExtract:
     def test_extract_add_field(self, facts):
         mapping, batch = self._std()
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert [f["field"] for f in add_fields] == ["channel_name"]
         f = add_fields[0]
         assert f["source"]["table"] == "dim_channel" and f["cn"] == "渠道名称"
@@ -250,7 +250,7 @@ class TestExtract:
         mapping = mapping_of(entity, attrs)
         batch = [_to_entry(chg(2, "2026-10-14", "attr", "DEFAULT|CHANNEL_NAME", "资产字段", "ADD"))]
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert [f["field"] for f in add_fields] == ["channel_name"], \
             "大写 key 归一后应命中属性级小写行"
         assert not [d for d in diags if d["level"] == "error"]
@@ -258,13 +258,13 @@ class TestExtract:
     def test_modify_delete_classified_unsupported(self, facts):
         """非目标字段类型列的 MODIFY/DELETE/列级 ADD 仍待扩展；实体级 ADD（场景 A）
         已正式消费——当前态无行时报 add_source_row_missing error（不进 unsupported）。"""
-        extra = [chg(3, "2026-10-14", "attr", "default|order_id", "映射表达式", "MODIFY"),
+        extra = [chg(3, "2026-10-14", "attr", "default|order_id", "映射规则", "MODIFY"),
                  chg(4, "2026-10-14", "attr", "default|gone_f", "资产字段", "DELETE"),
                  chg(5, "2026-10-14", "entity", "default|dim_shop", "资产字段", "ADD"),
                  chg(6, "2026-10-14", "attr", "default|order_id", "备注", "ADD")]
         mapping, batch = self._std(extra)
         renames, rest = synth_renames(batch)
-        _, _ns, _mods, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        _, _ns, _mods, _mlogics, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         kinds = {(u["change_type"], u["name"]) for u in unsupported}
         assert ("modify", "order_id") in kinds
         assert ("delete", "gone_f") in kinds
@@ -280,7 +280,7 @@ class TestExtract:
         mapping, batch = self._std(extra)
         renames, rest = synth_renames(batch)
         assert renames, "先删后加对应合成 rename"
-        _, _ns, _mods, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        _, _ns, _mods, _mlogics, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert any(u["change_type"] == "rename" and "order_amt→order_amount" in u["name"]
                    for u in unsupported)
 
@@ -290,7 +290,7 @@ class TestExtract:
             chg(8, "2026-10-14", "attr", "default|ghost_f", "资产字段", "ADD"),    # 当前态无行
         ])
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         codes = {d["code"] for d in diags if d["level"] == "error"}
         assert "add_field_conflict" in codes
         assert "add_field_row_missing" in codes
@@ -301,7 +301,7 @@ class TestExtract:
             chg(9, "2026-10-14", "attr", "default|dangle_f", "资产字段", "ADD"),
         ], extra_attr=[attr(tcol="dangle_f", alias="nope", stable="dim_x", scol="x")])
         renames, rest = synth_renames(batch)
-        _, _ns, _mods, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        _, _ns, _mods, _mlogics, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert any(d["code"] == "source_alias_dangling" for d in diags if d["level"] == "error")
 
     def test_unmarked_new_field_warns(self, facts):
@@ -309,14 +309,14 @@ class TestExtract:
         mapping, batch = self._std(extra_attr=[
             attr(tcol="extra_f", alias="a", stable="ods_trade_order_di", scol="extra_f")])
         renames, rest = synth_renames(batch)
-        _, _ns, _mods, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        _, _ns, _mods, _mlogics, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert any(d["code"] == "unmarked_new_field" and "extra_f" in d["message"]
                    for d in diags if d["level"] == "warn")
 
     def test_rs_material_reconciliation(self, facts):
         mapping, batch = self._std()
         renames, rest = synth_renames(batch)
-        _, _ns, _mods, _, diags = extract_and_check(rest, renames, mapping, facts, "202610",
+        _, _ns, _mods, _mlogics, _, diags = extract_and_check(rest, renames, mapping, facts, "202610",
                                         "新增 other_f 字段")   # RS 段没提 channel_name
         assert any(d["code"] == "rs_field_not_mentioned" for d in diags if d["level"] == "warn")
 
@@ -467,20 +467,20 @@ class TestFieldTypeDrift:
         std = TestExtract()
         mapping, batch = std._std(extra_attr=extra_attr)
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         drift = [d for d in diags if d["code"] == "field_type_drift"]
         assert drift and "order_id" in drift[0]["message"]
         assert [f["field"] for f in add_fields] == ["channel_name"]  # 本批 ADD 照常
 
     def test_unsupported_existence_note(self, facts):
         """unsupported 报告的目标存在性事实：笔误/台账滞后/两侧都有（真待支持）三分。"""
-        extra = [chg(3, "2026-10-14", "attr", "default|typo_f", "映射表达式", "MODIFY"),      # 两侧都无
-                 chg(4, "2026-10-14", "attr", "default|total_amount", "映射表达式", "MODIFY"),  # 基线有当前态无（目标字段类型列的 MODIFY 已正式消费——用表达式列测存在性）
+        extra = [chg(3, "2026-10-14", "attr", "default|typo_f", "映射规则", "MODIFY"),      # 两侧都无（映射表达式列已被第三刀消费）
+                 chg(4, "2026-10-14", "attr", "default|total_amount", "映射规则", "MODIFY"),  # 基线有当前态无
                  chg(5, "2026-10-14", "attr", "default|order_id", "备注", "ADD")]            # 两侧都有
         std = TestExtract()
         mapping, batch = std._std(extra_changes=extra)
         renames, rest = synth_renames(batch)
-        _, _ns, _mods, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        _, _ns, _mods, _mlogics, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
         notes = {u["name"]: u.get("note", "") for u in unsupported}
         assert "疑似笔误" in notes["typo_f"]
         assert "台账滞后" in notes["total_amount"]
@@ -496,7 +496,7 @@ class TestFieldTypeDrift:
         std = TestExtract()
         mapping, batch = std._std(extra_changes=extra)
         renames, rest = synth_renames(batch)
-        _, _ns, _mods, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        _, _ns, _mods, _mlogics, unsupported, _ = extract_and_check(rest, renames, mapping, facts, "202610", "")
         ent = next(u for u in unsupported if u["level"] == "entity")
         assert "实体级当前态" in ent.get("note", "")
 
@@ -522,7 +522,7 @@ class TestMultiAliasAddField:
         source.alias=首个命中 a。"""
         mapping, batch = self._mapping_with("a;b")
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, unsupported, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert not [d for d in diags if d["code"] == "source_alias_dangling"], diags
         assert add_fields and add_fields[0]["source"]["alias"] == "a"
 
@@ -531,7 +531,7 @@ class TestMultiAliasAddField:
         首对 a 命中，source.field 取配对列名（不再整格）。"""
         mapping, batch = self._mapping_with("", scol="a.id;c.channel_name")
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert not [d for d in diags if d["code"] == "source_alias_dangling"], diags
         assert add_fields[0]["source"]["alias"] == "a"
         assert add_fields[0]["source"]["field"] == "id"
@@ -540,7 +540,7 @@ class TestMultiAliasAddField:
         """全角分号配对 'a；c'（a 命中实体级）→ 命中即过。"""
         mapping, batch = self._mapping_with("a；c")
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         assert not [d for d in diags if d["code"] == "source_alias_dangling"], diags
         assert add_fields[0]["source"]["alias"] == "a"
 
@@ -549,7 +549,7 @@ class TestMultiAliasAddField:
         明确声明的 ADD——漏标扫描不得再说它'不在本次变更记录中'。"""
         mapping, batch = self._mapping_with("xx;yy")
         renames, rest = synth_renames(batch)
-        add_fields, _ns, _mods, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
+        add_fields, _ns, _mods, _mlogics, _, diags = extract_and_check(rest, renames, mapping, facts, "202610", "")
         dangling = [d for d in diags if d["code"] == "source_alias_dangling"]
         unmarked = [d for d in diags if d["code"] == "unmarked_new_field"
                     and "channel_name" in d["message"]]
@@ -630,7 +630,7 @@ class TestScenarioNewSource:
         return extract_and_check(rest, renames, mapping, facts_ or facts_fixture(), "202610", "")
 
     def test_declared_source_collected(self):
-        add, new_sources, mods, uns, diags = self._run(
+        add, new_sources, mods, mlogics, uns, diags = self._run(
             extra_changes=[chg(3, "2026-10-14", "entity", "default|c", "资产字段", "ADD")])
         assert [ns["table"] for ns in new_sources] == ["dim_channel"]
         assert not [d for d in diags if d["level"] == "error"], diags
@@ -638,19 +638,19 @@ class TestScenarioNewSource:
 
     def test_declared_but_in_baseline_warns(self):
         """声明的'新'表其实已在 baseline 来源 → warn（重复申报）。"""
-        add, new_sources, mods, uns, diags = self._run(
+        add, new_sources, mods, mlogics, uns, diags = self._run(
             extra_changes=[chg(3, "2026-10-14", "entity", "default|a", "资产字段", "ADD")])
         assert any(d["code"] == "add_source_already_in_baseline" for d in diags)
 
     def test_reference_without_declaration_warns(self):
         """新字段来自新表但无实体级 ADD 声明 → warn（隐式放行，建议补申报）。"""
-        add, new_sources, mods, uns, diags = self._run()
+        add, new_sources, mods, mlogics, uns, diags = self._run()
         assert any(d["code"] == "new_source_undeclared" and "'c'" in d["message"] for d in diags)
 
     def test_declaration_without_reference_warns(self):
         """声明了新表（u=dim_unused）但无字段引用它 → warn（无用声明）。"""
         entity_extra = [ent(table="dim_unused", alias="u")]
-        add, new_sources, mods, uns, diags = self._run(
+        add, new_sources, mods, mlogics, uns, diags = self._run(
             extra_changes=[chg(3, "2026-10-14", "entity", "default|u", "资产字段", "ADD")],
             extra_entity=entity_extra)
         assert any(d["code"] == "new_source_unreferenced" and "'u'" in d["message"] for d in diags)
@@ -676,32 +676,32 @@ class TestScenarioModifyType:
         return extract_and_check(rest, renames, mapping, facts_fixture(), "202610", "")
 
     def test_valid_modify_collected(self):
-        add, ns, mods, uns, diags = self._run()
+        add, ns, mods, mlogics, uns, diags = self._run()
         assert mods and mods[0]["field"] == "order_id"
         assert mods[0]["old_type"] == "VARCHAR(64)" and mods[0]["new_type"] == "VARCHAR(128)"
         assert not [d for d in diags if d["level"] == "error"], diags
 
     def test_before_mismatch_blocks(self):
-        add, ns, mods, uns, diags = self._run(before="numeric(10,2)")  # baseline 是 varchar
+        add, ns, mods, mlogics, uns, diags = self._run(before="numeric(10,2)")  # baseline 是 varchar
         assert any(d["code"] == "modify_before_mismatch" for d in diags if d["level"] == "error")
 
     def test_after_mismatch_blocks(self):
-        add, ns, mods, uns, diags = self._run(after="VARCHAR(256)")  # 当前态是 128
+        add, ns, mods, mlogics, uns, diags = self._run(after="VARCHAR(256)")  # 当前态是 128
         assert any(d["code"] == "modify_after_mismatch" for d in diags if d["level"] == "error")
 
     def test_not_in_baseline_blocks(self):
-        add, ns, mods, uns, diags = self._run(after="", ttype="VARCHAR(128)")
+        add, ns, mods, mlogics, uns, diags = self._run(after="", ttype="VARCHAR(128)")
         # channel_name 不在 baseline——用它测 not_in_baseline
         entity = [ent(), ent(table="dim_channel", alias="c")]
         mapping = mapping_of(entity, [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"), attr(ttype="VARCHAR(128)")])
         batch = [_to_entry(chg(1, "2026-10-14", "attr", "default|channel_name",
                                "目标字段类型", "MODIFY", "VARCHAR(64)", "VARCHAR(128)"))]
         renames, rest = synth_renames(batch)
-        _, _, _, _, diags = extract_and_check(rest, renames, mapping, facts_fixture(), "202610", "")
+        _, _, _, _, _, diags = extract_and_check(rest, renames, mapping, facts_fixture(), "202610", "")
         assert any(d["code"] == "modify_field_not_in_baseline" for d in diags if d["level"] == "error")
 
     def test_modify_add_conflict_blocks(self):
-        add, ns, mods, uns, diags = self._run(
+        add, ns, mods, mlogics, uns, diags = self._run(
             extra_changes=[chg(2, "2026-10-14", "attr", "default|order_id", "资产字段", "ADD")])
         assert any(d["code"] == "modify_add_conflict" for d in diags if d["level"] == "error")
 
@@ -718,12 +718,71 @@ class TestScenarioModifyType:
         batch = [_to_entry(chg(1, "2026-10-14", "attr", "default|order_id",
                                "目标字段类型", "MODIFY", "VARCHAR(64)", "VARCHAR(128)"))]
         renames, rest = synth_renames(batch)
-        _, _, _, _, diags = extract_and_check(rest, renames, mapping, facts_fixture(), "202610", "")
+        _, _, _, _, _, diags = extract_and_check(rest, renames, mapping, facts_fixture(), "202610", "")
         drifts = [d for d in diags if d["code"] == "field_type_drift"]
         assert drifts and all("cust_id" in d["message"] for d in drifts), \
             f"order_id 应豁免、cust_id 应报: {drifts}"
 
     def test_other_column_modify_still_unsupported(self):
-        add, ns, mods, uns, diags = self._run(modify_col="映射表达式")
-        assert not mods
+        """映射规则列的 MODIFY（分类变更）仍待扩展——映射表达式列已被第三刀消费。"""
+        add, ns, mods, mlogics, uns, diags = self._run(modify_col="映射规则")
+        assert not mods and not mlogics
+        assert any(u["change_type"] == "modify" for u in uns)
+
+
+class TestScenarioModifyLogic:
+    """第三刀（2026-10-22）：口径修改（属性级 MODIFY·映射表达式）——对账分级
+    （变更后≈当前态 error / 变更前≈baseline 宽松 warn）→ modify_logic_fields 段。"""
+
+    def _run(self, column="映射表达式", before="", after="nvl(a.amt,0)",
+             expr="nvl(a.amt,0)", key="order_id", with_baseline_logic=False,
+             extra_attr=None):
+        entity = [ent(), ent(table="dim_channel", alias="c")]
+        attrs = [attr(tcol="order_id", alias="a", stable="ods_trade_order_di",
+                      scol="order_id", ttype="VARCHAR(64)"),
+                 attr()]
+        attrs[0]["映射表达式"] = expr  # 当前态终态口径
+        if extra_attr:
+            attrs.append(extra_attr)
+        f = facts_fixture()
+        if with_baseline_logic:  # 注入 baseline 旧口径（demo 桶为空——手工造落点）
+            f["logics"]["order_id"] = [{"rule": "R0002", "kind": "processed",
+                                        "logic": "a.amt"}]
+        mapping = mapping_of(entity, attrs)
+        all_changes = [chg(1, "2026-10-14", "attr", f"default|{key}", column, "MODIFY",
+                           before, after)]
+        batch = [_to_entry(c) for c in all_changes]
+        renames, rest = synth_renames(batch)
+        return extract_and_check(rest, renames, mapping, f, "202610", "")
+
+    def test_valid_modify_logic_collected(self):
+        add, ns, mods, mlogics, uns, diags = self._run(before="a.amt")
+        assert mlogics and mlogics[0]["field"] == "order_id"
+        assert mlogics[0]["new_expr"] == "nvl(a.amt,0)"
+        assert not [d for d in diags if d["level"] == "error"], diags
+
+    def test_after_mismatch_blocks(self):
+        add, ns, mods, mlogics, uns, diags = self._run(after="wrong_expr")
+        assert any(d["code"] == "modify_after_mismatch" for d in diags if d["level"] == "error")
+        assert not mlogics
+
+    def test_before_mismatch_warns_not_blocks(self):
+        """变更前与 baseline 旧口径不一致 → warn 宽松（baseline 可能存翻译态）。"""
+        add, ns, mods, mlogics, uns, diags = self._run(
+            before="完全不相关的旧口径", with_baseline_logic=True)
+        assert mlogics, "宽松 warn 不应丢弃条目"
+        assert any(d["code"] == "modify_expr_before_mismatch"
+                   for d in diags if d["level"] == "warn")
+
+    def test_not_in_baseline_blocks(self):
+        """当前态有行但不在 baseline 存量 → error（口径修改只针对存量）。"""
+        add, ns, mods, mlogics, uns, diags = self._run(
+            key="ghost_f", after="", expr="",
+            extra_attr=attr(tcol="ghost_f", alias="a", stable="ods_trade_order_di",
+                            scol="x"))
+        assert any(d["code"] == "modify_field_not_in_baseline" for d in diags if d["level"] == "error")
+
+    def test_rule_column_still_unsupported(self):
+        add, ns, mods, mlogics, uns, diags = self._run(column="映射规则")
+        assert not mlogics
         assert any(u["change_type"] == "modify" for u in uns)

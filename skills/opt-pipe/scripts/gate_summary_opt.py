@@ -28,11 +28,12 @@ def render(v2: dict, baseline: dict, cr: dict) -> str:
                                if ns.get("table")})
     new_sources = sorted(set(new_sources) | set(declared_sources))
     mods = change.get("modify_types") or []
+    mlogics = change.get("modify_logics") or []
     inter = sorted({t for f in fields for t in f.get("intermediate_tables", [])})
     lines.append("## 变更概览")
     lines.append(f"- 版本：{cr.get('version','')}（{cr.get('change_type','')}）"
                  f"｜新增字段 {len(fields)} 个｜新来源 {len(new_sources)} 张｜中间表加列 {len(inter)} 张"
-                 f"｜类型修改 {len(mods)} 列")
+                 f"｜类型修改 {len(mods)} 列｜口径修改 {len(mlogics)} 列")
     if new_sources:
         lines.append(f"- 新来源：{', '.join(new_sources)}")
     if inter:
@@ -42,6 +43,20 @@ def render(v2: dict, baseline: dict, cr: dict) -> str:
         lines.append(f"- RS 变更记录：{row.get('date','')} {row.get('ver','')}——{row.get('desc','')}")
     lines.append("")
 
+    if mlogics:
+        lines.append("## 口径修改（第三刀：字段含义纠偏/逻辑重写——**存量数据新旧含义混置，回刷意向人定**）")
+        lines.append("")
+        lines.append("| 字段 | 旧口径 | 新口径（designer 翻译） | 落位规则 |")
+        lines.append("|------|--------|--------------------------|----------|")
+        for m in mlogics:
+            old_l = str(m.get("old_logic", ""))[:60].replace("|", "\\|")
+            new_l = str(m.get("new_logic", ""))[:120].replace("|", "\\|")
+            lines.append(f"| {m.get('field','')} | {old_l} | {new_l} "
+                         f"| {', '.join(m.get('rules', []))} |")
+        lines.append("")
+        lines.append(f"> 回刷意向（backfill={change.get('backfill', '?')}）：口径修改字段的历史行"
+                     f"为旧含义——重算与否业务拍板（推生产不自主，UT 披露新旧逻辑差异样例）。")
+        lines.append("")
     if mods:
         lines.append("## 类型修改（场景 B：ALTER 自动转换存量值，UT 抽查新列）")
         lines.append("")

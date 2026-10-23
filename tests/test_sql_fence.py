@@ -126,7 +126,7 @@ class TestRuleDeclaration:
         d2 = rule_declaration(change, "R0002")
         assert d2["fields"] == ["channel_name"] and d2["new_joins"] == []
         d3 = rule_declaration(change, "R0009")
-        assert d3 == {"rule": "R0009", "fields": [], "new_joins": [], "modify_types": {}}
+        assert d3 == {"rule": "R0009", "fields": [], "new_joins": [], "modify_types": {}, "modify_logics": set()}
 
 
 class TestCastWrap:
@@ -159,3 +159,28 @@ class TestCastWrap:
         new_sql = "SELECT a.x AS x, cast(a.y AS varchar(128)) AS y FROM ods.t a"
         v = check_sql_fence(self.BASE, new_sql, self.DECL)
         assert any("表达式被修改" in x["message"] and "y" in x["message"] for x in v)
+
+
+class TestModifyLogicWhitelist:
+    """第三刀（2026-10-22）：口径修改列的表达式许变（白名单放行不比对内容——
+    内容锚=design_logic+闸口①'人审）；白名单外的老列照拦。"""
+
+    BASE = "SELECT a.x AS x, a.y AS y FROM ods.t a"
+
+    def _decl(self, mlogics=("x",)):
+        return {"rule": "R1", "fields": [], "new_joins": [], "modify_types": {},
+                "modify_logics": set(mlogics)}
+
+    def test_whitelisted_expression_change_passes(self):
+        new_sql = "SELECT nvl(a.x, 0) AS x, a.y AS y FROM ods.t a"
+        assert check_sql_fence(self.BASE, new_sql, self._decl()) == []
+
+    def test_non_whitelisted_change_still_blocks(self):
+        new_sql = "SELECT nvl(a.x, 0) AS x, a.y || '' AS y FROM ods.t a"
+        v = check_sql_fence(self.BASE, new_sql, self._decl())
+        assert any("表达式被修改" in x["message"] and "'y'" in x["message"] for x in v)
+
+    def test_whitelisted_column_loss_still_blocks(self):
+        new_sql = "SELECT nvl(a.y, 0) AS y FROM ods.t a"  # x 列丢失
+        v = check_sql_fence(self.BASE, new_sql, self._decl())
+        assert any("丢失" in x["message"] and "'x'" in x["message"] for x in v)

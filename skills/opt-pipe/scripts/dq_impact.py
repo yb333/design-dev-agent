@@ -112,6 +112,8 @@ def _collect_change_sets(change_request: dict):
         fields.append(f.get("target_column") or f.get("column") or f.get("field") or "")
     for m in (change_request.get("modify_type_fields") or []):
         fields.append(m.get("field") or "")
+    for m in (change_request.get("modify_logic_fields") or []):   # 口径修改（第三刀）
+        fields.append(m.get("field") or "")
     sources = []
     for s in (change_request.get("new_sources") or change_request.get("sources") or []):
         sources.append(s.get("table") or s.get("source_table") or str(s))

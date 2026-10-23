@@ -281,3 +281,64 @@ class TestModifyTypeFence:
         v2["change"]["modify_types"][0]["new_type"] = "VARCHAR(128)"  # 落地 256 ≠ 声明 128
         violations = check(baseline, v2, _cr_mod())
         assert any("恰好性" in v["message"] for v in violations), violations
+
+
+class TestModifyLogicFence:
+    """第三刀（2026-10-22）：口径修改围栏——声明字段 logic 许变/桶归属许迁；未声明
+    的口径被改=越界；双向对账 ts.change ↔ change_request。"""
+
+    def _pair(self, baseline):
+        """(带桶的 baseline, 它的 deepcopy v2)——两侧同源，diff 只显施加的变更。"""
+        b = copy.deepcopy(baseline)
+        b["rules"]["R0002"]["fields"] = {
+            "processed": [{"target": "order_amt", "logic": "a.order_amt",
+                           "refs": ["a.order_amt"]}],
+            "assign": [], "direct": ["a.order_id AS order_id"]}
+        return b, copy.deepcopy(b)
+
+    def _cr(self, fields=("channel_name",), mlogics=("order_amt",)):
+        cr = make_cr(fields)
+        cr["modify_logic_fields"] = [{"field": f, "old_expr": "", "new_expr": "",
+                                      "rules": ["R0002"]} for f in mlogics]
+        return cr
+
+    def test_declared_logic_change_passes(self, baseline):
+        b, v2 = self._pair(baseline)
+        v2["rules"]["R0002"]["fields"]["processed"][0]["logic"] = "nvl(a.order_amt, 0)"
+        v2["change"] = {"change_type": "add_field", "backfill": "no", "fields": [],
+                        "modify_logics": [{"field": "order_amt", "target_table": "dwb_trade_order_d",
+                                           "old_logic": "a.order_amt", "new_logic": "nvl(a.order_amt, 0)",
+                                           "rules": ["R0002"]}]}
+        violations = check(b, v2, self._cr())
+        assert not [v for v in violations if "order_amt" in v["message"]], violations
+
+    def test_undeclared_logic_change_blocks(self, baseline):
+        b, v2 = self._pair(baseline)
+        v2["rules"]["R0002"]["fields"]["processed"][0]["logic"] = "偷偷改了"
+        v2["change"] = {"change_type": "add_field", "backfill": "no", "fields": []}
+        violations = check(b, v2, self._cr(mlogics=()))
+        assert any("口径（logic）被修改" in v["message"] for v in violations), violations
+
+    def test_declared_direct_migration_passes(self, baseline):
+        b, v2 = self._pair(baseline)
+        bf = v2["rules"]["R0002"]["fields"]
+        bf["direct"] = [d for d in bf["direct"] if d != "a.order_id AS order_id"]
+        bf["processed"].append({"target": "order_id", "logic": "nvl(a.order_id,0)", "refs": []})
+        v2["change"] = {"change_type": "add_field", "backfill": "no", "fields": [],
+                        "modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                           "old_logic": "a.order_id AS order_id",
+                                           "new_logic": "nvl(a.order_id,0)", "rules": ["R0002"]}]}
+        cr = self._cr()
+        cr["modify_logic_fields"].append({"field": "order_id", "old_expr": "",
+                                          "new_expr": "", "rules": ["R0002"]})
+        violations = check(b, v2, cr)
+        assert not [v for v in violations if "order_id" in v["message"]], violations
+
+    def test_design_smuggling_blocks(self, baseline):
+        """ts.change 的 modify_logics 声明了 cr 没有的字段=设计夹带。"""
+        b, v2 = self._pair(baseline)
+        v2["change"] = {"change_type": "add_field", "backfill": "no", "fields": [],
+                        "modify_logics": [{"field": "ghost", "target_table": "dwb_trade_order_d",
+                                           "old_logic": "", "new_logic": "x", "rules": []}]}
+        violations = check(b, v2, self._cr(mlogics=()))
+        assert any("设计夹带" in v["message"] for v in violations)

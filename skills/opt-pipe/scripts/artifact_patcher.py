@@ -57,8 +57,11 @@ def _change_index(ts_v2: dict) -> List[Tuple[str, str, dict]]:
 
 
 def _sql_rules(ts_v2: dict) -> List[str]:
-    """SQL 单元格需要替换的规则（= 有声明落位的规则）。"""
-    return sorted({r for r, _, _ in _change_index(ts_v2)})
+    """SQL 单元格需要替换的规则（= 有声明落位的规则 ∪ 口径修改字段的落位规则——
+    第三刀：口径变了 SQL 必然变）。"""
+    _mod_rules = {rc for m in ((ts_v2.get("change") or {}).get("modify_logics") or [])
+                  for rc in (m.get("rules") or [])}
+    return sorted({r for r, _, _ in _change_index(ts_v2)} | _mod_rules)
 
 
 # ---------------------------------------------------------------------------

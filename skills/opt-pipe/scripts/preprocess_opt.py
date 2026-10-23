@@ -244,14 +244,34 @@ def synth_renames(batch: List[dict]) -> Tuple[List[dict], List[dict]]:
 def baseline_facts(ts_baseline: dict) -> dict:
     f_table = ts_baseline["meta"]["target"]["f_table"]
     target_short = f_table["table"]
-    field_list = ts_baseline.get("tables", {}).get(target_short, {}).get("fields", [])
+    rules = ts_baseline.get("rules") or {}
+    fields_of = lambda t: ((ts_baseline.get("tables") or {}).get(t, {}) or {}).get("fields", [])
+    field_list = fields_of(target_short)
+    # 旧口径登记（第三刀·口径修改的变更前对账材料）：规则桶 processed 条目 logic /
+    # direct 串（直取形态的"口径"）——同字段多规则条目取全（提示哪个规则，人核用）
+    logics: Dict[str, List[dict]] = {}
+    for code, r in rules.items():
+        buckets = r.get("fields") or {}
+        for p in (buckets.get("processed") or []):
+            if isinstance(p, dict) and p.get("target"):
+                logics.setdefault(str(p["target"]).lower(), []).append(
+                    {"rule": code, "kind": "processed", "logic": str(p.get("logic") or "")})
+        for d in (buckets.get("direct") or []):
+            t = str(d).rsplit(" AS ", 1)[-1].strip().lower() if " AS " in str(d) else ""
+            if t:
+                logics.setdefault(t, []).append({"rule": code, "kind": "direct", "logic": str(d)})
     fields = {f["target_field"] for f in field_list}
     field_types = {(f.get("target_field") or "").strip().lower(): (f.get("field_type") or "").strip()
                    for f in field_list}
     sources = {s.get("table", "") for s in ts_baseline["meta"].get("source_tables", [])}
     return {"asset": f"{f_table['schema']}.{target_short}",
             "target_short": target_short, "target_fields": fields,
-            "field_types": field_types, "source_tables": sources}
+            "field_types": field_types, "logics": logics, "source_tables": sources}
+
+
+def _expr_loose(s: str) -> str:
+    """表达式宽松比形态（口径对账用）：压空白/全角空格——书写差异容、语义差异不容。"""
+    return " ".join(str(s or "").split())
 
 
 # types_compatible（类型归一比）已归位 shared/type_compat（2026-10-22 第二刀：
@@ -323,7 +343,7 @@ def _existence_note(key: str, attr_target_cols: set, baseline_fields: set) -> st
 def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str, List[dict]],
                       facts: dict, version: str, rs_section: str
                       ) -> Tuple[List[dict], List[dict], List[dict], List[dict], List[dict]]:
-    """返回 (add_fields, new_sources, modify_fields, unsupported, diagnostics)。
+    """返回 (add_fields, new_sources, modify_fields, modify_logic_fields, unsupported, diagnostics)。
 
     add_fields = 本批次属性级整行 ADD（变更列=资产字段）且 key 不在 baseline → 字段详情
     从属性级当前态取（变更页签只说"哪些变了"，内容取当前态 mapping）；
@@ -331,7 +351,10 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
     一案例综合场景）：新表取数链路第一刀已通（新字段附属），此处升级为显式声明消费；
     modify_fields = 属性级 MODIFY 且变更列=目标字段类型（2026-10-22 第二刀场景 B：
     目标字段类型修改）——三方对账（变更前≈baseline 旧类型/变更后≈mapping 当前态新
-    类型，types_compatible 归一比）；其他列的 MODIFY（口径/表达式变更）仍待扩展；
+    类型，types_compatible 归一比）；
+    modify_logic_fields = 属性级 MODIFY 且变更列=映射表达式（2026-10-22 第三刀：
+    口径修改——对账分级[变更后≈当前态 error/变更前≈baseline 宽松 warn]，字段含义
+    纠偏/逻辑重写的登记通道）；其他列的 MODIFY（映射规则分类变更等）仍待扩展；
     unsupported = 识别为其他变更形态（rename/DELETE/其他列 MODIFY/列级 ADD/实体级
     其他类型）——识别+报告"待扩展"（附目标存在性事实），不拒收为非法。
     """
@@ -366,6 +389,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
     new_sources: List[dict] = []
     declared_source_aliases: set = set()
     modify_fields: List[dict] = []
+    modify_logic_fields: List[dict] = []
     for e in batch:
         if e["page"] == "entity":
             if e["ctype"] == "ADD" and e["column"] == WHOLE_ROW_MARK:
@@ -446,6 +470,56 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                 "field": e["key"],
                 "old_type": old_type or before,
                 "new_type": new_type,
+                "change_entry": {"seq": e["seq"], "before": before, "after": after},
+            })
+            continue
+        if e["ctype"] == "MODIFY" and (e["column"] or "").strip() == "映射表达式":
+            # 第三刀（2026-10-22）：口径修改（映射表达式）——对账分级：变更后 ≈ mapping
+            # 当前态表达式（error——同一生态必对）；变更前 ≈ baseline 旧口径（warn 宽松
+            # ——baseline 存翻译态/直取串，书写差异披露供人核，不硬拦）
+            hits = _match_attr_rows(attr_rows, e)
+            if not hits:
+                diags.append({"level": "error", "code": "modify_field_row_missing",
+                              "message": f"变更记录序号 {e['seq']!r}：修改字段 {e['key']!r} "
+                                         f"在属性级当前态找不到对应行（key=分组|目标字段名）"})
+                continue
+            if e["key"] not in facts["target_fields"]:
+                diags.append({"level": "error", "code": "modify_field_not_in_baseline",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 不在 baseline "
+                                         f"存量字段中——口径修改只针对存量字段"})
+                continue
+            if e["key"] in batch_declared_adds:
+                diags.append({"level": "error", "code": "modify_add_conflict",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 同批次既 ADD 又 "
+                                         f"MODIFY（新增字段直接写对口径，两者矛盾）"})
+                continue
+            row = hits[0]
+            new_expr = (row.get("mapping_expression") or "").strip()
+            before, after = (e["before"] or "").strip(), (e["after"] or "").strip()
+            if not new_expr:
+                diags.append({"level": "error", "code": "modify_target_expr_empty",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 属性级当前态的"
+                                         f"映射表达式为空"})
+                continue
+            if after and _expr_loose(after) != _expr_loose(new_expr):
+                diags.append({"level": "error", "code": "modify_after_mismatch",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 变更后表达式与"
+                                         f"属性级当前态映射表达式不一致（宽松比较）"
+                                         f"——当前态应为变更后的终态"})
+                continue
+            old_entries = facts.get("logics", {}).get(e["key"], [])
+            if before and old_entries:
+                _olds = {(_expr_loose(x["logic"])) for x in old_entries}
+                if _expr_loose(before) not in _olds:
+                    diags.append({"level": "warn", "code": "modify_expr_before_mismatch",
+                                  "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 变更前表达式"
+                                             f"与 baseline 旧口径不一致（宽松比较——baseline 可能"
+                                             f"存翻译态/直取串，书写差异请人核）"})
+            modify_logic_fields.append({
+                "field": e["key"],
+                "old_expr": before or (old_entries[0]["logic"] if old_entries else ""),
+                "new_expr": new_expr,
+                "rules": sorted({x["rule"] for x in old_entries}),
                 "change_entry": {"seq": e["seq"], "before": before, "after": after},
             })
             continue
@@ -557,7 +631,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             if f["field"] not in rs_section:
                 diags.append({"level": "warn", "code": "rs_field_not_mentioned",
                               "message": f"新增字段 {f['field']!r} 未在 RS 正文提及——口径请人确认"})
-    return add_fields, new_sources, modify_fields, unsupported, diags
+    return add_fields, new_sources, modify_fields, modify_logic_fields, unsupported, diags
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +640,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
 
 def build_change_request(facts: dict, version: str, add_fields: List[dict],
                          new_sources: List[dict], modify_fields: List[dict],
+                         modify_logic_fields: List[dict],
                          unsupported: List[dict], change_entries: List[dict],
                          renames: List[dict], rs_section: str, files: dict) -> dict:
     return {
@@ -579,6 +654,7 @@ def build_change_request(facts: dict, version: str, add_fields: List[dict],
         "unsupported_changes": unsupported,     # 识别+归类但流程待扩展（modify/drop/rename/add_column…）
         "new_sources": new_sources,             # 新增来源表声明（2026-10-22 场景 A：实体级整行 ADD）
         "modify_type_fields": modify_fields,    # 目标字段类型修改（2026-10-22 场景 B：属性级 MODIFY·目标字段类型）
+        "modify_logic_fields": modify_logic_fields,  # 口径修改（2026-10-22 第三刀：属性级 MODIFY·映射表达式）
         "source_files": files,
         "fields": add_fields,
         "backfill": "pending",
@@ -632,8 +708,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     static_diags = [{"level": d["level"], "code": "mapping_static", "message": d["message"]}
                     for d in check_mapping_static(mapping["attr"], mapping["entity"])]
     renames, rest = synth_renames(batch)
-    add_fields, new_sources, modify_fields, unsupported, diags = extract_and_check(
-        rest, renames, mapping, facts, version, rs_section)
+    add_fields, new_sources, modify_fields, modify_logic_fields, unsupported, diags = \
+        extract_and_check(rest, renames, mapping, facts, version, rs_section)
     diags = static_diags + diags
 
     errors = [d for d in diags if d["level"] == "error"]
@@ -672,14 +748,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         view_path.write_text(render_baseline_view_from_ts(ts_baseline), encoding="utf-8")
         print(f"baseline_view: {view_path}（档案 ts 简化版）")
     cr = build_change_request(facts, version, add_fields, new_sources, modify_fields,
-                              unsupported, batch, renames, rs_section,
+                              modify_logic_fields, unsupported, batch, renames, rs_section,
                               {"mapping": str(mapping_path), "rs": str(rs_path),
                                "ts_baseline": str(args.ts_baseline)})
     (out / "change_request.json").write_text(
         json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"change_request: {out / 'change_request.json'}")
     print(f"version: {version}, add_fields: {len(add_fields)}, new_sources: {len(new_sources)}, "
-          f"modify_type: {len(modify_fields)}, unsupported: {len(unsupported)}, warns: {len(warns)}")
+          f"modify_type: {len(modify_fields)}, modify_logic: {len(modify_logic_fields)}, "
+          f"unsupported: {len(unsupported)}, warns: {len(warns)}")
     return 1 if warns else 0
 
 

@@ -208,12 +208,24 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
                 if removed:
                     over(f"[围栏][规则] {code}.field_targets 丢失存量字段 {sorted(removed)}")
             elif aspect == "fields":
-                # 两视图桶：只许为声明字段新增 processed/assign/direct 条目，存量条目冻结
+                # 两视图桶：只许为声明字段新增 processed/assign/direct 条目，存量条目冻结；
+                # 口径修改声明（modify_logics·第三刀）的字段：logic 许变（恰好性——
+                # 新口径不比对内容，内容锚=design_logic+闸口①'人审）且桶归属许迁
+                # （direct→processed 是口径修改的合法形态——直取变加工）
+                _declared_mlogics = {str(m.get("field", "")).lower()
+                                     for m in change.get("modify_logics", [])}
                 def _bucket_index(b):
                     out = {}
                     for kind in ("processed", "assign", "direct"):
                         for e in (b or {}).get(kind, []):
-                            t = e.get("target") if isinstance(e, dict) else None
+                            if isinstance(e, dict):
+                                t = e.get("target")
+                            elif kind == "direct":
+                                # direct 串 "alias.col AS target" 身份=AS 后段（第三刀补：
+                                # 此前字符串条目不进索引，direct 删改围栏看不见——盲区）
+                                t = str(e).rsplit(" AS ", 1)[-1].strip() if " AS " in str(e) else None
+                            else:
+                                t = None
                             if t:
                                 out.setdefault(t, set()).add(kind)
                     return out
@@ -223,10 +235,27 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
                     over(f"[围栏][规则] {code}.fields 增加了未声明字段的条目 {sorted(bad)}")
                 gone = set(old_ix) - set(new_ix)
                 if gone:
-                    over(f"[围栏][规则] {code}.fields 丢失存量字段条目 {sorted(gone)}")
+                    # direct→processed 迁移会让 direct 侧消失 processed 侧出现——
+                    # 桶归属比对（下一循环）覆盖；这里只拦"整字段条目消失"
+                    _migrated = {t for t in gone if t in _declared_mlogics and t in new_ix}
+                    real_gone = gone - _migrated
+                    if real_gone:
+                        over(f"[围栏][规则] {code}.fields 丢失存量字段条目 {sorted(real_gone)}")
                 for t in set(old_ix) & set(new_ix):
                     if old_ix[t] != new_ix[t]:
-                        over(f"[围栏][规则] {code}.fields.{t} 桶归属被改 {old_ix[t]}→{new_ix[t]}")
+                        if t.lower() not in _declared_mlogics:
+                            over(f"[围栏][规则] {code}.fields.{t} 桶归属被改 {old_ix[t]}→{new_ix[t]}"
+                                 f"（口径修改走 modify_logics 声明）")
+                # 老字段 processed 条目的 logic 内容冻结（声明字段豁免——第三刀恰好性：
+                # 未声明的口径被改=越界，这里正是口径修改的 ts 级守门）
+                def _logic_map(b):
+                    return {str(e.get("target", "")).lower(): str(e.get("logic") or "")
+                            for e in (b or {}).get("processed", []) if isinstance(e, dict)}
+                old_lg, new_lg = _logic_map(old), _logic_map(new)
+                for t in set(old_lg) & set(new_lg):
+                    if old_lg[t] != new_lg[t] and t not in _declared_mlogics:
+                        over(f"[围栏][规则] {code}.fields.{t} 的口径（logic）被修改——"
+                             f"存量口径冻结（口径修改走变更记录 MODIFY·映射表达式申报）")
             elif aspect == "joins":
                 # ts 规则 joins 以别名为身份（表归属由 source_tables 承载）
                 old_al = {j.get("alias", "") for j in (old or [])}
@@ -290,7 +319,8 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
     cr_fields = {f["field"] for f in change_request.get("fields", [])}
     declared = change.get("fields", [])
     declared_mods = change.get("modify_types", [])
-    if not declared and not declared_mods:
+    declared_mlogics = change.get("modify_logics", [])
+    if not declared and not declared_mods and not declared_mlogics:
         missing("[围栏][声明] change 段为空——ts_v2 缺设计落位声明")
     for f in declared:
         fname = f["field"]
@@ -323,6 +353,16 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
     for f in change_request.get("modify_type_fields", []):
         if f["field"] not in {m["field"] for m in declared_mods}:
             missing(f"[围栏][声明] change_request 的类型修改 {f['field']!r} 未被"
+                    f" change 段接住——漏接")
+    # 口径修改同款双向（第三刀）：ts.change.modify_logics ↔ cr.modify_logic_fields
+    cr_mlogics = {m["field"] for m in change_request.get("modify_logic_fields", [])}
+    for m in declared_mlogics:
+        if m["field"] not in cr_mlogics:
+            over(f"[围栏][声明] modify_logics 声明的字段 {m['field']!r} 不在"
+                 f" change_request（设计夹带）")
+    for f in change_request.get("modify_logic_fields", []):
+        if f["field"] not in {m["field"] for m in declared_mlogics}:
+            missing(f"[围栏][声明] change_request 的口径修改 {f['field']!r} 未被"
                     f" change 段接住——漏接")
     return violations
 

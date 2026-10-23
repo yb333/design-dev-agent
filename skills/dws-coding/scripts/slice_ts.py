@@ -218,11 +218,18 @@ def slice_rule_opt(ts: dict, rule_code: str, baseline_sql: str) -> dict:
             for m in change.get("modify_types", [])
             if (m.get("target_table") or "").rsplit(".", 1)[-1] == _rule_target_short
         ],
+        "declared_modify_logics": [
+            {"field": m.get("field", ""), "new_logic": m.get("new_logic", "")}
+            for m in change.get("modify_logics", [])
+            if (m.get("target_table") or "").rsplit(".", 1)[-1] == _rule_target_short
+            or rule_code in (m.get("rules") or [])
+        ],
         "baseline_sql": baseline_sql,
         "hard_constraints": [
             "老列投影一个字符都不许动（AST 级结构等价比对；格式差异可，等价改写如 ='N' 改 <>'Y' 也算越界）",
             "只许追加 change 段声明的新列；声明的新列必须出现",
             "类型修改列（declared_modify_types）：SELECT 里给该列加 cast(老表达式 AS 新类型) 包裹——内层老表达式原文不动；其余一切照旧",
+            "口径修改列（declared_modify_logics）：该列表达式按 new_logic 重写（designer 翻译后的口径），其余老列照旧——SQL 围栏对该列白名单放行",
             "FROM/JOIN/WHERE/GROUP BY/CTE 冻结；新 JOIN 只允许声明过的（别名+表名）",
             "改法：以 baseline_sql 为底稿加列，不从零重写；产出走 pipe 的 SQL 围栏闸门",
         ],

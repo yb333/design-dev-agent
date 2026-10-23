@@ -316,3 +316,46 @@ class TestModifyTypes:
         d["modify_types"][0]["new_type"] = "varchar(64)"  # 归一同类型
         with pytest.raises(SystemExit):
             validate_modify_types(d, baseline)
+
+
+class TestModifyLogics:
+    """第三刀（2026-10-22）：口径修改落地——桶条目自动定位（processed 替换 /
+    direct→processed 迁移）+ 引用门禁 + fence 集成。"""
+
+    def _baseline_with_bucket(self, baseline):
+        """demo 桶为空——给 R0002 注入 order_id 的 direct 条目（测迁移路径）。"""
+        b = copy.deepcopy(baseline)
+        b["rules"]["R0002"].setdefault("fields", {"processed": [], "assign": [], "direct": []})
+        b["rules"]["R0002"]["fields"]["direct"].append("a.order_id AS order_id")
+        b["rules"]["R0002"]["fields"]["direct"].append("a.cust_id AS cust_id")
+        return b
+
+    def test_direct_migrates_to_processed(self, baseline):
+        from assemble_ts_opt import validate_modify_logics, apply_decisions
+        b = self._baseline_with_bucket(baseline)
+        d = {"change_type": "add_field", "backfill": "pending", "fields": [],
+             "modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                "new_logic": "nvl(a.order_id, 0)（空按0）"}]}
+        validate_modify_logics(d, b)
+        v2 = apply_decisions(b, d)
+        buckets = v2["rules"]["R0002"]["fields"]
+        assert "a.order_id AS order_id" not in buckets["direct"]  # direct 条目迁走
+        assert any(p["target"] == "order_id" and "nvl" in p["logic"]
+                   for p in buckets["processed"])
+        assert "a.cust_id AS cust_id" in buckets["direct"]  # 其他字段不动
+        assert v2["change"]["modify_logics"][0]["rules"] == ["R0002"]
+
+    def test_no_bucket_entry_blocks(self, baseline):
+        from assemble_ts_opt import validate_modify_logics
+        d = {"modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                "new_logic": "nvl(a.order_id, 0)"}]}
+        with pytest.raises(SystemExit):  # demo 桶空 → 无落点
+            validate_modify_logics(d, baseline)
+
+    def test_unqualified_logic_blocks(self, baseline):
+        from assemble_ts_opt import validate_modify_logics
+        b = self._baseline_with_bucket(baseline)
+        d = {"modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                "new_logic": "nvl(order_id, 0)"}]}  # 裸引用
+        with pytest.raises(SystemExit):
+            validate_modify_logics(d, b)

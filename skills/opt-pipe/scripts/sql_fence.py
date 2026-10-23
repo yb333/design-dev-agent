@@ -75,7 +75,16 @@ def rule_declaration(v2_change: dict, rule_code: str, rule_target: str = "") -> 
     for m in (v2_change or {}).get("modify_types", []):
         if (m.get("target_table") or "").rsplit(".", 1)[-1].lower() == t_short:
             mods[str(m.get("field", "")).lower()] = m.get("new_type", "")
-    return {"rule": rule_code, "fields": fields, "new_joins": joins, "modify_types": mods}
+    # 口径修改白名单（第三刀）：声明字段的表达式许与 baseline 不同——内容不比对
+    # （内容锚=design_logic+闸口①'人审；围栏只硬管"哪些列变了"恰好性）
+    mlogics = set()
+    for m in (v2_change or {}).get("modify_logics", []):
+        if (m.get("target_table") or "").rsplit(".", 1)[-1].lower() == t_short:
+            mlogics.add(str(m.get("field", "")).lower())
+        elif rule_code in (m.get("rules") or []):
+            mlogics.add(str(m.get("field", "")).lower())
+    return {"rule": rule_code, "fields": fields, "new_joins": joins,
+            "modify_types": mods, "modify_logics": mlogics}
 
 
 def _cast_wrap_matches(new_node, b_node, new_type: str) -> bool:
@@ -161,9 +170,12 @@ def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[di
         elif n_cols[name] != b_expr:
             # 场景 B（2026-10-22）：类型修改列允许 cast(老表达式 AS 新类型) 包裹——
             # AST 判定内层归一必须==baseline 原文（cast 之外的任何改写照拦）
-            _nty = declared_mods.get(str(name).lower())
+            _name_l = str(name).lower()
+            _nty = declared_mods.get(_name_l)
             if _nty and _cast_wrap_matches(n_nodes.get(name), b_nodes.get(name), _nty):
                 pass
+            elif _name_l in (rule_decl.get("modify_logics") or set()):
+                pass  # 口径修改声明（第三刀）：表达式许变——内容锚=design_logic+闸口①'人审
             else:
                 bad(f"老列 {name!r} 表达式被修改：{b_expr!r} → {n_cols[name]!r}")
     for name in n_cols:
