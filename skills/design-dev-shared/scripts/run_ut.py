@@ -62,14 +62,38 @@ def resolve_test_value(param_name: str, cfg: dict | None) -> str | None:
     return cfg.get("value", "")
 
 
+# 平台变量形态：#name = value#（成对 # 包裹——存量代码的变量写法，2026-10-22 内网
+# 反馈：UT 替换此前只认 ${}，# 形态原样透传进 SQL → DB 语法错误导分流）
+_PLATFORM_VAR_RE = re.compile(r"#\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^#]*?)\s*#")
+
+
 def substitute_params(sql: str, param_values: dict) -> str:
-    """${PARAM} → 实际值。SQL 里用了某参数但 param_values 没值 → fail loud。"""
+    """${PARAM} → 实际值；#name = value# 平台变量 → 实际值。
+
+    ${PARAM}：SQL 用了某参数但 param_values 没值 → fail loud。
+    #name = value#：**配置优先**（param_values 有 name 用配置值），没配置用形态内
+    自带默认值兜底（存量写法自带值——不 fail loud，与 resolve_all_params 三层
+    兜底链同精神）；默认值形如 {x} 剥外层花括号。
+    """
     def replacer(m):
         name = m.group(1)
         if name not in param_values:
             raise ValueError(f"SQL 用了参数 ${{{name}}}，但没配测试值")
         return str(param_values[name])
-    return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", replacer, sql)
+
+    def platform_replacer(m):
+        name, default = m.group(1), m.group(2).strip()
+        if name in param_values:
+            return str(param_values[name])
+        if default.startswith("{") and default.endswith("}"):
+            default = default[1:-1].strip()
+        if not default:
+            raise ValueError(f"SQL 用了平台变量 #{name}=...#，形态内默认值为空且未配测试值")
+        return default  # 形态内默认值兜底
+
+    sql = re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", replacer, sql)
+    sql = _PLATFORM_VAR_RE.sub(platform_replacer, sql)
+    return sql
 
 
 def resolve_all_params(ts: dict, config_path: str) -> dict:

@@ -37,7 +37,7 @@ skills/
 │   └── schemas/         # baseline_v1.schema.json(随 baseline_contract 归 opt)
 └── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
     └── scripts/         # ★ 共用入口（>1 消费者才留这，2026-09 按消费者归位定调）：
-                         #   preprocess.py(两剧本共用;★全仓唯一实现三件2026-10-22:clean_excel_column列名归一/parse_mapping_sheets全量两页签解析/check_mapping_static静态检查——precheck与preprocess_opt同一实现同一语义) check_db.py(两剧本共用) assemble_ddl.py(new-pipe直调+opt侧assemble_ddl_opt import) resolve_appid.py(查appid,被preprocess/assemble_export import)
+                         #   preprocess.py(两剧本共用;★全仓唯一实现三件2026-10-22:clean_excel_column列名归一/parse_mapping_sheets全量两页签解析/check_mapping_static静态检查——precheck与preprocess_opt同一实现同一语义) sql_clean.py(★平台SQL解析预处理链vendor拷贝2026-10-22:权威在analyzer仓engine[版本8d41a04],剔注释/DWS特有语法/占位符量化,oracle方言——sql_fence围栏parse门票;指纹联锁test_vendor_sync盯漂移,修复改彼侧再re-vendor) check_db.py(两剧本共用) assemble_ddl.py(new-pipe直调+opt侧assemble_ddl_opt import) resolve_appid.py(查appid,被preprocess/assemble_export import)
                          #   ★ 公共库（被多方 import）：
                          #   dws_db.py(连库) config_paths.py(★config路径集中) run_ut.py(UT函数库,无main,含dq_filename/load_dq_rules[dq.json优先,旧ts.dq_rules兜底]) type_compat.py(类型兼容)
                          #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量) ts_compat.py(ts结构兼容:分桶原语+旧结构升级) schema_query.py(字段查询能力层:check_field/pick_fields内核)

@@ -252,3 +252,35 @@ class TestE2EParamFlow:
         assert "${P_CYCLE_ID}" not in result
         assert "${BIZ_DATE}" not in result
         assert "20260801" in result
+
+
+class TestPlatformVarSubstitution:
+    """#name=value# 平台变量形态（2026-10-22 内网反馈：存量代码变量写法，UT 替换
+    此前只认 ${}——# 形态原样透传进 SQL 导致 DB 语法错误误导分流）。"""
+
+    def test_platform_var_config_wins(self):
+        from run_ut import substitute_params
+        sql = "SELECT #biz_date = 20260101# AS d FROM t"
+        assert substitute_params(sql, {"biz_date": "20261022"}) == \
+            "SELECT 20261022 AS d FROM t"
+
+    def test_platform_var_inline_default_fallback(self):
+        from run_ut import substitute_params
+        sql = "SELECT #biz_date = 20260101# AS d FROM t"
+        assert substitute_params(sql, {}) == "SELECT 20260101 AS d FROM t"
+
+    def test_platform_var_braced_default_stripped(self):
+        from run_ut import substitute_params
+        sql = "SELECT #biz_date = {20260101}# AS d FROM t"
+        assert substitute_params(sql, {}) == "SELECT 20260101 AS d FROM t"
+
+    def test_platform_var_empty_default_fails_loud(self):
+        from run_ut import substitute_params
+        with pytest.raises(ValueError, match="biz_date"):
+            substitute_params("SELECT #biz_date = {}# AS d FROM t", {})
+
+    def test_dollar_form_unchanged_and_mixed(self):
+        from run_ut import substitute_params
+        sql = "SELECT ${P_CYCLE_ID} AS c, #dt = 20260101# AS d FROM t"
+        out = substitute_params(sql, {"P_CYCLE_ID": "20261022000000"})
+        assert out == "SELECT 20261022000000 AS c, 20260101 AS d FROM t"

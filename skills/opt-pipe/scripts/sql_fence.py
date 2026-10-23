@@ -115,10 +115,16 @@ def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[di
         v.append({"type": "missing", "message": f"[SQL围栏][{rule_decl.get('rule', '?')}] {msg}"})
 
     try:
-        b_tree = sqlglot.parse_one(baseline_sql)
-        n_tree = sqlglot.parse_one(new_sql)
-    except Exception as e:  # 解析失败：交给常规 SQL 报错链路，这里只报不可比
-        bad(f"SQL 解析失败，无法围栏比对：{e}")
+        # 预处理（vendor 单点 sql_clean——逆向踩坑沉淀：剔注释/DWS 特有语法/占位符
+        # 量化，两侧同款=等价比对自洽）+ oracle 方言（NVL/DECODE 原样不转写）
+        from sql_clean import clean_platform_sql, SQLGLOT_DIALECT
+        b_tree = sqlglot.parse_one(clean_platform_sql(baseline_sql), dialect=SQLGLOT_DIALECT)
+        n_tree = sqlglot.parse_one(clean_platform_sql(new_sql), dialect=SQLGLOT_DIALECT)
+    except RecursionError:
+        bad("SQL 嵌套层级过深（RecursionError）——机器审不了，转人工审查（闸口②'人审 SQL diff）")
+        return v
+    except Exception as e:  # 解析失败：存量形态超机器能力——转人工披露（不装作审过也不无差别阻断）
+        bad(f"SQL 解析失败（方言/特殊写法超 sqlglot 能力），转人工审查（闸口②'人审 SQL diff）：{e}")
         return v
 
     b_sel, n_sel = _top_select(b_tree), _top_select(n_tree)

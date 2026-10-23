@@ -184,3 +184,39 @@ class TestModifyLogicWhitelist:
         new_sql = "SELECT nvl(a.y, 0) AS y FROM ods.t a"  # x 列丢失
         v = check_sql_fence(self.BASE, new_sql, self._decl())
         assert any("丢失" in x["message"] and "'x'" in x["message"] for x in v)
+
+
+class TestPlatformSqlClean:
+    """vendor 预处理链接入围栏（2026-10-22）——逆向踩坑清单逐项：DWS 特有语法/
+    SYSDATE/${} 占位符/注释干扰，两侧同款 clean 后 oracle 方言 parse。"""
+
+    def test_dws_syntax_and_placeholder_pass_fence(self):
+        """baseline 含 DISTRIBUTE BY/PARTITION(x)/SYSDATE/${}——vendor clean 后
+        两侧正常比对（此前裸 parse 直接 ParseError 卡流程）。"""
+        base = ("SELECT a.x AS x, ${P_CYCLE_ID} AS cyc FROM ods.t DISTRIBUTE BY HASH(a.x) "
+                "/* 主表注释 */")
+        new = ("SELECT a.x AS x, ${P_CYCLE_ID} AS cyc, a.y AS y2 FROM ods.t "
+                "DISTRIBUTE BY HASH(a.x)")
+        decl = {"rule": "R1", "fields": ["y2"], "new_joins": [], "modify_types": {},
+                "modify_logics": set()}
+        assert check_sql_fence(base, new, decl) == []
+
+    def test_sysdate_normalized(self):
+        base = "SELECT SYSDATE AS ts, a.x AS x FROM ods.t a"
+        new = "SELECT SYSDATE AS ts, a.x AS x FROM ods.t a"
+        assert check_sql_fence(base, new, {"rule": "R1", "fields": [], "new_joins": [],
+                                           "modify_types": {}, "modify_logics": set()}) == []
+
+    def test_unparseable_routes_manual_review(self):
+        """真解析不了的形态 → 转人工披露（不装作审过，不无差别硬 fail 文案）。"""
+        v = check_sql_fence("这不是 SQL", "这也不是", {"rule": "R1", "fields": [],
+                                                     "new_joins": [], "modify_types": {},
+                                                     "modify_logics": set()})
+        assert any("转人工审查" in x["message"] for x in v)
+
+    def test_nvl_preserved_by_oracle_dialect(self):
+        """oracle 方言：NVL 原样解析不被转写 COALESCE——两侧归一稳定。"""
+        base = "SELECT NVL(a.x, 0) AS x, a.y AS y FROM ods.t a"
+        new = "SELECT NVL(a.x, 0) AS x, a.y AS y FROM ods.t a"
+        assert check_sql_fence(base, new, {"rule": "R1", "fields": [], "new_joins": [],
+                                           "modify_types": {}, "modify_logics": set()}) == []
