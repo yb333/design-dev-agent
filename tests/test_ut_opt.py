@@ -21,10 +21,11 @@ SQL_OK = "SELECT a.x AS x FROM ods.t a"
 class FakeExecutor:
     """契约对齐 dws_db：execute 失败返回 success=False 不抛；fetch_all 失败抛。"""
 
-    def __init__(self, fail_on=None, counts=None, dup_keys=None):
+    def __init__(self, fail_on=None, counts=None, dup_keys=None, desc_columns=None):
         self.fail_on = fail_on or {}      # {sql 子串: 报错文本}
         self.counts = counts or []        # COUNT 查询按调用序返回的行数列表
         self.dup_keys = dup_keys or []    # 主键 GROUP HAVING 返回的重复键行
+        self.desc_columns = desc_columns  # describe 列序对账（_ut_cols）返回的列名
         self.executed = []
 
     def execute(self, sql):
@@ -32,6 +33,8 @@ class FakeExecutor:
         for key, err in self.fail_on.items():
             if key in sql:
                 return ExecuteResult(success=False, error=err)
+        if "_ut_cols" in sql:             # describe 列序对账（LIMIT 0 不取数）
+            return ExecuteResult(success=True, columns=self.desc_columns or [])
         if sql.strip().upper().startswith("EXPLAIN"):
             return ExecuteResult(success=True, rows=[{"plan": "1 | Seq Scan | 10"}])
         if "HAVING COUNT(*) > 1" in sql:
@@ -79,6 +82,45 @@ class TestExplainParamSubstitution:
         results = run_explain_single(FakeExecutor(), ts_v2, etl, tmp_path / "ts.json", {})
         assert results[0]["status"] == "ERROR"
         assert "P_START_DATE" in results[0]["detail"]
+
+
+class TestColumnOrderCheck:
+    """describe 列序对账（2026-10-23 缺 b，对齐 6a 口径：期望=结构源序∩规则产出列）：
+    INSERT 按位置对齐——多/缺/乱序都拦（FAIL 归 coder 硬阻断），describe 无列宁放过披露。"""
+
+    def _ts(self):
+        return {"rules": {"R0001": {"target_table": "dws.t_f",
+                                    "fields": {"direct": ["a.x AS x", "a.y AS y"]}}},
+                "tables": {"t_f": {"fields": [{"target_field": "x"}, {"target_field": "y"}]}}}
+
+    @staticmethod
+    def _etl(tmp_path, sql="SELECT a.x AS x, a.y AS y FROM ods.t a"):
+        etl = tmp_path / "etl"
+        etl.mkdir(exist_ok=True)
+        (etl / "R0001.sql").write_text(sql, encoding="utf-8")
+        return etl
+
+    def test_order_match_passes(self, tmp_path):
+        ex = FakeExecutor(desc_columns=["x", "y"])
+        rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
+        assert rs[0]["status"] == "PASS"
+        assert "列序对账 2 列一致" in rs[0]["detail"]
+
+    def test_order_drift_blocked_to_coder(self, tmp_path):
+        ex = FakeExecutor(desc_columns=["y", "x"])      # 乱序——按位置对齐=静默错位
+        rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
+        assert rs[0]["status"] == "FAIL"
+        assert "列序对账失败" in rs[0]["detail"] and "coder" in rs[0]["detail"]
+
+    def test_missing_col_blocked(self, tmp_path):
+        ex = FakeExecutor(desc_columns=["x"])           # 缺列
+        rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
+        assert rs[0]["status"] == "FAIL" and "缺列" in rs[0]["detail"]
+
+    def test_describe_no_columns_skipped(self, tmp_path):
+        ex = FakeExecutor(desc_columns=[])              # describe 无列——宁放过披露
+        rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
+        assert rs[0]["status"] == "PASS" and "列序对账跳过" in rs[0]["detail"]
 
 
 class TestExecuteWritePath:

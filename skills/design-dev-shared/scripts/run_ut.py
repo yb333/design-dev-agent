@@ -89,6 +89,30 @@ def _platform_default(raw: str) -> str:
     return v
 
 
+def compare_column_order(expected: list, actual: list) -> tuple:
+    """列序对账：SELECT 实际输出列 vs ts 结构源字段序（内部统一小写）。
+
+    返回 (是否一致, 差异描述列表)。按位置对齐的 INSERT 遇多/缺列直接报错、
+    遇乱序静默错位数据——三者都算不一致。
+    （2026-10-23 自 new-pipe/ut_precheck 下沉：6a 与 opt ut_opt EXPLAIN 段双消费者，
+    UT 检查逻辑归 UT 函数库；ut_precheck 搬体留名 re-export。）
+    """
+    expected = [str(c).lower() for c in expected]
+    actual = [str(c).lower() for c in actual]
+    missing = [c for c in expected if c not in actual]
+    extra = [c for c in actual if c not in expected]
+    if missing or extra:
+        parts = []
+        if missing:
+            parts.append(f"缺列 {missing}")
+        if extra:
+            parts.append(f"多列 {extra}")
+        return False, parts
+    if actual != expected:
+        return False, [f"顺序漂移（期望 {expected}，实际 {actual}）"]
+    return True, []
+
+
 def substitute_params(sql: str, param_values: dict) -> str:
     """${PARAM} → 实际值；#name = value# 平台变量 → 实际值。
 

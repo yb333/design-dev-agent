@@ -24,7 +24,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from sql_parse import (parse_join_pairs, find_unqualified_refs, find_three_part_refs,
-                       extract_qualified_refs)
+                       extract_qualified_refs, extract_logic_refs)
 from type_compat import join_key_pair_risky, types_compatible
 
 # decisions 必填键（缺 = fail loud，防 designer 漏声明）
@@ -51,10 +51,59 @@ def load_decisions(path: Path) -> dict:
     return d
 
 
-def validate_modify_logics(decisions: dict, ts_baseline: dict) -> None:
+def _ref_domains(ts_baseline: dict, new_joins: list) -> Tuple[dict, dict]:
+    """口径引用解析域（N38 等价用）：(cache 域, 声明域)。
+
+    cache 域：alias → (schema, table)（小写）——baseline 全部规则源表 ∪ 本字段
+    new_joins 声明，查 schema_cache（precheck_opt 拉「新源∪baseline 全部源表」落盘）。
+    声明域：短表名 → 字段集——ts tables（目标/中间表，我们建的结构在档），
+    不依赖连库。"""
+    cache_domain: dict = {}
+    for r in (ts_baseline.get("rules") or {}).values():
+        for s in r.get("source_tables") or []:
+            if s.get("alias") and s.get("table"):
+                cache_domain[str(s["alias"]).lower()] = (str(s.get("schema", "")).lower(),
+                                                         str(s["table"]).lower())
+    for j in new_joins or []:
+        if j.get("alias") and j.get("table"):
+            cache_domain[str(j["alias"]).lower()] = (str(j.get("schema", "")).lower(),
+                                                     str(j["table"]).lower())
+    declared_domain = {str(t).lower(): {str(f.get("target_field", "")).lower()
+                                        for f in (td.get("fields") or [])
+                                        if isinstance(f, dict) and f.get("target_field")}
+                       for t, td in (ts_baseline.get("tables") or {}).items()}
+    return cache_domain, declared_domain
+
+
+def _check_logic_ref_existence(logic: str, label: str, ts_baseline: dict,
+                               new_joins: list, cache: Optional[dict]) -> None:
+    """N38 等价（2026-10-23 缺 a 补齐）：新口径限定引用查表存在性——源表查
+    schema_cache、目标/中间表查 ts 结构声明集，幻觉列硬拦（引用幻觉此前只能等
+    UT 炸，回路最长）。别名两头解析不了 → 跳过不猜（宁放过，同 new-pipe）；
+    cache None（无库未建缓存）→ 源表侧跳过（声明域仍查——结构在档零成本）。"""
+    if not logic:
+        return
+    cache_domain, declared_domain = _ref_domains(ts_baseline, new_joins)
+    for al, c in extract_logic_refs(logic, set())[0]:
+        key = cache_domain.get(al)
+        if key is not None:
+            fields = (cache or {}).get(key)
+            if fields is not None and c not in {str(k).lower() for k in fields}:
+                _fail(f"{label} 的口径引用 {al}.{c}，源表 {key[0]}.{key[1]} 里没有字段 "
+                      f"'{c}'——检查拼写（引用确认可调 explore 批量模式 --ts 锚点）")
+        elif al in declared_domain:
+            if c not in declared_domain[al]:
+                _fail(f"{label} 的口径引用 {al}.{c}，表 {al}（ts 结构声明集）里没有字段 "
+                      f"'{c}'——检查拼写")
+        # 两头都解析不了 → 宁放过（N36 已保证格式；无绑定别名归 designer 判断域）
+
+
+def validate_modify_logics(decisions: dict, ts_baseline: dict,
+                           cache: Optional[dict] = None) -> None:
     """modify_logics 段合法性（第三刀·2026-10-22 口径修改）：字段必须是 baseline
     存量、桶中必须有旧条目（有落点可改）、new_logic 非空且过引用门禁
-    （N36 等价——designer 翻译的新口径必须可结构化解析）。"""
+    （N36 等价——designer 翻译的新口径必须可结构化解析；N38 等价 2026-10-23 补——
+    限定引用查 schema_cache/ts 结构声明集，幻觉列当场拦）。"""
     fields = ts_baseline.get("tables", {})
     for i, m in enumerate(decisions.get("modify_logics") or [], start=1):
         for k in ("field", "target_table", "new_logic"):
@@ -79,6 +128,9 @@ def validate_modify_logics(decisions: dict, ts_baseline: dict) -> None:
         if bare:
             _fail(f"modify_logics[{i}].new_logic 含未限定标识符 {bare}——字段引用写'别名.字段'"
                   f"（未限定归属是设计判断，脚本不猜）")
+        # N38 等价（2026-10-23 缺 a）：新口径引用查存在——幻觉列当场拦
+        _check_logic_ref_existence(logic, f"modify_logics[{i}].new_logic",
+                                   ts_baseline, [], cache)
 
 
 def _locate_logic_entries(ts_baseline: dict, field: str) -> list:
@@ -174,6 +226,10 @@ def validate_decisions(decisions: dict, ts_baseline: dict, cache: dict | None = 
         if bare:
             _fail(f"fields[{i}].design_logic 含未限定标识符 {bare}——字段引用写'别名.字段'"
                   f"（未限定归属是设计判断，脚本不猜）")
+        # N38 等价（2026-10-23 缺 a）：新字段口径引用查存在（解析域含本字段 new_joins
+        # 声明的新源——新 JOIN 还没落 ts，从 decisions 现取）
+        _check_logic_ref_existence(logic, f"fields[{i}].design_logic",
+                                   ts_baseline, f.get("new_joins") or [], cache)
 
         # ★ 新 JOIN 键类型比对（N_JOIN2 等价，2026-09-04 补）：ON 等值对两侧类型
         # 跨大类须内联 cast（on 里 :: / cast()）；类型走 schema_cache（无 cache 降 warn 不硬拦）
@@ -360,7 +416,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
     validate_decisions(decisions, ts_baseline, cache)
     validate_modify_types(decisions, ts_baseline)
-    validate_modify_logics(decisions, ts_baseline)
+    validate_modify_logics(decisions, ts_baseline, cache)
     v2 = apply_decisions(ts_baseline, decisions)
 
     out = Path(args.output)

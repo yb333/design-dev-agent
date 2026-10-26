@@ -104,6 +104,67 @@ class TestApplyAndFenceIntegration:
         assert check(baseline, v2, cr_for("channel_name")) == []
 
 
+class TestLogicRefExistence:
+    """N38 等价（2026-10-23 缺 a）：新口径限定引用查存在——源表查 schema_cache
+    （precheck_opt 拉「新源∪baseline 全部源表」）、ts 表查结构声明集，幻觉列硬拦
+    （此前只能等 UT 炸）；无 cache 源表侧宁放过（声明域仍查——结构在档零成本）。"""
+
+    CACHE = {("ods", "ods_trade_order_di"): {"order_id": "varchar(64)", "pay_channel": "varchar(32)"},
+             ("dws", "dim_channel"): {"channel_name": "varchar(64)"}}
+
+    def test_new_field_hallucinated_col_blocked(self, baseline, tmp_path):
+        d = dec_direct()
+        d["fields"][0]["design_logic"] = "nvl(a.pay_channel_x, 'NA')（渠道缺省 NA）"
+        p = tmp_path / "d.yaml"
+        p.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        with pytest.raises(SystemExit):
+            validate_decisions(load_decisions(p), baseline, self.CACHE)
+
+    def test_new_field_valid_ref_passes(self, baseline, tmp_path):
+        d = dec_direct()
+        d["fields"][0]["design_logic"] = "nvl(a.pay_channel, 'NA')（渠道缺省 NA）"
+        p = tmp_path / "d.yaml"
+        p.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        validate_decisions(load_decisions(p), baseline, self.CACHE)   # 不炸即过
+
+    def test_new_join_alias_resolves_from_decisions(self, baseline, tmp_path):
+        """新 JOIN 还没落 ts——解析域从 decisions 的 new_joins 现取（dws.dim_channel）。"""
+        d = dec_new_join()
+        d["fields"][0]["design_logic"] = "nvl(c.channel_name_x, '-')（渠道名缺省）"
+        p = tmp_path / "d.yaml"
+        p.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        with pytest.raises(SystemExit):
+            validate_decisions(load_decisions(p), baseline, self.CACHE)
+
+    def test_modify_logic_hallucinated_col_blocked(self, baseline):
+        from assemble_ts_opt import validate_modify_logics
+        b = copy.deepcopy(baseline)
+        b["rules"]["R0001"].setdefault("fields", {"processed": [], "assign": [], "direct": []})
+        b["rules"]["R0001"]["fields"]["direct"].append("a.order_id AS order_id")
+        d = {"modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                "new_logic": "nvl(a.order_id_xx, 0)（空按0）"}]}
+        with pytest.raises(SystemExit):
+            validate_modify_logics(d, b, self.CACHE)
+
+    def test_no_cache_source_side_forgiven_declared_side_still_checked(self, baseline):
+        """无 cache（无库未建缓存）：源表引用宁放过；ts 表（结构在档）引用仍查。"""
+        from assemble_ts_opt import validate_modify_logics
+        b = copy.deepcopy(baseline)
+        b["rules"]["R0001"].setdefault("fields", {"processed": [], "assign": [], "direct": []})
+        b["rules"]["R0001"]["fields"]["direct"].append("a.order_id AS order_id")
+        base_d = {"modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                     "new_logic": ""}]}
+        # 源表侧幻觉列 + cache=None → 放过（宁放过——UT 兜底）
+        d = copy.deepcopy(base_d)
+        d["modify_logics"][0]["new_logic"] = "nvl(a.order_id_xx, 0)"
+        validate_modify_logics(d, b, None)
+        # ts 表侧幻觉列（别名=表短名命中声明域）+ cache=None → 仍拦
+        d2 = copy.deepcopy(base_d)
+        d2["modify_logics"][0]["new_logic"] = "tmp_trade_order.order_id_xx"
+        with pytest.raises(SystemExit):
+            validate_modify_logics(d2, b, None)
+
+
 class TestValidationFailLoud:
     def test_existing_field_rejected(self, baseline, tmp_path):
         d = dec_direct()
@@ -370,6 +431,14 @@ class TestModifyLogics:
                                 "new_logic": "nvl(a.order_id, 0)"}]}
         with pytest.raises(SystemExit):  # demo 桶空 → 无落点
             validate_modify_logics(d, baseline)
+
+    def test_no_bucket_entry_blocks_with_cache_too(self, baseline):
+        """签名扩 cache 后向后兼容：不传 cache 照常工作。"""
+        from assemble_ts_opt import validate_modify_logics
+        d = {"modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
+                                "new_logic": "nvl(a.order_id, 0)"}]}
+        with pytest.raises(SystemExit):
+            validate_modify_logics(d, baseline, {("ods", "ods_trade_order_di"): {"order_id": "varchar"}})
 
     def test_unqualified_logic_blocks(self, baseline):
         from assemble_ts_opt import validate_modify_logics

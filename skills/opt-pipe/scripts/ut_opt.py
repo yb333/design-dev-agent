@@ -34,7 +34,7 @@ from typing import Dict, List, Optional
 
 from run_ut import (read_select, run_dq_checks, load_dq_rules, rule_output_fields,
                     execute_write_path, verify_merge_idempotent, run_ut_check,
-                    substitute_params, resolve_all_params)
+                    substitute_params, resolve_all_params, compare_column_order)
 from explain_check import _analyze_plan, _parse_actual_rows
 
 # 报告样例上限（不搬全量数据）
@@ -44,10 +44,13 @@ SAMPLE_LIMIT = 5
 def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path,
                        param_values: Optional[dict] = None) -> List[dict]:
     """逐规则 EXPLAIN ANALYZE 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌）：
-    真跑通验证 + 计划两门槛（不下推/STREAM——提示级不阻断）+ 顶层行数（0 行告警）。
+    真跑通验证 + 计划两门槛（不下推/STREAM——提示级不阻断）+ 顶层行数（0 行告警）
+    + describe 列序对账（2026-10-23 缺 b 补齐——对齐 6a：INSERT 按位置对齐，coder
+    输出多/缺/乱序=静默错位，权威解释器是数据库；列序 FAIL=硬阻断归 coder）。
     计划原文全量落盘 _internal/diagnose/ 可回溯。返回检查结果列表。
     执行前过参数替换（2026-10-23 补：存量 SQL 平台变量 #name={constants,val}# /
     ${PARAM} 形态——统一 UT 重构时 opt 侧漏接，裸跑必 DB 报错）。"""
+    tables_meta = ts_v2.get("tables", {}) or {}
     results = []
     for rule_code, rule in ts_v2.get("rules", {}).items():
         new_sql = read_select(etl_dir, rule_code)   # {code}.sql 或 {code}_描述_模式.sql
@@ -71,6 +74,29 @@ def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path,
         if pre_rows == 0:
             plan_issues = [f"⚠ 0 行——源表有数据却查不出：疑似关联/过滤条件全灭，核对关联条件"] + plan_issues
         row_note = f"EXPLAIN {pre_rows}行" if pre_rows is not None else "行数未解析"
+        # 列序对账（对齐 6a 口径：期望=结构源序 ∩ 规则产出列；describe 无列宁放过披露）
+        target = rule.get("target_table", "")
+        t_short = target.rsplit(".", 1)[-1] if "." in target else target
+        expected = [str(f.get("target_field", "")).lower()
+                    for f in (tables_meta.get(t_short) or {}).get("fields", [])
+                    if isinstance(f, dict) and f.get("target_field")]
+        produced = rule_output_fields(rule)
+        if produced:
+            expected = [c for c in expected if c in {str(p).lower() for p in produced}]
+        if expected:
+            r_desc = executor.execute(
+                f"SELECT * FROM ({new_sql.strip().rstrip(';')}) _ut_cols LIMIT 0")
+            if r_desc.success and r_desc.columns:
+                actual = [str(c).lower() for c in r_desc.columns]
+                ok, diffs = compare_column_order(expected, actual)
+                if not ok:
+                    results.append({"rule": rule_code, "status": "FAIL",
+                                    "detail": f"列序对账失败（SQL 输出列 ≠ ts 字段声明）: "
+                                              f"{'; '.join(diffs)}——回 coder 修 SELECT 输出列"})
+                    continue
+                row_note += f"，列序对账 {len(expected)} 列一致"
+            else:
+                row_note += "，列序对账跳过（describe 无列返回）"
         results.append({"rule": rule_code, "status": "PASS",
                         "detail": f"真跑通（{row_note}）",
                         "plan_issues": plan_issues, "plan_file": plan_file})

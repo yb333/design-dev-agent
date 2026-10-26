@@ -60,6 +60,9 @@ strategy 空 / join_key_unique 缺结论 / **reason 空（断言必须有依据�
   （取一/开窗）工作单自动机械核对。
 - 连不上库 → reason 标注「未实测（连不上库）」+ 输入声明依据（不阻断，宁放过）；
   **有疑点不落笔**——随回复上报（疑似方向一句），与新建评估层同款。
+- 新口径引用存疑（拼写/类型，写前确认，服务不枷锁）：引用确认器=explore 批量模式
+  `python {skills根}/dws-design/scripts/explore.py --ts {arc_tmp}/ts.json --field a.amt`
+  （--ts 锚点按目标 schema 选源；组装器已对口径引用查存在——幻觉列当场拦，这里是写前帮手）。
 
 ### 4. 回刷判断
 按 opt-playbook §二决策表：全量基线→无需回刷（backfill: none）；增量基线→pending
