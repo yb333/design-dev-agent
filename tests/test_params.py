@@ -284,3 +284,31 @@ class TestPlatformVarSubstitution:
         sql = "SELECT ${P_CYCLE_ID} AS c, #dt = 20260101# AS d FROM t"
         out = substitute_params(sql, {"P_CYCLE_ID": "20261022000000"})
         assert out == "SELECT 20261022000000 AS c, 20260101 AS d FROM t"
+
+    # ---- 2026-10-23 二轮内网反馈：来源标记形态 {constants,值}（用户实报原文） ----
+
+    def test_platform_var_src_marker_stripped(self):
+        """用户实报形态：#p_cycle_id={constants,47121231000000}#——等价 ${p_cycle_id}
+        +默认值兜底；constants 是来源标记（常量源）不是值的一部分，必须剥掉。"""
+        from run_ut import substitute_params
+        sql = "SELECT * FROM t WHERE cycle_id = #p_cycle_id={constants,47121231000000}#"
+        assert substitute_params(sql, {}) == \
+            "SELECT * FROM t WHERE cycle_id = 47121231000000"
+
+    def test_platform_var_src_marker_config_wins(self):
+        from run_ut import substitute_params
+        sql = "SELECT * FROM t WHERE cycle_id = #p_cycle_id={constants,47121231000000}#"
+        assert substitute_params(sql, {"p_cycle_id": "47129999000000"}) == \
+            "SELECT * FROM t WHERE cycle_id = 47129999000000"
+
+    def test_platform_var_default_with_comma_preserved(self):
+        """默认值内含逗号（split 一次，余段原样保留）。"""
+        from run_ut import substitute_params
+        sql = "SELECT #p_in = {constants,'a,b,c'}# AS v FROM t"
+        assert substitute_params(sql, {}) == "SELECT 'a,b,c' AS v FROM t"
+
+    def test_platform_var_numeric_default_not_mistaken_as_marker(self):
+        """首段是数字（非纯标识符）不剥——整体即默认值。"""
+        from run_ut import substitute_params
+        assert substitute_params("SELECT #p_x = {20260101,20260102}# AS v FROM t", {}) == \
+            "SELECT 20260101,20260102 AS v FROM t"

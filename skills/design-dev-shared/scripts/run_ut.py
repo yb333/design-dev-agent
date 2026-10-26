@@ -64,7 +64,29 @@ def resolve_test_value(param_name: str, cfg: dict | None) -> str | None:
 
 # 平台变量形态：#name = value#（成对 # 包裹——存量代码的变量写法，2026-10-22 内网
 # 反馈：UT 替换此前只认 ${}，# 形态原样透传进 SQL → DB 语法错误导分流）
+# 形态内默认值三种形态（2026-10-23 二轮反馈补全）：裸值 4712… / {4712…} /
+# {constants,47121231000000}——花括号内首段纯标识符=来源标记（constants=常量源），
+# 剥掉取逗号后真默认值（等价 ${name} + 默认值兜底）
 _PLATFORM_VAR_RE = re.compile(r"#\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^#]*?)\s*#")
+_SRC_MARKER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _platform_default(raw: str) -> str:
+    """平台变量形态内默认值解析：{constants,47121231000000} → 47121231000000。
+
+    花括号剥壳后，首段若为纯标识符（来源标记——constants 类，数字/日期值不会是纯
+    标识符）且后随逗号，则剥标记取余段（split 一次，默认值内含逗号保留）；无标记
+    整体即默认值。空返回空（调用方 fail loud）。
+    """
+    v = (raw or "").strip()
+    if v.startswith("{") and v.endswith("}"):
+        v = v[1:-1].strip()
+    if not v:
+        return ""
+    head, sep, rest = v.partition(",")
+    if sep and _SRC_MARKER_RE.fullmatch(head.strip()):
+        return rest.strip()
+    return v
 
 
 def substitute_params(sql: str, param_values: dict) -> str:
@@ -73,7 +95,7 @@ def substitute_params(sql: str, param_values: dict) -> str:
     ${PARAM}：SQL 用了某参数但 param_values 没值 → fail loud。
     #name = value#：**配置优先**（param_values 有 name 用配置值），没配置用形态内
     自带默认值兜底（存量写法自带值——不 fail loud，与 resolve_all_params 三层
-    兜底链同精神）；默认值形如 {x} 剥外层花括号。
+    兜底链同精神）；默认值形态见 _platform_default（裸值/{值}/{来源标记,值}）。
     """
     def replacer(m):
         name = m.group(1)
@@ -82,11 +104,10 @@ def substitute_params(sql: str, param_values: dict) -> str:
         return str(param_values[name])
 
     def platform_replacer(m):
-        name, default = m.group(1), m.group(2).strip()
+        name = m.group(1)
         if name in param_values:
             return str(param_values[name])
-        if default.startswith("{") and default.endswith("}"):
-            default = default[1:-1].strip()
+        default = _platform_default(m.group(2))
         if not default:
             raise ValueError(f"SQL 用了平台变量 #{name}=...#，形态内默认值为空且未配测试值")
         return default  # 形态内默认值兜底

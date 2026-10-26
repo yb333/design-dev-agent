@@ -33,22 +33,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 from typing import Dict, List, Optional
 
 from run_ut import (read_select, run_dq_checks, load_dq_rules, rule_output_fields,
-                    execute_write_path, verify_merge_idempotent, run_ut_check)
+                    execute_write_path, verify_merge_idempotent, run_ut_check,
+                    substitute_params, resolve_all_params)
 from explain_check import _analyze_plan, _parse_actual_rows
 
 # 报告样例上限（不搬全量数据）
 SAMPLE_LIMIT = 5
 
 
-def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path) -> List[dict]:
+def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path,
+                       param_values: Optional[dict] = None) -> List[dict]:
     """逐规则 EXPLAIN ANALYZE 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌）：
     真跑通验证 + 计划两门槛（不下推/STREAM——提示级不阻断）+ 顶层行数（0 行告警）。
-    计划原文全量落盘 _internal/diagnose/ 可回溯。返回检查结果列表。"""
+    计划原文全量落盘 _internal/diagnose/ 可回溯。返回检查结果列表。
+    执行前过参数替换（2026-10-23 补：存量 SQL 平台变量 #name={constants,val}# /
+    ${PARAM} 形态——统一 UT 重构时 opt 侧漏接，裸跑必 DB 报错）。"""
     results = []
     for rule_code, rule in ts_v2.get("rules", {}).items():
         new_sql = read_select(etl_dir, rule_code)   # {code}.sql 或 {code}_描述_模式.sql
         if not new_sql:
             continue   # 视图/未产出规则跳过（dispatch 层已保证清单）
+        try:
+            new_sql = substitute_params(new_sql, param_values or {})
+        except ValueError as e:
+            results.append({"rule": rule_code, "status": "ERROR", "detail": str(e)})
+            continue
         r_plan = executor.execute(f"EXPLAIN ANALYZE {new_sql}")
         if not r_plan.success:
             results.append({"rule": rule_code, "status": "ERROR",
@@ -245,8 +254,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"UT_OPT_ENV: ALTER 失败（表不存在=环境问题归人）: {e}", file=sys.stderr)
         return 3
 
+    # 参数值解析（与 ut_execute 同款三层兜底：test_params 配置 > ts 默认值 > 类型兜底；
+    # 平台变量形态内默认值在 substitute_params 里兜底——配置优先）
+    from config_paths import db_sources_path
+    param_values = resolve_all_params(ts_v2, str(db_sources_path()))
+
     # 2. EXPLAIN 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌）
-    explains = run_explain_single(executor, ts_v2, Path(args.etl_dir), Path(args.ts))
+    explains = run_explain_single(executor, ts_v2, Path(args.etl_dir), Path(args.ts),
+                                  param_values)
 
     # 3. 写路径（共享内核：load_mode 真形态+写前清理）+ merge 族幂等第二遍
     writes = []
@@ -257,6 +272,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     for rule_code, rule in ts_v2.get("rules", {}).items():
         select_sql = read_select(Path(args.etl_dir), rule_code)
         if not select_sql:
+            continue
+        try:
+            select_sql = substitute_params(select_sql, param_values)
+        except ValueError as e:
+            writes.append({"rule": rule_code, "status": "FAIL",
+                           "error_type": "ENV", "detail": str(e)})
             continue
         target = rule.get("target_table", "")
         if not target:
@@ -293,7 +314,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     dq_rules_list = load_dq_rules(Path(args.ts).parent)
     if dq_rules_list:
         if all(r["status"] == "PASS" for r in explains + writes) and (explains or writes):
-            dq_results = run_dq_checks(executor, Path(args.ts).parent / "dq", dq_rules_list, {})
+            dq_results = run_dq_checks(executor, Path(args.ts).parent / "dq",
+                                       dq_rules_list, param_values)
         else:
             dq_note = "EXPLAIN/写路径存在失败——DQ 未执行（修复后重跑自带）"
             print(f"⏭️ DQ 跳过：{dq_note}", file=sys.stderr)

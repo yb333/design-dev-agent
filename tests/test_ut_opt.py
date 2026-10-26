@@ -13,6 +13,7 @@ import pytest
 
 from dws_db import ExecuteResult
 from run_ut import execute_write_path, verify_merge_idempotent, wrap_write, run_ut_check
+from ut_opt import run_explain_single
 
 SQL_OK = "SELECT a.x AS x FROM ods.t a"
 
@@ -48,6 +49,36 @@ class FakeExecutor:
         if not r.success:
             raise RuntimeError(r.error)
         return list(r.rows or [])
+
+
+class TestExplainParamSubstitution:
+    """opt 执行链路参数替换（2026-10-23 补：统一 UT 重构时 opt 侧漏接——存量 SQL 的
+    平台变量 #name={constants,val}# / ${PARAM} 裸跑必 DB 报错；用户实报形态直进夹具）。"""
+
+    def test_explain_substitutes_platform_var(self, tmp_path):
+        """EXPLAIN 前过 substitute_params：来源标记形态剥标记取真默认值进 SQL。"""
+        etl = tmp_path / "etl"
+        etl.mkdir()
+        (etl / "R0001.sql").write_text(
+            "SELECT a.x AS x FROM ods.t a WHERE cycle_id = #p_cycle_id={constants,47121231000000}#",
+            encoding="utf-8")
+        ts_v2 = {"rules": {"R0001": {"target_table": "dws.t_f"}}}
+        ex = FakeExecutor()
+        results = run_explain_single(ex, ts_v2, etl, tmp_path / "ts.json", {})
+        assert results[0]["status"] == "PASS"
+        assert "47121231000000" in ex.executed[0]
+        assert "#p_cycle_id" not in ex.executed[0], "平台变量必须替换后进 EXPLAIN"
+
+    def test_explain_dollar_var_missing_fails_loud(self, tmp_path):
+        """${PARAM} 无测试值 → ERROR 条目（不裸跑炸 DB 语法错误导分流）。"""
+        etl = tmp_path / "etl"
+        etl.mkdir()
+        (etl / "R0001.sql").write_text(
+            "SELECT a.x AS x FROM ods.t a WHERE dt = ${P_START_DATE}", encoding="utf-8")
+        ts_v2 = {"rules": {"R0001": {"target_table": "dws.t_f"}}}
+        results = run_explain_single(FakeExecutor(), ts_v2, etl, tmp_path / "ts.json", {})
+        assert results[0]["status"] == "ERROR"
+        assert "P_START_DATE" in results[0]["detail"]
 
 
 class TestExecuteWritePath:
