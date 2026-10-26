@@ -39,6 +39,7 @@ import pandas as pd
 from preprocess import (ExcelMappingParser, parse_mapping_sheets, check_mapping_static,
                         clean_excel_column)
 from sql_parse import extract_from_bindings
+from eval_workbench import render_eval_draft
 
 # 变更记录页签八列（规格见 mapping-format.md；列名按真实模板——「变更KEY」KEY 为大写，
 # 匹配大小写不敏感：列头 strip+lower 归一后对标准名查找，变更KEY/变更key 均命中）
@@ -750,12 +751,45 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
 # 5. 组装与 main
 # ---------------------------------------------------------------------------
 
+def build_eval_context(ts: dict, add_fields: List[dict],
+                       new_sources: List[dict]) -> Optional[dict]:
+    """切片评估上下文（--eval 通道，2026-10-23 批2 断言对齐）：最小 rs_input 形态——
+    只含新来源表（探针引擎 explore/eval_workbench 零改动；切片=确定性适配器，非重写）。
+
+    新 JOIN 断言的取证通道：designer 一次 `explore --rs eval_context.json --eval`，
+    实测数字直贴 join_safety.reason——与新建评估层同款纪律（有据/疑点二态，先取证后断言）。
+    无新来源返回 None（无新 JOIN 无需评估）。"""
+    rows, seen = [], set()
+
+    def _add(alias, schema, table, cond):
+        al = (alias or "").strip().lower()
+        if not al or not table or al in seen:
+            return
+        seen.add(al)
+        rows.append({"source_alias": alias or "", "source_schema": schema or "",
+                     "source_table": table, "join_condition": cond or ""})
+
+    for f in add_fields:                       # 新字段的来源（实体行带 join_condition）
+        if f.get("new_source_table"):
+            s = f.get("source") or {}
+            _add(s.get("alias"), s.get("schema"), s.get("table"), s.get("join_condition"))
+    for ns in new_sources:                     # 声明未引用的新源也进（台账对照）
+        _add(ns.get("alias"), ns.get("schema"), ns.get("table"), ns.get("join_condition"))
+    if not rows:
+        return None
+    f_table = ts.get("meta", {}).get("target", {}).get("f_table", {})
+    return {"meta": {"target": {"f_table": {"schema": f_table.get("schema", ""),
+                                            "table": f_table.get("table", "")}}},
+            "source_tables": rows}
+
+
 def build_change_request(facts: dict, version: str, add_fields: List[dict],
                          new_sources: List[dict], modify_fields: List[dict],
                          modify_logic_fields: List[dict],
                          unsupported: List[dict], change_entries: List[dict],
                          renames: List[dict], rs_section: str, files: dict,
-                         placement_hints: Optional[List[dict]] = None) -> dict:
+                         placement_hints: Optional[List[dict]] = None,
+                         eval_worksheet: str = "") -> dict:
     return {
         # change_type 兼容保留 "add_field"（fence/slice/gate 等消费方按段取所需；
         # 多类型场景下以 new_sources/modify_type_fields 段为准）
@@ -769,6 +803,7 @@ def build_change_request(facts: dict, version: str, add_fields: List[dict],
         "modify_type_fields": modify_fields,    # 目标字段类型修改（2026-10-22 场景 B：属性级 MODIFY·目标字段类型）
         "modify_logic_fields": modify_logic_fields,  # 口径修改（2026-10-22 第三刀：属性级 MODIFY·映射表达式）
         "placement_hints": placement_hints or [],    # 落位预判（2026-10-23 批1：源表可见规则——确定性事实，取舍归 designer）
+        "eval_worksheet": eval_worksheet,            # 评估工作单（批2：新 JOIN 键唯一性实测位——预填表单，? 行填空一次 --eval）
         "source_files": files,
         "fields": add_fields,
         "backfill": "pending",
@@ -869,11 +904,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         view_path.write_text(render_baseline_view_from_ts(ts_baseline, alias_rows),
                              encoding="utf-8")
         print(f"baseline_view: {view_path}（decisions 语言地图+别名对照）")
+    # 评估上下文+工作单（批2 断言对齐：新 JOIN 断言须有据——--eval 取证通道，探针引擎零改动）
+    eval_ctx = build_eval_context(ts_baseline, add_fields, new_sources)
+    worksheet_md = ""
+    if eval_ctx is not None:
+        worksheet_md = render_eval_draft(eval_ctx)
+        (out / "eval_context.json").write_text(
+            json.dumps(eval_ctx, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"eval_context: {out / 'eval_context.json'}"
+              f"（新 JOIN 评估通道：explore --rs 此文件 --eval；工作单见 change_request.eval_worksheet）")
     cr = build_change_request(facts, version, add_fields, new_sources, modify_fields,
                               modify_logic_fields, unsupported, batch, renames, rs_section,
                               {"mapping": str(mapping_path), "rs": str(rs_path),
                                "ts_baseline": str(args.ts_baseline)},
-                              placement_hints=build_placement_hints(ts_baseline, add_fields))
+                              placement_hints=build_placement_hints(ts_baseline, add_fields),
+                              eval_worksheet=worksheet_md)
     (out / "change_request.json").write_text(
         json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"change_request: {out / 'change_request.json'}")

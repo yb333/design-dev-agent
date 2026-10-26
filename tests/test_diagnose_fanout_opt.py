@@ -6,7 +6,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "skills" / "opt-pipe" / "scripts"))
 sys.path.insert(0, str(REPO / "skills" / "design-dev-shared" / "scripts"))
 
-from diagnose_fanout_opt import check_rule, render
+from diagnose_fanout_opt import check_rule, render, placed_rule_codes
 
 
 def mk_rule():
@@ -69,6 +69,44 @@ class TestCheckRule:
         entries = check_rule(ErrEx(), "R0001", mk_rule())
         assert entries[0]["status"] == "ERROR"
         assert "does not exist" in entries[0]["detail"]
+
+
+class TestAssertionKeys:
+    def test_alias_keyed_declaration_falsified(self):
+        """adopt 档 join_safety 按 alias 键（new-pipe 关联级化形态）——断言对照双键皆认。"""
+        rule = mk_rule()
+        rule["join_safety"] = [{"alias": "c", "join_key_unique": True,
+                                "strategy": "直接关联", "reason": "维表主键"}]
+        ex = FakeEx([
+            ("COUNT(DISTINCT order_id)", [{"total": 100, "dist": 80}]),
+            ("GROUP BY order_id", [{"order_id": "O1", "n": 20}]),
+        ])
+        entries = check_rule(ex, "R0001", rule)
+        assert "证伪 join_safety 声明" in entries[0]["detail"]
+
+
+class TestPlacedScope:
+    """--placed 断言对照（批2）：增量血缘路径规则集——新字段落位 ∪ 中间表产出 ∪ 口径修改所在；
+    其余存量规则冻结不测（按需点亮，不全量重测）。"""
+
+    def test_placed_rule_codes_union(self):
+        ts = {
+            "rules": {
+                "R0001": {"target_table": "dws.tmp_x"},
+                "R0002": {"target_table": "dws.t_f"},
+                "R0003": {"target_table": "dws.t_f",
+                          "fields": {"processed": [{"target": "amt", "logic": "nvl(a.amt,0)"}]}},
+                "R0004": {"target_table": "dws.t_other"},
+            },
+            "change": {
+                "fields": [{"placed_rules": ["R0002"], "intermediate_tables": ["tmp_x"]}],
+                "modify_logics": [{"field": "amt"}],
+            },
+        }
+        assert placed_rule_codes(ts) == ["R0001", "R0002", "R0003"]   # R0004 冻结不测
+
+    def test_placed_empty_when_no_change(self):
+        assert placed_rule_codes({"rules": {"R0001": {"target_table": "t"}}, "change": {}}) == []
 
 
 class TestRender:

@@ -541,6 +541,46 @@ class TestInputSurfaceE2E:
         assert "读中间表: dws.tmp_trade_order" in view
 
 
+class TestEvalWorksheet:
+    """评估工作单+切片上下文（批2 断言对齐）：新 JOIN 断言须有据——探针引擎零改动，
+    切片=确定性适配器（最小 rs_input 形态只含新来源表）。无新来源不产。"""
+
+    def test_eval_context_and_worksheet_e2e(self, tmp_path, demo_baseline):
+        arc = _opt_ready(tmp_path, demo_baseline)
+        ent_c = ent(table="dim_channel", alias="c")
+        ent_c["源表schema"] = "dws"
+        ent_c["关联&限定条件"] = "t.order_id = c.order_id"   # 实体级声明的关联条件→预填行
+        changes = STD_CHANGES + [chg(3, "2026-10-14", "entity", "default|c", "资产字段", "ADD")]
+        pkg = make_pkg(tmp_path / "pkg", [ent(), ent_c], [attr()], changes)
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc == 0
+        ctx_path = tmp_path / "build" / "_internal" / "eval_context.json"
+        assert ctx_path.exists()
+        ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
+        assert ctx["meta"]["target"]["f_table"]["schema"] == "dws"   # 探针选源锚点
+        assert ctx["source_tables"] == [{"source_alias": "c", "source_schema": "dws",
+                                         "source_table": "dim_channel",
+                                         "join_condition": "t.order_id = c.order_id"}]
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        # 工作单预填行：结构化条件预解析（c 侧键=order_id），designer 核一眼跑实测
+        assert "c|order_id|" in cr["eval_worksheet"]
+
+    def test_no_new_source_no_worksheet(self, tmp_path, demo_baseline):
+        arc = _opt_ready(tmp_path, demo_baseline)
+        changes = [chg(1, "2026-10-14", "attr", "default|pay_type", "资产字段", "ADD")]
+        rs_md = "# RS\n\n## 4. 字段需求\n\n202610版本新增 pay_type。\n"
+        pkg = make_pkg(tmp_path / "pkg", [ent()],
+                       [attr(tcol="pay_type", alias="a", stable="ods_trade_order_di",
+                             scol="pay_type")], changes, rs_md=rs_md)
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc == 0
+        assert not (tmp_path / "build" / "_internal" / "eval_context.json").exists()
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert cr["eval_worksheet"] == ""
+
+
 class TestWorkspaceReady:
     def test_build_cleared_and_tmp_created(self, tmp_path, demo_baseline):
         arc = _opt_ready(tmp_path, demo_baseline)

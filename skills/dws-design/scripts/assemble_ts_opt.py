@@ -156,6 +156,13 @@ def validate_decisions(decisions: dict, ts_baseline: dict, cache: dict | None = 
             js = j.get("join_safety") or {}
             if not js.get("strategy"):
                 _fail(f"fields[{i}].new_joins[{j['alias']}].join_safety.strategy 为空")
+            if "join_key_unique" not in js:
+                _fail(f"fields[{i}].new_joins[{j['alias']}].join_safety.join_key_unique 缺失"
+                      f"——断言必须有结论（true/false）")
+            if not str(js.get("reason") or "").strip():
+                _fail(f"fields[{i}].new_joins[{j['alias']}].join_safety.reason 为空——断言必须"
+                      f"有依据句（--eval 实测数字直贴/输入声明/主键论证；连不上库=reason 标注"
+                      f"「未实测」+输入依据，不静默空——与新建评估层同款纪律：先取证后断言）")
 
         # ★ 引用门禁（N36 等价，2026-09-04 补）：design_logic 剥全角说明后——
         # 三段式硬拦 / 未限定英文标识符拦（产出必须 100% 可结构化解析）

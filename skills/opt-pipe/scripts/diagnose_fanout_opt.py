@@ -1,17 +1,22 @@
-"""diagnose_fanout_opt —— opt 场景关联发散定位（对比 FAIL / 新列全 NULL 人定根因时的证据工具）。
+"""diagnose_fanout_opt —— opt 场景关联发散定位 / 闸口①'断言对照（maker 断言·checker 实证）。
 
 轻量版（对齐 new-pipe diagnose_fanout 的主判据，opt 语境裁剪——2026-09-04）：
 - **主判据 = 逐表键唯一性**：对规则每张 join 表，COUNT(*) vs COUNT(DISTINCT ON键)
   （声明了 join_filter 的按声明条件过滤）——条件下唯一 ⇒ 任何数据不膨胀。
 - **join_safety 断言对照**：designer 声明 join_key_unique=true 但实测不唯一 = 证伪
-  （新 JOIN 是 designer 声明的，无需 new-pipe 版的"声明对照"——那是对照 mapping 用的）。
+  （断言条目按 alias 或 table 键皆可命中——opt 合并条目带 table，new-pipe adopt 档带 alias）。
 - 证据：重复键样例 TOP + 重复行数（膨胀量级参考）。
 不做（裁掉）：join-count 试算 / 重复组解剖——需要时人跑 explore（dws-design 工具）。
 
-用法：
+两种用法：
+  # UT 回路（对比 FAIL/新列全 NULL 人定根因的证据工具）：
   python diagnose_fanout_opt.py --ts-v2 {opt}/ts_v2.json [--rule R0002]
-输出：stdout 结论 + {opt}/_internal/diagnose/fanout_{rule}.md（证据可回溯）。
-连不上库 → 报告降级提示（不猜）。
+  # 闸口①'断言对照（批2 断言对齐，与新建闸口① diagnose --all 同构——只测增量血缘
+  # 路径规则：新字段落位规则 ∪ 中间表产出规则 ∪ 口径修改所在规则；其余存量规则
+  # 冻结不测，按需点亮）：
+  python diagnose_fanout_opt.py --ts-v2 {arc_tmp}/ts.json --placed
+输出：stdout 结论 + 同目录 _internal/diagnose/fanout_{rule}.md（证据可回溯）。
+连不上库 → 报告降级提示（不猜，exit 3=未实测披露）。
 """
 import argparse
 import json
@@ -24,6 +29,31 @@ from sql_parse import parse_join_pairs
 
 SAMPLE_LIMIT = 5
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def placed_rule_codes(ts: dict) -> list[str]:
+    """增量血缘路径规则集（--placed 范围）：新字段落位规则 ∪ 中间表产出规则 ∪
+    口径修改条目所在规则——本次增量流经的规则（其上的新 JOIN+存量 JOIN 都点亮）。"""
+    rules = ts.get("rules") or {}
+    by_target: dict[str, str] = {}
+    for code, r in rules.items():
+        by_target.setdefault((r.get("target_table") or "").split(".")[-1].lower(), code)
+    codes: set[str] = set()
+    ch = ts.get("change") or {}
+    for f in ch.get("fields") or []:
+        codes.update(f.get("placed_rules") or [])
+        for t in f.get("intermediate_tables") or []:
+            c = by_target.get(str(t).split(".")[-1].lower())
+            if c:
+                codes.add(c)
+    for m in ch.get("modify_logics") or []:
+        fld = str(m.get("field") or "").lower()
+        for code, r in rules.items():
+            buckets = r.get("fields") or {}
+            if any(str(p.get("target") or "").lower() == fld
+                   for p in (buckets.get("processed") or [])):
+                codes.add(code)
+    return sorted(codes & set(rules))
 
 
 def _keys_and_filter(rule: dict, alias: str) -> tuple[list[str], str]:
@@ -48,8 +78,12 @@ def check_rule(executor, rule_code: str, rule: dict) -> list[dict]:
     out = []
     alias_map = {str(s.get("alias", "")).lower(): (s.get("schema", ""), s.get("table", ""))
                  for s in rule.get("source_tables") or []}
-    declared_unique = {js.get("table"): bool(js.get("join_key_unique"))
-                       for js in rule.get("join_safety") or []}
+    # 断言条目 alias/table 双键皆认（opt 合并条目带 table；new-pipe adopt 档带 alias）
+    declared_unique: dict[str, bool] = {}
+    for js in rule.get("join_safety") or []:
+        for k in (js.get("alias"), js.get("table")):
+            if k:
+                declared_unique[str(k).lower()] = bool(js.get("join_key_unique"))
     seen = set()
     for j in rule.get("joins") or []:
         alias = str(j.get("alias", "")).lower()
@@ -92,7 +126,7 @@ def check_rule(executor, rule_code: str, rule: dict) -> list[dict]:
                 entry["samples"] = [", ".join(str(v) for v in s.values()) for s in samples]
             except Exception:
                 entry["samples"] = []
-            if declared_unique.get(st[1]):
+            if declared_unique.get(alias) or declared_unique.get(st[1].lower()):
                 entry["detail"] += " ★证伪 join_safety 声明（designer 标唯一，实测不唯一）"
         out.append(entry)
     return out
@@ -114,14 +148,24 @@ def render(rule_code: str, entries: list[dict]) -> str:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="opt 关联发散定位（逐表键唯一性主判据）")
+    ap = argparse.ArgumentParser(
+        description="opt 关联发散定位/闸口①'断言对照（逐表键唯一性主判据）")
     ap.add_argument("--ts-v2", required=True)
     ap.add_argument("--rule", default="", help="规则码（默认全部有 JOIN 的规则）")
+    ap.add_argument("--placed", action="store_true",
+                    help="闸口①'断言对照模式：只测增量血缘路径规则（新字段落位/中间表产出/"
+                         "口径修改所在——新 JOIN+增量路径存量 JOIN 按需点亮；其余存量规则冻结不测）")
     args = ap.parse_args(argv)
 
     ts = json.loads(Path(args.ts_v2).read_text(encoding="utf-8"))
     rules = ts.get("rules") or {}
-    targets = {args.rule} if args.rule else set(rules)
+    if args.placed:
+        targets = set(placed_rule_codes(ts))
+        if not targets:
+            print("断言对照（--placed）：本次变更未触及任何规则——空跑（无新 JOIN/落位规则）")
+            return 0
+    else:
+        targets = {args.rule} if args.rule else set(rules)
     schema = ts.get("meta", {}).get("target", {}).get("f_table", {}).get("schema", "")
 
     try:
@@ -148,7 +192,8 @@ def main(argv=None) -> int:
             print(text)
             print(f"→ {out_path}")
             bad += sum(1 for e in entries if e["status"] == "DUP")
-        print(f"\n汇总: {'❌ ' + str(bad) + ' 张表键不唯一（发散根因候选）' if bad else '✅ 全部关联键唯一——发散另有根因（过滤条件/数据本身）'}")
+        print(f"\n汇总: {'❌ ' + str(bad) + ' 张表键不唯一（发散根因候选）' if bad else '✅ 全部关联键唯一——发散另有根因（过滤条件/数据本身）'}"
+              + ("〔--placed 断言对照：只覆盖增量血缘路径规则，存量其余冻结不测〕" if args.placed else ""))
         return 0
     finally:
         try:

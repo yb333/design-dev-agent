@@ -121,6 +121,25 @@ class TestValidationFailLoud:
         with pytest.raises(SystemExit):
             validate_decisions(load_decisions(p), baseline)
 
+    def test_join_safety_reason_required(self, baseline, tmp_path):
+        """批2 断言对齐（2026-10-23）：reason 空=只有声明没有依据句——硬拦
+        （与新建评估层同款：先取证后断言，实测数字/输入声明/未实测标注）。"""
+        d = dec_new_join()
+        d["fields"][0]["new_joins"][0]["join_safety"]["reason"] = ""
+        p = tmp_path / "d.yaml"
+        p.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        with pytest.raises(SystemExit):
+            validate_decisions(load_decisions(p), baseline)
+
+    def test_join_safety_key_verdict_required(self, baseline, tmp_path):
+        """批2：join_key_unique 缺失=断言无结论——硬拦（true/false 必须有）。"""
+        d = dec_new_join()
+        d["fields"][0]["new_joins"][0]["join_safety"].pop("join_key_unique")
+        p = tmp_path / "d.yaml"
+        p.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        with pytest.raises(SystemExit):
+            validate_decisions(load_decisions(p), baseline)
+
     def test_join_on_unplaced_rule_rejected(self, baseline, tmp_path):
         d = dec_new_join()
         d["fields"][0]["new_joins"][0]["rule"] = "R0001"   # 不在 placed_rules

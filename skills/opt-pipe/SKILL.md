@@ -122,6 +122,15 @@ python PIPE_SCRIPTS/fence_check.py \
 ```
 - 越界/漏改（exit 1）→ 报错带 `[围栏]` 回 designer（恢复会话）改，限 3 轮；designer 提的
   【建议追加变更】走本闸口确认后更新 change_request 再回步骤 2。
+- **断言对照（批2 断言对齐，围栏过后、闸口材料前——maker 断言·checker 实证，与新建
+  闸口① diagnose --all 同构）：只测增量血缘路径规则（新字段落位/中间表产出/口径修改
+  所在）——新 JOIN+增量路径存量 JOIN 按需点亮，其余存量规则冻结不测**：
+
+```bash
+python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {arc_tmp}/ts.json --placed
+```
+  exit 3（连不上库）= 未实测披露进闸口材料；**证伪**（声明唯一实测不唯一）→ 回 designer
+  恢复会话改断言/对齐策略（限 3 轮），改后围栏+本步重跑。
 - **闸口①' 材料（确定性脚本产出，不 AI 摘要）**：
 
 ```bash

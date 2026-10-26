@@ -49,9 +49,17 @@ description: >-
 /新来源），取舍树见 `references/opt-playbook.md` §一。落位写进 decisions 的 placed_rules /
 intermediate_tables——**这是围栏许可的边界，落错位会连锁漏改**。
 
-### 3. 新 JOIN 声明（有新来源才做）
-每个新 JOIN 必须带 join_safety（join_key_unique / strategy / reason）——组装器强制。
-不确定键唯一性时可调 explore 试算（工具在 dws-design/scripts）。
+### 3. 新 JOIN 声明（有新来源才做）——先取证后断言（与新建评估层同款纪律）
+每个新 JOIN 必须带 join_safety（join_key_unique / strategy / reason），组装器硬拦三空：
+strategy 空 / join_key_unique 缺结论 / **reason 空（断言必须有依据句）**。取证一次收口：
+- change_request.eval_worksheet 是预填工作单（新源 join_condition 已预解析，`?` 行=键
+  唯一性实测位），探针上下文已就绪：
+  `python {skills根}/dws-design/scripts/explore.py --rs {build}/_internal/eval_context.json --eval`
+  （stdin 只给 `?` 行答案：`别名|键|限定`；结构化预填行自动跑）
+- 实测数字直贴 reason（如 `explore 实测 count=12000 distinct=12000 唯一`）；免实测声明
+  （取一/开窗）工作单自动机械核对。
+- 连不上库 → reason 标注「未实测（连不上库）」+ 输入声明依据（不阻断，宁放过）；
+  **有疑点不落笔**——随回复上报（疑似方向一句），与新建评估层同款。
 
 ### 4. 回刷判断
 按 opt-playbook §二决策表：全量基线→无需回刷（backfill: none）；增量基线→pending
@@ -77,5 +85,5 @@ python {skills根}/dws-design/scripts/assemble_ts_opt.py \
 ## 四、验收口径
 
 - decisions 每条与 change_request 字段一一对应（不多不少——多了是夹带，少了是漏接）
-- 新 JOIN 全部带 safety；回刷意向已按决策表填
+- 新 JOIN 全部带 safety 且 **reason 有依据**（实测数字/输入声明/未实测标注）；回刷意向已按决策表填
 - 产出：`_internal/design_decisions_opt.yaml` + `ts.json`（脚本写）
