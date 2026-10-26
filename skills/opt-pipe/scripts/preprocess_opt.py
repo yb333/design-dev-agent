@@ -38,6 +38,7 @@ import pandas as pd
 
 from preprocess import (ExcelMappingParser, parse_mapping_sheets, check_mapping_static,
                         clean_excel_column)
+from sql_parse import extract_from_bindings
 
 # 变更记录页签八列（规格见 mapping-format.md；列名按真实模板——「变更KEY」KEY 为大写，
 # 匹配大小写不敏感：列头 strip+lower 归一后对标准名查找，变更KEY/变更key 均命中）
@@ -49,32 +50,143 @@ WHOLE_ROW_MARK = "资产字段"
 SUPPORTED_CTYPES = {"ADD"}
 
 
-def render_baseline_view_from_ts(ts: dict) -> str:
-    """从档案 ts 渲染 baseline_view 简化版（档案/收档路径——无逆向契约元信息，
-    规则清单/写入类型/源表/字段从 ts 全量可得；json 入料的完整版优先不覆盖）。"""
+def _short(name: str) -> str:
+    return (name or "").split(".")[-1]
+
+
+# 判断位空位标记（语义空位——存量不补，只为增量建立语义；有则显示、无则标空，
+# adopt 档与逆向档的差异由数据存在性自然呈现，渲染器不分叉）
+EMPTY_MARK = "▢未声明（语义空位）"
+
+
+def build_alias_map(sql_by_rule: Dict[str, str], ts: dict) -> List[dict]:
+    """别名对照（落笔权威=SQL 实际别名）：FROM/JOIN 绑定 × ts 声明别名逐规则对齐。
+
+    decisions 的 source.alias 必须与 baseline SQL 实际别名一致才可引用（mapping 台账
+    别名可能与 SQL 不同名）——确定性查表归脚本，designer 不读 SQL 原文（禁读 territory）。
+    sql_by_rule 缺失的规则如实标注（以 ts 声明为准）；只对照 ts 声明源表，避免 CTE 名噪声。
+    """
+    rows = []
+    for code in sorted((ts.get("rules") or {})):
+        r = ts["rules"][code]
+        sql = (sql_by_rule or {}).get(code) or ""
+        binds: Dict[str, str] = {}
+        if sql:
+            for ref, alias in extract_from_bindings(sql):
+                binds[_short(ref)] = (alias or "").strip()
+        for s in (r.get("source_tables") or []):
+            tbl = s.get("table") or ""
+            sql_alias = binds.get(tbl, "")
+            rows.append({
+                "rule": code, "table": tbl,
+                "sql_alias": sql_alias, "ts_alias": s.get("alias") or "",
+                "note": "" if sql_alias and sql_alias == (s.get("alias") or "")
+                else ("SQL 缺失/未引用——以 ts 声明为准" if not sql_alias
+                      else "与 ts 声明不一致——落笔以 SQL 为准"),
+            })
+    return rows
+
+
+def build_placement_hints(ts: dict, add_fields: List[dict]) -> List[dict]:
+    """落位预判（确定性事实，取舍判断归 designer——opt-playbook §一取舍树的输入）：
+    每个新增字段的源表在哪些规则可见。直挂候选=产出目标表且源表在其 source_tables；
+    穿中间表候选=源表可见于中间规则、其产出被产出目标表的规则 reads；
+    都不可见=新来源（需新 JOIN）。"""
+    f_table = _short(ts.get("meta", {}).get("target", {}).get("f_table", {}).get("table", ""))
+    rules = ts.get("rules") or {}
+    hints = []
+    for f in add_fields:
+        src = (f.get("source") or {}).get("table") or ""
+        direct, via = [], {}
+        for code, r in rules.items():
+            if src not in {s.get("table") for s in (r.get("source_tables") or [])}:
+                continue
+            if _short(r.get("target_table") or "") == f_table:
+                direct.append(code)
+            else:  # 源表可见于中间规则——找到 reads 它的目标规则（穿中间表路径）
+                u_tbl = _short(r.get("target_table") or "")
+                carriers = [c for c, rr in rules.items()
+                            if _short(rr.get("target_table") or "") == f_table
+                            and u_tbl in {_short(x) for x in (rr.get("reads") or [])}]
+                if carriers:
+                    via[code] = carriers
+        hint = {"field": f["field"], "source_table": src,
+                "direct_rules": sorted(direct),
+                "via_intermediate": {k: sorted(v) for k, v in sorted(via.items())},
+                "new_source": bool(f.get("new_source_table"))}
+        if src and not direct and not via:
+            hint["note"] = "源表不在任何产出规则的直接/中间路径——按新 JOIN 处理（取舍树 opt-playbook §一）"
+        hints.append(hint)
+    return hints
+
+
+def render_topology_sections(ts: dict, alias_rows: Optional[List[dict]] = None) -> List[str]:
+    """decisions 语言核心段（两路径共用：档案 ts 渲染 / 逆向入料渲染）：
+    锚点（粒度/主键）+ 规则拓扑（源/joins/safety/读写）+ 别名对照。"""
     meta = ts.get("meta", {})
-    f_table = meta.get("target", {}).get("f_table", {})
-    lines = [
-        f"# baseline_view · {f_table.get('schema','')}.{f_table.get('table','')}",
-        "",
-        "> 档案基线（当前态 ts 投影）。逆向 warnings/平台代数等契约元信息仅在 json 入料路径"
-        "的完整版 baseline_view 中（本文件由 preprocess_opt 从档案渲染）。",
-        "",
-        "## 规则清单",
-        "",
-        "| 规则 | 写入 | 目标表 | 源表 |",
-        "|------|------|--------|------|",
-    ]
-    for code, r in sorted((ts.get("rules") or {}).items(), key=lambda kv: (kv[1].get("exec_sequence", 1), kv[0])):
-        srcs = ", ".join(f"{s.get('schema','')}.{s.get('table','')}" for s in (r.get("source_tables") or []))
-        lines.append(f"| {code} | {r.get('load_mode','')} | {r.get('target_table','')} | {srcs} |")
-    lines += ["", "## 目标表字段数", ""]
+    bk = meta.get("business_key") or []
+    grain = meta.get("grain")
+    if isinstance(grain, dict):  # decisions grain 是 input/output 结构（装配定格形态）
+        grain = f"{grain.get('input', '')} → {grain.get('output', '')}".strip(" →")
+    lines = ["## 锚点", "",
+             f"- 粒度: {grain or EMPTY_MARK}",
+             f"- business_key: {', '.join(bk) if bk else EMPTY_MARK}", "",
+             "## 规则拓扑", ""]
+    rules = ts.get("rules") or {}
+    for code in sorted(rules, key=lambda c: (rules[c].get("exec_sequence", 1), c)):
+        r = rules[code]
+        head = f"### {code} → {r.get('target_table') or '?'}"
+        tag = "·".join(x for x in (r.get("load_mode") or "", r.get("step_type") or "",
+                                   r.get("target_role") or "") if x)
+        lines.append(head + (f"（{tag}）" if tag else ""))
+        for s in (r.get("source_tables") or []):
+            lines.append(f"- 源: {s.get('alias') or '?'}→{s.get('schema', '')}.{s.get('table', '')}")
+        if r.get("reads"):
+            lines.append(f"- 读中间表: {', '.join(r['reads'])}")
+        safety = {(j.get("alias") or "").strip().lower(): j
+                  for j in (r.get("join_safety") or [])}
+        joins = r.get("joins") or []
+        if joins:
+            for j in joins:
+                extra = f"（filter: {j['filter']}）" if j.get("filter") else ""
+                lines.append(f"- JOIN: {j.get('alias')}·{j.get('type', '')}·{j.get('condition', '')}{extra}")
+                js = safety.get((j.get("alias") or "").strip().lower())
+                lines.append("  - safety: " + (
+                    f"唯一={js.get('join_key_unique')}·{js.get('strategy', '')}（{js.get('reason', '')}）"
+                    if js else EMPTY_MARK))
+        else:
+            lines.append("- JOIN: （无声明）")
+        lines.append("")
+    if alias_rows:
+        lines += ["## 别名对照（SQL 实际别名=落笔权威）", "",
+                  "| 规则 | 表 | SQL 实际 | ts 声明 | 备注 |",
+                  "|------|----|--------|--------|------|"]
+        for a in alias_rows:
+            lines.append(f"| {a['rule']} | {a['table']} | {a['sql_alias'] or '—'} "
+                         f"| {a['ts_alias']} | {a['note']} |")
+        lines.append("")
+    return lines
+
+
+def render_baseline_view_from_ts(ts: dict, alias_rows: Optional[List[dict]] = None) -> str:
+    """从档案 ts 渲染 baseline_view（decisions 语言地图，2026-10-23 重写）。
+
+    ts=存量 decisions 的装配定格：判断位（粒度/主键/join_safety/口径）adopt 档有值、
+    逆向档空位——统一从 ts 渲染，差异由数据存在性自然呈现（渲染器不分叉）。
+    逐字段血缘不在此（territory——变更涉及字段的存量条目已在 change_request modify
+    段内联，落位预判见 change_request.placement_hints）。json 入料的完整版优先不覆盖。"""
+    f_table = ts.get("meta", {}).get("target", {}).get("f_table", {})
+    lines = [f"# baseline_view · {f_table.get('schema','')}.{f_table.get('table','')}", "",
+             "> 档案基线（ts=存量设计的装配定格，decisions 语言投影）。判断位有则显示、"
+             "无则标 ▢ 空位——存量语义不补，只为增量建立语义（新 JOIN 现声明须有据；"
+             "存量问题走【建议追加变更】不直改）。", ""]
+    lines += render_topology_sections(ts, alias_rows)
+    lines += ["## 目标表字段数", ""]
     for tb, td in sorted((ts.get("tables") or {}).items()):
         lines.append(f"- {tb}: {len(td.get('fields') or [])} 字段")
     if ts.get("_baseline"):
-        lines += ["", "> 语义空位（存量不补，回归由输出对比保障）：主键/粒度/关联安全"
-                  "（见 _internal/exemptions.json）。"]
-    return "\n".join(lines)
+        lines += ["", "- 本档为逆向入料（warnings/写入类型待定见入料审核与 exemptions.json）。"]
+    return "\n".join(lines) + "\n"
 
 
 from baseline_contract import norm_asset  # 资产对账归一口径（唯一源）
@@ -642,7 +754,8 @@ def build_change_request(facts: dict, version: str, add_fields: List[dict],
                          new_sources: List[dict], modify_fields: List[dict],
                          modify_logic_fields: List[dict],
                          unsupported: List[dict], change_entries: List[dict],
-                         renames: List[dict], rs_section: str, files: dict) -> dict:
+                         renames: List[dict], rs_section: str, files: dict,
+                         placement_hints: Optional[List[dict]] = None) -> dict:
     return {
         # change_type 兼容保留 "add_field"（fence/slice/gate 等消费方按段取所需；
         # 多类型场景下以 new_sources/modify_type_fields 段为准）
@@ -655,6 +768,7 @@ def build_change_request(facts: dict, version: str, add_fields: List[dict],
         "new_sources": new_sources,             # 新增来源表声明（2026-10-22 场景 A：实体级整行 ADD）
         "modify_type_fields": modify_fields,    # 目标字段类型修改（2026-10-22 场景 B：属性级 MODIFY·目标字段类型）
         "modify_logic_fields": modify_logic_fields,  # 口径修改（2026-10-22 第三刀：属性级 MODIFY·映射表达式）
+        "placement_hints": placement_hints or [],    # 落位预判（2026-10-23 批1：源表可见规则——确定性事实，取舍归 designer）
         "source_files": files,
         "fields": add_fields,
         "backfill": "pending",
@@ -741,16 +855,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     if errors:
         print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断，{len(warns)} 项 warn。", file=sys.stderr)
         return 2
-    # baseline_view 补产（designer 契约：三段式入口 ①档案②收档 无 json 契约——从 ts 渲染
-    # 简化版；③json 入料的完整版已存在则保留）
+    # baseline_view 补产（designer 契约：三段式入口 ①档案②收档 无 json 契约——decisions
+    # 语言地图从档案 ts 渲染+别名对照；③json 入料的完整版已存在则保留）
     view_path = out / "baseline_view.md"
     if not view_path.exists():
-        view_path.write_text(render_baseline_view_from_ts(ts_baseline), encoding="utf-8")
-        print(f"baseline_view: {view_path}（档案 ts 简化版）")
+        arc_etl = Path(args.ts_baseline).parent / "etl"
+        sql_by_rule = {}
+        for code in (ts_baseline.get("rules") or {}):
+            _p = arc_etl / f"{code}.sql"
+            if _p.exists():
+                sql_by_rule[code] = _p.read_text(encoding="utf-8")
+        alias_rows = build_alias_map(sql_by_rule, ts_baseline)
+        view_path.write_text(render_baseline_view_from_ts(ts_baseline, alias_rows),
+                             encoding="utf-8")
+        print(f"baseline_view: {view_path}（decisions 语言地图+别名对照）")
     cr = build_change_request(facts, version, add_fields, new_sources, modify_fields,
                               modify_logic_fields, unsupported, batch, renames, rs_section,
                               {"mapping": str(mapping_path), "rs": str(rs_path),
-                               "ts_baseline": str(args.ts_baseline)})
+                               "ts_baseline": str(args.ts_baseline)},
+                              placement_hints=build_placement_hints(ts_baseline, add_fields))
     (out / "change_request.json").write_text(
         json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"change_request: {out / 'change_request.json'}")

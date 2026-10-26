@@ -328,29 +328,26 @@ def build_ts_baseline(data: dict) -> Tuple[dict, List[dict]]:
 # ---------------------------------------------------------------------------
 
 def render_baseline_view(data: dict, ts: dict, gaps: List[dict]) -> str:
+    """逆向入料版 baseline_view（decisions 语言地图，2026-10-23 批1 重写）。
+
+    与档案路径（preprocess_opt.render_baseline_view_from_ts）共用 decisions 语言核心段
+    （锚点/规则拓扑/别名对照——同单元 import，单实现）；本版追加逆向特有的置信度材料
+    （增量材料 write_plan / hint / warnings / 语义空位 / 写入类型待定）。逐字段血缘摘要
+    不再渲染（territory——变更涉及字段的存量条目由 preprocess_opt 内联进 change_request）。"""
+    from preprocess_opt import build_alias_map, render_topology_sections
+
     asset = data["asset"]
-    lines: List[str] = []
+    lines = []
     lines.append(f"# baseline_view · {asset['schema']}.{asset['table']}")
     lines.append("")
     lines.append(f"> 逆向基线（契约 v{data['version']}，platform_generation="
                  f"{asset.get('platform_generation', '')}，{asset.get('analysis_time', '')}）。"
-                 f"提示：load_strategy / patterns 为非权威 hint；warnings 是逆向置信度。")
+                 "结构=从制品同构映射；判断位（粒度/主键/join_safety/口径理解）制品里没有——"
+                 "▢ 空位，只为增量建立语义。load_strategy / patterns 为非权威 hint；"
+                 "warnings 是逆向置信度。")
     lines.append("")
-    lines.append("## 规则清单")
-    lines.append("| 规则 | 目标表 | 写入类型(kind) | load_mode | 写入条件 | 源表/中间表 | 场景 |")
-    lines.append("|------|--------|----------------|-----------|----------|------------|------|")
-    pending_rules = [g["target"] for g in gaps if g["code"] == "load_mode_pending"]
-    kind_by_rule = {r["rule_code"]: (r.get("write_plan") or {}).get("kind", "?")
-                    for r in data["rules"]}
-    for code, r in ts["rules"].items():
-        flag = " ⚠️待定" if code in pending_rules else ""
-        srcs = ",".join(f"{s['table']}" for s in r["source_tables"])
-        reads = ",".join(r["reads"])
-        src_cell = srcs + ((" | 读中间表: " + reads) if reads else "") if (srcs or reads) else "-"
-        lines.append(f"| {code} | {r['target_table']} | {kind_by_rule.get(code, '?')}{flag} | "
-                     f"{r['load_mode'] or '待定'} | {r['write_condition'] or '-'} | "
-                     f"{src_cell} | {r['scenario']} |")
-    lines.append("")
+    sql_by_rule = {r["rule_code"]: (r.get("query_sql") or "") for r in data["rules"]}
+    lines += render_topology_sections(ts, build_alias_map(sql_by_rule, ts))
     lines.append("## 增量材料（write_plan / 调度参数，designer 判断增量语义用）")
     for r in data["rules"]:
         wp = r.get("write_plan") or {}
@@ -361,15 +358,13 @@ def render_baseline_view(data: dict, ts: dict, gaps: List[dict]) -> str:
                      f"src={wp.get('condition_source', '?')}；"
                      f"where={r.get('where_clause') or '-'}")
     lines.append("")
-    lines.append("## 字段血缘摘要（目标表）")
-    target_short = ts["meta"]["target"]["f_table"]["table"]
-    for f in ts["tables"].get(target_short, {}).get("fields", []):
-        src = ",".join(f"{s['table']}.{s['field']}" for s in f["source_fields"]) or "-"
-        lines.append(f"- {f['target_field']}（{f['field_type'] or '类型待回填'}）"
-                     f" ← {src} [{f['transform_type'] or '?'}]")
+    lines.append("## 目标表字段数")
     lines.append("")
+    for tb, td in sorted((ts.get("tables") or {}).items()):
+        lines.append(f"- {tb}: {len(td.get('fields') or [])} 字段")
     ls = data.get("load_strategy") or {}
     if ls:
+        lines.append("")
         lines.append(f"## hint（非权威）\n- load_strategy: {ls.get('label', '')}（{ls.get('detail', '')}）")
     for p in data.get("patterns") or []:
         lines.append(f"- pattern: {p.get('label', '')} — {p.get('detail', '')}")
@@ -391,7 +386,7 @@ def render_baseline_view(data: dict, ts: dict, gaps: List[dict]) -> str:
         for g in pend:
             lines.append(f"- {g['target']}: {g['reason']}")
     lines.append("")
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------

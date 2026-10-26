@@ -90,12 +90,17 @@ class TestDemoFullCase:
         assert ts["dq_rules"][0]["check_type"] == "NULL"
 
     def test_view_contains_sections(self, demo):
+        """decisions 语言地图（2026-10-23 批1）：锚点/拓扑/别名对照共用段 + 逆向特有段；
+        逐字段血缘摘要已砍（territory——变更字段存量条目由 preprocess_opt 内联 change_request）。"""
         ts, gaps = build_ts_baseline(demo)
         view = render_baseline_view(demo, ts, gaps)
-        for section in ("# baseline_view", "## 规则清单", "## 增量材料",
-                        "## 字段血缘摘要", "## warnings", "## 语义空位"):
+        for section in ("# baseline_view", "## 锚点", "## 规则拓扑", "## 别名对照",
+                        "## 增量材料", "## warnings", "## 语义空位"):
             assert section in view
+        assert "字段血缘摘要" not in view          # territory 不进 designer 输入面
         assert "R0002" in view and "tmp_trade_order" in view
+        # 逆向档判断位空位标注（语义空位由数据存在性自然呈现，非渲染器分支）
+        assert "▢" in view
 
 
 class TestMergeCase:

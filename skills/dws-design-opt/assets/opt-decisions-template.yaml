@@ -6,8 +6,9 @@
 # ★命名规约（2026-10-14 彩排实证，写错即被组装器拦）：
 #   - target_table / intermediate_tables 用**短表名**（baseline tables 键形态，
 #     如 dwb_cust_asset_d / tmp_cust_asset_detail——不带 schema 前缀）
-#   - source.alias 以 **baseline SQL 实际别名**为准（读 build/_internal/baseline_view.md
-#     或档案 etl/{rule}.sql 核对——mapping 台账的别名可能与 SQL 不同名）
+#   - source.alias 以 **baseline SQL 实际别名**为准——见 baseline_view「别名对照」段
+#     预计算表（SQL 实际别名=落笔权威；mapping 台账别名可能与 SQL 不同名。
+#     禁读档案 etl SQL 原文自行核对——对照已由脚本算好）
 #   - 直挂字段穿聚合规则（GROUP BY）须声明聚合口径（如 MAX 组内任取）——
 #     design_logic 写明"组内任取"语义，coder 才能合法翻译（GROUP BY 属冻结层不可加键）
 # ============================================================================

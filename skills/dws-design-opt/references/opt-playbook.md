@@ -23,10 +23,10 @@
 
 ## 二、回刷决策表
 
-| 基线写入类型（baseline_view 规则清单的 kind） | 新列历史数据 | decisions.backfill |
-|---|---|---|
-| full_truncate / partition_truncate（全量类） | 下次调度自动补齐 | `none` |
-| merge_upsert / append / update / delete_by_condition（增量类） | 历史行新列 NULL | `pending`（闸口①'人选拿：不回刷=接受 NULL / 回刷=给时间范围） |
+| 基线写入（baseline_view 规则拓扑的 load_mode） | 新列历史数据 | decisions.backfill |
+|------|------|------|
+| truncate_table / truncate_partition（全量类） | 下次调度自动补齐 | `none` |
+| merge_into / no_delete / delete（增量类） | 历史行新列 NULL | `pending`（闸口①'人选拿：不回刷=接受 NULL / 回刷=给时间范围） |
 
 - RS 优化章节写了回刷意向 → 预填（none / yes），否则 pending。
 - 回刷实现不归本决策：人选拿后由调用方触发 init 管道（档案路径可复用档案 init 段）。

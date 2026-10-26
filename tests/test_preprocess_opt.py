@@ -411,6 +411,136 @@ class TestBaselineViewBackfill:
         assert "R0001" in view and "t_f" in view and "2 字段" in view
 
 
+class TestBaselineViewDecisionsLanguage:
+    """decisions 语言地图（2026-10-23 批1）：判断位有则显、无则标空——adopt/逆向档差异
+    由数据存在性自然呈现（渲染器不分叉）；territory（逐字段血缘）不进 designer 输入面。"""
+
+    def _adopt_ts(self):
+        return {"meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}},
+                         "grain": {"input": "一行一单", "output": "一行一单"},
+                         "business_key": ["order_id"]},
+                "rules": {"R0001": {"exec_sequence": 1, "load_mode": "merge_into",
+                                    "step_type": "merge", "target_role": "target",
+                                    "target_table": "dws.t_f",
+                                    "source_tables": [{"schema": "ods", "table": "s", "alias": "a"}],
+                                    "joins": [{"alias": "c", "type": "LEFT", "condition": "a.id=c.id"}],
+                                    "join_safety": [{"alias": "c", "join_key_unique": True,
+                                                     "strategy": "直接关联", "reason": "维表主键关联"}]}},
+                "tables": {"t_f": {"fields": [{"target_field": "x"}]}}}
+
+    def test_adopt_judgments_rendered(self):
+        from preprocess_opt import render_baseline_view_from_ts
+        view = render_baseline_view_from_ts(self._adopt_ts())
+        assert "一行一单 → 一行一单" in view              # grain dict 形态归一显示
+        assert "business_key: order_id" in view
+        assert "唯一=True·直接关联（维表主键关联）" in view  # join_safety 意图随档可见
+        assert "▢未声明" not in view                      # 真档判断位全显无空位（header 说明字样除外）
+        assert "字段血缘摘要" not in view                  # territory 不渲染
+
+    def test_reverse_gaps_marked(self):
+        from preprocess_opt import render_baseline_view_from_ts
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}}},
+              "rules": {"R0001": {"target_table": "t_f",
+                                  "source_tables": [{"schema": "ods", "table": "s", "alias": "a"}]}},
+              "tables": {}}
+        view = render_baseline_view_from_ts(ts)
+        assert "▢未声明（语义空位）" in view               # 粒度/主键空位标注
+        assert "JOIN: （无声明）" in view
+
+
+class TestBuildAliasMap:
+    """别名对照（落笔权威=SQL 实际别名）：确定性查表归脚本——designer 禁读 SQL 原文。"""
+
+    def test_match_mismatch_missing(self):
+        from preprocess_opt import build_alias_map
+        ts = {"rules": {
+            "R0001": {"source_tables": [{"table": "ods_a", "alias": "a"},
+                                        {"table": "ods_b", "alias": "b"}]},
+            "R0002": {"source_tables": [{"table": "ods_c", "alias": "c"}]}}}
+        sql = {"R0001": "SELECT a.x FROM ods.ods_a a JOIN ods.ods_b ob ON a.id=ob.id"}
+        rows = build_alias_map(sql, ts)
+        by = {(r["rule"], r["table"]): r for r in rows}
+        assert by[("R0001", "ods_a")]["sql_alias"] == "a"
+        assert by[("R0001", "ods_a")]["note"] == ""       # 一致无标注
+        assert by[("R0001", "ods_b")]["sql_alias"] == "ob"
+        assert "以 SQL 为准" in by[("R0001", "ods_b")]["note"]
+        assert "SQL 缺失" in by[("R0002", "ods_c")]["note"]
+
+    def test_cte_refs_not_noise(self):
+        from preprocess_opt import build_alias_map
+        ts = {"rules": {"R0001": {"source_tables": [{"table": "ods_a", "alias": "a"}]}}}
+        sql = {"R0001": "WITH t AS (SELECT 1 FROM ods.ods_a a) SELECT * FROM t x"}
+        rows = build_alias_map(sql, ts)
+        assert [r["table"] for r in rows] == ["ods_a"]     # CTE 名不进对照
+
+
+class TestBuildPlacementHints:
+    """落位预判（确定性事实）：直挂/穿中间表/新来源三态——取舍判断仍归 designer。"""
+
+    def _ts(self):
+        return {"meta": {"target": {"f_table": {"table": "t_f"}}},
+                "rules": {
+                    "R0001": {"target_table": "dws.tmp_x",
+                              "source_tables": [{"table": "ods_a", "alias": "a"}]},
+                    "R0002": {"target_table": "dws.t_f", "reads": ["dws.tmp_x"],
+                              "source_tables": [{"table": "ods_b", "alias": "b"}]}}}
+
+    def test_direct_via_new(self):
+        from preprocess_opt import build_placement_hints
+        fields = [
+            {"field": "f1", "source": {"table": "ods_b"}},             # 直挂 R0002
+            {"field": "f2", "source": {"table": "ods_a"}},             # 穿中间表 R0001→R0002
+            {"field": "f3", "source": {"table": "dim_new"}, "new_source_table": True},
+        ]
+        hints = {h["field"]: h for h in build_placement_hints(self._ts(), fields)}
+        assert hints["f1"]["direct_rules"] == ["R0002"]
+        assert hints["f1"]["via_intermediate"] == {}
+        assert hints["f2"]["direct_rules"] == []
+        assert hints["f2"]["via_intermediate"] == {"R0001": ["R0002"]}
+        assert hints["f3"]["direct_rules"] == []
+        assert hints["f3"]["via_intermediate"] == {}
+        assert hints["f3"]["new_source"] is True
+        assert "新 JOIN" in hints["f3"]["note"]
+
+
+class TestInputSurfaceE2E:
+    """e2e：落位预判进 change_request、别名对照进 baseline_view（批1 输入面重构）。"""
+
+    def test_placement_hints_and_alias_map_e2e(self, tmp_path, demo_baseline):
+        arc = _opt_ready(tmp_path, demo_baseline)
+        # 档案 SQL：R0001 实际别名故意与 ts 声明不同名（ord≠a）——对照表应抓到
+        (arc / "etl").mkdir(exist_ok=True)
+        (arc / "etl" / "R0001.sql").write_text(
+            "SELECT ord.order_id FROM ods.ods_trade_order_di ord;", encoding="utf-8")
+        changes = STD_CHANGES + [
+            chg(3, "2026-10-14", "entity", "default|c", "资产字段", "ADD"),
+            chg(4, "2026-10-14", "attr", "default|pay_type", "资产字段", "ADD")]
+        rs_md = "# 某资产需求规格\n\n## 4. 字段需求\n\n202610版本新增需求：新增 channel_name（渠道名称），来源渠道维表；新增 pay_type（支付方式）。\n"
+        pkg = make_pkg(tmp_path / "pkg",
+                       [ent(), ent(table="dim_channel", alias="c")],
+                       [attr(tcol="pay_type", alias="a", stable="ods_trade_order_di", scol="pay_type"),
+                        attr()],
+                       changes, rs_md=rs_md)
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc == 0
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        hints = {h["field"]: h for h in cr["placement_hints"]}
+        # pay_type 源表 ods_trade_order_di：只可见于中间规则 R0001（产 tmp）——穿中间表路径
+        assert hints["pay_type"]["direct_rules"] == []
+        assert hints["pay_type"]["via_intermediate"] == {"R0001": ["R0002"]}
+        # channel_name 新来源（dim_channel）——新 JOIN 提示
+        assert hints["channel_name"]["new_source"] is True
+        assert "新 JOIN" in hints["channel_name"]["note"]
+        # 别名对照进 view：SQL 实际别名 ord ≠ ts 声明 a → 不一致标注（落笔以 SQL 为准）
+        view = (tmp_path / "build" / "_internal" / "baseline_view.md").read_text(encoding="utf-8")
+        assert "## 别名对照" in view
+        assert "ord" in view and "以 SQL 为准" in view
+        # 拓扑段：穿中间表路径（reads）在图上可见
+        assert "### R0001 → dws.tmp_trade_order" in view
+        assert "读中间表: dws.tmp_trade_order" in view
+
+
 class TestWorkspaceReady:
     def test_build_cleared_and_tmp_created(self, tmp_path, demo_baseline):
         arc = _opt_ready(tmp_path, demo_baseline)

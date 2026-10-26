@@ -16,26 +16,37 @@ description: >-
 - 模板：本 skill 的 `assets/opt-decisions-template.yaml`
 - 本 skill 专属知识：`references/opt-playbook.md`（落位取舍树 + 回刷决策树）
 
-## 一、你与新建模式的三个不同
+## 一、你与新建模式的四个不同
 
 1. **只写增量，不写存量**：每个新增字段一条 decisions，存量一概不碰（重写存量=红线）。
-2. **存量语义不补**：baseline 的主键/粒度/关联安全是空位——**不需要你补**（存量回归由输出
-   对比保障）；你只为**新 JOIN** 声明关联安全性（生产在跑不是新 JOIN 的理由）。
+2. **存量语义不补**：baseline 的主键/粒度/关联安全是空位——**不需要你补**（存量回归由
+   SQL 围栏+UT 全量质检保障）；你只为**新 JOIN** 声明关联安全性（生产在跑不是新 JOIN 的理由）。
 3. **围栏罩着你**：组装产物会被 fence_check 机器审计（越界/漏改硬阻断）。decisions 说什么，
    ts 就是什么——组装器是确定性的，你夹带不了任何东西，别试。
+4. **Territory 禁读（输入面只有四件）**：baseline_view + change_request（含 placement_hints）+
+   模板 + playbook。**archive/ts.json、archive/etl/*.sql、全量 mapping xlsx、全量 RS 一律不 Read**
+   （脚本域材料——别名对照/落位预判/变更字段存量条目已全部预计算进 view 与 change_request；
+   与新建「rs_input.json 不 Read」同一条纪律）。缺信息 → 上报调用方报 view 改进缺口，
+   禁回读原文自行绕过。
 
 ## 二、单线工作流（五步）
 
 ### 1. 读输入
-- `baseline_view.md`——老资产长什么样（规则清单/写入类型/增量材料/血缘/warnings/语义空位）
-- `change_request.json`——这次要加什么（业务说了什么；`new_source_table: true` = 新来源信号）。
+- `baseline_view.md`——老资产长什么样（**decisions 语言地图**：锚点[粒度/主键]·规则拓扑
+  [源/JOIN·safety/读中间表]·**别名对照[SQL 实际别名=落笔权威]**·语义空位）。有值的判断位
+  =真档原设计意图直接可用；▢ 空位=存量语义空位（不补，新 JOIN 现声明）。
+- `change_request.json`——这次要加什么（业务说了什么；`new_source_table: true` = 新来源信号；
+  **`placement_hints` = 每个新增字段的源表可见规则[直挂 direct_rules/穿中间表
+  via_intermediate]预计算**——你落位取舍的起始材料）。
   **字段带 `decision` 标记 = 类型风险已人定（原始输入='直接复制'，勿推翻方向）——译守卫式
-  转换 design_logic；`join_type_decisions` 段的处置=转换 → 对应 joins 必须声明 cast**
+  转换 design_logic；`join_type_decisions` 段的处置=转换 → 对应 joins 必须声明 cast**；
+  modify 条目已内联存量参考（old_type/old_expr=基线当前态，rules=旧口径所在规则）。
 - RS 优化章节原文在 change_request.rs_opt_section——口径从这读
 
 ### 2. 落位决策（核心判断，一个）
 新字段从源头到目标表走哪条路：直挂目标规则 / 穿中间表（中间表加列、多规则落位）。
-取舍树见 `references/opt-playbook.md` §一。落位写进 decisions 的 placed_rules /
+起始材料=change_request.placement_hints（源表可见规则预计算——直挂候选/穿中间表候选
+/新来源），取舍树见 `references/opt-playbook.md` §一。落位写进 decisions 的 placed_rules /
 intermediate_tables——**这是围栏许可的边界，落错位会连锁漏改**。
 
 ### 3. 新 JOIN 声明（有新来源才做）
