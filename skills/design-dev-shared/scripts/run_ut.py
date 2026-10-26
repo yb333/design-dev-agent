@@ -283,7 +283,13 @@ def wrap_write(select_sql: str, target_table: str, table_fields: list,
     columns = ", ".join(field_names)
     # UPDATE SET：源字段赋值（T1.col 对应每个目标字段，审计字段不更新由业务定，这里全量 UPDATE）
     update_set = ",\n        ".join(f"T.{c} = T1.{c}" for c in field_names)
-    on_cond = write_condition.strip() if write_condition.strip() else "1=1"
+    # ★ 无条件 MERGE fail loud（2026-10-26 用户定调：没条件 UT 就该爆——此前静默
+    # fallback "1=1" 在空表 UT 上语法全对跑得过，生产是全表交叉匹配灾难）
+    if not write_condition.strip():
+        raise ValueError(
+            f"merge_into/update 缺 write_condition（MERGE ON 条件）——designer 填写"
+            f"（如 T.id=T1.id），不静默兜底")
+    on_cond = write_condition.strip()
 
     return f"""MERGE INTO {target_table} T
 USING (
@@ -534,3 +540,89 @@ def run_ut_check(executor, target_table: str, business_key: list, audit_fields: 
             results.append(entry)
 
     return results
+
+
+# ============================================================
+# UT 写路径执行通道（2026-10-26 统一 UT 内核单点——用户架构定调：
+# 优化与新建的 UT 本质无区别[幂等执行脚本+数据检查]，写路径通道一份实现）
+# ============================================================
+
+def execute_write_path(executor, rule_code: str, target: str, select_sql: str,
+                       tbl_fields: list, load_mode: str = "truncate_table",
+                       write_condition: str = "", produced: set = None) -> dict:
+    """写路径执行通道：load_mode 预处理（写前清理）→ wrap_write 拼装（真生产形态
+    ——merge_into 拼真 MERGE）→ 执行判定（r.success——executor 失败契约=返回
+    ExecuteResult 不抛异常，2026-10-26 opt 侧契约误解病灶的根治）+ error_type 分流。
+
+    返回 {rule, status: PASS|FAIL, error_type: SQL|ENV, detail, insert_sql}。
+    消费方：ut_execute（new-pipe 6b）/ ut_opt（opt 编排壳）——诊断增益/落盘/级联
+    由调用方按返回值自行挂接。预处理失败=ENV（环境/权限归人）；拼装失败与执行
+    的 COLUMN/TYPE/SYNTAX/DOES NOT EXIST=SQL（归 coder）。
+    """
+    prep_sql = ""
+    if load_mode == "truncate_table":
+        prep_sql = f"TRUNCATE TABLE {target}"
+    elif load_mode == "truncate_partition" and write_condition:
+        prep_sql = f"TRUNCATE TABLE {target} PARTITION ( {write_condition} )"
+    elif load_mode == "delete" and write_condition:
+        prep_sql = f"DELETE FROM {target} WHERE {write_condition}"
+    # merge_into/update 不预处理（MERGE 语句自带 upsert 语义；幂等验证见
+    # verify_merge_idempotent）
+    if prep_sql:
+        r = executor.execute(prep_sql)
+        if not r.success:
+            return {"rule": rule_code, "status": "FAIL", "error_type": "ENV",
+                    "detail": f"写前清理失败: {(r.error or '')[:200]}", "insert_sql": prep_sql}
+
+    try:
+        insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode,
+                                write_condition, produced)
+    except ValueError as ve:
+        # INSERT 列清单/条件缺失等构造异常——规则级 FAIL，不拖垮整轮
+        return {"rule": rule_code, "status": "FAIL", "error_type": "SQL",
+                "detail": f"INSERT 构造失败: {ve}", "insert_sql": ""}
+    r = executor.execute(insert_sql)
+    if not r.success:
+        error_msg = r.error[:200] if r.error else "未知错误"
+        error_type = "SQL" if any(k in error_msg.upper() for k in
+                                  ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
+        return {"rule": rule_code, "status": "FAIL", "error_type": error_type,
+                "detail": f"INSERT失败: {error_msg}", "insert_sql": insert_sql}
+    return {"rule": rule_code, "status": "PASS", "detail": r.summary(),
+            "insert_sql": insert_sql}
+
+
+def verify_merge_idempotent(executor, rule_code: str, target: str,
+                            insert_sql: str) -> dict:
+    """merge 族写路径幂等验证（统一 UT 标准步骤）：同语句第二遍（不清表）——第一遍
+    全 NOT MATCHED（插入），第二遍全 MATCHED（更新路径真实走到）——行数不变=upsert
+    幂等成立；行数翻倍=MERGE 条件/主键有问题当场爆（生产重叠窗口重跑安全性的 UT
+    镜像——WHEN MATCHED 分支由此覆盖，2026-10-26 修正"不做语义验证"的旧说法）。
+    返回形态同 execute_write_path（行数查询失败降 WARN 不阻断——宁放过）。"""
+    def _cnt() -> int:
+        rows = executor.fetch_all(f"SELECT COUNT(*) AS N FROM {target}")
+        return int((rows or [{}])[0].get("N") or 0)
+
+    try:
+        before = _cnt()
+    except Exception as e:
+        return {"rule": rule_code, "status": "WARN",
+                "detail": f"幂等验证行数查询失败: {str(e)[:150]}", "insert_sql": insert_sql}
+    r = executor.execute(insert_sql)
+    if not r.success:
+        return {"rule": rule_code, "status": "FAIL", "error_type": "SQL",
+                "detail": f"幂等第二遍执行失败: {(r.error or '')[:200]}",
+                "insert_sql": insert_sql}
+    try:
+        after = _cnt()
+    except Exception as e:
+        return {"rule": rule_code, "status": "WARN",
+                "detail": f"幂等验证行数查询失败: {str(e)[:150]}", "insert_sql": insert_sql}
+    if after != before:
+        return {"rule": rule_code, "status": "FAIL", "error_type": "SQL",
+                "detail": (f"幂等性破坏：第二遍后行数 {before}→{after}"
+                           f"（MERGE 条件/主键问题——生产重叠窗口重跑会重复）"),
+                "insert_sql": insert_sql}
+    return {"rule": rule_code, "status": "PASS",
+            "detail": f"幂等成立（两遍行数 {after}——MATCHED 分支已覆盖）",
+            "insert_sql": insert_sql}

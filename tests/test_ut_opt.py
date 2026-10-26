@@ -1,132 +1,151 @@
-"""ut_opt 测试：MINUS 构造 + 冻结列推导 + 假 executor 的对比判定（docs/specs/opt/06）。
+# -*- coding: utf-8 -*-
+"""ut_opt / UT 内核测试（2026-10-26 统一 UT 重构：双跑对比退役、写路径走共享内核、
+主键/审计全集、merge 幂等第二遍、无条件 MERGE fail loud、ALTER 逐句判定）。
 
-不连库：输出对比判定逻辑用 fake executor（对齐 conftest 约定）；DB 路径（main）不测。
+mock 契约对齐（本轮教训核心）：FakeExecutor.execute 失败=返回 ExecuteResult(
+success=False) **不抛异常**（对齐 dws_db 真实契约）——此前 mock 按异常假设造，
+掩盖了 opt 侧的契约误解病灶。
 """
 import json
 from pathlib import Path
 
 import pytest
 
-from ut_opt import build_compare_sql, _frozen_columns, run_output_compare, build_insert_plan
+from dws_db import ExecuteResult
+from run_ut import execute_write_path, verify_merge_idempotent, wrap_write, run_ut_check
 
-B_R2 = ("SELECT t.order_id, t.cust_id, SUM(t.amount) AS total_amount "
-        "FROM dws.tmp_trade_order t GROUP BY t.order_id, t.cust_id")
-N_R2 = ("SELECT t.order_id, t.cust_id, SUM(t.amount) AS total_amount, c.channel_name "
-        "FROM dws.tmp_trade_order t LEFT JOIN dws.dim_channel c ON t.order_id = c.order_id "
-        "GROUP BY t.order_id, t.cust_id")
-
-DECL = {"rule": "R0002", "fields": ["channel_name"],
-        "new_joins": [{"rule": "R0002", "table": "dim_channel", "alias": "c",
-                       "on": "t.order_id = c.order_id"}]}
+SQL_OK = "SELECT a.x AS x FROM ods.t a"
 
 
 class FakeExecutor:
-    """count 查询按预设字典返回；样例查询返回空。"""
+    """契约对齐 dws_db：execute 失败返回 success=False 不抛；fetch_all 失败抛。"""
 
-    def __init__(self, counts: dict):
-        self.counts = counts
-        self.queries = []
+    def __init__(self, fail_on=None, counts=None, dup_keys=None):
+        self.fail_on = fail_on or {}      # {sql 子串: 报错文本}
+        self.counts = counts or []        # COUNT 查询按调用序返回的行数列表
+        self.dup_keys = dup_keys or []    # 主键 GROUP HAVING 返回的重复键行
+        self.executed = []
 
     def execute(self, sql):
-        # EXPLAIN ANALYZE 预检：成功、空计划文本（真跑通/两门槛由 explain_check 单测覆盖）
-        class _R:
-            success, rows, error = True, [{"plan": "id | Operation | A-rows", "plan2": " 1 | Seq Scan | 10"}], None
-        return _R()
+        self.executed.append(sql)
+        for key, err in self.fail_on.items():
+            if key in sql:
+                return ExecuteResult(success=False, error=err)
+        if sql.strip().upper().startswith("EXPLAIN"):
+            return ExecuteResult(success=True, rows=[{"plan": "1 | Seq Scan | 10"}])
+        if "HAVING COUNT(*) > 1" in sql:
+            return ExecuteResult(success=True, rows=self.dup_keys)
+        if "COUNT(*)" in sql:
+            n = self.counts.pop(0) if self.counts else 10
+            col = "cnt" if "AS cnt" in sql else "N"   # 对齐查询别名
+            return ExecuteResult(success=True, rows=[{col: n}])
+        if "IS NULL" in sql:
+            return ExecuteResult(success=True, rows=[{"N": 0}])
+        return ExecuteResult(success=True, rowcount=10)
 
     def fetch_all(self, sql):
-        self.queries.append(sql)
-        # 行数对账（cnt_o=老 / cnt_n=新，裸 COUNT 不含 MINUS）
-        if "cnt_o" in sql and "COUNT" in sql:
-            return [{"N": self.counts.get("old_rows", 10)}]
-        if "cnt_n" in sql and "COUNT" in sql:
-            return [{"N": self.counts.get("new_rows", 10)}]
-        for key, n in self.counts.items():
-            if key in sql and "COUNT" in sql:
-                return [{"N": n}]
-        return []
+        r = self.execute(sql)          # 委托同一路由（对齐 dws_db.fetch_all 实现）
+        if not r.success:
+            raise RuntimeError(r.error)
+        return list(r.rows or [])
 
 
-class TestBuildCompareSql:
-    def test_minus_pair_shape(self, tmp_path):
-        m1, m2 = build_compare_sql(B_R2, N_R2, ["order_id", "cust_id", "total_amount"],
-                                   ["channel_name"])
-        assert m1.startswith("SELECT") and "MINUS" in m1
-        # 老侧子查询不改写本体
-        assert "SUM(t.amount) AS total_amount" in m1
-        # 新→老方向包含新列（差异可见供人审）
-        assert "channel_name" in m2
-        # 冻结列双向都裁剪投影
-        assert '"order_id"' in m1 and '"order_id"' in m2
+class TestExecuteWritePath:
+    """UT 写路径内核（opt 契约病灶的根治位）：预处理+拼装+判定分流。"""
+
+    FIELDS = [{"target_field": "x", "field_type": "int"}]
+
+    def test_pass_with_truncate_prep(self):
+        ex = FakeExecutor()
+        wp = execute_write_path(ex, "R1", "dws.t1", SQL_OK, self.FIELDS, "truncate_table")
+        assert wp["status"] == "PASS"
+        assert any("TRUNCATE" in s.upper() for s in ex.executed)   # 写前清理在（重跑无残留）
+        assert any("INSERT" in s.upper() for s in ex.executed)
+
+    def test_insert_failure_reported_not_swallowed(self):
+        """execute 失败（返回 success=False 不抛）→ 必须报 FAIL——2026-10-26 病灶回归锁。"""
+        ex = FakeExecutor(fail_on={"INSERT": "ERROR: column \"y\" does not exist"})
+        wp = execute_write_path(ex, "R1", "dws.t1", SQL_OK, self.FIELDS, "truncate_table")
+        assert wp["status"] == "FAIL"
+        assert wp["error_type"] == "SQL"          # COLUMN/DOES NOT EXIST 关键词分流
+        assert "does not exist" in wp["detail"]
+
+    def test_env_failure_routed(self):
+        ex = FakeExecutor(fail_on={"INSERT": "permission denied"})
+        wp = execute_write_path(ex, "R1", "dws.t1", SQL_OK, self.FIELDS, "truncate_table")
+        assert wp["status"] == "FAIL" and wp["error_type"] == "ENV"
+
+    def test_prep_failure_reported(self):
+        ex = FakeExecutor(fail_on={"TRUNCATE": "relation does not exist"})
+        wp = execute_write_path(ex, "R1", "dws.t1", SQL_OK, self.FIELDS, "truncate_table")
+        assert wp["status"] == "FAIL" and "写前清理失败" in wp["detail"]
+
+    def test_merge_without_condition_fails_loud(self):
+        """merge 无 write_condition → 构造失败（wrap_write fail loud——旧 1=1 静默
+        兜底在空表 UT 上跑得过、生产是交叉匹配灾难）。"""
+        ex = FakeExecutor()
+        wp = execute_write_path(ex, "R1", "dws.t1", SQL_OK, self.FIELDS, "merge_into", "")
+        assert wp["status"] == "FAIL"
+        assert "write_condition" in wp["detail"]
 
 
-class TestFrozenColumns:
-    def test_declared_excluded(self, tmp_path):
-        ts = {"rules": {"R0002": {"field_targets": ["order_id", "cust_id",
-                                                    "total_amount", "channel_name"]}},
-              "change": {"fields": [{"field": "channel_name", "placed_rules": ["R0002"]}]}}
-        frozen = _frozen_columns(ts, ts["change"])
-        assert frozen["R0002"] == ["order_id", "cust_id", "total_amount"]
+class TestMergeIdempotent:
+    """merge 族幂等第二遍：同语句两遍行数不变=WHEN MATCHED 覆盖+重跑安全。"""
+
+    MERGE_SQL = ("MERGE INTO dws.t1 T USING (SELECT 1 AS x) T1 ON T.x=T1.x "
+                 "WHEN NOT MATCHED THEN INSERT (x) VALUES (T1.x)")
+
+    def test_idempotent_pass(self):
+        ex = FakeExecutor(counts=[10, 10])
+        r = verify_merge_idempotent(ex, "R1", "dws.t1", self.MERGE_SQL)
+        assert r["status"] == "PASS"
+        assert "MATCHED" in r["detail"]
+        assert sum(1 for s in ex.executed if "MERGE" in s.upper()) == 1  # 第二遍真执行
+
+    def test_row_duplication_fails(self):
+        ex = FakeExecutor(counts=[10, 23])
+        r = verify_merge_idempotent(ex, "R1", "dws.t1", self.MERGE_SQL)
+        assert r["status"] == "FAIL"
+        assert "幂等性破坏" in r["detail"]
+
+    def test_second_run_error_fails(self):
+        ex = FakeExecutor(counts=[10], fail_on={"MERGE": "syntax error"})
+        r = verify_merge_idempotent(ex, "R1", "dws.t1", self.MERGE_SQL)
+        assert r["status"] == "FAIL" and "第二遍" in r["detail"]
 
 
-class TestCompareVerdict:
-    def _setup(self, tmp_path, new_sql):
-        etl = tmp_path / "etl"; etl.mkdir(exist_ok=True)
-        base = tmp_path / "etl_baseline"; base.mkdir(exist_ok=True)
-        (etl / "R0002.sql").write_text(new_sql, encoding="utf-8")
-        (base / "R0002.sql").write_text(B_R2, encoding="utf-8")
-        return etl, base
-
-    def _ts(self):
-        return {"rules": {"R0002": {"target_table": "dwb_trade_order_d",
-                                    "field_targets": ["order_id", "cust_id",
-                                                      "total_amount", "channel_name"]}},
-                "change": {"change_type": "add_field", "fields": [
-                    {"field": "channel_name", "target_table": "dwb_trade_order_d",
-                     "placed_rules": ["R0002"],
-                     "new_joins": [{"rule": "R0002", "table": "dim_channel", "alias": "c",
-                                    "on": "t.order_id = c.order_id"}]}]}}
-
-    def test_zero_diff_pass(self, tmp_path):
-        etl, base = self._setup(tmp_path, N_R2)
-        ex = FakeExecutor({"MINUS": 0})
-        res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
-        assert res[0]["status"] == "PASS"
-        assert "零差异" in res[0]["detail"]
-
-    def test_frozen_regression_fail(self, tmp_path):
-        etl, base = self._setup(tmp_path, N_R2)
-        # 老→新方向有差集（第一个 MINUS）→ FAIL；新→老方向（第二个）为 0
-        ex = FakeExecutor({})
-        ex.fetch_all = lambda sql: ([{"N": 3}] if "fence_old MINUS" in sql or
-                                    ("MINUS" in sql and "COUNT" in sql
-                                     and sql.index("MINUS") < sql.index("fence_new")
-                                     and "cnt_" not in sql) else
-                                    ([{"N": 0}] if "COUNT" in sql else []))
-        res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
-        assert res[0]["status"] == "FAIL" and "回归失败" in res[0]["detail"]
-
-    def test_sql_fence_gate_inside_compare(self, tmp_path):
-        """SQL 围栏不过（等价改写 WHERE）→ 对比前拦下，不进 MINUS。"""
-        bad = N_R2 + " WHERE 1=1"  # 语法上叠加 where 会被围栏拦
-        etl, base = self._setup(tmp_path, bad)
-        ex = FakeExecutor({})
-        res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
-        assert res[0]["status"] == "FENCE_FAIL"
+class TestWrapWriteConditionGuard:
+    def test_merge_no_condition_raises(self):
+        with pytest.raises(ValueError, match="write_condition"):
+            wrap_write(SQL_OK, "dws.t1", [{"target_field": "x"}], "merge_into", "", {"x"})
 
 
-class TestInsertPlan:
-    """表名两种形态（json 路径短名 / 档案路径 new-pipe 新版带 schema）产出同一 INSERT 计划。"""
+class TestApplyAltersVerdict:
+    """ALTER 逐句判定（类型 MODIFY 转换失败当场爆——不再静默吞掉带病跑写路径）。"""
 
-    def _ts(self, prefixed: bool):
-        tt = "dws.dwb_trade_order_d" if prefixed else "dwb_trade_order_d"
-        return {"rules": {"R0002": {"target_table": tt}},
-                "tables": {"dwb_trade_order_d": {"fields": [{"target_field": "order_id"}]}}}
+    def test_alter_failure_raises(self, tmp_path):
+        from ut_opt import apply_alters
+        ddl = tmp_path / "alter_table_t1.sql"
+        ddl.write_text("ALTER TABLE dws.t1 MODIFY (x varchar(128));", encoding="utf-8")
+        ex = FakeExecutor(fail_on={"MODIFY": "value too long"})
+        with pytest.raises(RuntimeError, match="ALTER 失败"):
+            apply_alters(ex, tmp_path, ["t1"], "dws")
 
-    def test_short_and_prefixed_agree(self, tmp_path):
-        short = build_insert_plan(self._ts(False), "dws")
-        prefixed = build_insert_plan(self._ts(True), "dws")
-        # 第四元=产出列集（本 fixture 规则无产出声明→空集=保守全列，2026-09-15）
-        assert short == prefixed == [("R0002", "dws.dwb_trade_order_d", ["order_id"], set())]
+
+class TestUtCheckFullSet:
+    """资产数据检查全集（豁免移除）：主键重复必须被抓——口径修改后主键唯一性
+    不被任何 diff 机制蕴含（UT 是资产质量门不是 diff 门）。"""
+
+    def test_duplicate_primary_key_fails(self):
+        ex = FakeExecutor(dup_keys=[{"x": "1", "cnt": 2}])
+        checks = run_ut_check(ex, "dws.t1", ["x"], {"del_flag": {}})
+        pk = [c for c in checks if c["check"] == "业务主键唯一"]
+        assert pk and pk[0]["status"] == "FAIL"
+
+    def test_clean_primary_key_passes(self):
+        ex = FakeExecutor()   # 默认行数 10 >0 PASS / 主键无重复 / 审计空集
+        checks = run_ut_check(ex, "dws.t1", ["x"], {})
+        assert all(c["status"] != "FAIL" for c in checks), checks
 
 
 class TestNewColumnNulls:
@@ -161,38 +180,6 @@ class TestNewColumnNulls:
         # 干净：无提示
         out2 = check_new_column_nulls(NullEx({"total": 10, "null_c1": 0}), ts, "dws")
         assert out2[0]["note"] == ""
-
-
-class TestRowCountReconciliation:
-    """行数对账（多重集守护）：MINUS 是集合语义看不见重复数——新 JOIN 发散的行级硬信号。"""
-
-    def _setup(self, tmp_path):
-        etl = tmp_path / "etl"; etl.mkdir()
-        base = tmp_path / "base"; base.mkdir()
-        (etl / "R0002.sql").write_text("SELECT 1 AS a, 2 AS b", encoding="utf-8")
-        (base / "R0002.sql").write_text("SELECT 1 AS a", encoding="utf-8")
-        return etl, base
-
-    def _ts(self):
-        return {"change": {"fields": [
-            {"field": "b", "target_table": "t1", "placed_rules": ["R0002"],
-             "intermediate_tables": [], "new_joins": []}]},
-            "rules": {"R0002": {"field_targets": ["a", "b"],
-                                "source_tables": [{"schema": "ods", "table": "o", "alias": "a"}]}},
-            "meta": {"target": {"f_table": {"schema": "dws", "table": "t1"}}}}
-
-    def test_row_drift_fails_with_diagnose_hint(self, tmp_path):
-        etl, base = self._setup(tmp_path)
-        ex = FakeExecutor({"old_rows": 100, "new_rows": 340})   # 发散 3.4 倍
-        res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
-        assert res[0]["status"] == "FAIL"
-        assert "行数漂移" in res[0]["detail"] and "diagnose_fanout_opt" in res[0]["detail"]
-
-    def test_equal_rows_proceeds_to_minus(self, tmp_path):
-        etl, base = self._setup(tmp_path)
-        ex = FakeExecutor({"old_rows": 100, "new_rows": 100, "MINUS": 0})
-        res = run_output_compare(ex, self._ts(), etl, base, {}, tmp_path)
-        assert res[0]["status"] == "PASS"
 
 
 class TestFenceStalenessGate:

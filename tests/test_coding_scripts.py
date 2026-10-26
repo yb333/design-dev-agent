@@ -518,12 +518,14 @@ class TestWrapWrite:
                             "update", "T.id=T1.id")
         assert "MERGE INTO" in result
 
-    def test_merge_no_condition_fallback_on_condition(self):
-        """merge 无 write_condition → ON 用 1=1 兜底（不崩）"""
+    def test_merge_no_condition_fails_loud(self):
+        """merge 无 write_condition → fail loud（2026-10-26 定调：无条件 MERGE 空表
+        UT 跑得过、生产是交叉匹配灾难——旧 1=1 静默兜底退役）"""
+        import pytest as _pytest
         from run_ut import wrap_write
-        result = wrap_write(self._select(), "sch.tbl", self._fields(),
-                            "merge_into", "")
-        assert "ON 1=1" in result
+        with _pytest.raises(ValueError, match="write_condition"):
+            wrap_write(self._select(), "sch.tbl", self._fields(),
+                       "merge_into", "")
 
     def test_merge_update_set_has_all_fields(self):
         """MERGE 的 UPDATE SET 覆盖所有字段"""

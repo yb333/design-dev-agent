@@ -249,63 +249,35 @@ def main():
             load_mode = rule.get("load_mode", "truncate_table")
             write_condition = rule.get("write_condition", "")
 
-            # load_mode 预处理（模拟平台写入前的清空动作）
-            if load_mode == "truncate_table":
-                executor.execute(f"TRUNCATE TABLE {target}")
-                print(f"  🔄 TRUNCATE")
-            elif load_mode == "truncate_partition" and write_condition:
-                # write_condition 是分区名（如 P_1001）
-                executor.execute(f"TRUNCATE TABLE {target} PARTITION ( {write_condition} )")
-                print(f"  🔄 TRUNCATE PARTITION {write_condition}")
-            elif load_mode == "delete" and write_condition:
-                executor.execute(f"DELETE FROM {target} WHERE {write_condition}")
-                print(f"  🔄 DELETE WHERE {write_condition}")
-            # merge_into/update 不预处理（MERGE 语句自带 upsert 语义）
-
-            # 写入语句构造（试跑/全量共用同一套 wrap）
+            # 写路径执行通道（2026-10-26 统一 UT 内核单点——预处理+拼装+判定分流；
+            # 此前本段内联在 ut_execute，opt 侧复制时丢了 r.success 判定[契约误解病灶]）
             target_short = target.rsplit(".", 1)[-1] if "." in target else target
             tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
             if not tbl_fields:
                 tbl_fields = rule.get("fields", [])
-            try:
-                _produced = rule_output_fields(rule)
-                _wrap_probe = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition, _produced)
-            except ValueError as ve:
-                # INSERT 列清单解析异常（重复列=CTE 边界错位/重复别名）——规则级 FAIL，不拖垮整轮
+            from run_ut import execute_write_path
+            wp = execute_write_path(executor, rule_code, target, select_sql,
+                                    tbl_fields, load_mode, write_condition,
+                                    rule_output_fields(rule))
+            insert_sql = wp.get("insert_sql", "")
+            if wp["status"] == "FAIL":
                 rule_result["status"] = "FAIL"
-                rule_result["error_type"] = "SQL"
-                rule_result["detail"] = f"INSERT 构造失败: {ve}"
-                print(f"  ❌ INSERT 构造失败: {ve}")
-                _dump_rule_sql(ts_path, rule_code, target, select_sql, "",
-                               f"构造失败: {ve}", [])
-                all_results.append(rule_result)
-                prev_failed = True
-                continue
-
-            insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode, write_condition, rule_output_fields(rule))
-
-            print(f"  ⏳ INSERT 执行中...（全量）")
-            r = executor.execute(insert_sql)
-            if not r.success:
-                error_msg = r.error[:200] if r.error else "未知错误"
-                error_type = "SQL" if any(k in error_msg.upper() for k in ["COLUMN", "TYPE", "SYNTAX", "DOES NOT EXIST"]) else "ENV"
-                rule_result["status"] = "FAIL"
-                rule_result["error_type"] = error_type
-                rule_result["detail"] = f"INSERT失败: {error_msg}"
-                print(f"  ❌ INSERT失败({error_type}): {error_msg}")
+                rule_result["error_type"] = wp.get("error_type", "SQL")
+                rule_result["detail"] = wp["detail"]
+                print(f"  ❌ {wp['detail']}")
                 # 类型转换类报错 → 自动诊断嫌疑脏数据（增益，不阻断）
-                if _is_type_conversion_error(error_msg):
-                    diag = _diagnose_insert_failure(executor, rule, ts, ts_path, error_msg)
+                if _is_type_conversion_error(wp["detail"]):
+                    diag = _diagnose_insert_failure(executor, rule, ts, ts_path, wp["detail"])
                     if diag:
                         rule_result["diagnosis"] = diag
                         print(f"  🔍 {diag.splitlines()[0]}")
                 # 落地 SQL（失败也要落，这是最需要 debug 的场景）
                 _dump_rule_sql(ts_path, rule_code, target, select_sql, insert_sql,
-                               f"执行失败({error_type}): {error_msg}", [])
+                               wp["detail"], [])
                 all_results.append(rule_result)
                 prev_failed = True
                 continue
-            print(f"  ✅ INSERT: {r.summary()}")
+            print(f"  ✅ 写路径: {wp['detail']}")
 
             # UT 检查
             # 主键唯一性按表取键（2026-09-15 决策 A）：表级 business_key（中间表粒度

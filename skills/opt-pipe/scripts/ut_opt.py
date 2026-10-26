@@ -1,17 +1,27 @@
-"""ut_opt —— 优化模式 UT（docs/specs/opt/06；零触碰 ut_precheck/ut_execute 的独立执行入口）。
+"""ut_opt —— 优化模式 UT（2026-10-26 统一 UT 重构：opt 编排壳）。
 
-流程（对应 06 的验证形态，全部动作在**现成开发环境**上）：
-  1. 应用 ALTER（ddl/alter_table_*.sql，一表一文件按确定文件名拼接——禁 glob）
-     表不存在 = 环境问题归人（exit 3，对齐 new-pipe 6c 分流），不自己 CREATE 兜底。
-  2. SELECT 预检：新旧 SELECT 逐规则跑通（EXPLAIN 级由 executor 决定，这里真跑一次）
-  3. 输出对比（双跑落地）：双向 MINUS 一条 SQL，老/新 SELECT 同库同时执行——
-     冻结列双向差集必须为空；差异只允许出现在新增列；oracle 按声明参数化。
-  4. INSERT 全量执行（复用 run_ut.wrap_insert——SELECT 对比管不了写路径类型转换，
-     全量 INSERT 才算数，两道缺一不可）。
-  5. 报告 ut_report_opt.md（含闸口②'素材：新列 NULL 率/差异摘要/资产健康提示）。
+架构定调（用户多轮拍板）：优化与新建的 UT 本质无区别——幂等地执行脚本+对着资产
+做数据检查（UT 视角不区分 CREATE/ALTER、不豁免基本项）。本脚本瘦身为 opt 编排壳：
+围栏时效+ALTER+EXPLAIN 前置，写路径/数据检查/DQ 全走共享内核（run_ut）。
 
-不支持的形态（UNION 顶层/SELECT *——sql_fence 同款判定）→ 报"转人工"，不静默。
-主键检查豁免（双跑更强，06 §一）；空值检查只对新列（06 §一）。
+流程（现成开发环境上）：
+  1. 围栏时效校验（回路铁律机器化：产物变→围栏重跑→才进 UT）
+  2. 应用 ALTER（ddl/alter_table_*.sql 确定文件名；表不存在=环境归人 exit 3；
+     **逐句判定 r.success**——类型 MODIFY 转换失败当场爆）
+  3. EXPLAIN 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌；计划两门槛+顶层行数）
+  4. 写路径（共享内核 execute_write_path：load_mode 真形态——merge_into 拼真 MERGE
+     +写前清理，**多次重跑不再累积残留**）+ **merge 族幂等第二遍**
+     （verify_merge_idempotent：同语句两遍行数不变——WHEN MATCHED 分支覆盖+
+     生产重叠窗口重跑安全性镜像）
+  5. run_ut_check **全集**（行数/主键唯一/审计非空——2026-10-26 豁免移除：UT 是
+     资产质量门不是 diff 门，口径修改后主键唯一性必须独立验证）
+  6. 新列/新类型抽查（全 NULL=新 JOIN 关联不上；类型修改列转换 NULL=事故信号）
+  7. DQ 真跑（数据不完整跳过）
+  8. 报告 ut_report_opt.md
+
+双跑对比（新老 SELECT 数据 diff）2026-10-26 退役（ROI 拍板）：SQL 围栏 AST 级更严
+更早（确定性无时间列误报）+ run_ut_check 主键全集替代行数对账；纵深代价=围栏漏放
+时少一层数据兜底，已知悉。
 """
 import argparse
 import json
@@ -20,60 +30,26 @@ from pathlib import Path
 
 # shared 公共库自洽引用：相对路径推算 design-dev-shared（skill 脚本标准 bootstrap）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-from run_ut import wrap_insert, read_select, run_dq_checks, load_dq_rules, rule_output_fields
-from sql_fence import check_sql_fence, rule_declaration
+from run_ut import (read_select, run_dq_checks, load_dq_rules, rule_output_fields,
+                    execute_write_path, verify_merge_idempotent, run_ut_check)
 from explain_check import _analyze_plan, _parse_actual_rows
 
-# MINUS 结果取样上限（报告用样例，不搬全量数据）
+# 报告样例上限（不搬全量数据）
 SAMPLE_LIMIT = 5
 
 
-def build_compare_sql(old_sql: str, new_sql: str, frozen_cols: List[str],
-                      new_cols: List[str]) -> Tuple[str, str]:
-    """双向 MINUS 一条 SQL（投影裁到比对列：冻结列必比；新列只进新侧方向）。
-
-    返回 (老 MINUS 新, 新 MINUS 老)。列裁剪用子查询包裹，不改写两侧 SELECT 本体。
-    """
-    frozen = ", ".join(f'"{c}"' for c in frozen_cols) or "*"
-    old_q = f"SELECT {frozen} FROM ({old_sql}) fence_old"
-    new_q = f"SELECT {frozen} FROM ({new_sql}) fence_new"
-    minus_old_new = f"{old_q} MINUS {new_q}"
-    all_cols = list(frozen_cols) + [c for c in new_cols if c not in frozen_cols]
-    all_sel = ", ".join(f'"{c}"' for c in all_cols) or "*"
-    new_full = f"SELECT {all_sel} FROM ({new_sql}) fence_new2"
-    old_full = f"SELECT {all_sel} FROM ({old_sql}) fence_old2"
-    minus_new_old = f"{new_full} MINUS {old_full}"
-    return minus_old_new, minus_new_old
-
-
-def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
-                       table_fields: Dict[str, List[str]], ts_path: Path) -> List[dict]:
-    """逐规则输出对比。返回检查结果列表（含 PASS/FAIL 与样例）。"""
+def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path) -> List[dict]:
+    """逐规则 EXPLAIN ANALYZE 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌）：
+    真跑通验证 + 计划两门槛（不下推/STREAM——提示级不阻断）+ 顶层行数（0 行告警）。
+    计划原文全量落盘 _internal/diagnose/ 可回溯。返回检查结果列表。"""
     results = []
-    change = ts_v2.get("change") or {}
-    frozen_by_rule = _frozen_columns(ts_v2, change)
     for rule_code, rule in ts_v2.get("rules", {}).items():
-        decl = rule_declaration(change, rule_code, rule.get("target_table", ""))
         new_sql = read_select(etl_dir, rule_code)   # {code}.sql 或 {code}_描述_模式.sql
         if not new_sql:
             continue   # 视图/未产出规则跳过（dispatch 层已保证清单）
-        old_sql = read_select(baseline_dir, rule_code) or None
-        if old_sql is None:
-            results.append({"rule": rule_code, "status": "SKIP",
-                            "detail": "无 baseline SQL（新规则？add_field 不应出现）"})
-            continue
-        fence = check_sql_fence(old_sql, new_sql, decl)
-        hard = [f for f in fence if f["type"] != "missing"]
-        if hard:
-            results.append({"rule": rule_code, "status": "FENCE_FAIL",
-                            "detail": "; ".join(f["message"] for f in hard)})
-            continue
-        # EXPLAIN ANALYZE 全量真实执行一次（对齐 new-pipe 6a：真跑通验证 + 计划两门槛
-        # + 顶层行数；新 JOIN 改变计划形状，两门槛对新 SQL 同样成立）。提示级不阻断。
         r_plan = executor.execute(f"EXPLAIN ANALYZE {new_sql}")
-        plan_issues, plan_file = [], ""
         if not r_plan.success:
             results.append({"rule": rule_code, "status": "ERROR",
                             "detail": f"新 SELECT 执行失败: {(r_plan.error or '')[:200]}"})
@@ -85,48 +61,10 @@ def run_output_compare(executor, ts_v2: dict, etl_dir: Path, baseline_dir: Path,
             diag_dir=etl_dir.parent / "_internal" / "diagnose")
         if pre_rows == 0:
             plan_issues = [f"⚠ 0 行——源表有数据却查不出：疑似关联/过滤条件全灭，核对关联条件"] + plan_issues
-        # 行数对账（多重集守护，2026-09-04）：MINUS 是集合语义看不见重复数——新 JOIN 发散
-        # 产生同冻结列组合的多行，双向 MINUS 都可能空。add_field 是行对行加列，
-        # 裸 COUNT（不去重）不等 = 发散/丢行硬信号。
-        old_cnt = int((executor.fetch_all(f"SELECT COUNT(*) AS N FROM ({old_sql}) cnt_o")
-                       or [{"N": 0}])[0].get("N") or 0)
-        new_cnt = int((executor.fetch_all(f"SELECT COUNT(*) AS N FROM ({new_sql}) cnt_n")
-                       or [{"N": 0}])[0].get("N") or 0)
-        if old_cnt != new_cnt:
-            results.append({"rule": rule_code, "status": "FAIL",
-                            "detail": f"行数漂移（老 {old_cnt} → 新 {new_cnt}）：疑似新 JOIN "
-                                      f"发散或丢行——跑 diagnose_fanout_opt 定位，禁回 coder 掩盖",
-                            "plan_issues": plan_issues})
-            continue
-        frozen = frozen_by_rule.get(rule_code, [])
-        new_cols = decl["fields"]
-        m1, m2 = build_compare_sql(old_sql, new_sql, frozen, new_cols)
-        try:
-            rows1 = executor.fetch_all(f"SELECT COUNT(*) AS N FROM ({m1}) t") or [{"N": 0}]
-            n1 = int(rows1[0]["N"])
-            sample1 = executor.fetch_all(f"SELECT * FROM ({m1}) t LIMIT {SAMPLE_LIMIT}") if n1 else []
-        except Exception as e:
-            results.append({"rule": rule_code, "status": "ERROR", "detail": f"MINUS(老→新) 执行失败: {e}"})
-            continue
-        try:
-            rows2 = executor.fetch_all(f"SELECT COUNT(*) AS N FROM ({m2}) t") or [{"N": 0}]
-            n2 = int(rows2[0]["N"])
-            sample2 = executor.fetch_all(f"SELECT * FROM ({m2}) t LIMIT {SAMPLE_LIMIT}") if n2 else []
-        except Exception as e:
-            results.append({"rule": rule_code, "status": "ERROR", "detail": f"MINUS(新→老) 执行失败: {e}"})
-            continue
-        # 判定：老→新 差集必须为空（冻结列在老侧多/变 = 回归失败）；
-        # 新→老 允许非空但差异应只涉及新列（样例供人审）
-        if n1 > 0:
-            results.append({"rule": rule_code, "status": "FAIL",
-                            "detail": f"冻结列回归失败：老 MINUS 新 = {n1} 行",
-                            "samples": sample1, "plan_issues": plan_issues})
-        else:
-            row_note = f"EXPLAIN {pre_rows}行" if pre_rows is not None else "行数未解析"
-            results.append({"rule": rule_code, "status": "PASS",
-                            "detail": f"冻结列零差异（{row_note}）；新→老差集 {n2} 行（新列引入，样例供审）",
-                            "samples": sample2, "plan_issues": plan_issues,
-                            "plan_file": plan_file})
+        row_note = f"EXPLAIN {pre_rows}行" if pre_rows is not None else "行数未解析"
+        results.append({"rule": rule_code, "status": "PASS",
+                        "detail": f"真跑通（{row_note}）",
+                        "plan_issues": plan_issues, "plan_file": plan_file})
     return results
 
 
@@ -178,20 +116,6 @@ def check_new_column_nulls(executor, ts_v2: dict, schema: str) -> List[dict]:
     return out
 
 
-def _frozen_columns(ts_v2: dict, change: dict) -> Dict[str, List[str]]:
-    """每规则参与比对的冻结列 = 该规则 field_targets - 声明新列 - **类型修改列**
-    （场景 B·2026-10-22：modify 列的值转换本身是变更——MINUS 对比豁免，改由
-    新类型列质量抽查[空值率]守）。"""
-    out: Dict[str, List[str]] = {}
-    declared_all = {f["field"] for f in change.get("fields", [])}
-    modified_all = ({m.get("field") for m in change.get("modify_types", [])}
-                    | {m.get("field") for m in change.get("modify_logics", [])})
-    for code, rule in ts_v2.get("rules", {}).items():
-        out[code] = [c for c in (rule.get("field_targets") or [])
-                     if c not in declared_all and c not in modified_all]
-    return out
-
-
 def apply_alters(executor, ddl_dir: Path, tables: List[str], schema: str) -> List[str]:
     """应用 ALTER 变更单（确定文件名拼接，禁 glob）。表不存在让 DB 报错 → 环境问题归人。
 
@@ -205,31 +129,41 @@ def apply_alters(executor, ddl_dir: Path, tables: List[str], schema: str) -> Lis
             f"ALTER 变更单缺失: {missing}（{ddl_dir}）——先跑 assemble_ddl_opt 生成变更单再执行 UT")
     for t in tables:
         p = ddl_dir / f"alter_table_{t}.sql"
-        executor.execute(p.read_text(encoding="utf-8"))
+        # 逐句判定（2026-10-26 契约修复：execute 失败=返回 success=False 不抛异常——
+        # 此前返回值丢弃，类型 MODIFY 转换失败被静默吞掉后带病继续跑写路径）
+        for stmt in [x.strip() for x in p.read_text(encoding="utf-8").split(";") if x.strip()]:
+            r = executor.execute(stmt)
+            if not r.success:
+                raise RuntimeError(
+                    f"ALTER 失败（表 {t}）：{(r.error or '')[:200]}——"
+                    f"类型转换失败=存量脏值塞不进新类型（闸口②'事故信号）")
         applied.append(t)
     return applied
 
 
-def render_report(ts_v2: dict, alters: List[str], compare: List[dict],
-                  inserts: List[dict], nulls: List[dict],
+def render_report(ts_v2: dict, alters: List[str], explains: List[dict],
+                  writes: List[dict], ut_checks: List[dict], nulls: List[dict],
                   dq_results: List[dict] = None) -> str:
-    lines = ["# UT 报告（优化模式）", "",
+    lines = ["# UT 报告（优化模式·统一 UT 内核）", "",
              f"- ALTER 已应用：{', '.join(alters) or '（无）'}",
-             f"- 主键检查：豁免（双跑更强，06 §一）；空值检查：只对新列", ""]
-    lines.append("## 输出对比（冻结列回归）")
-    for r in compare:
-        lines.append(f"- [{r['status']}] {r['rule']}：{r['detail']}")
-        for s in (r.get("samples") or [])[:SAMPLE_LIMIT]:
-            lines.append(f"    - 样例: {s}")
-    lines.append("")
-    lines.append("## INSERT 全量执行")
-    for r in inserts:
+             f"- 数据检查：run_ut_check 全集（行数/主键唯一/审计非空——不豁免）", ""]
+    lines.append("## EXPLAIN 真跑（单侧新 SELECT + 计划两门槛）")
+    for r in explains:
         lines.append(f"- [{r['status']}] {r['rule']}：{r['detail']}")
         for pi in (r.get("plan_issues") or [])[:5]:
             lines.append(f"    - 计划门槛: {pi}")
     lines.append("")
-
-    lines.append("## 新列空值检查（写路径后真实数据）")
+    lines.append("## 写路径（load_mode 真形态 + merge 幂等验证）")
+    for r in writes:
+        lines.append(f"- [{r['status']}] {r['rule']}：{r['detail']}")
+    lines.append("")
+    lines.append("## 资产数据检查（run_ut_check 全集）")
+    for r in ut_checks:
+        lines.append(f"- [{r['status']}] {r['table']}·{r['check']}：{r['detail']}")
+        for smp in (r.get("samples") or [])[:SAMPLE_LIMIT]:
+            lines.append(f"    - 样例: {smp}")
+    lines.append("")
+    lines.append("## 新列/新类型抽查（写路径后真实数据）")
     for n in nulls:
         lines.append(f"- {n['table']}.{n['col']}：{n['nulls']}/{n['total']} NULL"
                      f"（{n['rate']}）{n['note']}")
@@ -255,26 +189,9 @@ def render_report(ts_v2: dict, alters: List[str], compare: List[dict],
         lines.append("> 分流：FAIL/MISSING 回 dws-dq-producer（限 3 轮）；ALERT 攒闸口②' 人判三选一（回改/人定口径或取消/豁免），零自动回路。")
         lines.append("")
 
-    lines.append("> 闸口②'素材：新列 NULL 率/值分布请看新→老差集样例；"
+    lines.append("> 闸口②'素材：新列 NULL 率/新类型转换 NULL/幂等结论见上各段；"
                  "开发库数据代表性限制如实声明。")
     return "\n".join(lines) + "\n"
-
-
-def build_insert_plan(ts_v2: dict, schema: str) -> List[Tuple[str, str, List[str]]]:
-    """INSERT 执行计划 [(rule_code, 目标全名, 字段清单, 产出列集)]。
-
-    表名容忍两种形态（rsplit 剥 schema，与 ts_compat 的查找容忍同款）：
-    json 路径 baseline 产短名 target_table；档案路径 baseline 是 new-pipe 新版 ts
-    （target_table 带 schema 如 dws.dwb_x）——统一剥成短名再拼全名/查 tables 键。
-    第四元=规则产出列集（rule_output_fields——列清单交集过滤，2026-09-15）。
-    """
-    plan: List[Tuple[str, str, List[str], set]] = []
-    for rule_code, rule in ts_v2.get("rules", {}).items():
-        tshort = str(rule.get("target_table") or "").rsplit(".", 1)[-1].lower()
-        fields = [f["target_field"] for f in
-                  ts_v2.get("tables", {}).get(tshort, {}).get("fields", [])]
-        plan.append((rule_code, f"{schema}.{tshort}", fields, rule_output_fields(rule)))
-    return plan
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -328,47 +245,70 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"UT_OPT_ENV: ALTER 失败（表不存在=环境问题归人）: {e}", file=sys.stderr)
         return 3
 
-    # 2+3. SELECT 预检隐含在对比执行里；输出对比
-    compare = run_output_compare(executor, ts_v2, Path(args.etl_dir),
-                                 Path(args.baseline_dir), {}, Path(args.ts))
+    # 2. EXPLAIN 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌）
+    explains = run_explain_single(executor, ts_v2, Path(args.etl_dir), Path(args.ts))
 
-    # 4. INSERT 全量执行（老列+新列全量写一遍，验证写路径）
-    inserts = []
-    for rule_code, target, fields, produced in build_insert_plan(ts_v2, schema):
+    # 3. 写路径（共享内核：load_mode 真形态+写前清理）+ merge 族幂等第二遍
+    writes = []
+    tables_meta = ts_v2.get("tables", {}) or {}
+    design = ts_v2.get("design", {}) or {}
+    global_bk = design.get("business_key", [])
+    audit_fields = design.get("audit_fields", {}) or {}
+    for rule_code, rule in ts_v2.get("rules", {}).items():
         select_sql = read_select(Path(args.etl_dir), rule_code)
         if not select_sql:
             continue
-        try:
-            sql = wrap_insert(select_sql, target, fields, produced)
-            executor.execute(sql)
-            inserts.append({"rule": rule_code, "status": "PASS", "detail": f"{target} 全量写入"})
-        except Exception as e:
-            inserts.append({"rule": rule_code, "status": "FAIL", "detail": str(e)})
+        target = rule.get("target_table", "")
+        if not target:
+            continue
+        t_short = target.rsplit(".", 1)[-1] if "." in target else target
+        tbl_fields = (tables_meta.get(t_short) or {}).get("fields", [])
+        wp = execute_write_path(executor, rule_code, target, select_sql,
+                                tbl_fields, rule.get("load_mode", "truncate_table"),
+                                rule.get("write_condition", ""), rule_output_fields(rule))
+        writes.append(wp)
+        # merge 族：幂等第二遍（WHEN MATCHED 覆盖+生产重跑安全性镜像）
+        if wp["status"] == "PASS" and rule.get("load_mode") in ("merge_into", "update"):
+            writes.append(verify_merge_idempotent(executor, rule_code, target,
+                                                  wp["insert_sql"]))
+
+    # 4. 资产数据检查（run_ut_check 全集——2026-10-26 豁免移除：UT 是资产质量门）
+    ut_checks = []
+    for target in sorted({w_target for w_target in
+                          (r.get("target_table") or (r.get("rule") and
+                           (ts_v2.get("rules", {}).get(r["rule"], {}) or {}).get("target_table"))
+                           for r in ts_v2.get("rules", {}).values()) if w_target}):
+        t_short = target.rsplit(".", 1)[-1] if "." in target else target
+        tbl_bk = (tables_meta.get(t_short) or {}).get("business_key") or global_bk
+        for c in run_ut_check(executor, target, tbl_bk, audit_fields):
+            ut_checks.append({"table": t_short, **c})
 
     nulls = check_new_column_nulls(executor, ts_v2, schema)
 
     # DQ 段（2026-09-14 补环）：重做后的 DQ 在变更现场真跑——上生产的检查，变更后必须执行验证。
     # 规则来源 load_dq_rules（arc_tmp 的 dq.json 优先[producer 重做装配后] / 旧 ts.dq_rules 兜底）；
-    # 数据不完整（对比/INSERT 有失败）时 DQ 结果无意义，跳过。DQ ALERT 同样阻断出口（闸口②' 人判）。
+    # 数据不完整（EXPLAIN/写路径有失败）时 DQ 结果无意义，跳过。DQ ALERT 同样阻断出口（闸口②' 人判）。
     dq_results = []
     dq_note = ""
     dq_rules_list = load_dq_rules(Path(args.ts).parent)
     if dq_rules_list:
-        if all(r["status"] == "PASS" for r in compare + inserts) and (compare or inserts):
+        if all(r["status"] == "PASS" for r in explains + writes) and (explains or writes):
             dq_results = run_dq_checks(executor, Path(args.ts).parent / "dq", dq_rules_list, {})
         else:
-            dq_note = "对比/INSERT 存在失败——DQ 未执行（修复后重跑自带）"
+            dq_note = "EXPLAIN/写路径存在失败——DQ 未执行（修复后重跑自带）"
             print(f"⏭️ DQ 跳过：{dq_note}", file=sys.stderr)
 
     Path(args.report).write_text(
-        render_report(ts_v2, alters, compare, inserts, nulls, dq_results), encoding="utf-8")
-    failed = any(r["status"] in ("FAIL", "ERROR", "FENCE_FAIL") for r in compare + inserts)
+        render_report(ts_v2, alters, explains, writes, ut_checks, nulls, dq_results),
+        encoding="utf-8")
+    failed = (any(r["status"] in ("FAIL", "ERROR") for r in explains + writes)
+              or any(c["status"] == "FAIL" for c in ut_checks))
     dq_alert = sum(1 for d in dq_results if d["status"] == "ALERT")
     dq_bad = sum(1 for d in dq_results if d["status"] in ("FAIL", "MISSING"))
     print(f"ut_report_opt: {args.report}")
     null_notes = [n for n in nulls if n["note"]]
-    print(f"compare: {len(compare)} 规则, inserts: {len(inserts)} 规则, "
-          f"result: {'FAIL' if failed else 'PASS'}")
+    print(f"explain: {len(explains)} 规则, writes: {len(writes)} 条, "
+          f"ut_checks: {len(ut_checks)} 项, result: {'FAIL' if failed else 'PASS'}")
     if dq_results or dq_note:
         print(f"DQ: ✅{sum(1 for d in dq_results if d['status'] == 'PASS')} 通过  "
               f"🚨{dq_alert} 告警  ❌{dq_bad} 失败/缺失")
