@@ -19,6 +19,22 @@ jsonschema = pytest.importorskip("jsonschema")
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = REPO / "skills" / "opt-pipe" / "schemas" / "ts_draft_v2.schema.json"
 EXAMPLE_PATH = REPO / "skills" / "opt-pipe" / "schemas" / "ts_draft_v2.example.json"
+FORWARD_SAMPLE_PATH = REPO / "skills" / "opt-pipe" / "schemas" / "ts_sample_forward.json"
+
+
+def _build_forward_sample() -> dict:
+    """真实正向 ts：增量工厂（双 extract+merge，过全量校验的合法 decisions）走
+    assemble_ts 真装配——契约包第四件「本体全貌靶」的再生函数（golden 守护用）。"""
+    from conftest import make_incremental_rs_input, make_incremental_decisions
+    sys.path.insert(0, str(REPO / "skills" / "dws-design" / "scripts"))
+    sys.path.insert(0, str(REPO / "skills" / "design-dev-shared" / "scripts"))
+    from assemble_ts import assemble_ts
+    rs = make_incremental_rs_input()
+    dd = make_incremental_decisions([
+        {"key": "update_time", "table": "ods_test_f", "seq": 1},
+        {"key": "dt", "table": "ods_pay_f", "seq": 2}])
+    out = assemble_ts(rs, dd)
+    return out[0] if isinstance(out, tuple) else out
 
 
 @pytest.fixture(scope="module")
@@ -126,12 +142,7 @@ class TestContractPackage:
         不是 v1 逆向装配器（待退役、有前科）。新建 ts 附 _reverse 即过 v2 契约
         ——证明契约目标形态锚定正确；assemble_ts 形态演进使此断言失败时=契约
         波次提示（样例文件随波次再核对）。"""
-        from conftest import make_rs_input, make_design_decisions
-        sys.path.insert(0, str(REPO / "skills" / "dws-design" / "scripts"))
-        sys.path.insert(0, str(REPO / "skills" / "design-dev-shared" / "scripts"))
-        from assemble_ts import assemble_ts
-        out = assemble_ts(make_rs_input(), make_design_decisions())
-        ts = out[0] if isinstance(out, tuple) else out
+        ts = _build_forward_sample()
         draft = dict(ts)
         draft["version"] = "2.0"
         draft["_reverse"] = {
@@ -139,3 +150,18 @@ class TestContractPackage:
             "warnings": [], "write_plan": [], "schedule_evidence": [], "evidence": {}}
         validator.validate(draft)
         assert "dq_rules" not in draft            # 新建 ts 无 DQ——v2 草稿同口径
+
+    def test_forward_sample_golden(self, validator):
+        """契约包第四件「本体全貌靶」（逆向侧点名要的真实正向 ts）golden 守护：
+        文件=真装配原样产出（不掺说明键），再生比对剥 volatile 的 generated_at。
+        assemble_ts 形态演进使本断言失败=契约波次提示（样本需随波次再生成）。"""
+        shipped = json.loads(FORWARD_SAMPLE_PATH.read_text(encoding="utf-8"))
+        regen = _build_forward_sample()
+        shipped.pop("generated_at", None), regen.pop("generated_at", None)
+        assert shipped == regen
+        # 全貌性：多规则增量链（extract×2+merge）+三桶+判断位有值（正向真产出特征）
+        assert list(shipped["rules"].keys()) == ["R0001", "R0002", "R0003"]
+        assert all(isinstance(r.get("fields"), dict) for r in shipped["rules"].values())
+        assert shipped["meta"]["grain"]
+        assert shipped["tables"]["dwb_test_f"]["business_key"]      # 表级化（2026-09-15）
+        assert shipped["rules"]["R0003"]["load_mode"] == "merge_into"

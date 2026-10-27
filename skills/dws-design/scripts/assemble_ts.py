@@ -2170,7 +2170,9 @@ def build_tables(rules: dict, decisions: dict, field_map: dict, rs_input: dict, 
         # 输入缺就补齐到标准格式，"有没有"不容商量；此前仅目标表补，中间表
         # tables 无审计而 DDL 自补/桶已补 → 三处列数分裂[ts 7/DDL 12/SELECT 11]内网实证）
         # tables 是 DDL 唯一源——补齐只在此处，assemble_ddl 纯投影不再自带追加
-        for aname in STANDARD_AUDIT_NAMES:
+        # （迭代模板 dict 非 NAMES set——set 跨进程序漂致同输入不同产出序，2026-10-27
+        # 契约 golden 样本抓出；成员关系两者等价）
+        for aname in STANDARD_AUDIT_TEMPLATE:
             spec = STANDARD_AUDIT_TEMPLATE.get(aname, {})
             existing_names = {f["target_field"].lower() for f in fields}
             if aname.lower() not in existing_names:
