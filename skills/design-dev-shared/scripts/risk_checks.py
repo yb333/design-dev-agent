@@ -12,6 +12,7 @@ class PrecheckResult:
         self.passed: list[str] = []
         self.warnings: list[str] = []
         self.errors: list[str] = []
+        self.pendings: list[str] = []   # 待人决策项（PENDING 三选——不进 return_code，opt 体检报告「待决策」层）
 
     @property
     def return_code(self) -> int:
@@ -29,6 +30,9 @@ class PrecheckResult:
 
     def add_error(self, msg: str):
         self.errors.append(msg)
+
+    def add_pending(self, msg: str):
+        self.pendings.append(msg)
 
     def summary(self) -> str:
         lines = [

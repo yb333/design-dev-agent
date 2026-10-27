@@ -195,6 +195,9 @@ def render_baseline_view_from_ts(ts: dict, alias_rows: Optional[List[dict]] = No
     lines += ["## 目标表字段数", ""]
     for tb, td in sorted((ts.get("tables") or {}).items()):
         lines.append(f"- {tb}: {len(td.get('fields') or [])} 字段")
+    cross = crosscheck_columns(ts)
+    if cross:
+        lines += ["", "## 制品交叉披露（DDL 列↔ETL 投影——G3 披露级，不阻断）", ""] + cross
     if ts.get("_baseline"):
         lines += ["", "- 本档为逆向入料（warnings/写入类型待定见入料审核与 exemptions.json）。"]
     return "\n".join(lines) + "\n"
@@ -793,6 +796,90 @@ def build_eval_context(ts: dict, add_fields: List[dict],
             "source_tables": rows}
 
 
+# 变更列（中文）→ 属性级行键（英文）——G1 未支持列对账用
+_CHANGE_COL_TO_KEY = {"映射规则": "mapping_rule", "映射表达式": "mapping_expression",
+                      "目标字段类型": "target_type", "目标字段中文名": "target_column_cn",
+                      "源表字段名": "source_column", "源表别名": "source_alias",
+                      "备注": "remark", "分组": "scene_group"}
+
+
+def crosscheck_change_vs_current(batch: List[dict], mapping: dict) -> List[dict]:
+    """G1（2026-10-27 批1·P1 三缺口）：变更记录↔当前态全刀对账——已支持刀（目标字段
+    类型/映射表达式）的 error 级对账在 extract_and_check 管辖，此处覆盖其余：
+    DELETE 行当前态应消失；未支持列的变更后≈当前态单元格。披露级 warn（新检查
+    默认披露级；对应刀扩展时升 error 收编）。"""
+    diags, attr_rows = [], mapping.get("attr") or []
+    for e in batch:
+        if e["page"] != "attr" or e["ctype"] not in ("DELETE", "MODIFY"):
+            continue
+        if e["ctype"] == "MODIFY" and (e["column"] or "").strip() in ("目标字段类型", "映射表达式"):
+            continue   # 已支持刀——error 级对账管辖
+        hits = [r for r in attr_rows
+                if (r.get("scene_group") or "").strip().lower() == e["group"]
+                and (r.get("target_column") or "").strip().lower() == e["key"]]
+        if e["ctype"] == "DELETE":
+            if hits:
+                diags.append({"level": "warn", "code": "delete_row_still_present",
+                              "message": f"变更记录序号 {e['seq']!r}：DELETE {e['key']!r} 但当前态"
+                                         f"页签该行仍在（台账执行时间线存疑——先删后加？漏执行？）"})
+        else:
+            col = (e["column"] or "").strip()
+            after = (e["after"] or "").strip()
+            cur = str(hits[0].get(_CHANGE_COL_TO_KEY.get(col, col)) or "").strip() if hits else ""
+            if after and cur and after != cur:
+                diags.append({"level": "warn", "code": "modify_after_mismatch_disclose",
+                              "message": f"变更记录序号 {e['seq']!r}：{e['key']!r} 的「{col}」"
+                                         f"变更后 {after!r} ≠ 当前态 {cur!r}（未支持刀——披露供人核）"})
+    return diags
+
+
+def ledger_ghost_fields(facts: dict, mapping: dict, batch: List[dict]) -> List[dict]:
+    """G2（批1·P1 三缺口）：baseline→mapping 字段消失反向对账——漏标扫描（mapping→
+    baseline）的对称面：baseline 有、台账当前态无、且无 DELETE 行声明=台账漂移
+    （缺页/漏记 DELETE）。披露级 warn；与入料时 ledger_lag（对制品）互补（此处每次
+    优化对档案跑）。"""
+    declared = {(r.get("target_column") or "").strip().lower()
+                for r in (mapping.get("attr") or []) if r.get("target_column")}
+    deleted = {e["key"] for e in batch if e["page"] == "attr" and e["ctype"] == "DELETE"}
+    ghost = sorted(f for f in (facts.get("target_fields") or set())
+                   if f not in declared and f not in deleted)
+    if ghost:
+        return [{"level": "warn", "code": "ledger_ghost_fields",
+                 "message": f"baseline 有 {len(ghost)} 个字段不在 mapping 当前态且无 DELETE 行"
+                            f"（台账缺页/漏记 DELETE）：{', '.join(ghost[:10])}"
+                            + ("…" if len(ghost) > 10 else "")}]
+    return []
+
+
+def crosscheck_columns(ts: dict) -> List[str]:
+    """G3（批1·P1 三缺口）：DDL 列↔ETL 投影列交叉披露——tables（DDL 来）与规则桶
+    投影并集（SQL 来）的列差（多列=DDL 有列无规则产出；缺列=产出列不在 DDL——
+    生产在跑则为跨集群/视图特例）。渲染进 baseline_view 披露段，两路径共用。"""
+    from run_ut import rule_output_fields
+    rules = ts.get("rules") or {}
+    out = []
+    for t, td in sorted((ts.get("tables") or {}).items()):
+        declared = {str(f.get("target_field") or "").lower()
+                    for f in (td.get("fields") or []) if f.get("target_field")}
+        if not declared:
+            continue
+        produced: set = set()
+        for r in rules.values():
+            if (r.get("target_table") or "").split(".")[-1].lower() != str(t).lower():
+                continue
+            produced |= {str(x).lower() for x in rule_output_fields(r)}
+        missing = sorted(declared - produced)
+        extra = sorted(produced - declared)
+        if missing or extra:
+            parts = []
+            if missing:
+                parts.append(f"DDL 有列无规则产出 {missing[:8]}")
+            if extra:
+                parts.append(f"规则产出列不在 DDL {extra[:8]}")
+            out.append(f"- {t}: " + "；".join(parts))
+    return out
+
+
 def build_change_request(facts: dict, version: str, add_fields: List[dict],
                          new_sources: List[dict], modify_fields: List[dict],
                          modify_logic_fields: List[dict],
@@ -870,6 +957,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     add_fields, new_sources, modify_fields, modify_logic_fields, unsupported, diags = \
         extract_and_check(rest, renames, mapping, facts, version, rs_section)
     diags = static_diags + diags
+    # G1/G2 披露对账（2026-10-27 批1·P1 三缺口——披露级 warn，新检查默认披露级规则；
+    # 已支持刀的 error 级对账在 extract_and_check 管辖，此处覆盖其余）
+    if mapping is not None:
+        diags += crosscheck_change_vs_current(batch, mapping)
+        diags += ledger_ghost_fields(facts, mapping, batch)
 
     errors = [d for d in diags if d["level"] == "error"]
     warns = [d for d in diags if d["level"] == "warn"]
@@ -886,6 +978,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     build = ddlc / "build"
     arc_tmp = ddlc / "archive_tmp"
     import shutil
+    # 上次体检报告抢救（清场前——体检报告 diff 增量的基线，precheck_opt 消费）
+    _prev_health = build / "_internal" / "input_health_report.md"
+    if _prev_health.exists():
+        shutil.copy2(_prev_health, ddlc / "last_input_health.md")
     shutil.rmtree(build, ignore_errors=True)
     shutil.rmtree(arc_tmp, ignore_errors=True)
     out = build / "_internal"
@@ -897,9 +993,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"build: {build}（增量现场，清场重建）")
     print(f"archive_tmp: {arc_tmp}（临时档案=档案副本起步）")
 
-    if errors:
-        print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断，{len(warns)} 项 warn。", file=sys.stderr)
-        return 2
     # baseline_view 补产（designer 契约：三段式入口 ①档案②收档 无 json 契约——decisions
     # 语言地图从档案 ts 渲染+别名对照；③json 入料的完整版已存在则保留）
     view_path = out / "baseline_view.md"
@@ -923,15 +1016,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             json.dumps(eval_ctx, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"eval_context: {out / 'eval_context.json'}"
               f"（新 JOIN 评估通道：explore --rs 此文件 --eval；工作单见 change_request.eval_worksheet）")
+    # change_request **无条件落盘**（批1 体检报告：阻断项随件内联 `_blocked_errors`——
+    # precheck_opt 降级跑独立项并入一份报告，人一次收全；`_blocked` 残次产物不得进设计
+    # [SKILL 铁律+precheck exit 2 双保险]）
     cr = build_change_request(facts, version, add_fields, new_sources, modify_fields,
                               modify_logic_fields, unsupported, batch, renames, rs_section,
                               {"mapping": str(mapping_path), "rs": str(rs_path),
                                "ts_baseline": str(args.ts_baseline)},
                               placement_hints=build_placement_hints(ts_baseline, add_fields),
                               eval_worksheet=worksheet_md)
+    cr["_blocked"] = bool(errors)
+    cr["_blocked_errors"] = errors
+    cr["_warns"] = warns
     (out / "change_request.json").write_text(
         json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"change_request: {out / 'change_request.json'}")
+    print(f"change_request: {out / 'change_request.json'}"
+          + ("（含 _blocked_errors——体检报告将并入）" if errors else ""))
+    if errors:
+        print(f"OPT_PRECHECK_BLOCKED：{len(errors)} 项阻断，{len(warns)} 项 warn。", file=sys.stderr)
+        return 2
     print(f"version: {version}, add_fields: {len(add_fields)}, new_sources: {len(new_sources)}, "
           f"modify_type: {len(modify_fields)}, modify_logic: {len(modify_logic_fields)}, "
           f"unsupported: {len(unsupported)}, warns: {len(warns)}")

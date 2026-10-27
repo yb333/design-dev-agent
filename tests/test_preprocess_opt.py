@@ -361,7 +361,7 @@ class TestMainEndToEnd:
                        changes)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
-        assert rc == 0
+        assert rc in (0, 1)   # 1=G2 台账缺页披露（最小夹具不声明存量字段——预期）
         cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
         assert cr["version"] == "202610"
         assert [f["field"] for f in cr["fields"]] == ["channel_name"]
@@ -538,7 +538,7 @@ class TestInputSurfaceE2E:
                        changes, rs_md=rs_md)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
-        assert rc == 0
+        assert rc in (0, 1)   # 1=G2 披露（最小夹具不声明存量字段——预期）
         cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
         hints = {h["field"]: h for h in cr["placement_hints"]}
         # pay_type 源表 ods_trade_order_di：只可见于中间规则 R0001（产 tmp）——穿中间表路径
@@ -569,7 +569,7 @@ class TestEvalWorksheet:
         pkg = make_pkg(tmp_path / "pkg", [ent(), ent_c], [attr()], changes)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
-        assert rc == 0
+        assert rc in (0, 1)   # 1=G2 披露（最小夹具——预期）
         ctx_path = tmp_path / "build" / "_internal" / "eval_context.json"
         assert ctx_path.exists()
         ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
@@ -590,10 +590,100 @@ class TestEvalWorksheet:
                              scol="pay_type")], changes, rs_md=rs_md)
         rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
                    "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
-        assert rc == 0
+        assert rc in (0, 1)   # 1=G2 披露（最小夹具——预期）
         assert not (tmp_path / "build" / "_internal" / "eval_context.json").exists()
         cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
         assert cr["eval_worksheet"] == ""
+
+
+class TestHealthReport:
+    """批1 体检报告（跨脚本短路修复+G1/G2 披露）：阻断仍落 change_request（_blocked_
+    errors 随件内联，precheck 降级并入一份报告）+ 新检查默认披露级。"""
+
+    def test_blocked_still_writes_cr(self, tmp_path, demo_baseline):
+        """资产不一致（阻断）→ change_request 仍落盘带 _blocked_errors——人一次收全。"""
+        arc = _opt_ready(tmp_path, demo_baseline)
+        pkg = make_pkg(tmp_path / "pkg", [ent(target="dwb_other_asset_d")], [attr()],
+                       STD_CHANGES)
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc == 2
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert cr["_blocked"] is True
+        assert any(e["code"] == "asset_table_mismatch" for e in cr["_blocked_errors"])
+
+    def test_g1_delete_row_still_present_disclosed(self, tmp_path, demo_baseline):
+        """G1：变更记录标 DELETE 但当前态该行仍在 → 披露 warn（台账时间线存疑）。"""
+        arc = _opt_ready(tmp_path, demo_baseline)
+        changes = [chg(1, "2026-10-14", "attr", "default|order_id", "资产字段", "DELETE")]
+        pkg = make_pkg(tmp_path / "pkg", [ent()],
+                       [attr(tcol="order_id", alias="a", stable="ods_trade_order_di",
+                             scol="order_id")], changes)
+        main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+             "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert any(w["code"] == "delete_row_still_present" for w in cr["_warns"])
+
+    def test_g2_ghost_fields_disclosed(self, tmp_path, demo_baseline):
+        """G2：baseline 有、台账无、无 DELETE 行 → 台账缺页披露（漏标扫描的对称面）。"""
+        arc = _opt_ready(tmp_path, demo_baseline)
+        pkg = make_pkg(tmp_path / "pkg", [ent()], [attr()], STD_CHANGES)
+        main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+             "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        ghost = next(w for w in cr["_warns"] if w["code"] == "ledger_ghost_fields")
+        assert "order_id" in ghost["message"]     # demo baseline 字段未声明
+
+    def test_g3_crosscheck_in_view(self):
+        """G3：DDL 列↔ETL 投影列差渲染进 view 披露段（两路径共用）。"""
+        from preprocess_opt import render_baseline_view_from_ts
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}}},
+              "rules": {"R0001": {"target_table": "dws.t_f",
+                                  "fields": {"direct": ["a.x AS x"]}}},
+              "tables": {"t_f": {"fields": [{"target_field": "x"}, {"target_field": "y"}]}}}
+        view = render_baseline_view_from_ts(ts)
+        assert "制品交叉披露" in view and "无规则产出" in view and "y" in view
+
+
+class TestPrecheckHealthReport:
+    """precheck_opt 聚合报告：上游阻断并入+三层分组+diff 增量+残次产物 exit 2。"""
+
+    def _cr(self, tmp_path, blocked=None, warns=None):
+        out = tmp_path / "build" / "_internal"
+        out.mkdir(parents=True, exist_ok=True)
+        cr = {"fields": [], "modify_type_fields": [], "_blocked": bool(blocked),
+              "_blocked_errors": blocked or [], "_warns": warns or []}
+        (out / "change_request.json").write_text(json.dumps(cr, ensure_ascii=False),
+                                                 encoding="utf-8")
+        return out / "change_request.json"
+
+    def test_blocked_cr_aggregated_and_exit2(self, tmp_path, demo_baseline):
+        from precheck_opt import main as pc_main
+        arc = _opt_ready(tmp_path, demo_baseline)
+        cr_path = self._cr(tmp_path, blocked=[{"code": "asset_mismatch", "message": "串包"}])
+        rc = pc_main(["--change-request", str(cr_path),
+                      "--ts-baseline", str(arc / "ts.json"), "--outdir", str(cr_path.parent)])
+        assert rc == 2                       # 残次 change_request 不进设计
+        report = (cr_path.parent / "input_health_report.md").read_text(encoding="utf-8")
+        assert "必须修" in report and "asset_mismatch" in report and "串包" in report
+
+    def test_diff_increment_marks_new(self, tmp_path):
+        from precheck_opt import write_health_report
+        from risk_checks import PrecheckResult
+        out = tmp_path / "build" / "_internal"
+        out.mkdir(parents=True, exist_ok=True)
+        cr_path = out / "change_request.json"
+        # 上轮报告（ddlc/last_input_health.md——preprocess 清场前抢救位）
+        (tmp_path / "last_input_health.md").write_text(
+            "# 输入体检报告\n\n▶ 带病可继续\n\n- [ledger_ghost_fields] baseline 有 2 个字段不在\n",
+            encoding="utf-8")
+        r = PrecheckResult()
+        r.add_warn("[ledger_ghost_fields] baseline 有 2 个字段不在")
+        r.add_warn("[新检查] 本轮新冒的披露")
+        write_health_report(out, [], [], r, cr_path)
+        text = (out / "input_health_report.md").read_text(encoding="utf-8")
+        assert "▲新增 1" in text and "▲ [新检查] 本轮新冒的披露" in text
+        assert "✓消失 0" in text
 
 
 class TestWorkspaceReady:

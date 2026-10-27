@@ -80,8 +80,9 @@ python PIPE_SCRIPTS/preprocess_opt.py \
 - 版本锚点：默认取 mapping「变更记录」页签最新批次时间归一 YYYYMM（--version 可显式重选历史批次）；
 - 变更提取：mapping「变更记录」页签（v3 八列结构化——历史批次累积，按变更时间归一 YYYYMM 取最新）——属性级 ADD（变更列=`资产字段`）= 新增字段候选；**rename（先删后加对）/MODIFY/DELETE/实体级 ADD/列级 ADD 识别归类并报告"待扩展"，不是非法输入**；
 - exit 2 = 阻断（冲突/别名悬空/资产不一致[已按 I/F 镜像归一比较]/版本定位失败）→ 报告人改输入，不自动修；
-- exit 1 = 有 warn（漏标漂移/RS 未提及）→ 展示后**直接继续**（信息性告知，随 change_request 汇进闸口①'材料）；
-- **现场就绪**（脚本做确定性动作）：清场重建 `{build}/`（上次残留不混入本次）+ `cp -r {arc} {arc_tmp}`（临时档案=档案副本起步）。
+- exit 1 = 有 warn（漏标漂移/RS 未提及/**G1 变更记录↔当前态披露/G2 台账缺页**——新检查默认披露级）→ 展示后**直接继续**（信息性告知，随 change_request._warns 汇进体检报告）；
+- **阻断时 change_request 仍落盘**（`_blocked_errors` 随件内联）——步骤 1b 降级跑独立项、聚合一份《输入体检报告》，人一次收全（修输入循环从 N 次降到 1 次）；
+- **现场就绪**（脚本做确定性动作）：清场重建 `{build}/`（上次残留不混入本次；**清场前抢救上轮体检报告至 `{ddlc}/last_input_health.md`**——diff 增量基线）+ `cp -r {arc} {arc_tmp}`（临时档案=档案副本起步）。
 - 产出 `change_request.json`（含 version/变更记录摘要——闸口①'把简述与提取字段并排亮给人扫漏标）。
 
 ## 步骤 1b：优化预检（只检新增子集，对齐 new-pipe 1b）
@@ -95,7 +96,11 @@ python PIPE_SCRIPTS/precheck_opt.py \
 - 检查项：新增字段命名规范 / 源字段连库存在性+类型对账（**以库为准**修正回填）/ 类型风险决策（人三选：转换/不加/返源端）/ 值域探测（整数位溢出退 BA、字符超长披露）/ 新来源 JOIN 键类型对账（三选：转换/改关联键/接受）。存量零预检（围栏+双跑兜底）。
 - stdout `TYPE_RISK_PENDING` / `JOIN_TYPE_RISK_PENDING` → **用 question 收集决策再填**（同 new-pipe 1b：`python SHARED_SCRIPTS/fill_type_risk_decision.py --decision {build}/_internal/type_risk_decision.yaml ...`），填完**重跑本步**放行。批量按类型对归并提问；`返源端`/`改关联键` = **本轮终止**（修 mapping/源端后重跑步骤 1）。
 - 决策回写 change_request（fields『decision』标记 + join_type_decisions）——designer 见标记勿推翻方向。
-- exit 2 = 阻断（命名/存在性/决策未过）→ 按 diff 报告人改输入，不自动修；exit 1 = warn 直接继续。无库降 warn（UT 兜底）。
+- **《输入体检报告》**（批1：跨脚本短路修复）——本步聚合产出 `{build}/_internal/input_health_report.md`：
+  三层分组（▶必须修[含步骤1 阻断项并入]/▶待决策[PENDING 归并问]/▶带病可继续[披露]）+
+  增量段（▲新增/✓消失 vs 上轮）——人一次收全问题；**`_blocked` 残次 change_request 本步
+  exit 2 不进设计**（与 SKILL 铁律双保险）。
+- exit 2 = 阻断（命名/存在性/决策未过/**上游阻断并入**）→ 按 diff 报告人改输入，不自动修；exit 1 = warn 直接继续。无库降 warn（UT 兜底）。
 
 ## 步骤 2：designer（优化模式，显式声明）
 
@@ -138,9 +143,11 @@ python PIPE_SCRIPTS/gate_summary_opt.py \
   --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json \
   --change-request {build}/_internal/change_request.json --output {build}/gate_summary_opt.md
 ```
-- **闸口①'（question，三问）**：① 落位确认（拿 gate_summary_opt 的逐字段落位表："X 挂 R00xx，新 JOIN T，中间表不动/加列——确认？"）
-  ② 回刷选择（增量基线才有；RS 已预填则确认）③ 建议追加的变更（如有）。
-  **分场景模板**：围栏/预检全干净 → 三问标准选项（确认/修改/放弃）；**检出过问题**（围栏越界/类型风险决策/值域披露/新 JOIN 类型）→ 四选项，必含**"源端输入问题→退 BA（修 mapping/源数据后重来）"**一等选项（现实大概率是源端问题；与 new-pipe 闸口①同款）。
+- **闸口①'（question，四问）**：① 落位确认（拿 gate_summary_opt 的逐字段落位表："X 挂 R00xx，新 JOIN T，中间表不动/加列——确认？"）
+  ② 回刷选择（增量基线才有；RS 已预填则确认）③ 建议追加的变更（如有）
+  ④ **带病确认**（体检报告带病层有 ▲新增/恶化时才问："已知披露 N 条，确认带病继续？"
+  ——无变化不重复弹；确认留痕，恶化有据）。
+  **分场景模板**：围栏/预检全干净 → 四问标准选项（确认/修改/放弃）；**检出过问题**（围栏越界/类型风险决策/值域披露/新 JOIN 类型）→ 四选项，必含**"源端输入问题→退 BA（修 mapping/源数据后重来）"**一等选项（现实大概率是源端问题；与 new-pipe 闸口①同款）。
   非交互跳过须显式声明（只豁免流程闸口；人工决策项照常阻断上报）。
 
 ## 步骤 3.5：DQ 影响分析 + producer 重做（闸口①'窗口内，与 new-pipe 步骤 2.5 对称）

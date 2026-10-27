@@ -166,6 +166,8 @@ def _check_join_risks(cr: dict, ts: dict, tables: dict, outdir: Path,
     else:
         result.add_error(f"检测到新来源关联键类型跨大类（{len(risks)} 对），待人工决策")
     _generate_join_risk_skeleton(decision, risks)
+    result.add_pending(f"新来源关联键类型跨大类 {len(risks)} 对——三选（转换/改关联键/接受），"
+                       f"决策文件 {decision.name}（fill 后重跑放行）")
     print("JOIN_TYPE_RISK_PENDING " + json.dumps(
         {"pairs": risks, "decision_file": str(decision)}, ensure_ascii=False))
 
@@ -211,6 +213,8 @@ def _check_type_risks(cr: dict, outdir: Path, result: PrecheckResult) -> None:
     else:
         result.add_error(f"检测到类型风险待人工决策（决策文件将生成于：{decision}）")
     _generate_type_risk_skeleton(decision, batch, individual)
+    result.add_pending(f"类型风险待决策（批量 {len(batch)} / 单独 {len(individual)} 项）——三选"
+                       f"（加安全处理/不加/返源端），决策文件 {decision.name}（fill 后重跑放行）")
     print("TYPE_RISK_PENDING " + json.dumps(
         {"batch": batch, "individual": individual, "decision_file": str(decision)},
         ensure_ascii=False))
@@ -282,6 +286,58 @@ def _check_modify_type_risks(cr: dict, outdir: Path, result: PrecheckResult) -> 
             for p in pending), encoding="utf-8")
     print("TYPE_MODIFY_RISK_PENDING " + json.dumps(
         {"fields": pending, "decision_file": str(decision)}, ensure_ascii=False))
+    result.add_pending(f"类型修改方向风险 {len(pending)} 项——三选（确认转换/重选兼容类型/"
+                       f"放弃该条变更），决策文件 {Path(decision).name}（fill 后重跑放行）")
+
+
+def _bullet_lines(report_path: Path) -> set:
+    """体检报告的问题行集合（diff 基线——只取条目行，结论行/计数不参与）。"""
+    if not report_path.exists():
+        return set()
+    return {ln.strip() for ln in report_path.read_text(encoding="utf-8").splitlines()
+            if ln.strip().startswith(("- ", "  - "))}
+
+
+def write_health_report(outdir: Path, blocked: list, cr_warns: list,
+                        result: PrecheckResult, cr_path: Path) -> Path:
+    """《输入体检报告》（2026-10-27 批1：跨脚本短路修复——preprocess 阻断项随
+    change_request._blocked_errors 并入，本步独立项照跑；三层分组[必须修/人决策/
+    带病可继续]；diff 增量 vs ddlc/last_input_health.md[preprocess 清场前抢救的上轮
+    报告]——新增/恶化 ▲ 标注进闸口①'带病确认，无变化不重复弹）。"""
+    must_fix = [f"[{e.get('code', '?')}] {e.get('message', e if isinstance(e, str) else '')}"
+                for e in blocked] + list(result.errors)
+    pending = list(result.pendings)
+    disclose = [f"[{w.get('code', '?')}] {w.get('message', '')}" for w in (cr_warns or [])]
+    disclose += list(result.warnings)
+    verdict = (f"拦——必须修 {len(must_fix)} 处" if must_fix else "过") + \
+        f"｜待决策 {len(pending)} 项｜带病披露 {len(disclose)} 条"
+    lines = ["# 输入体检报告（一次全量；重跑只看增量段）", "",
+             f"═══ 结论：{verdict} ═══", ""]
+    if blocked:
+        lines += ["▶ 必须修·上游（preprocess_opt 阻断项——已并入本报告，修 mapping 后"
+                  "重跑 preprocess+precheck 一次收增量）", ""]
+    if must_fix:
+        lines += ["▶ 必须修（阻断——影响本次变更）", ""] + [f"- {m}" for m in must_fix] + [""]
+    if pending:
+        lines += ["▶ 待决策（question 窗口按类型归并问——fill 后重跑本步放行）", ""] + \
+                 [f"- {m}" for m in pending] + [""]
+    if disclose:
+        lines += ["▶ 带病可继续（不影响本次——闸口①'带病确认仅弹 ▲新增/恶化）", ""] + \
+                 [f"- {m}" for m in disclose] + [""]
+    # diff 增量（vs 上轮——preprocess 清场前抢救至 ddlc/last_input_health.md）
+    last = cr_path.parent.parent.parent / "last_input_health.md"
+    prev = _bullet_lines(last)
+    if prev:
+        cur_bullets = {ln.strip() for ln in lines if ln.strip().startswith("- ")}
+        added = [b[2:] for b in sorted(cur_bullets - prev)]
+        gone = sorted({p for p in prev if p.startswith("- ")} - cur_bullets)
+        lines += ["", "── 增量（vs 上轮）──", f"▲新增 {len(added)} / ✓消失 {len(gone)}"]
+        lines += [f"  ▲ {m}" for m in added[:10]]
+        lines += [f"  ✓ {m}" for m in gone[:5]]
+    report = outdir / "input_health_report.md"
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"input_health_report: {report}（{verdict}）")
+    return report
 
 
 def main(argv=None) -> int:
@@ -331,6 +387,16 @@ def main(argv=None) -> int:
 
     # 决策有回写（fields[].decision / join_type_decisions）→ 落盘 change_request
     cr_path.write_text(json.dumps(cr, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 体检报告（批1：上游阻断项[_blocked_errors]并入+独立项照跑=跨脚本短路修复；
+    # 上游阻断存在 → 无论本步结果一律 exit 2——残次 change_request 不得进设计）
+    write_health_report(outdir, cr.get("_blocked_errors") or [],
+                        cr.get("_warns") or [], result, cr_path)
+    if cr.get("_blocked"):
+        print(f"OPT_PRECHECK_BLOCKED（并入体检报告）：上游阻断 "
+              f"{len(cr.get('_blocked_errors') or [])} 项——修输入后重跑 preprocess+precheck",
+              file=sys.stderr)
+        return 2
 
     print(result.summary())
     return result.return_code
