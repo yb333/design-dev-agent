@@ -131,8 +131,18 @@ def render_topology_sections(ts: dict, alias_rows: Optional[List[dict]] = None) 
         grain = f"{grain.get('input', '')} → {grain.get('output', '')}".strip(" →")
     lines = ["## 锚点", "",
              f"- 粒度: {grain or EMPTY_MARK}",
-             f"- business_key: {', '.join(bk) if bk else EMPTY_MARK}", "",
-             "## 规则拓扑", ""]
+             f"- business_key: {', '.join(bk) if bk else EMPTY_MARK}"]
+    if not bk:
+        # 旁证随行（批0-③ 2026-10-27：判断位留空防误信，机械旁证亮在旁边供确认采纳）。
+        # 强度：MERGE ON 键=强（upsert 语义要求目标侧唯一，即当初认定的行身份）；
+        # 分布键=弱（无唯一性语义，只证高基数选择）不列。
+        on_keys = [f"{code}·{(r.get('write_condition') or '').strip()}"
+                   for code, r in sorted((ts.get("rules") or {}).items())
+                   if r.get("load_mode") in ("merge_into", "update")
+                   and (r.get("write_condition") or "").strip()]
+        if on_keys:
+            lines.append(f"  - 旁证（强·MERGE ON 键=行身份，确认即采纳）: {'；'.join(on_keys[:3])}")
+    lines += ["", "## 规则拓扑", ""]
     rules = ts.get("rules") or {}
     for code in sorted(rules, key=lambda c: (rules[c].get("exec_sequence", 1), c)):
         r = rules[code]

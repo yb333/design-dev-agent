@@ -79,10 +79,26 @@ class TestDemoFullCase:
     def test_semantic_gaps_recorded(self, demo):
         _, gaps = build_ts_baseline(demo)
         codes = {g["code"] for g in gaps}
+        # distribution_key 已出空位集（2026-10-27 批0-①：物理事实回收进本体，
+        # 不再当语义空位——契约 table_props 为 DDL 投影无损再生而设计）
         assert {"business_key", "join_safety", "step_type", "field_logics",
-                "distribution_key", "init_section"} <= codes
+                "init_section"} <= codes
+        assert "distribution_key" not in codes
         assert not any(g["code"] == "load_mode_pending" for g in gaps), \
             "demo 全量链路不应有写入类型待定"
+
+    def test_physical_props_recovered(self):
+        """批0-①：分布键/分区从 facts 回收——此前硬编码 ROUNDROBIN+留空=丢信息
+        +DDL 投影断损；gap 错定性"语义空位"一并退役。（v13 夹具带 HASH(cust_id)）"""
+        v13 = json.loads((FIXTURES / "asset_facts_v13_full.json").read_text(encoding="utf-8"))
+        ts, gaps = build_ts_baseline(v13)
+        t = ts["tables"]["dwb_cust_asset_d"]
+        assert t["distribution_key"] == ["cust_id"]
+        assert t["distribute_type"] == "HASH"
+        assert not any(g["code"] == "distribution_key" for g in gaps)
+        # 无分布键表（缺 DDL/无表尾子句）不误造——契约：is_distribute_key 恒 false
+        assert ts["tables"]["tmp_cust_asset_detail"]["distribution_key"] == []
+        assert ts["tables"]["tmp_cust_asset_detail"]["distribute_type"] == "ROUNDROBIN"
 
     def test_dq_rules_mapped(self, demo):
         ts, _ = build_ts_baseline(demo)

@@ -18,6 +18,7 @@
 """
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -158,17 +159,24 @@ def build_tables(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], Li
                                   for ps in ln.get("physical_sources", [])],
                 "design_logic": "",
             })
+        # 物理属性回收（2026-10-27 批0-①：契约 table_props 本就为「档案 DDL 走 ts
+        # 投影无损再生」设计——此前留空+硬编码 ROUNDROBIN=投影断损+丢信息，gap 还
+        # 错定性为"语义空位"〔物理事实非判断位〕。is_distribute_key 字段级权威与
+        # distribute_columns 的一致性归逆向自检域）
+        props = ct.get("table_props") or {}
+        dist_key = [f["name"] for f in fields_def if f.get("is_distribute_key")]
+        by = str(props.get("distribute_by") or "").strip()
+        dist_type = (re.split(r"[\s(]+", by, 1)[0].upper() if by
+                     else ("HASH" if dist_key else "ROUNDROBIN"))
         ts_tables[short] = {
             "type": table_roles[written_short[short]],
-            "distribution_key": [],        # 语义位：物理决策留空
-            "distribute_type": "ROUNDROBIN",
-            "partition": "",
+            "distribution_key": dist_key,
+            "distribute_type": dist_type,
+            "partition": str(props.get("partition_by") or ""),
             "storage": "column",
             "logical_group": "",
             "fields": fields,
         }
-        gaps.append({"code": "distribution_key", "target": short,
-                     "reason": "逆向基线语义空位：分布键为物理设计决策"})
     return ts_tables, gaps
 
 

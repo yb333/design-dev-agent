@@ -447,6 +447,21 @@ class TestBaselineViewDecisionsLanguage:
         assert "▢未声明（语义空位）" in view               # 粒度/主键空位标注
         assert "JOIN: （无声明）" in view
 
+    def test_merge_on_evidence_when_bk_empty(self):
+        """批0-③：business_key 空位时 MERGE ON 键旁证随行（强旁证——upsert 行身份）；
+        判断位不填防消费者误信。有 bk 则不出旁证行。"""
+        from preprocess_opt import render_baseline_view_from_ts
+        ts = {"meta": {"target": {"f_table": {"schema": "dws", "table": "t_f"}}},
+              "rules": {"R0001": {"target_table": "dws.t_f", "load_mode": "merge_into",
+                                  "write_condition": "T.order_id=T1.order_id"}},
+              "tables": {}}
+        view = render_baseline_view_from_ts(ts)
+        assert "business_key: ▢未声明（语义空位）" in view
+        assert "旁证（强·MERGE ON" in view and "R0001·T.order_id=T1.order_id" in view
+        ts["meta"]["business_key"] = ["order_id"]
+        view2 = render_baseline_view_from_ts(ts)
+        assert "旁证" not in view2                          # 有声明不出旁证
+
 
 class TestBuildAliasMap:
     """别名对照（落笔权威=SQL 实际别名）：确定性查表归脚本——designer 禁读 SQL 原文。"""
