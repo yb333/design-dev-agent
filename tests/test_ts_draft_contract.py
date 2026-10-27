@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """ts 草稿契约 v2 schema 测试（2026-10-27 批2：契约方向反转——权威=消费方，逆向侧 vendor）。
 
-契约设计稿的可校验性守卫：schema 可载入/最小合法草稿过验/关键必填段缺失被拦
-（_reverse 审核材料段/物理属性恢复槽位/三桶结构）。逆向侧实现前，本测试守的是
-契约文件本身不漂（与 baseline_v1 的 vendor 联锁同精神——彼侧 vendor 后由彼侧联锁盯）。
+契约交付包三件套的可校验性守卫：①schema 可载入/关键段必填；②**合格样例**
+（schemas/ts_draft_v2.example.json）过 schema 验——逆向侧的生成参照物自身合法；
+③**形态衔接**：v1 装配器真实产出（build_ts_baseline → normalize_ts 标准形态 →
+剥 dq_rules → 附 _reverse）也过 schema——证明 v2 契约与 v1 现产形态兼容，
+形态演进（改 assemble_ts_baseline/ts_compat）会在此被拦=契约波次提示。
+ts-template.json 为完整结构权威（人读），schema 守契约必填面，消费链校验是终局守。
 """
 import json
 from pathlib import Path
@@ -14,6 +17,7 @@ jsonschema = pytest.importorskip("jsonschema")
 
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = REPO / "skills" / "opt-pipe" / "schemas" / "ts_draft_v2.schema.json"
+EXAMPLE_PATH = REPO / "skills" / "opt-pipe" / "schemas" / "ts_draft_v2.example.json"
 
 
 @pytest.fixture(scope="module")
@@ -98,3 +102,42 @@ class TestTsDraftContract:
         d["_reverse"]["evidence"]["business_key"][0]["source"] = "distribute_by"
         with pytest.raises(jsonschema.ValidationError):
             validator.validate(d)
+
+
+class TestContractPackage:
+    """契约交付包三件套：schema（契约必填面）+ ts-template.json（完整结构权威）+
+    合格样例（逆向侧生成参照）。"""
+
+    def test_shipped_example_valid(self, validator):
+        example = json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
+        validator.validate(example)
+        # 样例必须演示关键契约面：恢复槽位有值+判断位留空+旁证双来源+三桶标准形态
+        assert example["tables"]["dwb_cust_asset_d"]["distribution_key"] == ["cust_id"]
+        assert example["meta"]["grain"] == "" and example["meta"]["business_key"] == []
+        assert {e["source"] for e in example["_reverse"]["evidence"]["business_key"]} == \
+            {"merge_on", "dq_pk_check"}
+        assert all(isinstance(r["fields"], dict) and "direct" in r["fields"]
+                   for r in example["rules"].values())
+        assert "dq_rules" not in example          # v2 无 DQ——独立 dq.json 通道
+
+    def test_v1_pipeline_form_compatible(self, validator):
+        """形态衔接：v1 装配器真实产出过 v2 契约——证明 v2 契约与 v1 现产形态兼容；
+        assemble_ts_baseline/ts_compat 形态演进使此断言失败时=契约波次提示
+        （样例文件需随波次再生成）。"""
+        import sys
+        for d in ("skills/opt-pipe/scripts", "skills/design-dev-shared/scripts"):
+            sys.path.insert(0, str(REPO / d))
+        from assemble_ts_baseline import build_ts_baseline
+        from ts_compat import normalize_ts
+        facts = json.loads((REPO / "tests/fixtures/opt/asset_facts_v13_full.json")
+                           .read_text(encoding="utf-8"))
+        ts, _ = build_ts_baseline(facts)
+        draft = normalize_ts(ts)
+        draft.pop("dq_rules", None)               # v1 特有 legacy——v2 DQ 走 dq.json
+        draft["version"] = "2.0"
+        draft["_reverse"] = {
+            "self_check": {"verdict": "pass", "structural_count": 0, "noise_count": 0},
+            "warnings": [],
+            "write_plan": [{"rule_code": c} for c in (facts.get("rules") or [])],
+            "schedule_evidence": [], "evidence": {}}
+        validator.validate(draft)
