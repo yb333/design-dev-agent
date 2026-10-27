@@ -170,9 +170,11 @@ N 系校验适用性：新字段适用的等价物已补（N36→引用门禁 / 
 
 distribution_key/table_props 回收（facts 已带 is_distribute_key，v1 装配丢弃+gap 错定性"语义空位：物理设计决策"——物理事实被当语义判断扔）。
 
-### 11.5 实施排期（方案见讨论记录，逐批拍板）
+### 11.5 实施排期（2026-10-27 批2 契约定稿后更新）
 
-批0 v1 顺手修（本仓）→ 批1 v2 契约设计稿（本仓 schema+消费侧预设计；12 章 v3.2 建议第一案例反馈后校准再发）→ 批2/3 双仓实施（逆向装配实现+我方切换[audit 消费草稿/建档瘦身/view 去 SQL 重解析——ts.joins 直读]/v1 facts 双支持期兼容路由）→ 批4 v1 退役时间表。
+批0 v1 顺手修 ✅（4ae0a9f）→ 批1 体检报告 ✅（d14d50c）→ **批2 v2 契约定稿 ✅**（ts_draft_v2.schema.json 权威 schema+`_reverse` 定形+调度映射表——**逆向侧可即刻按 12 章 v4 动工，不待案例**；案例校准的是 v1 运行体验与 v2 联调，不是契约形态）→ 批3 双仓实施（逆向装配实现+我方切换）→ 批4 v1 退役时间表。
+
+**批3 消费侧切换设计要点**（预设计，实施时展开）：audit_ingest 消费草稿（对账输入域不变，读 ts 形态字段）；assemble_ts_baseline 瘦身=守门+audit+copy+MANIFEST（解析装配整体退役）；view 渲染归一（别名对照改 ts.joins/source_tables 直读——SQL 重解析仅作 legacy v1 档兜底；建档渲染退役，preprocess_opt 单渲染点）；preprocess_opt/fence/UT 对 v1 档 v2 草稿双支持（按产物自描述版本路由）。
 
 ## 文档地图
 
