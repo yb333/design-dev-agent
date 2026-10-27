@@ -9,6 +9,7 @@
 ts-template.json 为完整结构权威（人读），schema 守契约必填面，消费链校验是终局守。
 """
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -120,24 +121,21 @@ class TestContractPackage:
                    for r in example["rules"].values())
         assert "dq_rules" not in example          # v2 无 DQ——独立 dq.json 通道
 
-    def test_v1_pipeline_form_compatible(self, validator):
-        """形态衔接：v1 装配器真实产出过 v2 契约——证明 v2 契约与 v1 现产形态兼容；
-        assemble_ts_baseline/ts_compat 形态演进使此断言失败时=契约波次提示
-        （样例文件需随波次再生成）。"""
-        import sys
-        for d in ("skills/opt-pipe/scripts", "skills/design-dev-shared/scripts"):
-            sys.path.insert(0, str(REPO / d))
-        from assemble_ts_baseline import build_ts_baseline
-        from ts_compat import normalize_ts
-        facts = json.loads((REPO / "tests/fixtures/opt/asset_facts_v13_full.json")
-                           .read_text(encoding="utf-8"))
-        ts, _ = build_ts_baseline(facts)
-        draft = normalize_ts(ts)
-        draft.pop("dq_rules", None)               # v1 特有 legacy——v2 DQ 走 dq.json
+    def test_new_build_form_anchor(self, validator):
+        """形态锚=新建链路真装配产出（assemble_ts+全量校验工厂——多轮磨砺的形态），
+        不是 v1 逆向装配器（待退役、有前科）。新建 ts 附 _reverse 即过 v2 契约
+        ——证明契约目标形态锚定正确；assemble_ts 形态演进使此断言失败时=契约
+        波次提示（样例文件随波次再核对）。"""
+        from conftest import make_rs_input, make_design_decisions
+        sys.path.insert(0, str(REPO / "skills" / "dws-design" / "scripts"))
+        sys.path.insert(0, str(REPO / "skills" / "design-dev-shared" / "scripts"))
+        from assemble_ts import assemble_ts
+        out = assemble_ts(make_rs_input(), make_design_decisions())
+        ts = out[0] if isinstance(out, tuple) else out
+        draft = dict(ts)
         draft["version"] = "2.0"
         draft["_reverse"] = {
             "self_check": {"verdict": "pass", "structural_count": 0, "noise_count": 0},
-            "warnings": [],
-            "write_plan": [{"rule_code": c} for c in (facts.get("rules") or [])],
-            "schedule_evidence": [], "evidence": {}}
+            "warnings": [], "write_plan": [], "schedule_evidence": [], "evidence": {}}
         validator.validate(draft)
+        assert "dq_rules" not in draft            # 新建 ts 无 DQ——v2 草稿同口径

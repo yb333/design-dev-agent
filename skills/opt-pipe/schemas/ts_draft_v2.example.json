@@ -3,7 +3,7 @@
   "spec_type": "ts",
   "generated_at": "2026-10-27T00:00:00",
   "generated_by": "dws-reverser",
-  "_说明": "合格草稿样例（v2 契约）。生成路径：v1 装配器 build_ts_baseline(demo facts) → ts_compat.normalize_ts（旧形态 field_targets/field_logics → 标准三桶——v2 草稿必须直接产标准形态）→ 剥离 v1 特有 dq_rules（v2 DQ 走独立 dq.json 通道）→ 附 _reverse 审核材料段。tests/test_ts_draft_contract.py 守此文件与生成路径同步（形态演进=契约波次）。判断位留空是合法契约形态：grain/business_key 空、join_safety 依据空——消费方『语义空位』机制消费，增量设计时按需点亮。",
+  "_说明": "合格草稿样例（v2 契约交付包之三）。作用=说清需求：①恢复槽位的应有形态——物理属性[HASH(cust_id)]/write_condition/调度/源表实际别名；②判断位留空是合法契约形态——grain/business_key/join_safety 依据（制品无显式表达则空，消费方『语义空位』机制消费）；③_reverse 审核材料段填法——self_check/warnings/write_plan 原文/schedule_evidence/evidence 旁证（merge_on 强旁证与 dq_pk_check 显式设计并存示范）；④标准三桶形态（rules.fields direct/processed/assign）。权威分工：ts_draft_v2.schema.json=契约必填面，ts-template.json=完整结构权威，本文件=形态参照。本文件不是生成指令——解析与装配的实现全归逆向侧。",
   "meta": {
     "target": {
       "f_table": {"schema": "dws", "table": "dwb_cust_asset_d", "cn": "客户资产日表"},
