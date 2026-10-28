@@ -3,7 +3,7 @@
 交付副本模式：读原始制品（provenance 定位）→ 产出**更新后的完整文件副本**进 patched/ +
 patch 说明。不就地改原件、不碰仓（推生产不自主）。存量声明漂移不碰（严格 patch）。
 
-add_field 的编辑原语组合（第一刀）：
+add_field（新增字段）的编辑原语组合：
 - 术加 xlsx：TargetFields **行追加**（每落位规则每声明字段一行）+ RULE 表 SQL **单元格替换**
 - 代码仓规则组 yml：TargetFields 列表**追加条目** + query_sql 值**替换**（pyyaml round-trip，
   sort_keys=False 保序；已知限制：注释会丢——平台生成 yml 无注释，见 patch 说明）
@@ -58,7 +58,7 @@ def _change_index(ts_v2: dict) -> List[Tuple[str, str, dict]]:
 
 def _sql_rules(ts_v2: dict) -> List[str]:
     """SQL 单元格需要替换的规则（= 有声明落位的规则 ∪ 口径修改字段的落位规则——
-    第三刀：口径变了 SQL 必然变）。"""
+    口径修改：口径变了 SQL 必然变）。"""
     _mod_rules = {rc for m in ((ts_v2.get("change") or {}).get("modify_logics") or [])
                   for rc in (m.get("rules") or [])}
     return sorted({r for r, _, _ in _change_index(ts_v2)} | _mod_rules)

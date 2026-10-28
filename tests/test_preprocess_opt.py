@@ -784,7 +784,7 @@ class TestFieldTypeDrift:
 
     def test_unsupported_existence_note(self, facts):
         """unsupported 报告的目标存在性事实：笔误/台账滞后/两侧都有（真待支持）三分。"""
-        extra = [chg(3, "2026-10-14", "attr", "default|typo_f", "映射规则", "MODIFY"),      # 两侧都无（映射表达式列已被第三刀消费）
+        extra = [chg(3, "2026-10-14", "attr", "default|typo_f", "映射规则", "MODIFY"),      # 两侧都无（映射表达式列已被口径修改场景消费）
                  chg(4, "2026-10-14", "attr", "default|total_amount", "映射规则", "MODIFY"),  # 基线有当前态无
                  chg(5, "2026-10-14", "attr", "default|order_id", "备注", "ADD")]            # 两侧都有
         std = TestExtract()
@@ -926,7 +926,7 @@ def facts_fixture():
 
 
 class TestScenarioNewSource:
-    """场景 A（2026-10-22 第二刀·内网第一案例综合场景）：新增来源表声明
+    """场景 A（新增来源表·内网第一案例综合场景）：新增来源表声明
     （实体级整行 ADD）——正式消费进 new_sources + 与新字段引用两向联动。"""
 
     def _run(self, extra_changes=(), extra_entity=(), extra_attr=(), facts_=None):
@@ -967,7 +967,7 @@ class TestScenarioNewSource:
 
 
 class TestScenarioModifyType:
-    """场景 B（第二刀）：目标字段类型修改（属性级 MODIFY·目标字段类型）——
+    """场景 B（类型修改）：目标字段类型修改（属性级 MODIFY·目标字段类型）——
     三方对账（变更前≈baseline/变更后≈mapping 当前态）+ 漂移豁免。"""
 
     def _run(self, modify_col="目标字段类型", before="VARCHAR(64)", after="VARCHAR(128)",
@@ -1034,14 +1034,14 @@ class TestScenarioModifyType:
             f"order_id 应豁免、cust_id 应报: {drifts}"
 
     def test_other_column_modify_still_unsupported(self):
-        """映射规则列的 MODIFY（分类变更）仍待扩展——映射表达式列已被第三刀消费。"""
+        """映射规则列的 MODIFY（分类变更）仍待扩展——映射表达式列已被口径修改场景消费。"""
         add, ns, mods, mlogics, uns, diags = self._run(modify_col="映射规则")
         assert not mods and not mlogics
         assert any(u["change_type"] == "modify" for u in uns)
 
 
 class TestScenarioModifyLogic:
-    """第三刀（2026-10-22）：口径修改（属性级 MODIFY·映射表达式）——对账分级
+    """口径修改（modify_logic，属性级 MODIFY·映射表达式）——对账分级
     （变更后≈当前态 error / 变更前≈baseline 宽松 warn）→ modify_logic_fields 段。"""
 
     def _run(self, column="映射表达式", before="", after="nvl(a.amt,0)",

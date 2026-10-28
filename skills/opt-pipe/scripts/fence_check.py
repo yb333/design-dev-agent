@@ -16,10 +16,10 @@
           "new_joins": [ {"rule": "R0002", "table": "dim_channel", "alias": "c"} ] }]}
         # new_joins 为空 = 同源直挂；每条新 JOIN 触发对应规则的 joins/source_tables 变更许可
 
-第一刀矩阵（add_field：冻结一切 + 新增清单）：
+add_field 矩阵（新增字段：冻结一切 + 新增清单）：
 - 冻结：存量字段定义（类型/注释/血缘/口径）、字段删除、规则集与规则一切属性
   （除落位规则的白名单槽位）、表结构属性、meta（除派生计数与声明的新源表）、
-  data_flow（除声明新表节点）、init、dq_rules（DQ 声明位 change.dq 预留，第一刀未接）。
+  data_flow（除声明新表节点）、init、dq_rules（DQ 声明位 change.dq 预留，当前未接）。
 - 许可：声明字段在（目标表 ∪ 中间表）的 fields 新增；落位规则的 field_targets 增加声明
   字段、field_logics 为声明字段补口径、join_safety 为声明的新 JOIN 补条目、
   joins/source_tables 增加声明的新 JOIN。
@@ -35,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 from typing import Dict, List, Optional, Tuple
 
-# ts.change 段支持的动作类型（第一刀仅 add_field；矩阵扩展即此枚举扩展，原则6）
+# ts.change 段支持的动作类型（当前仅 add_field；矩阵扩展即此枚举扩展，原则6）
 SUPPORTED_CHANGE_TYPES = {"add_field"}
 
 # 落位规则允许变化的槽位（除白名单外的一切 aspect 差异 = 越界）
@@ -209,7 +209,7 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
                     over(f"[围栏][规则] {code}.field_targets 丢失存量字段 {sorted(removed)}")
             elif aspect == "fields":
                 # 两视图桶：只许为声明字段新增 processed/assign/direct 条目，存量条目冻结；
-                # 口径修改声明（modify_logics·第三刀）的字段：logic 许变（恰好性——
+                # 口径修改声明（modify_logics）的字段：logic 许变（恰好性——
                 # 新口径不比对内容，内容锚=design_logic+闸口①'人审）且桶归属许迁
                 # （direct→processed 是口径修改的合法形态——直取变加工）
                 _declared_mlogics = {str(m.get("field", "")).lower()
@@ -221,7 +221,7 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
                             if isinstance(e, dict):
                                 t = e.get("target")
                             elif kind == "direct":
-                                # direct 串 "alias.col AS target" 身份=AS 后段（第三刀补：
+                                # direct 串 "alias.col AS target" 身份=AS 后段（口径修改补：
                                 # 此前字符串条目不进索引，direct 删改围栏看不见——盲区）
                                 t = str(e).rsplit(" AS ", 1)[-1].strip() if " AS " in str(e) else None
                             else:
@@ -246,7 +246,7 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
                         if t.lower() not in _declared_mlogics:
                             over(f"[围栏][规则] {code}.fields.{t} 桶归属被改 {old_ix[t]}→{new_ix[t]}"
                                  f"（口径修改走 modify_logics 声明）")
-                # 老字段 processed 条目的 logic 内容冻结（声明字段豁免——第三刀恰好性：
+                # 老字段 processed 条目的 logic 内容冻结（声明字段豁免——口径修改恰好性：
                 # 未声明的口径被改=越界，这里正是口径修改的 ts 级守门）
                 def _logic_map(b):
                     return {str(e.get("target", "")).lower(): str(e.get("logic") or "")
@@ -311,7 +311,7 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
             over(f"[围栏][data_flow] data_flow.{k} 被修改——冻结")
     for d in diff["dq_added"]:
         over(f"[围栏][DQ] 新增 DQ 规则 {d.get('rule_name', '?')}——DQ 变更声明位（change.dq）"
-             f"预留，第一刀未接（见 03 挂账）")
+             f"预留，当前未接（见 03 挂账）")
     if diff["init_changed"]:
         over("[围栏][init] init 段被修改——add_field 默认冻结（回刷走闸口①'人选拿后另行声明）")
 
@@ -354,7 +354,7 @@ def check_add_field(baseline: dict, v2: dict, change_request: dict) -> List[dict
         if f["field"] not in {m["field"] for m in declared_mods}:
             missing(f"[围栏][声明] change_request 的类型修改 {f['field']!r} 未被"
                     f" change 段接住——漏接")
-    # 口径修改同款双向（第三刀）：ts.change.modify_logics ↔ cr.modify_logic_fields
+    # 口径修改同款双向：ts.change.modify_logics ↔ cr.modify_logic_fields
     cr_mlogics = {m["field"] for m in change_request.get("modify_logic_fields", [])}
     for m in declared_mlogics:
         if m["field"] not in cr_mlogics:
@@ -375,7 +375,7 @@ def check(baseline: dict, v2: dict, change_request: dict) -> List[dict]:
     if ctype not in SUPPORTED_CHANGE_TYPES:
         return [{"type": "unsupported",
                  "message": f"[围栏] 不支持的 change_type {ctype!r}"
-                            f"（本刀支持: {sorted(SUPPORTED_CHANGE_TYPES)}）"}]
+                            f"（当前支持: {sorted(SUPPORTED_CHANGE_TYPES)}）"}]
     return check_add_field(baseline, v2, change_request)
 
 

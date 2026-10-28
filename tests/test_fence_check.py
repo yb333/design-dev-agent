@@ -234,7 +234,7 @@ def _cr_mod():
 
 
 class TestModifyTypeFence:
-    """场景 B（2026-10-22 第二刀）：类型修改恰好性——声明的(表,字段)允许
+    """场景 B（类型修改）：类型修改恰好性——声明的(表,字段)允许
     field_type 变且恰好=声明新类型；非类型键变仍冻结；未声明照拦；漏改=missing。"""
 
     def _mod(self, v2, field="order_id", new_type="VARCHAR(128)", also_comment=False):
@@ -284,7 +284,7 @@ class TestModifyTypeFence:
 
 
 class TestModifyLogicFence:
-    """第三刀（2026-10-22）：口径修改围栏——声明字段 logic 许变/桶归属许迁；未声明
+    """口径修改（modify_logic）围栏——声明字段 logic 许变/桶归属许迁；未声明
     的口径被改=越界；双向对账 ts.change ↔ change_request。"""
 
     def _pair(self, baseline):

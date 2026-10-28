@@ -75,7 +75,7 @@ def rule_declaration(v2_change: dict, rule_code: str, rule_target: str = "") -> 
     for m in (v2_change or {}).get("modify_types", []):
         if (m.get("target_table") or "").rsplit(".", 1)[-1].lower() == t_short:
             mods[str(m.get("field", "")).lower()] = m.get("new_type", "")
-    # 口径修改白名单（第三刀）：声明字段的表达式许与 baseline 不同——内容不比对
+    # 口径修改白名单（modify_logic）：声明字段的表达式许与 baseline 不同——内容不比对
     # （内容锚=design_logic+闸口①'人审；围栏只硬管"哪些列变了"恰好性）
     mlogics = set()
     for m in (v2_change or {}).get("modify_logics", []):
@@ -181,7 +181,7 @@ def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[di
             if _nty and _cast_wrap_matches(n_nodes.get(name), b_nodes.get(name), _nty):
                 pass
             elif _name_l in (rule_decl.get("modify_logics") or set()):
-                pass  # 口径修改声明（第三刀）：表达式许变——内容锚=design_logic+闸口①'人审
+                pass  # 口径修改声明（modify_logic）：表达式许变——内容锚=design_logic+闸口①'人审
             else:
                 bad(f"老列 {name!r} 表达式被修改：{b_expr!r} → {n_cols[name]!r}")
     for name in n_cols:

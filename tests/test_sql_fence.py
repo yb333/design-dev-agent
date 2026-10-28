@@ -130,7 +130,7 @@ class TestRuleDeclaration:
 
 
 class TestCastWrap:
-    """场景 B（2026-10-22 第二刀）：类型修改列允许 cast(老表达式 AS 新类型) 包裹——
+    """场景 B（类型修改）：类型修改列允许 cast(老表达式 AS 新类型) 包裹——
     AST 判定内层归一==baseline 原文+目标类型匹配；cast 之外的一切改写照拦。"""
 
     BASE = "SELECT a.x AS x, a.y AS y FROM ods.t a"
@@ -162,7 +162,7 @@ class TestCastWrap:
 
 
 class TestModifyLogicWhitelist:
-    """第三刀（2026-10-22）：口径修改列的表达式许变（白名单放行不比对内容——
+    """口径修改（modify_logic）：口径修改列的表达式许变（白名单放行不比对内容——
     内容锚=design_logic+闸口①'人审）；白名单外的老列照拦。"""
 
     BASE = "SELECT a.x AS x, a.y AS y FROM ods.t a"

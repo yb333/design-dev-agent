@@ -47,7 +47,7 @@ CHANGE_SHEET_COLS = ["变更序号", "变更时间", "变更页签", "变更KEY"
 _CHANGE_COL_LOOKUP = {c.lower(): c for c in CHANGE_SHEET_COLS}
 # 变更列约定值：整行新增（新字段/新来源——不逐列列举）
 WHOLE_ROW_MARK = "资产字段"
-# 第一刀全流程仅支持属性级整行 ADD；其余识别+报告待扩展
+# 当前流程仅支持属性级整行 ADD；其余识别+报告待扩展
 SUPPORTED_CTYPES = {"ADD"}
 
 
@@ -350,7 +350,7 @@ def pick_batch_version(entries: List[dict]) -> str:
 def synth_renames(batch: List[dict]) -> Tuple[List[dict], List[dict]]:
     """改名合成（严格证据链）：同批次内 attr DELETE 行的「变更后」== 某 attr ADD 行的 key。
 
-    返回 (renames, rest)：合成对从独立清单移除（改名=存量字段级变更，第一刀待扩展）；
+    返回 (renames, rest)：合成对从独立清单移除（改名=存量字段级变更，待扩展）；
     证据不成立（DELETE.变更后 为空/无匹配 ADD）→ 保持独立 DELETE/ADD 各自归类。
     """
     renames: List[dict] = []
@@ -374,7 +374,7 @@ def baseline_facts(ts_baseline: dict) -> dict:
     rules = ts_baseline.get("rules") or {}
     fields_of = lambda t: ((ts_baseline.get("tables") or {}).get(t, {}) or {}).get("fields", [])
     field_list = fields_of(target_short)
-    # 旧口径登记（第三刀·口径修改的变更前对账材料）：规则桶 processed 条目 logic /
+    # 旧口径登记（口径修改的变更前对账材料）：规则桶 processed 条目 logic /
     # direct 串（直取形态的"口径"）——同字段多规则条目取全（提示哪个规则，人核用）
     logics: Dict[str, List[dict]] = {}
     for code, r in rules.items():
@@ -401,7 +401,7 @@ def _expr_loose(s: str) -> str:
     return " ".join(str(s or "").split())
 
 
-# types_compatible（类型归一比）已归位 shared/type_compat（2026-10-22 第二刀：
+# types_compatible（类型归一比）已归位 shared/type_compat（2026-10-22 类型修改：
 # assemble_ts_opt/fence_check 跨 pipe 不可 import 此处——类型判定唯一源在 type_compat）
 from type_compat import types_compatible  # noqa: F401  re-export 保旧引用（audit_ingest/测试）
 
@@ -455,7 +455,7 @@ def _match_attr_rows(attr_rows: List[dict], entry: dict) -> List[dict]:
 def _existence_note(key: str, attr_target_cols: set, baseline_fields: set) -> str:
     """unsupported 条目的目标存在性事实（2026-10-21）：key 在两侧登记处的命中情况——
     人看 INFO 行即可分辨"变更记录笔误"vs"真待支持"，不用回查台账。
-    事实增强不是对账（对账口径随对应变更类型支持刀一起定义）。"""
+    事实增强不是对账（对账口径随对应变更类型支持面一起定义）。"""
     in_m = (key or "").strip().lower() in attr_target_cols
     in_b = (key or "").strip().lower() in {str(f).lower() for f in baseline_fields}
     if in_m and in_b:
@@ -474,12 +474,12 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
 
     add_fields = 本批次属性级整行 ADD（变更列=资产字段）且 key 不在 baseline → 字段详情
     从属性级当前态取（变更页签只说"哪些变了"，内容取当前态 mapping）；
-    new_sources = 实体级整行 ADD（新增来源表声明，2026-10-22 第二刀场景 A——内网第
-    一案例综合场景）：新表取数链路第一刀已通（新字段附属），此处升级为显式声明消费；
-    modify_fields = 属性级 MODIFY 且变更列=目标字段类型（2026-10-22 第二刀场景 B：
+    new_sources = 实体级整行 ADD（新增来源表声明，2026-10-22 新增来源表场景——内网第
+    一案例综合场景）：新表取数链路新增字段场景已通（新字段附属），此处升级为显式声明消费；
+    modify_fields = 属性级 MODIFY 且变更列=目标字段类型（2026-10-22 类型修改场景 B：
     目标字段类型修改）——三方对账（变更前≈baseline 旧类型/变更后≈mapping 当前态新
     类型，types_compatible 归一比）；
-    modify_logic_fields = 属性级 MODIFY 且变更列=映射表达式（2026-10-22 第三刀：
+    modify_logic_fields = 属性级 MODIFY 且变更列=映射表达式（2026-10-22 口径修改场景：
     口径修改——对账分级[变更后≈当前态 error/变更前≈baseline 宽松 warn]，字段含义
     纠偏/逻辑重写的登记通道）；其他列的 MODIFY（映射规则分类变更等）仍待扩展；
     unsupported = 识别为其他变更形态（rename/DELETE/其他列 MODIFY/列级 ADD/实体级
@@ -520,7 +520,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
     for e in batch:
         if e["page"] == "entity":
             if e["ctype"] == "ADD" and e["column"] == WHOLE_ROW_MARK:
-                # 场景 A（第二刀）：新增来源表声明——校验实体级当前态有行，进 new_sources
+                # 场景 A（新增来源表）：新增来源表声明——校验实体级当前态有行，进 new_sources
                 hit = next((r for r in entity_rows
                             if (r.get("source_alias") or "").strip().lower() == e["key"]
                             and (not e["group"]
@@ -555,7 +555,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             continue
         # 属性级
         if e["ctype"] == "MODIFY" and (e["column"] or "").strip() == "目标字段类型":
-            # 场景 B（第二刀）：目标字段类型修改——三方对账后进 modify_fields
+            # 场景 B（类型修改）：目标字段类型修改——三方对账后进 modify_fields
             hits = _match_attr_rows(attr_rows, e)
             if not hits:
                 diags.append({"level": "error", "code": "modify_field_row_missing",
@@ -601,7 +601,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             })
             continue
         if e["ctype"] == "MODIFY" and (e["column"] or "").strip() == "映射表达式":
-            # 第三刀（2026-10-22）：口径修改（映射表达式）——对账分级：变更后 ≈ mapping
+            # 口径修改（modify_logic，映射表达式）——对账分级：变更后 ≈ mapping
             # 当前态表达式（error——同一生态必对）；变更前 ≈ baseline 旧口径（warn 宽松
             # ——baseline 存翻译态/直取串，书写差异披露供人核，不硬拦）
             hits = _match_attr_rows(attr_rows, e)
@@ -715,7 +715,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             "new_source_table": ent.get("source_table", "") not in facts["source_tables"],
         })
 
-    # 场景 A 联动校验（2026-10-22 第二刀）：新来源表的声明（实体级 ADD）与引用
+    # 场景 A 联动校验（2026-10-22 新增来源表）：新来源表的声明（实体级 ADD）与引用
     # （新字段来源）两向对齐——隐式引用放行+warn 提示补申报（台账完整），无用声明提示
     _referenced_new_aliases = {(f["source"]["alias"] or "").strip().lower()
                                for f in add_fields if f.get("new_source_table")}
@@ -805,7 +805,7 @@ _CHANGE_COL_TO_KEY = {"映射规则": "mapping_rule", "映射表达式": "mappin
 
 
 def crosscheck_change_vs_current(batch: List[dict], mapping: dict) -> List[dict]:
-    """G1（2026-10-27 批1·P1 三缺口）：变更记录↔当前态全刀对账——已支持刀（目标字段
+    """G1（2026-10-27 批1·P1 三缺口）：变更记录↔当前态全变更类型对账——已支持变更类型（目标字段
     类型/映射表达式）的 error 级对账在 extract_and_check 管辖，此处覆盖其余：
     DELETE 行当前态应消失；未支持列的变更后≈当前态单元格。披露级 warn（新检查
     默认披露级；对应刀扩展时升 error 收编）。"""
@@ -899,7 +899,7 @@ def build_change_request(facts: dict, version: str, add_fields: List[dict],
         "unsupported_changes": unsupported,     # 识别+归类但流程待扩展（modify/drop/rename/add_column…）
         "new_sources": new_sources,             # 新增来源表声明（2026-10-22 场景 A：实体级整行 ADD）
         "modify_type_fields": modify_fields,    # 目标字段类型修改（2026-10-22 场景 B：属性级 MODIFY·目标字段类型）
-        "modify_logic_fields": modify_logic_fields,  # 口径修改（2026-10-22 第三刀：属性级 MODIFY·映射表达式）
+        "modify_logic_fields": modify_logic_fields,  # 口径修改（2026-10-22 口径修改场景：属性级 MODIFY·映射表达式）
         "placement_hints": placement_hints or [],    # 落位预判（2026-10-23 批1：源表可见规则——确定性事实，取舍归 designer）
         "eval_worksheet": eval_worksheet,            # 评估工作单（批2：新 JOIN 键唯一性实测位——预填表单，? 行填空一次 --eval）
         "source_files": files,
@@ -970,7 +970,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[{d['level'].upper()}][{d['code']}] {d['message']}", file=sys.stderr)
     for u in unsupported:
         print(f"[INFO] 识别到 {u['change_type']} 变更（{u['level']} {u['name']}）"
-              f"——本刀流程未支持，待扩展{u.get('note', '')}", file=sys.stderr)
+              f"——当前变更类型未支持，待扩展{u.get('note', '')}", file=sys.stderr)
 
     # 现场就绪（目录模型 2026-09-07 终态，脚本做确定性动作）：
     #   build/ = 增量现场（清场重建只留最新——上次的过程产物/交付物残留不混入本次）

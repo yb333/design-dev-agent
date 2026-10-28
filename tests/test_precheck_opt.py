@@ -184,7 +184,7 @@ class TestJoinRisk:
 
 
 class TestModifyTypeDecision:
-    """场景 B 类型修改方向决策（2026-10-22 第二刀）：扩容放行 / 收窄·跨大类
+    """场景 B 类型修改方向决策：扩容放行 / 收窄·跨大类
     PENDING 人决策三选（确认转换/重选兼容类型/放弃该条变更）回写。"""
 
     def _cr(self, old="varchar(64)", new="varchar(128)"):

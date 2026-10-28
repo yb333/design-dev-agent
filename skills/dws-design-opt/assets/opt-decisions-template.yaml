@@ -60,7 +60,7 @@ fields:
           reason: explore 实测 count=12000 distinct=12000 唯一（依据句必填——实测数字/输入
                   声明；连不上库=标注「未实测」+输入依据；空 reason 组装器拦）
 
-# ---- 场景 B（2026-10-22 第二刀）：目标字段类型修改 ----
+# ---- 场景 B（类型修改 modify_type）：目标字段类型修改 ----
 # 变更记录页签「属性级 MODIFY·目标字段类型」的条目（change_request.modify_type_fields）
 # 照抄到此处（含 decision 标记——precheck_opt 已人定的方向勿推翻）；无类型修改则整段省略。
 modify_types:
@@ -70,7 +70,7 @@ modify_types:
     new_type: VARCHAR(128)        # 照抄 change_request（mapping 当前态=终态——校验拦）
     decision: "扩容/兼容方向，ALTER 自动转换即可"   # 照抄 precheck_opt 回写的决策标记（有则带）
 
-# ---- 第三刀（2026-10-22）：口径修改（属性级 MODIFY·映射表达式）----
+# ---- 口径修改（modify_logic，属性级 MODIFY·映射表达式）----
 # 变更记录「MODIFY | 字段 | 映射表达式 | 旧表达式 | 新表达式」的条目：人话新口径由你
 # 翻译成 design_logic 填此处（new_logic——表达式+全角括号说明，N36/N38 引用门禁约束）；
 # 落点由脚本自动定位（baseline 桶条目——processed 替换 / direct 迁移为 processed）。

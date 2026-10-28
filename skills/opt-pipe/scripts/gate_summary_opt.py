@@ -44,7 +44,7 @@ def render(v2: dict, baseline: dict, cr: dict) -> str:
     lines.append("")
 
     if mlogics:
-        lines.append("## 口径修改（第三刀：字段含义纠偏/逻辑重写——**存量数据新旧含义混置，回刷意向人定**）")
+        lines.append("## 口径修改（modify_logic：字段含义纠偏/逻辑重写——**存量数据新旧含义混置，回刷意向人定**）")
         lines.append("")
         lines.append("| 字段 | 旧口径 | 新口径（designer 翻译） | 落位规则 |")
         lines.append("|------|--------|--------------------------|----------|")

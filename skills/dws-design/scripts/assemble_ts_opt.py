@@ -44,7 +44,7 @@ def _fail(msg: str) -> None:
 def load_decisions(path: Path) -> dict:
     d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if d.get("change_type") != "add_field":
-        _fail(f"decisions.change_type = {d.get('change_type')!r}，本刀仅支持 add_field"
+        _fail(f"decisions.change_type = {d.get('change_type')!r}，当前变更类型仅支持 add_field"
               f"（modify_types 作为并行段声明——change_type 保持 add_field 兼容锚）")
     if not d.get("fields") and not d.get("modify_types") and not d.get("modify_logics"):
         _fail("decisions.fields / modify_types / modify_logics 均为空——没有要落的变更")
@@ -100,7 +100,7 @@ def _check_logic_ref_existence(logic: str, label: str, ts_baseline: dict,
 
 def validate_modify_logics(decisions: dict, ts_baseline: dict,
                            cache: Optional[dict] = None) -> None:
-    """modify_logics 段合法性（第三刀·2026-10-22 口径修改）：字段必须是 baseline
+    """modify_logics 段合法性（2026-10-22 口径修改）：字段必须是 baseline
     存量、桶中必须有旧条目（有落点可改）、new_logic 非空且过引用门禁
     （N36 等价——designer 翻译的新口径必须可结构化解析；N38 等价 2026-10-23 补——
     限定引用查 schema_cache/ts 结构声明集，幻觉列当场拦）。"""
@@ -365,7 +365,7 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
     if _mods:
         v2["change"]["modify_types"] = _mods
 
-    # 7. 第三刀（2026-10-22）：口径修改落地——桶条目自动定位（脚本确定性动作，
+    # 7. 口径修改落地（modify_logic）——桶条目自动定位（脚本确定性动作，
     # designer 只翻新口径）：processed 条目 logic 替换 / direct 串迁移为 processed
     # （直取→加工，桶归属变化是口径修改的合法形态）
     _mlogics = []

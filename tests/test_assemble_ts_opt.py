@@ -354,7 +354,7 @@ class TestStableOrdering:
 
 
 class TestModifyTypes:
-    """场景 B（2026-10-22 第二刀）：decisions.modify_types → tables 终态类型更新 +
+    """场景 B（类型修改）：decisions.modify_types → tables 终态类型更新 +
     change.modify_types 声明 + fence 集成（组装器与围栏同一契约两端）。"""
 
     def _dec_mod(self):
@@ -399,7 +399,7 @@ class TestModifyTypes:
 
 
 class TestModifyLogics:
-    """第三刀（2026-10-22）：口径修改落地——桶条目自动定位（processed 替换 /
+    """口径修改（modify_logic）落地——桶条目自动定位（processed 替换 /
     direct→processed 迁移）+ 引用门禁 + fence 集成。"""
 
     def _baseline_with_bucket(self, baseline):

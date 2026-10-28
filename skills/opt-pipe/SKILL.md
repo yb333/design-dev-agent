@@ -2,7 +2,7 @@
 name: opt-pipe
 description: >-
   优化交付全流程剧本（dws-engineer 加载执行）：入口基线→输入校验→增量设计→围栏→闸口①'→
-  编码→SQL围栏→DDL→UT→闸口②'→制品patch→档案推进。存量资产精确变更（第一刀 add_field）。
+  编码→SQL围栏→DDL→UT→闸口②'→制品patch→档案推进。存量资产精确变更（新增字段/类型修改/口径修改）。
   新建场景不在此（new-pipe）。
 ---
 
