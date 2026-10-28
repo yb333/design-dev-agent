@@ -38,7 +38,7 @@ import pandas as pd
 
 from preprocess import (ExcelMappingParser, parse_mapping_sheets, check_mapping_static,
                         clean_excel_column)
-from sql_parse import extract_from_bindings
+from sql_parse import extract_from_bindings, join_type_norm
 from eval_workbench import render_eval_draft
 
 # 变更记录页签八列（规格见 mapping-format.md；列名按真实模板——「变更KEY」KEY 为大写，
@@ -160,7 +160,8 @@ def render_topology_sections(ts: dict, alias_rows: Optional[List[dict]] = None) 
         if joins:
             for j in joins:
                 extra = f"（filter: {j['filter']}）" if j.get("filter") else ""
-                lines.append(f"- JOIN: {j.get('alias')}·{j.get('type', '')}·{j.get('condition', '')}{extra}")
+                lines.append(f"- JOIN: {j.get('alias')}·{join_type_norm(j.get('type', ''))}"
+                             f"·{j.get('condition', '')}{extra}")
                 js = safety.get((j.get("alias") or "").strip().lower())
                 lines.append("  - safety: " + (
                     f"唯一={js.get('join_key_unique')}·{js.get('strategy', '')}（{js.get('reason', '')}）"

@@ -27,6 +27,7 @@ from pathlib import Path
 # shared 库（ts_compat 等）自洽引用：相对路径推算 design-dev-shared（与 check_sql 同款）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 
+from sql_parse import join_type_norm
 
 try:
     import yaml
@@ -117,7 +118,8 @@ def slice_rule(ts: dict, rule_code: str, etl_dir=None) -> dict:
 
         # 关联策略（coder 写 FROM/JOIN 用）
         "source_tables": rule.get("source_tables", []),
-        "joins": rule.get("joins", []),
+        "joins": [{**j, "type": join_type_norm(j.get("type", ""))}
+                  for j in rule.get("joins", [])],
         "join_safety": rule.get("join_safety", []),
 
         # 粒度变化

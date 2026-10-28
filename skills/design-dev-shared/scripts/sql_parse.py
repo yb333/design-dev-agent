@@ -226,6 +226,14 @@ def _strip_sql_noise(sql: str) -> str:
     return s
 
 
+def join_type_norm(t: str) -> str:
+    """关联类型词形归一（消费端容错——2026-10-28 批3：v2 草稿产 'INNER JOIN' 带 JOIN
+    字，new-pipe 形态 'INNER'；两态同义，消费端归一到裸词形：去尾 JOIN/空白/大写）。
+    'inner join'→'INNER'，'Left'→'LEFT'，空→''（调用方自处）。"""
+    v = str(t or "").strip().upper()
+    return v[:-4].strip() if v.endswith("JOIN") else v
+
+
 def extract_select_aliases(sql: str) -> list[str]:
     """提取【主查询】SELECT 输出的字段别名（AS xxx）。
 

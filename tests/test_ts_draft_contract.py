@@ -45,7 +45,7 @@ def validator():
 
 def minimal_draft():
     return {
-        "version": "2.0",
+        "version": "2.1",
         "meta": {
             "target": {"f_table": {"schema": "dws", "table": "dwb_trade_order_d"}},
             "grain": "",
@@ -70,6 +70,7 @@ def minimal_draft():
                 "target_table": "dws.dwb_trade_order_d",
                 "load_mode": "merge_into",
                 "write_condition": "T.order_id=T1.order_id",
+                "query_sql": "SELECT a.order_id AS order_id FROM ods.ods_trade_order_di a",
                 "fields": {"direct": ["a.order_id AS order_id"], "processed": [], "assign": []},
             }
         },
@@ -97,6 +98,14 @@ class TestTsDraftContract:
     def test_version_constrained_to_v2(self, validator):
         d = minimal_draft()
         d["version"] = "1.4"
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(d)
+
+    def test_query_sql_required_v21(self, validator):
+        """v2.1 增补：rules[].query_sql 必填（逐字保真 SQL 载体——验收实锤 v2.0 漏项：
+        草稿无 SQL 则 baseline etl/coder 底稿/SQL 围栏基准无从诞生）。"""
+        d = minimal_draft()
+        d["rules"]["R0001"].pop("query_sql")
         with pytest.raises(jsonschema.ValidationError):
             validator.validate(d)
 
@@ -144,10 +153,13 @@ class TestContractPackage:
         波次提示（样例文件随波次再核对）。"""
         ts = _build_forward_sample()
         draft = dict(ts)
-        draft["version"] = "2.0"
+        draft["version"] = "2.1"
         draft["_reverse"] = {
             "self_check": {"verdict": "pass", "structural_count": 0, "noise_count": 0},
             "warnings": [], "write_plan": [], "schedule_evidence": [], "evidence": {}}
+        # 正向 ts 不带 query_sql（SQL 后产于 etl/）——草稿契约必填，注入占位证明兼容
+        for r in draft["rules"].values():
+            r.setdefault("query_sql", "-- placeholder（正向链路 SQL 在 etl/ 文件）")
         validator.validate(draft)
         assert "dq_rules" not in draft            # 新建 ts 无 DQ——v2 草稿同口径
 

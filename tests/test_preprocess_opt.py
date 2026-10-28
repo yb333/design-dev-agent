@@ -686,6 +686,41 @@ class TestPrecheckHealthReport:
         assert "✓消失 0" in text
 
 
+class TestV2ArchiveConsumptionE2E:
+    """v2 档案消费链 e2e（批3）：v2 草稿建档后，preprocess_opt 全流程直跑——
+    变更提取/视图渲染（别名对照 ts 直读）/落位预判/评估上下文全部工作。"""
+
+    def test_preprocess_on_v2_archive(self, tmp_path):
+        import argparse as _ap
+        from assemble_ts_baseline import _archive_ts_draft
+        d = json.loads((FIXTURES / "ts_draft_v2_case.json").read_text(encoding="utf-8"))
+        d["_reverse"]["self_check"] = {"verdict": "pass", "structural_count": 0, "noise_count": 0}
+        ddlc = tmp_path
+        args = _ap.Namespace(baseline="x", archive_dir=str(ddlc / "archive"),
+                             internal_dir=str(ddlc / "internal"), manifest=None,
+                             asset="dws.dwb_cust_asset_d")
+        assert _archive_ts_draft(d, args) == 0
+        ent_a = ent(table="ods_acct_balance_di", alias="a", target="dwb_cust_asset_d")
+        ent_c = ent(table="dim_channel", alias="c", target="dwb_cust_asset_d")
+        ent_c["源表schema"] = "dws"
+        ent_c["关联&限定条件"] = "t.cust_id = c.cust_id"
+        changes = [chg(1, "2026-10-28", "attr", "default|channel_name", "资产字段", "ADD"),
+                   chg(2, "2026-10-28", "entity", "default|c", "资产字段", "ADD")]
+        rs_md = "# RS\n\n## 4. 字段需求\n\n202610批次新增 channel_name（渠道名称）。\n"
+        pkg = make_pkg(tmp_path / "pkg", [ent_a, ent_c], [attr()], changes, rs_md=rs_md)
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(ddlc / "archive" / "ts.json"),
+                   "--opt-root", str(ddlc)])
+        assert rc in (0, 1)   # 1=G2 台账缺页披露（夹具只声明增量字段）
+        cr = json.loads((ddlc / "build" / "_internal" / "change_request.json").read_text())
+        assert [f["field"] for f in cr["fields"]] == ["channel_name"]
+        assert cr["placement_hints"][0]["new_source"] is True
+        assert "c|cust_id|" in cr["eval_worksheet"]        # 新源关联条件预解析
+        view = (ddlc / "build" / "_internal" / "baseline_view.md").read_text(encoding="utf-8")
+        assert "### R0001 → dws.tmp_cust_asset_detail" in view
+        assert "## 别名对照" in view                        # ts 直读（v2 档无 SQL 重解析需求）
+
+
 class TestWorkspaceReady:
     def test_build_cleared_and_tmp_created(self, tmp_path, demo_baseline):
         arc = _opt_ready(tmp_path, demo_baseline)

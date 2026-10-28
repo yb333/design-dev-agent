@@ -454,6 +454,64 @@ def copy_artifacts_to_export(manifest_path: Path, archive_dir: Path) -> List[str
     return report
 
 
+def _archive_ts_draft(draft: dict, args) -> int:
+    """v2 ts 草稿建档：契约进门验（我方权威 schema v2.1）+ 资产对账 + 守门 + **copy**。
+
+    - ts.json = 草稿**逐字落档**（_reverse 段随档——档案单文件自足；消费端围栏/UT/
+      切片天然忽略下划线段）；etl/{rule}.sql = rules[].query_sql 逐字（coder 底稿/
+      SQL 围栏基准）；export/ = _baseline.provenance 拷制品（同 v1 通道）；MANIFEST
+      首条 v2。无 exemptions/build_ts_baseline——草稿即档形态，装配北移逆向侧。
+    """
+    import jsonschema
+    schema = json.loads((Path(__file__).resolve().parent.parent / "schemas"
+                         / "ts_draft_v2.schema.json").read_text(encoding="utf-8"))
+    errs = sorted(jsonschema.Draft202012Validator(schema).iter_errors(draft),
+                  key=lambda e: list(e.path))
+    if errs:
+        print("[TS_DRAFT_CONTRACT_VIOLATION] v2 契约进门验不通过，拒绝建档：", file=sys.stderr)
+        for e in errs:
+            print(f"  {'/'.join(map(str, e.path)) or '<root>'}: {e.message[:160]}", file=sys.stderr)
+        return 2
+    f_table = (draft.get("meta", {}).get("target", {}) or {}).get("f_table", {}) or {}
+    if args.asset:
+        from baseline_contract import norm_asset
+        _got = f"{f_table.get('schema', '')}.{f_table.get('table', '')}"
+        if norm_asset(_got) != norm_asset(args.asset):
+            print(f"[TS_DRAFT_CONTRACT_VIOLATION] 资产对账不通过：产物 {_got!r} ≠ 本次 {args.asset!r}",
+                  file=sys.stderr)
+            return 2
+    archive, internal = Path(args.archive_dir), Path(args.internal_dir)
+    if (archive / "ts.json").exists():
+        print(f"[BASELINE_CONTRACT_VIOLATION] 拒绝建档：{archive} 已是确认档案——覆盖重入料=线上被外力"
+              "改过/推倒重来（人发起的重建），本脚本不自动覆盖", file=sys.stderr)
+        return 2
+    (archive / "etl").mkdir(parents=True, exist_ok=True)
+    internal.mkdir(parents=True, exist_ok=True)
+    prov = (draft.get("_baseline") or {}).get("provenance") or []
+    if prov:
+        for line in copy_artifacts_from_provenance({"provenance": prov}, archive):
+            print(line)
+    (archive / "MANIFEST.md").write_text(
+        f"# 资产演进索引 · {f_table.get('schema','')}.{f_table.get('table','')}\n\n"
+        "（当前态 = archive/ 本体；此文件为版本史一眼索引，完整历史在 git）\n\n"
+        "| 版本 | 内容 |\n|------|------|\n"
+        "| v1 | 逆向入料建档（ts 草稿 v2 契约 → 审核确认后逐字落档，经 audit_ingest）|\n",
+        encoding="utf-8")
+    (archive / "ts.json").write_text(
+        json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for code, r in sorted((draft.get("rules") or {}).items()):
+        (archive / "etl" / f"{code}.sql").write_text(str(r.get("query_sql") or ""),
+                                                     encoding="utf-8")
+    from preprocess_opt import render_baseline_view_from_ts
+    (internal / "baseline_view.md").write_text(
+        render_baseline_view_from_ts(draft), encoding="utf-8")
+    sc = (draft.get("_reverse") or {}).get("self_check") or {}
+    print(f"archive ts: {archive / 'ts.json'}（v2 草稿逐字落档，零解析）")
+    print(f"rules: {len(draft.get('rules') or {})}，etl 逐字落盘；"
+          f"self_check={sc.get('verdict', '?')}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="baseline_v1 入料建档（档案件落 archive/，过程件落 opt/_internal/）")
     ap.add_argument("--baseline", required=True, help="资产事实包 json 路径（原 baseline_v1.json，更名随契约波次）")
@@ -464,6 +522,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+
+    # v2 ts 草稿建档（2026-10-28 批3：契约=最终形态——审核过后的建档动作=守门+copy，
+    # 零解析零变换[任何需要的变换留在消费侧=契约失败]；v1 facts 路径保留=双支持期）
+    if data.get("spec_type") == "ts" and str(data.get("version", "")).startswith("2."):
+        return _archive_ts_draft(data, args)
 
     violations = validate_baseline_v1(data)
     # 资产对账（验收链独立一侧：我们从变更输入推资产，逆向从制品解析资产——双侧独立互证防串包）

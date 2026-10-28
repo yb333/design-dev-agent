@@ -33,6 +33,9 @@ from preprocess import parse_mapping_sheets
 from preprocess_opt import (pick_batch_version, read_change_sheet,
                             field_type_drift, WHOLE_ROW_MARK)
 
+# ts 草稿契约 v2（2026-10-28 批3：双支持期——产物自描述路由 v1 facts / v2 草稿）
+TS_DRAFT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "ts_draft_v2.schema.json"
+
 # 每类拦截自带处置路由（"结案陈词"——AI 上报即止，不侦探）
 ROUTES = {
     "contract_violation": "契约问题归逆向侧：错误清单原样退回（12 章 §五——它侧修，我们不代填）",
@@ -69,19 +72,57 @@ def _target_fields(facts: dict, asset: str) -> Tuple[str, set, Dict[str, str]]:
     return got, fields, types
 
 
-def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[dict], List[dict], List[str]]:
-    """返回 (errors, warns, report_lines)。errors 非空=拦。"""
-    errors: List[dict] = []
-    warns: List[dict] = []
-    lines: List[str] = []
+def is_ts_draft(doc: dict) -> bool:
+    """v2 ts 草稿识别（产物自描述——双支持期路由）。"""
+    return doc.get("spec_type") == "ts" and str(doc.get("version", "")).startswith("2.")
 
+
+def _validate_ts_draft(draft: dict) -> list:
+    """v2 契约进门验：我方权威 schema（ts_draft_v2 v2.1）。"""
+    import jsonschema
+    schema = json.loads(TS_DRAFT_SCHEMA.read_text(encoding="utf-8"))
+    errs = sorted(jsonschema.Draft202012Validator(schema).iter_errors(draft),
+                  key=lambda e: list(e.path))
+    return [f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message[:160]}" for e in errs]
+
+
+def audit_ts_draft(draft: dict, asset: str, mapping_path: Optional[Path]):
+    """v2 ts 草稿审核（2026-10-28 批3）：契约进门验换我方权威 schema；对账核心复用
+    （草稿→facts 同形视图：asset/tables/self_check/warnings——步骤 2-5 零分叉）。"""
+    errors: List[dict] = []
+    violations = _validate_ts_draft(draft)
+    if violations:
+        errors.append({"code": "contract_violation", "detail": violations})
+        return errors, [], []
+    f_table = (draft.get("meta", {}).get("target", {}) or {}).get("f_table", {}) or {}
+    rev = draft.get("_reverse", {}) or {}
+    view = {
+        "asset": {"schema": f_table.get("schema", ""), "table": f_table.get("table", "")},
+        "tables": [{"name": t,
+                    "fields": [{"name": f.get("target_field", ""), "type": f.get("field_type", "")}
+                               for f in (td.get("fields") or [])]}
+                   for t, td in (draft.get("tables") or {}).items()],
+        "self_check": rev.get("self_check", {}),
+        "warnings": rev.get("warnings", []),
+    }
+    return _audit_core(view, asset, mapping_path, errors, [], [])
+
+
+def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[dict], List[dict], List[str]]:
+    """v1 facts 审核（返回 (errors, warns, report_lines)。errors 非空=拦）。"""
+    errors: List[dict] = []
     # 1. 契约校验
     violations = validate_baseline_v1(facts)
     if violations:
         errors.append({"code": "contract_violation", "detail": violations})
-        return errors, warns, lines
+        return errors, [], []
+    return _audit_core(facts, asset, mapping_path, errors, [], [])
 
-    # 2. 资产对账
+
+def _audit_core(facts: dict, asset: str, mapping_path: Optional[Path],
+                errors: List[dict], warns: List[dict], lines: List[str]
+                ) -> Tuple[List[dict], List[dict], List[str]]:
+    """对账核心（v1/v2 共用——v2 经 facts 同形视图进）：资产/变更冲突/台账两向/自检消费。"""
     got, tfields, ttypes = _target_fields(facts, asset)
     lines.append(f"产物资产: {got}｜目标表字段 {len(tfields)} 个")
     if norm_asset(got) != norm_asset(asset):
@@ -172,7 +213,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"AUDIT_BLOCKED: mapping 不存在: {mapping_path}", file=sys.stderr)
         return 2
 
-    errors, warns, lines = audit(facts, args.asset, mapping_path)
+    errors, warns, lines = audit(facts, args.asset, mapping_path) \
+        if not is_ts_draft(facts) else audit_ts_draft(facts, args.asset, mapping_path)
     if args.accept_review:
         errors = [e for e in errors if e["code"] != "structural_review"]
         print("自检待审已放行（--accept-review，人裁决：矛盾已知悉）")

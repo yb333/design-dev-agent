@@ -1092,3 +1092,16 @@ class TestDqRuleFilenameAndFieldPriority:
         res2 = run_dq_checks(FakeEx(), tmp_path, [
             {"check_type": "空值检查", "rule_name": "x"}], {})
         assert res2[0]["file"] == "dq_01_空值检查.sql" and res2[0]["status"] == "PASS"
+
+
+class TestJoinTypeNorm:
+    """关联类型词形归一（2026-10-28 批3：v2 草稿 'INNER JOIN' vs new-pipe 'INNER'——
+    消费端归一，两态同义）。"""
+
+    def test_variants(self):
+        from sql_parse import join_type_norm
+        assert join_type_norm("INNER JOIN") == "INNER"
+        assert join_type_norm("inner join") == "INNER"
+        assert join_type_norm("Left") == "LEFT"
+        assert join_type_norm("LEFT") == "LEFT"
+        assert join_type_norm("") == ""

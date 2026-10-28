@@ -198,3 +198,67 @@ class TestVerbatimSql:
                      "--internal-dir", str(tmp_path / "o")])
         assert rc == 2
         assert "契约校验不通过" in capsys.readouterr().err
+
+
+# ============================================================
+# v2 ts 草稿建档（2026-10-28 批3：契约=最终形态——守门+copy 零解析）
+# ============================================================
+
+import argparse as _argparse
+from assemble_ts_baseline import _archive_ts_draft
+
+DRAFT_FIXTURE = FIXTURES / "ts_draft_v2_case.json"
+
+
+def _draft_pass():
+    d = json.loads(DRAFT_FIXTURE.read_text(encoding="utf-8"))
+    d["_reverse"]["self_check"] = {"verdict": "pass", "structural_count": 0, "noise_count": 0}
+    return d
+
+
+def _args(tmp_path, asset="dws.dwb_cust_asset_d"):
+    return _argparse.Namespace(baseline="x", archive_dir=str(tmp_path / "archive"),
+                               internal_dir=str(tmp_path / "internal"),
+                               manifest=None, asset=asset)
+
+
+class TestV2DraftArchive:
+    def test_verbatim_archive(self, tmp_path):
+        """建档=逐字 copy（零解析零变换）：ts.json 内容等、etl=query_sql 逐字、
+        MANIFEST 首条、_reverse 随档（单文件自足）。"""
+        d = _draft_pass()
+        assert _archive_ts_draft(d, _args(tmp_path)) == 0
+        arc = tmp_path / "archive"
+        assert json.loads((arc / "ts.json").read_text(encoding="utf-8")) == d
+        assert (arc / "etl" / "R0001.sql").read_text(encoding="utf-8") \
+            == d["rules"]["R0001"]["query_sql"]
+        assert "ts 草稿 v2 契约" in (arc / "MANIFEST.md").read_text(encoding="utf-8")
+        assert (tmp_path / "internal" / "baseline_view.md").exists()   # 消费点渲染留档
+
+    def test_guard_rejects_rearchive(self, tmp_path):
+        d = _draft_pass()
+        assert _archive_ts_draft(d, _args(tmp_path)) == 0
+        assert _archive_ts_draft(d, _args(tmp_path)) == 2            # 守门：确认档拒绝覆盖
+
+    def test_contract_gate_and_asset_gate(self, tmp_path):
+        d = _draft_pass()
+        d["rules"]["R0001"].pop("query_sql")                          # v2.1 契约拦
+        assert _archive_ts_draft(d, _args(tmp_path)) == 2
+        d2 = _draft_pass()
+        assert _archive_ts_draft(d2, _args(tmp_path, asset="dws.other_d")) == 2
+
+    def test_v2_archive_consumption_direct(self, tmp_path):
+        """消费直连：v2 档天然标准三桶——normalize 幂等直通、rule_output_fields
+        直接可用、别名对照 ts 直读（无需 SQL 重解析）。"""
+        from ts_compat import normalize_ts
+        from run_ut import rule_output_fields
+        from preprocess_opt import build_alias_map
+        d = _draft_pass()
+        _archive_ts_draft(d, _args(tmp_path))
+        archived = json.loads((tmp_path / "archive" / "ts.json").read_text(encoding="utf-8"))
+        assert normalize_ts(archived) == archived                    # 幂等（已是标准形态）
+        assert rule_output_fields(archived["rules"]["R0001"])         # 三桶直读
+        rows = build_alias_map({}, archived)                          # 无 SQL 文件——ts 直读
+        by = {(r["rule"], r["table"]): r for r in rows}
+        assert by[("R0001", "ods_acct_balance_di")]["sql_alias"] == ""
+        assert "以 ts 声明为准" in by[("R0001", "ods_acct_balance_di")]["note"]
