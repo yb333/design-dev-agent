@@ -592,6 +592,32 @@ class TestEvalWorksheet:
         assert cr["eval_worksheet"] == ""
 
 
+class TestCaseNormalization:
+    """标识符大小写归一（2026-11-04 实报回归：mapping 全大写引发 unmarked_new_field
+    风暴——baseline_facts.target_fields 曾漏归一，准则=比较点双侧 lower）。"""
+
+    def test_uppercase_mapping_no_unmarked_storm(self, tmp_path, demo_baseline):
+        arc = _opt_ready(tmp_path, demo_baseline)
+        # 属性级当前态全大写（存量字段 ORDER_ID + 新增 CHANNEL_NAME）——不得触发
+        # unmarked_new_field（存量字段在 baseline，大小写归一后应命中）
+        pkg = make_pkg(tmp_path / "pkg", [ent()],
+                       [attr(tcol="ORDER_ID", alias="a", stable="ods_trade_order_di",
+                             scol="order_id"),
+                        attr(tcol="CUST_ID", alias="a", stable="ods_trade_order_di",
+                             scol="cust_id"),
+                        attr(tcol="CHANNEL_NAME", alias="a", stable="ods_trade_order_di",
+                             scol="channel_name")],
+                       STD_CHANGES)
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert not any(w["code"] == "unmarked_new_field" for w in cr["_warns"]), \
+            [w for w in cr["_warns"] if w["code"] == "unmarked_new_field"]
+        # 大写新增字段照常提取（channel_name ADD 行 key 归一命中当前态行）
+        assert [f["field"] for f in cr["fields"]] == ["channel_name"]
+        assert rc in (0, 1)
+
+
 class TestHealthReport:
     """批1 体检报告（跨脚本短路修复+G1/G2 披露）：阻断仍落 change_request（_blocked_
     errors 随件内联，precheck 降级并入一份报告）+ 新检查默认披露级。"""

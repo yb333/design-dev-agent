@@ -98,7 +98,7 @@ def patch_xlsx(src: Path, dst: Path, ts_v2: dict, etl_dir: Path, notes: List[str
             continue
         hit = False
         for row in rule_ws.iter_rows(min_row=2):
-            if str(row[rh[COL_RULE_CODE] - 1].value).strip() == rc:
+            if str(row[rh[COL_RULE_CODE] - 1].value).strip().lower() == rc.lower():
                 for _, c in sql_cols:
                     row[c - 1].value = None
                 row[col1 - 1].value = sql_text
@@ -112,8 +112,8 @@ def patch_xlsx(src: Path, dst: Path, ts_v2: dict, etl_dir: Path, notes: List[str
     th = header_map(tf_ws)
     for rc, field, vals in _change_index(ts_v2):
         # 已存在（声明漂移/重复执行）→ 不动不覆盖（严格 patch：只落变更清单，不修存量）
-        dup = any(str(r[th[COL_RULE_CODE] - 1].value).strip() == rc and
-                  str(r[th["目标字段名称"] - 1].value).strip() == field
+        dup = any(str(r[th[COL_RULE_CODE] - 1].value).strip().lower() == rc.lower() and
+                  str(r[th["目标字段名称"] - 1].value).strip().lower() == str(field).lower()
                   for r in tf_ws.iter_rows(min_row=2) if r[th[COL_RULE_CODE] - 1].value)
         if dup:
             notes.append(f"[跳过] TargetFields 已有 ({rc}, {field})——不覆盖（严格 patch）")
@@ -173,7 +173,7 @@ def patch_yml_group(src_dir: Path, dst_dir: Path, ts_v2: dict, etl_dir: Path,
             extra = data.get("额外信息（其他sheet页信息）")
             if isinstance(extra, dict) and isinstance(extra.get("TargetFields"), list):
                 for _, field, vals in [x for x in _change_index(ts_v2) if x[0] == rc]:
-                    dup = any(str(e.get("目标字段名称", e.get("目标字段", ""))).strip() == field
+                    dup = any(str(e.get("目标字段名称", e.get("目标字段", ""))).strip().lower() == str(field).lower()
                               for e in extra["TargetFields"]
                               if isinstance(e, dict))
                     if dup:

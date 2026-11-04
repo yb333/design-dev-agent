@@ -387,7 +387,11 @@ def baseline_facts(ts_baseline: dict) -> dict:
             t = str(d).rsplit(" AS ", 1)[-1].strip().lower() if " AS " in str(d) else ""
             if t:
                 logics.setdefault(t, []).append({"rule": code, "kind": "direct", "logic": str(d)})
-    fields = {f["target_field"] for f in field_list}
+    # 标识符集一律小写归一（项目准则：mapping/变更记录/baseline 三方比较点双侧 lower——
+    # ts 档字段名可能任意大小写；field_types/logics 同款已归一，此处曾漏[2026-11-04 实报
+    # unmarked_new_field 大写风暴根因]）
+    fields = {str(f["target_field"]).strip().lower() for f in field_list
+              if str(f.get("target_field") or "").strip()}
     field_types = {(f.get("target_field") or "").strip().lower(): (f.get("field_type") or "").strip()
                    for f in field_list}
     sources = {s.get("table", "") for s in ts_baseline["meta"].get("source_tables", [])}
@@ -733,8 +737,9 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
     rename_new = {rn["new"] for rn in renames}
     for i, row in enumerate(attr_rows, start=2):
         tcol = row.get("target_column", "")
-        if tcol and tcol not in facts["target_fields"] and tcol not in batch_declared_adds \
-                and tcol not in rename_new:
+        tcol_key = str(tcol or "").strip().lower()
+        if tcol_key and tcol_key not in facts["target_fields"] and tcol_key not in batch_declared_adds \
+                and tcol_key not in rename_new:
             diags.append({"level": "warn", "code": "unmarked_new_field",
                           "message": f"属性级第{i}行：{tcol!r} 不在 baseline 存量且不在本次"
                                      f"变更记录中（历史漏入档 or 漏标）——请业务确认"})
