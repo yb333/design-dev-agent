@@ -97,7 +97,7 @@
 | `dws_standards.py` | 审计字段标准常量（STANDARD_AUDIT_TEMPLATE） | assemble_ts / precheck | design-dev-shared/scripts |
 | `lts_task_paths.py` | LTS 调度任务路径解析（load_schedule_config 读 lts_config 任务路径段 + resolve_schedule_path 按 schema×任务种类[f/view/dq/init]两维度嵌套解析）——2026-09-14 自 assemble_ts 抽出（assemble_dq 建 dq 任务同款解析，两消费者归 shared） | assemble_ts（re-export 保旧名）/ assemble_dq | design-dev-shared/scripts |
 | `ts_compat.py` | ts 结构兼容层：classify_field 分桶原语 + normalize_ts 旧结构内存升级（幂等，认远古 rule.fields-only）——两视图重构后读旧 ts 的下游全走此路 | slice_ts / check_sql / assemble_export / fence_check / assemble_ts / assemble_ts_opt | design-dev-shared/scripts |
-| `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查） | assemble_ts_baseline / tests/test_baseline_v1_contract | skills/opt-pipe/scripts（schema 在 opt-pipe/schemas） |
+| `baseline_contract.py` ★opt | baseline_v1 契约消费端校验器（vendored JSON Schema + 版本支持 1.0/1.1 + dm=6 必 merge_on 语义检查；schema 含 to_group 键[2026-11-04 re-vendor——用户实测'to_group was unexpected'根因=彼侧 v1.4 补 to_group 而旧 vendor 拒收]；**schema 整文件指纹联锁 test_vendor_sync**[彼仓在则比/不在 skip——v1/v2 双方向联锁齐]） | assemble_ts_baseline / tests/test_baseline_v1_contract | skills/opt-pipe/scripts（schema 在 opt-pipe/schemas） |
 
 ---
 

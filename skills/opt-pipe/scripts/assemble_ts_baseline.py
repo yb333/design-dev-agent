@@ -174,7 +174,10 @@ def build_tables(data: dict, topo: Dict[str, dict]) -> Tuple[Dict[str, dict], Li
             "distribute_type": dist_type,
             "partition": str(props.get("partition_by") or ""),
             "storage": "column",
-            "logical_group": "",
+            "logical_group": str(props.get("to_group") or "").strip().rstrip(","),
+            # ^ TO GROUP 逻辑集群恢复（2026-11-04：facts v1.4 补 to_group 键——用户实测
+            # 'to_group was unexpected' 根因即旧 vendor schema 拒此键；恢复对齐 v2 草稿
+            # 通道的 logical_group，DDL 投影无损两通道同水位）
             "fields": fields,
         }
     return ts_tables, gaps

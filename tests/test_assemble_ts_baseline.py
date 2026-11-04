@@ -95,6 +95,7 @@ class TestDemoFullCase:
         t = ts["tables"]["dwb_cust_asset_d"]
         assert t["distribution_key"] == ["cust_id"]
         assert t["distribute_type"] == "HASH"
+        assert t["logical_group"] == "LC_DW1"   # TO GROUP 恢复（2026-11-04：facts v1.4 补 to_group）
         assert not any(g["code"] == "distribution_key" for g in gaps)
         # 无分布键表（缺 DDL/无表尾子句）不误造——契约：is_distribute_key 恒 false
         assert ts["tables"]["tmp_cust_asset_detail"]["distribution_key"] == []

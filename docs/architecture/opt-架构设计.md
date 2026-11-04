@@ -184,3 +184,6 @@ distribution_key/table_props 回收（facts 已带 is_distribute_key，v1 装配
 | specs/opt/00-08 | 设计定稿过程（归档参考） |
 | specs/opt/09+10 | baseline_v1 契约（消费侧/逆向侧） |
 | specs/opt/11-测试指引 | 端到端测试入口（命令以 opt-pipe SKILL 为准） |
+| specs/opt/12 | 逆向能力需求：资产事实包（v4=ts 草稿契约，逆向侧实施依据） |
+| specs/opt/13 | 存量首优用户操作指南（用户视角） |
+| specs/opt/14 | 逆向能力需求：台账视图（mapping 语义重建——内容原则不锁格式，逆向侧实施依据） |
