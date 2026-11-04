@@ -75,10 +75,11 @@ python PIPE_SCRIPTS/assemble_ts_baseline.py \
 
 ```bash
 python PIPE_SCRIPTS/preprocess_opt.py \
-  --mapping {mapping} --rs {rs} \
+  --mapping {mapping} [--rs {rs}] \
   --ts-baseline {arc}/ts.json \
   --opt-root {ddlc} [--version 202608]
 ```
+- `--rs` **可选**（2026-11-04 对齐新建无 RS 模式）：RS=口径材料（DQ/调度/回刷意向），版本锚定主源在 mapping 变更页签——缺省 warn 不阻断，change_request 标 `_no_rs_mode`（闸口材料口径段渲染「未提供」）；建议 90% 场景提供；
 - 版本锚点：默认取 mapping「变更记录」页签最新批次时间归一 YYYYMM（--version 可显式重选历史批次）；
 - 变更提取：mapping「变更记录」页签（v3 八列结构化——历史批次累积，按变更时间归一 YYYYMM 取最新）——属性级 ADD（变更列=`资产字段`）= 新增字段候选；**rename（先删后加对）/MODIFY/DELETE/实体级 ADD/列级 ADD 识别归类并报告"待扩展"，不是非法输入**；
 - exit 2 = 阻断（冲突/别名悬空/资产不一致[已按 I/F 镜像归一比较]/版本定位失败）→ 报告人改输入，不自动修；
@@ -215,7 +216,7 @@ python PIPE_SCRIPTS/sql_fence_check.py \
 python PIPE_SCRIPTS/assemble_ddl_opt.py \
   --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json --outdir {build}
 ```
-产出 `{build}/ddl/alter_table_*.sql`（变更单）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）。全量建表 DDL 不产（ts 的可再生投影）。
+产出 `{build}/ddl/alter_table_*.sql`（变更单）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）+ `{build}/ddl_rollback/rollback_*.sql`（**回退脚本=变更的逆**：存量表 TRUNCATE 空表起步+列级结构逆[DROP COLUMN/MODIFY 旧类型]、新表 DROP——UT 幂等重跑用；**build 现场件不进档案**，advance 不拷贝）。全量建表 DDL 不产（ts 的可再生投影）。
 
 ```bash
 python SHARED_SCRIPTS/check_db.py --ts {arc_tmp}/ts.json
@@ -228,7 +229,9 @@ python PIPE_SCRIPTS/ut_opt.py \
   --baseline-dir {arc}/etl --ddl-dir {build}/ddl \
   --report {build}/ut_report_opt.md
 ```
-- exit 2 = ALTER 变更单缺失（流程顺序错，回本步骤头部补跑 assemble_ddl_opt）；
+- **回退先行**（UT 幂等重跑）：ut_opt 先执行 ddl_rollback 回到变更前状态再应用 ALTER（首次"列不存在"容忍，分色汇总进报告）——UT 语义=空表起步全量装载，与新建统一（merge 两分支由幂等第二遍覆盖，dev 不复现生产历史）；
+- **写路径列清单=SELECT 实际输出序**（describe 实测——2026-11-04：还原平台拼接动作；逆向档 tables 序[物理序]与 SQL 投影序独立来源常态错位，结构源序权威仅新建成立）；列存在性对账：SQL 输出列不在表结构=幻觉列/变更单缺失 FAIL；表有列 SQL 不产=差集披露（平台配置补值列——闸口②'素材）；
+- exit 2 = ALTER 变更单/回退脚本缺失（流程顺序错，回本步骤头部补跑 assemble_ddl_opt）；
 - exit 3 = 环境问题（表不存在/无库）→ 归人；
 - 每规则 EXPLAIN ANALYZE 真实执行一次（计划两门槛 + 0 行信号，计划落盘 diagnose/）+
   **新列空值检查**（写路径后真实数据；全 NULL = 疑似新 JOIN 关联不上——闸口②'素材）+

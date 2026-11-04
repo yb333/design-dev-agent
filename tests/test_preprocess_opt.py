@@ -394,6 +394,37 @@ class TestMainEndToEnd:
                    "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
         assert rc == 2
 
+    def test_no_rs_mode_runs_mapping_driven(self, tmp_path, demo_baseline):
+        """无 RS 模式（2026-11-04 对齐新建）：--rs 缺省不阻断，mapping 独立驱动，
+        change_request 标 _no_rs_mode、口径段空。"""
+        arc = _opt_ready(tmp_path, demo_baseline)
+        changes = STD_CHANGES + [chg(3, "2026-10-14", "entity", "default|c", "资产字段", "ADD")]
+        pkg = make_pkg(tmp_path / "pkg",
+                       [ent(), ent(table="dim_channel", alias="c")],
+                       [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                        attr()], changes)
+        rc = main(["--mapping", str(pkg / PKG_XLSX),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc in (0, 1)   # 1=G2 披露（最小夹具常态）
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert cr["_no_rs_mode"] is True
+        assert cr["rs_opt_section"] == ""
+        assert [f["field"] for f in cr["fields"]] == ["channel_name"]   # 变更提取不受影响
+        assert cr["source_files"]["rs"] == ""
+
+    def test_rs_provided_no_marker(self, tmp_path, demo_baseline):
+        arc = _opt_ready(tmp_path, demo_baseline)
+        changes = STD_CHANGES + [chg(3, "2026-10-14", "entity", "default|c", "资产字段", "ADD")]
+        pkg = make_pkg(tmp_path / "pkg",
+                       [ent(), ent(table="dim_channel", alias="c")],
+                       [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                        attr()], changes)
+        rc = main(["--mapping", str(pkg / PKG_XLSX), "--rs", str(pkg / PKG_RS),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc in (0, 1)
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert "_no_rs_mode" not in cr
+
 
 class TestBaselineViewBackfill:
     def test_view_rendered_when_missing(self):

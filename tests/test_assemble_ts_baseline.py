@@ -39,6 +39,14 @@ class TestV2DraftArchive:
             == d["rules"]["R0001"]["query_sql"]
         assert "ts 草稿 v2 契约" in (arc / "MANIFEST.md").read_text(encoding="utf-8")
         assert (tmp_path / "internal" / "baseline_view.md").exists()   # 消费点渲染留档
+        # 首档 ts.md 成对（2026-11-04 档案成对契约——不留空窗）：逆向形态降级渲染，
+        # design 段占位（待首轮优化还原），结构/规则段完整
+        md = arc / "dwb_cust_asset_d_ts.md"
+        assert md.exists(), "首档 ts.md 未成对产出"
+        _md_text = md.read_text(encoding="utf-8")
+        assert "设计思路待补" in _md_text
+        assert "dwb_cust_asset_d" in _md_text
+        assert "## 4. 规则详情" in _md_text
 
     def test_guard_rejects_rearchive(self, tmp_path):
         d = _draft_pass()

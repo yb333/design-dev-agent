@@ -105,6 +105,36 @@ class TestAuditBackfill:
 class TestModifyTypeDdl:
     """场景 B（2026-10-22）：类型修改进 ALTER 变更单（DWS MODIFY 语法）。"""
 
+    def test_rollback_generated_existing_table(self, pair, tmp_path):
+        """回退=变更的逆（2026-11-04）：存量表 TRUNCATE+列级结构逆；档案零回退
+        （产物只在 build 现场目录）。"""
+        from assemble_ddl_opt import build_rollback_ddl
+        b, v2 = pair
+        bp = tmp_path / "b.json"; vp = tmp_path / "v2.json"
+        bp.write_text(json.dumps(b, ensure_ascii=False), encoding="utf-8")
+        vp.write_text(json.dumps(v2, ensure_ascii=False), encoding="utf-8")
+        rc = main(["--ts-v2", str(vp), "--ts-baseline", str(bp), "--outdir", str(tmp_path)])
+        assert rc == 0
+        rb = tmp_path / "ddl_rollback" / "rollback_alter_dwb_trade_order_d.sql"
+        assert rb.exists()
+        text = rb.read_text(encoding="utf-8")
+        assert "TRUNCATE TABLE dws.dwb_trade_order_d;" in text
+        assert "ALTER TABLE dws.dwb_trade_order_d DROP COLUMN" in text   # 列级逆非整表
+        assert "DROP TABLE" not in text                                   # 存量表绝不整表 DROP
+        assert (tmp_path / "ddl_rollback" / "rollback_alter_tmp_trade_order.sql").exists()
+
+    def test_rollback_new_table_drop(self):
+        from assemble_ddl_opt import build_rollback_ddl
+        sql = build_rollback_ddl("dws", "tmp_new", [], [], is_new_table=True)
+        assert "DROP TABLE IF EXISTS dws.tmp_new;" in sql
+        assert "TRUNCATE" not in sql
+
+    def test_rollback_modify_restores_old_type(self):
+        from assemble_ddl_opt import build_rollback_ddl
+        sql = build_rollback_ddl("dws", "t1", [], [{"field": "c1", "old_type": "VARCHAR(32)",
+                                                    "new_type": "VARCHAR(64)"}])
+        assert "ALTER TABLE dws.t1 MODIFY (c1 VARCHAR(32));" in sql   # 逆=还原旧类型
+
     def test_alter_contains_modify(self):
         from assemble_ddl_opt import build_alter_ddl
         sql = build_alter_ddl("dws", "t1", [{"field": "c1", "field_type": "varchar(64)"}],

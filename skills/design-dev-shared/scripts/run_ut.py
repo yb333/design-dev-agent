@@ -232,24 +232,23 @@ def rule_output_fields(rule: dict) -> set:
     return out
 
 
-def _resolve_insert_columns(table_fields: list, produced: set = None) -> list[str]:
-    """INSERT 字段列表——结构源序 ∩ 规则产出列（2026-09-15 精确化）。
+def _resolve_insert_columns(table_fields: list, produced: set = None,
+                            column_order: list = None) -> list[str]:
+    """INSERT 字段列表——两个权威形态（2026-11-04 问题7 层1 定调）：
 
-    权威仍是结构源：ts.tables.{目标表}.fields（DDL 同源，顺序=装配顺序=切片顺序），
-    不从 SELECT 文本解析（2026-09-11 内网实证 CTE 炸批的教训不回退）；produced
-    （规则三桶 target 集，rule_output_fields 产）非空时按结构源序过滤到产出列（空集/
-    None=全列——旧档无产出声明保守全列）——
-    coder 不必为未产出列写 NULL AS x 凑全列（INSERT 缺省 NULL 等价；MERGE SET
-    产出列=保留其余列旧值）。produced=None 全列（单规则全字段/兼容旧调用）。
-
-    SELECT 实际输出列与清单的一致性由 6a describe 对账守（权威解释器是数据库）。
-    平台等价性：平台按 SELECT 输出顺序拼列（位置对齐）——UT 清单=SELECT 实际
-    输出（产出列）与平台形态一致；coder 按切片顺序输出 + 6a 列序对账。
+    - column_order（opt 场景）：**SELECT 实际输出序（describe 实测）**。逆向档
+      tables.fields 序（物理/DDL 序）与 query_sql 投影序是独立来源、常态错位
+      （v2 契约样例自身即错位）；生产平台列清单跟随 SQL 序，UT 还原平台拼接动作
+      =列清单取 SELECT 输出序。结构源序权威仅在新建成立（SELECT 也从结构源切片，
+      装配序=切片序=coder 输出序三方同构）。存在性对照结构源——describe 出的列
+      不在表里=ALTER 变更单缺失/幻觉列，当场拦。
+    - 无 column_order（新建，既有语义不变）：结构源序 ∩ 规则产出列。
 
     Args:
         table_fields: 表的全部字段（dict 列表取 target_field；或字符串列表）。
-        produced: 规则产出列集（小写；空集/None=不过滤全列）。
-    返回: 字段名列表（结构源顺序过滤后）；空清单抛 ValueError（fail-visible）。
+        produced: 规则产出列集（小写；空集/None=不过滤全列）——column_order 给定时忽略。
+        column_order: SELECT 实际输出列序（opt；None=新建结构源序语义）。
+    返回: 字段名列表；空清单抛 ValueError（fail-visible）。
     """
     if table_fields and isinstance(table_fields[0], dict):
         names = [f.get("target_field", "") for f in table_fields]
@@ -261,6 +260,21 @@ def _resolve_insert_columns(table_fields: list, produced: set = None) -> list[st
     dup = sorted({n for n in names if names.count(n) > 1})
     if dup:
         raise ValueError(f"INSERT 字段清单含重复列 {dup}——结构源异常（同表字段应被 C9 查重拦）")
+    if column_order:
+        cols = [str(c).strip() for c in column_order if str(c).strip()]
+        if not cols:
+            raise ValueError("column_order 为空——SELECT 实际输出列不可得（describe 失败）")
+        _cdup = sorted({c for c in cols if cols.count(c) > 1})
+        if _cdup:
+            raise ValueError(f"SELECT 输出列含重复 {_cdup}——SQL 投影异常")
+        if not names:
+            raise ValueError(
+                "INSERT 字段清单为空——ts.tables 里目标表无字段声明（检查 ts 装配/表短名匹配）")
+        _miss = [c for c in cols if c.lower() not in {n.lower() for n in names}]
+        if _miss:
+            raise ValueError(f"SELECT 输出列不在目标表结构内: {_miss}——"
+                             f"ALTER 变更单缺失或幻觉列（对照 ts.tables/变更单）")
+        return cols
     if not names:
         raise ValueError(
             "INSERT 字段清单为空——ts.tables 里目标表无字段声明（检查 ts 装配/表短名匹配）")
@@ -276,18 +290,21 @@ def _resolve_insert_columns(table_fields: list, produced: set = None) -> list[st
 
 
 def wrap_insert(select_sql: str, target_table: str, table_fields: list,
-                produced: set = None) -> str:
+                produced: set = None, column_order: list = None) -> str:
     """把 SELECT 包装成 INSERT 语句（模拟平台构建）。
 
     平台规则：
     - INSERT INTO 目标表 (字段列表)
     - SELECT 内容不变
-    - 字段列表 = 结构源序 ∩ 规则产出列（见 _resolve_insert_columns——不从 SELECT 文本解析）
+    - 字段列表：column_order（opt=SELECT 实际输出序）/ 结构源序 ∩ 规则产出列
+      （见 _resolve_insert_columns——不做 SELECT 文本猜测，序权威=describe 实测
+      或结构源切片）
 
     table_fields: 该表的全部字段（从 tables 段取，已含审计字段）。
-    produced: 规则产出列集（rule_output_fields；None=全列）。
+    produced: 规则产出列集（rule_output_fields；None=全列）——column_order 给定时忽略。
+    column_order: SELECT 实际输出列序（opt 场景权威；None=新建结构源序语义）。
     """
-    field_names = _resolve_insert_columns(table_fields, produced)
+    field_names = _resolve_insert_columns(table_fields, produced, column_order)
     columns = ",\n    ".join(field_names)
 
     return f"""INSERT INTO {target_table} (
@@ -299,7 +316,7 @@ def wrap_insert(select_sql: str, target_table: str, table_fields: list,
 
 def wrap_write(select_sql: str, target_table: str, table_fields: list,
                load_mode: str = "truncate_table", write_condition: str = "",
-               produced: set = None) -> str:
+               produced: set = None, column_order: list = None) -> str:
     """按 load_mode + write_condition 把 SELECT 包装成平台写入语句（模拟平台构建）。
 
     平台规则（用户确认）：目标表别名 T，源（SELECT 结果）别名 T1。
@@ -316,14 +333,17 @@ def wrap_write(select_sql: str, target_table: str, table_fields: list,
         write_condition: 写入条件（merge 的 ON、partition 的分区名、delete 的 WHERE）。
         produced: 规则产出列集（rule_output_fields；None=全列）。MERGE 的 UPDATE SET
             只 SET 产出列——**保留其余列旧值**（全列 SET 会把本规则不负责的列清成 NULL）。
+        column_order: SELECT 实际输出列序（opt 场景——INSERT/MERGE 列清单按此序；
+            None=新建结构源序语义，MERGE SET 按产出列）。
     """
     # 非 merge/update 的都走 INSERT（partition/delete 的清空动作在 ut_execute 预处理）
     if load_mode not in ("merge_into", "update"):
-        return wrap_insert(select_sql, target_table, table_fields, produced)
+        return wrap_insert(select_sql, target_table, table_fields, produced, column_order)
 
     # MERGE / UPDATE：拼 MERGE INTO 语句
-    # ★ 字段列表 = 结构源序 ∩ 规则产出列（见 _resolve_insert_columns；列序一致性由 6a describe 对账守）
-    field_names = _resolve_insert_columns(table_fields, produced)
+    # ★ 字段列表 = column_order（opt=SELECT 实际输出序）/ 结构源序 ∩ 规则产出列
+    #   （见 _resolve_insert_columns）
+    field_names = _resolve_insert_columns(table_fields, produced, column_order)
 
     columns = ", ".join(field_names)
     # UPDATE SET：源字段赋值（T1.col 对应每个目标字段，审计字段不更新由业务定，这里全量 UPDATE）
@@ -594,7 +614,8 @@ def run_ut_check(executor, target_table: str, business_key: list, audit_fields: 
 
 def execute_write_path(executor, rule_code: str, target: str, select_sql: str,
                        tbl_fields: list, load_mode: str = "truncate_table",
-                       write_condition: str = "", produced: set = None) -> dict:
+                       write_condition: str = "", produced: set = None,
+                       column_order: list = None) -> dict:
     """写路径执行通道：load_mode 预处理（写前清理）→ wrap_write 拼装（真生产形态
     ——merge_into 拼真 MERGE）→ 执行判定（r.success——executor 失败契约=返回
     ExecuteResult 不抛异常，2026-10-26 opt 侧契约误解病灶的根治）+ error_type 分流。
@@ -621,7 +642,7 @@ def execute_write_path(executor, rule_code: str, target: str, select_sql: str,
 
     try:
         insert_sql = wrap_write(select_sql, target, tbl_fields, load_mode,
-                                write_condition, produced)
+                                write_condition, produced, column_order)
     except ValueError as ve:
         # INSERT 列清单/条件缺失等构造异常——规则级 FAIL，不拖垮整轮
         return {"rule": rule_code, "status": "FAIL", "error_type": "SQL",

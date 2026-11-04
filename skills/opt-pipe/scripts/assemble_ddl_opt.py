@@ -2,6 +2,9 @@
 
 产出（--outdir，一般 {deliver}）：
   ddl/alter_table_{表名}.sql   ★变更单（交付物）：ALTER ADD COLUMN + COMMENT，一表一文件
+  ddl_rollback/rollback_*.sql  回退脚本（2026-11-04 UT 幂等补环——变更的逆：
+                               存量表 TRUNCATE+列级结构逆 / 新表 DROP；build 现场
+                               件不进档案——adopt/advance 拷贝清单不含 ddl_rollback）
   ddl_full/create_table_*.sql  全量 DDL（档案推进用；复用 assemble_ddl.generate_ddl 从 ts_v2 生成，
                                json 路径无原 DDL 时即档案初始版）
 
@@ -40,6 +43,32 @@ def build_alter_ddl(schema: str, table: str, additions: List[dict],
             lines.append(f"COMMENT ON COLUMN {full}.{f['field']} IS '{f['field_comment']}';")
     for m in modifies:
         lines.append(f"ALTER TABLE {full} MODIFY ({m['field']} {m.get('new_type', '')});")
+    return "\n".join(lines) + "\n"
+
+
+def build_rollback_ddl(schema: str, table: str, additions: List[dict],
+                       modifies: List[dict] | None = None,
+                       is_new_table: bool = False) -> str:
+    """一表一份回退脚本（UT 重跑幂等——2026-11-04 用户定调：回退=**变更的逆**，
+    不是整表回退；TRUNCATE 空表起步=与新建 UT 统一语义——merge 两分支由幂等
+    第二遍覆盖，dev 库不复现生产历史从来不是 UT 承诺）。
+
+    - 存量表：TRUNCATE（数据回退）+ 结构逆（add_field/审计缺口列 DROP COLUMN、
+      modify_type 还原旧类型——old_type 照抄 change 声明）
+    - 新表（baseline 没有的中间表）：DROP TABLE
+    ★ 位置：build/ddl_rollback/ 现场件——adopt/advance 拷贝清单不含它，
+    资产档案零回退（与 new-pipe 同构：回退属变更生命周期不属资产）。"""
+    full = f"{schema}.{table}" if schema else table
+    if is_new_table:
+        return (f"-- 回退脚本（UT 重跑幂等）：DROP 新表 {full}\n"
+                f"DROP TABLE IF EXISTS {full};\n")
+    lines = [f"-- 回退脚本（UT 重跑幂等）：{full} 回到变更前状态（列级逆——不整表回退）",
+             "-- UT 语义=空表起步全量装载（与新建一致）；由 assemble_ddl_opt 生成",
+             f"TRUNCATE TABLE {full};"]
+    for f in additions:
+        lines.append(f"ALTER TABLE {full} DROP COLUMN {f['field']};")
+    for m in modifies or []:
+        lines.append(f"ALTER TABLE {full} MODIFY ({m['field']} {m.get('old_type', '')});")
     return "\n".join(lines) + "\n"
 
 
@@ -175,6 +204,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"alter 变更单: {out / 'ddl'}（{n_alters} 列）")
     if n_view:
         print(f"I 视图重建: {out / 'ddl'}/create_or_replace_view_{i_view['table']}.sql")
+
+    # 3. 回退脚本（2026-11-04 UT 幂等补环）：变更的逆——存量表 TRUNCATE+列级结构逆，
+    #    新表 DROP。覆盖面=alter 表 ∪ 全部规则目标表（UT 写路径全量装载——TRUNCATE
+    #    保证重跑不累积；纯 truncate_table 规则的写前清理与回退幂等重合无害）
+    rb_dir = out / "ddl_rollback"
+    rb_dir.mkdir(parents=True, exist_ok=True)
+    _baseline_tables = set((baseline.get("tables") or {}).keys())
+    _rb_tables = set(_adds_by_table) | set(_mods_by_table) | {
+        str(r.get("target_table", "")).rsplit(".", 1)[-1]
+        for r in (v2.get("rules") or {}).values() if r.get("target_table")}
+    _rb_tables &= set((v2.get("tables") or {}).keys())   # 只物理表（视图不可 TRUNCATE）
+    n_rb = 0
+    for t in sorted(_rb_tables):
+        is_new = t not in _baseline_tables
+        (rb_dir / f"rollback_create_table_{t}.sql" if is_new
+         else rb_dir / f"rollback_alter_{t}.sql").write_text(
+            build_rollback_ddl(schema, t, _adds_by_table.get(t, []),
+                               _mods_by_table.get(t, []), is_new_table=is_new),
+            encoding="utf-8")
+        n_rb += 1
+    print(f"rollback 回退脚本: {rb_dir}（{n_rb} 表——build 现场件，档案零回退）")
     return 0
 
 

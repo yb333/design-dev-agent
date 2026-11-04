@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from assemble_ts_opt import load_decisions, validate_decisions, apply_decisions, main
+from assemble_ts_opt import (load_decisions, validate_decisions, apply_decisions,
+                             validate_baseline_design, main)
 from fence_check import check
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
@@ -21,9 +22,18 @@ def baseline():
     return json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
 
 
+BASELINE_DESIGN = {
+    "grain": "一行=一笔订单（order_id 唯一）",
+    "keys": "业务主键=order_id（订单表天然唯一，直取）",
+    "topology": "R0001 从 ods 订单表加工入 tmp，R0002 终态装配写入 F 表",
+    "notes": "",
+}
+
+
 def dec_direct():
     return {
         "change_type": "add_field", "backfill": "pending",
+        "baseline_design": dict(BASELINE_DESIGN),
         "fields": [{
             "field": "pay_channel", "target_table": "dwb_trade_order_d",
             "placed_rules": ["R0002"], "intermediate_tables": [],
@@ -99,6 +109,47 @@ class TestApplyAndFenceIntegration:
         assert "channel_name" in {x["target_field"]
                                   for x in v2["tables"]["tmp_trade_order"]["fields"]}
         assert check(baseline, v2, cr_for("channel_name")) == []
+
+
+class TestBaselineDesign:
+    """baseline_design（2026-11-04 用户定调：designer 还原前人的设计——完整 ts 文档
+    的组成部分）：必填拦空、装配进 v2.design、ts.md 渲染可见、渲染失败 fail loud。"""
+
+    def test_missing_baseline_design_blocked(self):
+        d = dec_direct()
+        d.pop("baseline_design")
+        with pytest.raises(SystemExit):
+            validate_baseline_design(d)
+
+    def test_empty_grain_blocked(self):
+        with pytest.raises(SystemExit):
+            validate_baseline_design({"baseline_design": {"grain": "", "keys": "k",
+                                                          "topology": "t"}})
+
+    def test_valid_passes(self):
+        validate_baseline_design({"baseline_design": dict(BASELINE_DESIGN)})   # 不炸即过
+
+    def test_assembled_into_v2_and_rendered(self, baseline):
+        d = dec_new_join()
+        v2 = apply_decisions(baseline, d)
+        assert v2["design"]["baseline_design"]["grain"] == BASELINE_DESIGN["grain"]
+        from render_md import render_md
+        md = render_md(v2)
+        assert "存量设计还原" in md
+        assert "数据流" in md and BASELINE_DESIGN["topology"] in md
+
+    def test_md_render_failure_fails_loud(self, baseline, tmp_path, monkeypatch):
+        """渲染失败=产物不完整，exit 1（内网实报：WARN 被长流程吞、md 缺位漂到闸口）。"""
+        import render_md as _rm
+        monkeypatch.setattr(_rm, "render_md",
+                            lambda ts: (_ for _ in ()).throw(RuntimeError("形态漂移")))
+        d = dec_new_join()
+        dp = tmp_path / "d.yaml"
+        dp.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        bp = tmp_path / "ts_baseline.json"
+        bp.write_text(json.dumps(baseline, ensure_ascii=False), encoding="utf-8")
+        assert main(["--ts-baseline", str(bp), "--decisions", str(dp),
+                     "--output", str(tmp_path / "ts_v2.json")]) == 1
 
 
 class TestLogicRefExistence:

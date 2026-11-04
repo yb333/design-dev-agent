@@ -15,6 +15,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# shared 公共库自洽引用：相对路径推算 design-dev-shared（首档 ts.md 渲染器 render_md）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
+
 
 
 
@@ -126,6 +129,12 @@ def _archive_ts_draft(draft: dict, args) -> int:
     for code, r in sorted((draft.get("rules") or {}).items()):
         (archive / "etl" / f"{code}.sql").write_text(str(r.get("query_sql") or ""),
                                                      encoding="utf-8")
+    # 首档 ts.md（2026-11-04 档案成对契约：ts.json/ts.md 不留空窗）——渲染器
+    # shared/render_md 对逆向形态降级容错（design 段渲染占位「待首轮优化还原」，
+    # 结构/规则段完整呈现）；首轮 opt designer 还原 baseline_design 后随 advance 变实
+    from render_md import render_md
+    _short = f_table.get("table") or "ts"
+    (archive / f"{_short}_ts.md").write_text(render_md(draft), encoding="utf-8")
     from preprocess_opt import render_baseline_view_from_ts
     (internal / "baseline_view.md").write_text(
         render_baseline_view_from_ts(draft), encoding="utf-8")

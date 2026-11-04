@@ -6,13 +6,15 @@
 
 流程（现成开发环境上）：
   1. 围栏时效校验（回路铁律机器化：产物变→围栏重跑→才进 UT）
-  2. 应用 ALTER（ddl/alter_table_*.sql 确定文件名；表不存在=环境归人 exit 3；
+  2. 回退（ddl_rollback/rollback_*.sql——UT 幂等重跑：先回到变更前状态再应用，
+     首次"列不存在"容忍；回退=变更的逆：TRUNCATE 空表起步+列级结构逆）
+  3. 应用 ALTER（ddl/alter_table_*.sql 确定文件名；表不存在=环境归人 exit 3；
      **逐句判定 r.success**——类型 MODIFY 转换失败当场爆）
-  3. EXPLAIN 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌；计划两门槛+顶层行数）
+  4. EXPLAIN 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌；计划两门槛+顶层行数）
   4. 写路径（共享内核 execute_write_path：load_mode 真形态——merge_into 拼真 MERGE
-     +写前清理，**多次重跑不再累积残留**）+ **merge 族幂等第二遍**
-     （verify_merge_idempotent：同语句两遍行数不变——WHEN MATCHED 分支覆盖+
-     生产重叠窗口重跑安全性镜像）
+     +写前清理，**多次重跑不再累积残留**；**opt 列清单=SELECT 实际输出序**——
+     逆向档 tables 序与 SQL 投影序独立来源，结构源序权威仅新建成立）+ **merge 族
+     幂等第二遍**（verify_merge_idempotent：同语句两遍行数不变——两分支覆盖）
   5. run_ut_check **全集**（行数/主键唯一/审计非空——2026-10-26 豁免移除：UT 是
      资产质量门不是 diff 门，口径修改后主键唯一性必须独立验证）
   6. 新列/新类型抽查（全 NULL=新 JOIN 关联不上；类型修改列转换 NULL=事故信号）
@@ -25,6 +27,7 @@
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -34,19 +37,32 @@ from typing import Dict, List, Optional
 
 from run_ut import (read_select, run_dq_checks, load_dq_rules, rule_output_fields,
                     execute_write_path, verify_merge_idempotent, run_ut_check,
-                    substitute_params, resolve_all_params, compare_column_order)
+                    substitute_params, resolve_all_params)
 from explain_check import _analyze_plan, _parse_actual_rows
 
 # 报告样例上限（不搬全量数据）
 SAMPLE_LIMIT = 5
 
 
+def describe_output_columns(executor, select_sql: str) -> List[str]:
+    """describe SELECT 实际输出列（LIMIT 0 不取数）——opt INSERT 列清单权威
+    （2026-11-04 问题7 层1：UT 还原平台拼接动作，列清单跟随 SQL 序；权威解释器
+    是数据库，零文本解析）。失败/无列返回空列表（调用方 fail loud）。"""
+    r = executor.execute(
+        f"SELECT * FROM ({select_sql.strip().rstrip(';')}) _ut_cols LIMIT 0")
+    if r.success and r.columns:
+        return [str(c) for c in r.columns]
+    return []
+
+
 def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path,
                        param_values: Optional[dict] = None) -> List[dict]:
     """逐规则 EXPLAIN ANALYZE 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌）：
     真跑通验证 + 计划两门槛（不下推/STREAM——提示级不阻断）+ 顶层行数（0 行告警）
-    + describe 列序对账（2026-10-23 缺 b 补齐——对齐 6a：INSERT 按位置对齐，coder
-    输出多/缺/乱序=静默错位，权威解释器是数据库；列序 FAIL=硬阻断归 coder）。
+    + **列存在性对账**（2026-11-04 问题7：opt 不做序对账——逆向档 tables 序[物理/
+    DDL 序]与 SQL 投影序独立来源、常态错位，序在 opt 无意义且 coder 老列不许动；
+    存在性照拦幻觉列[describe 列 ⊆ 表结构∪ALTER 后]，表有列 SQL 不产的差集披露
+    给人[平台配置补的审计列等]——层2 查证平台按名/位置匹配后决定是否升级）。
     计划原文全量落盘 _internal/diagnose/ 可回溯。返回检查结果列表。
     执行前过参数替换（2026-10-23 补：存量 SQL 平台变量 #name={constants,val}# /
     ${PARAM} 形态——统一 UT 重构时 opt 侧漏接，裸跑必 DB 报错）。"""
@@ -74,29 +90,30 @@ def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path,
         if pre_rows == 0:
             plan_issues = [f"⚠ 0 行——源表有数据却查不出：疑似关联/过滤条件全灭，核对关联条件"] + plan_issues
         row_note = f"EXPLAIN {pre_rows}行" if pre_rows is not None else "行数未解析"
-        # 列序对账（对齐 6a 口径：期望=结构源序 ∩ 规则产出列；describe 无列宁放过披露）
+        # 列存在性对账（opt 语义；describe 无列=宁放过披露）
         target = rule.get("target_table", "")
         t_short = target.rsplit(".", 1)[-1] if "." in target else target
-        expected = [str(f.get("target_field", "")).lower()
-                    for f in (tables_meta.get(t_short) or {}).get("fields", [])
-                    if isinstance(f, dict) and f.get("target_field")]
-        produced = rule_output_fields(rule)
-        if produced:
-            expected = [c for c in expected if c in {str(p).lower() for p in produced}]
-        if expected:
-            r_desc = executor.execute(
-                f"SELECT * FROM ({new_sql.strip().rstrip(';')}) _ut_cols LIMIT 0")
-            if r_desc.success and r_desc.columns:
-                actual = [str(c).lower() for c in r_desc.columns]
-                ok, diffs = compare_column_order(expected, actual)
-                if not ok:
-                    results.append({"rule": rule_code, "status": "FAIL",
-                                    "detail": f"列序对账失败（SQL 输出列 ≠ ts 字段声明）: "
-                                              f"{'; '.join(diffs)}——回 coder 修 SELECT 输出列"})
-                    continue
-                row_note += f"，列序对账 {len(expected)} 列一致"
+        table_cols = [str(f.get("target_field", "")).lower()
+                      for f in (tables_meta.get(t_short) or {}).get("fields", [])
+                      if isinstance(f, dict) and f.get("target_field")]
+        actual_cols = describe_output_columns(executor, new_sql)
+        if actual_cols and table_cols:
+            actual_l = [c.lower() for c in actual_cols]
+            extra = [c for c in actual_l if c not in set(table_cols)]
+            if extra:
+                results.append({"rule": rule_code, "status": "FAIL",
+                                "detail": f"SELECT 输出列不在表结构内: {extra}——"
+                                          f"ALTER 变更单缺失或幻觉列（对照 ts.tables/变更单）"})
+                continue
+            missing = [c for c in table_cols if c not in set(actual_l)]
+            if missing:
+                row_note += (f"，差集披露：表结构 {len(table_cols)} 列 / SQL 输出 "
+                             f"{len(actual_l)} 列（表有 SQL 未产出: {missing[:10]}"
+                             f"{'…' if len(missing) > 10 else ''}——平台配置补值列待层2查证）")
             else:
-                row_note += "，列序对账跳过（describe 无列返回）"
+                row_note += f"，列存在性对账 {len(actual_l)} 列全在表内"
+        elif not actual_cols:
+            row_note += "，列对账跳过（describe 无列返回）"
         results.append({"rule": rule_code, "status": "PASS",
                         "detail": f"真跑通（{row_note}）",
                         "plan_issues": plan_issues, "plan_file": plan_file})
@@ -176,12 +193,56 @@ def apply_alters(executor, ddl_dir: Path, tables: List[str], schema: str) -> Lis
     return applied
 
 
+def run_rollback(executor, rb_dir: Path, tables: List[str]) -> List[dict]:
+    """执行回退脚本（UT 重跑幂等——2026-11-04 内网实报补环：ALTER 已应用的重跑
+    "column already exists" 归 ENV 假故障；先回退到变更前状态再应用，重跑=从头）。
+
+    回退=变更的逆（TRUNCATE 空表起步+列级结构逆——与新建 DROP+CREATE 同语义：
+    UT 从来是空表起步验证交付物，不是生产历史仿真）。逐句执行**逐句容忍**：
+    首次执行列/表不存在属正常（回退无物可退）；非首次失败分色汇总进报告人可查
+    （与 new-pipe ut_precheck 回退容忍同款纪律）。缺目录=fail loud（流程顺序错）。
+    """
+    if not rb_dir.exists():
+        raise ValueError(
+            f"回退脚本目录缺失: {rb_dir}——先跑 assemble_ddl_opt（产 ddl/ + ddl_rollback/）再执行 UT")
+    results = []
+    for t in tables:
+        p = rb_dir / f"rollback_alter_{t}.sql"
+        if not p.exists():
+            p = rb_dir / f"rollback_create_table_{t}.sql"
+        if not p.exists():
+            raise ValueError(f"回退脚本缺失: rollback_*_{t}.sql（{rb_dir}）——重跑 assemble_ddl_opt")
+        # 与 apply_alters 同款切句：注释行与语句同 chunk 合法（注释前缀 DB 接受）
+        stmts = [x.strip() for x in p.read_text(encoding="utf-8").split(";") if x.strip()]
+        for stmt in stmts:
+            r = executor.execute(stmt)
+            results.append({
+                "table": t,
+                "stmt": re.sub(r"\s+", " ", stmt)[:80],
+                "ok": bool(r.success),
+                "error": (r.error or "")[:80] if not r.success else "",
+            })
+    return results
+
+
 def render_report(ts_v2: dict, alters: List[str], explains: List[dict],
                   writes: List[dict], ut_checks: List[dict], nulls: List[dict],
-                  dq_results: List[dict] = None) -> str:
+                  dq_results: List[dict] = None,
+                  rollbacks: List[dict] = None) -> str:
+    rollbacks = rollbacks or []
+    _rb_ok = sum(1 for r in rollbacks if r["ok"])
     lines = ["# UT 报告（优化模式·统一 UT 内核）", "",
              f"- ALTER 已应用：{', '.join(alters) or '（无）'}",
+             f"- 回退（UT 幂等重跑=空表起步，与新建统一语义）：{_rb_ok}/{len(rollbacks)} 句成功"
+             + ("（其余容忍失败——首次对象不存在属正常）" if _rb_ok < len(rollbacks) else ""),
              f"- 数据检查：run_ut_check 全集（行数/主键唯一/审计非空——不豁免）", ""]
+    if rollbacks and _rb_ok < len(rollbacks):
+        lines.append("**回退容忍失败明细**（非首次出现=需查——对象状态与预期不符）:")
+        lines.append("")
+        for r in rollbacks:
+            if not r["ok"]:
+                lines.append(f"- ⚠️ {r['table']}: `{r['stmt']}` — {r['error']}")
+        lines.append("")
     lines.append("## EXPLAIN 真跑（单侧新 SELECT + 计划两门槛）")
     for r in explains:
         lines.append(f"- [{r['status']}] {r['rule']}：{r['detail']}")
@@ -268,7 +329,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"UT_OPT_NO_DB: 数据源不可用（{e}）——环境问题归人", file=sys.stderr)
         return 3
 
-    # 1. ALTER（变更单缺失=流程顺序错——先 assemble_ddl_opt 再 UT，与环境问题分开报）
+    # 1. 回退（UT 幂等重跑——2026-11-04 内网实报补环：ALTER 已应用的重跑
+    #    "column already exists" 归 ENV 假故障；先回到变更前状态再应用。
+    #    回退表集=与 assemble_ddl_opt 同一确定集合（alter 表 ∪ 全部规则目标表 ∩ 物理表））
+    _rb_tables = ({f.get("target_table", "") for f in change["fields"]} |
+                  {t for f in change["fields"] for t in f.get("intermediate_tables", [])} |
+                  {m.get("target_table", "") for m in change.get("modify_types", [])} |
+                  {str(r.get("target_table", "")).rsplit(".", 1)[-1]
+                   for r in (ts_v2.get("rules") or {}).values() if r.get("target_table")})
+    _rb_tables &= set((ts_v2.get("tables") or {}).keys())
+    try:
+        rollbacks = run_rollback(executor, Path(args.ddl_dir).parent / "ddl_rollback",
+                                 sorted(_rb_tables))
+    except ValueError as e:
+        print(f"UT_OPT_ERROR: {e}", file=sys.stderr)
+        return 2
+    _rb_ok = sum(1 for r in rollbacks if r["ok"])
+    _rb_fail = len(rollbacks) - _rb_ok
+    print(f"回退汇总: ✅{_rb_ok} 成功  ⚠️{_rb_fail} 失败(容忍——首次对象不存在属正常,非首次需查)")
+
+    # 2. ALTER（变更单缺失=流程顺序错——先 assemble_ddl_opt 再 UT，与环境问题分开报）
     try:
         tables = sorted({f.get("target_table", "") for f in change["fields"]} |
                         {t for f in change["fields"] for t in f.get("intermediate_tables", [])})
@@ -310,9 +390,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         t_short = target.rsplit(".", 1)[-1] if "." in target else target
         tbl_fields = (tables_meta.get(t_short) or {}).get("fields", [])
+        # ★ opt 列清单权威=SELECT 实际输出序（describe 实测——2026-11-04 问题7 层1：
+        # 逆向档 tables 序与 SQL 投影序独立来源常态错位，结构源序权威仅新建成立；
+        # 平台列清单跟随 SQL 序，UT 还原平台拼接动作。列不可得=fail loud 不静默
+        # 退回结构源序——那是静默错位数据）
+        actual_cols = describe_output_columns(executor, select_sql)
+        if not actual_cols:
+            writes.append({"rule": rule_code, "status": "FAIL", "error_type": "ENV",
+                           "detail": "SELECT 输出列不可得（describe 失败/无列返回）——"
+                                     "先修 SELECT 再跑写路径（不静默退回结构源序=静默错位）"})
+            continue
         wp = execute_write_path(executor, rule_code, target, select_sql,
                                 tbl_fields, rule.get("load_mode", "truncate_table"),
-                                rule.get("write_condition", ""), rule_output_fields(rule))
+                                rule.get("write_condition", ""), rule_output_fields(rule),
+                                column_order=actual_cols)
         writes.append(wp)
         # merge 族：幂等第二遍（WHEN MATCHED 覆盖+生产重跑安全性镜像）
         if wp["status"] == "PASS" and rule.get("load_mode") in ("merge_into", "update"):
@@ -347,7 +438,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"⏭️ DQ 跳过：{dq_note}", file=sys.stderr)
 
     Path(args.report).write_text(
-        render_report(ts_v2, alters, explains, writes, ut_checks, nulls, dq_results),
+        render_report(ts_v2, alters, explains, writes, ut_checks, nulls, dq_results,
+                      rollbacks),
         encoding="utf-8")
     failed = (any(r["status"] in ("FAIL", "ERROR") for r in explains + writes)
               or any(c["status"] == "FAIL" for c in ut_checks))

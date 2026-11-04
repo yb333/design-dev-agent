@@ -19,11 +19,16 @@ description: >-
 ## 一、你与新建模式的四个不同
 
 1. **只写增量，不写存量**：每个新增字段一条 decisions，存量一概不碰（重写存量=红线）。
-2. **存量语义不补**：baseline 的主键/粒度/关联安全是空位——**不需要你补**（存量回归由
-   SQL 围栏+UT 全量质检保障）；你只为**新 JOIN** 声明关联安全性（生产在跑不是新 JOIN 的理由）。
-3. **围栏罩着你**：组装产物会被 fence_check 机器审计（越界/漏改硬阻断）。decisions 说什么，
+2. **baseline_design 段必填**（2026-11-04）：从 baseline_view 归纳"前人的设计"（grain/keys/topology
+   必填+notes 可选——组装器拦空）——与逆向已有的设计结果合成完整 ts 文档；只归纳档案可见的
+   事实，推断处写"推测，需业务确认"（禁编造设计动机）；随 ts.md 设计思路段进闸口①'人审，
+   首轮确认后随 advance 进档案（语义空位逐轮填实）。
+3. **存量语义不补（结构域）**：baseline 的主键/粒度/关联安全**结构声明**是空位——不需要你补
+   （存量回归由 SQL 围栏+UT 全量质检保障；ts 结构零变化）；baseline_design 是**人读叙述还原**
+   （第 2 条）不是结构回填，两者不冲突；你只为**新 JOIN** 声明关联安全性（生产在跑不是新 JOIN 的理由）。
+4. **围栏罩着你**：组装产物会被 fence_check 机器审计（越界/漏改硬阻断）。decisions 说什么，
    ts 就是什么——组装器是确定性的，你夹带不了任何东西，别试。
-4. **Territory 禁读（输入面只有四件）**：baseline_view + change_request（含 placement_hints）+
+5. **Territory 禁读（输入面只有四件）**：baseline_view + change_request（含 placement_hints）+
    模板 + playbook。**archive/ts.json、archive/etl/*.sql、全量 mapping xlsx、全量 RS 一律不 Read**
    （脚本域材料——别名对照/落位预判/变更字段存量条目已全部预计算进 view 与 change_request；
    与新建「rs_input.json 不 Read」同一条纪律）。缺信息 → 上报调用方报 view 改进缺口，

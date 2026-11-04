@@ -917,16 +917,18 @@ def build_change_request(facts: dict, version: str, add_fields: List[dict],
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="优化输入预处理 v3：变更记录页签格式（契约参数直传）")
     ap.add_argument("--mapping", required=True, help="全量 mapping xlsx 路径（调用方指定）")
-    ap.add_argument("--rs", required=True, help="RS md 路径（口径材料：DQ/调度/回刷意向）")
+    ap.add_argument("--rs", default="", help="RS md 路径（可选——口径材料：DQ/调度/回刷意向；"
+                                             "无 RS 模式=材料缺省，mapping 独立驱动，建议 90% 场景提供）")
     ap.add_argument("--ts-baseline", required=True, help="档案 ts（archive/ts.json，只读）")
     ap.add_argument("--opt-root", required=True,
                     help="ddlc_design_dev 目录——现场就绪（清场重建 build/ + cp archive→archive_tmp/）")
     ap.add_argument("--version", default="", help="覆盖版本号（默认 = 变更记录页签最新批次 YYYYMM）")
     args = ap.parse_args(argv)
 
-    mapping_path, rs_path = Path(args.mapping), Path(args.rs)
+    mapping_path = Path(args.mapping)
+    rs_path = Path(args.rs) if args.rs else None
     for p, label in ((mapping_path, "mapping"), (rs_path, "RS")):
-        if not p.exists():
+        if p is not None and not p.exists():
             print(f"OPT_PRECHECK_ERROR: {label} 文件不存在: {p}", file=sys.stderr)
             return 2
 
@@ -944,8 +946,17 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
-    rs_text = rs_path.read_text(encoding="utf-8")
-    rs_section = extract_version_section(rs_text, version)  # 口径段（v3 RS 无版本锚定段则空——材料角色）
+    # RS 可选（对齐 new-pipe 无 RS 模式——用户 2026-11-04 定调）：opt 的 RS 是纯材料
+    # 角色（版本锚定主源=mapping 变更记录页签；DQ 影响分析锚 baseline dq.json），
+    # 缺省=DQ/调度/回刷口径材料空缺 + change_request 标 _no_rs_mode，warn 不阻断
+    no_rs_mode = rs_path is None
+    if no_rs_mode:
+        print("[WARN] 无 RS 模式——DQ/调度/回刷意向的口径材料缺省（对齐新建场景："
+              "90% 场景建议提供 RS）", file=sys.stderr)
+        rs_section = ""
+    else:
+        rs_text = rs_path.read_text(encoding="utf-8")
+        rs_section = extract_version_section(rs_text, version)  # 口径段（v3 RS 无版本锚定段则空——材料角色）
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
     facts = baseline_facts(ts_baseline)
@@ -1027,10 +1038,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # [SKILL 铁律+precheck exit 2 双保险]）
     cr = build_change_request(facts, version, add_fields, new_sources, modify_fields,
                               modify_logic_fields, unsupported, batch, renames, rs_section,
-                              {"mapping": str(mapping_path), "rs": str(rs_path),
+                              {"mapping": str(mapping_path),
+                               "rs": str(rs_path) if rs_path else "",
                                "ts_baseline": str(args.ts_baseline)},
                               placement_hints=build_placement_hints(ts_baseline, add_fields),
                               eval_worksheet=worksheet_md)
+    if no_rs_mode:
+        cr["_no_rs_mode"] = True   # 口径材料缺省标记（gate 材料渲染「未提供」）
     cr["_blocked"] = bool(errors)
     cr["_blocked_errors"] = errors
     cr["_warns"] = warns

@@ -220,3 +220,47 @@ class TestPlatformSqlClean:
         new = "SELECT NVL(a.x, 0) AS x, a.y AS y FROM ods.t a"
         assert check_sql_fence(base, new, {"rule": "R1", "fields": [], "new_joins": [],
                                            "modify_types": {}, "modify_logics": set()}) == []
+
+
+class TestCaseNormalization:
+    """用例锁（2026-11-04 入册准则·内网实报）：标识符比较一律双侧归一——
+    baseline 大写别名/大写 AS 名、声明侧大写字段，围栏零误报；
+    真差异照拦（归一不等于放松）。"""
+
+    def test_uppercase_baseline_vs_lowercase_new(self):
+        """baseline 全大写别名/投影名，coder 新 SQL 小写同义——零违规（内网实报形态）。"""
+        b = ("SELECT T1.ORDER_ID, T1.CUST_ID, SUM(T1.AMOUNT) AS TOTAL_AMOUNT "
+             "FROM DWS.TMP_TRADE_ORDER T1 GROUP BY T1.ORDER_ID, T1.CUST_ID")
+        n = ("select t1.order_id, t1.cust_id, sum(t1.amount) as total_amount, t1.pay_channel "
+             "from dws.tmp_trade_order t1 group by t1.order_id, t1.cust_id")
+        assert check_sql_fence(b, n, DECL_DIRECT) == []
+
+    def test_declared_field_uppercase(self):
+        """声明字段大写（mapping 大写风暴形态）vs SELECT 小写——漏改/未声明双零误报。"""
+        decl = {"rule": "R0002", "fields": ["PAY_CHANNEL"], "new_joins": []}
+        n = ("SELECT t.order_id, t.cust_id, SUM(t.amount) AS total_amount, t.pay_channel "
+             "FROM dws.tmp_trade_order t GROUP BY t.order_id, t.cust_id")
+        assert check_sql_fence(B_R2, n, decl) == []
+
+    def test_declared_join_alias_case_insensitive(self):
+        """声明的新 JOIN 别名大小写与 SQL 不同——不算未声明 JOIN。"""
+        decl = {"rule": "R0002", "fields": ["channel_name"],
+                "new_joins": [{"rule": "R0002", "table": "DIM_CHANNEL", "alias": "C",
+                               "on": "t.order_id = c.order_id"}]}
+        n = ("SELECT t.order_id, t.cust_id, SUM(t.amount) AS total_amount, c.channel_name "
+             "FROM dws.tmp_trade_order t LEFT JOIN dws.dim_channel c "
+             "ON t.order_id = c.order_id GROUP BY t.order_id, t.cust_id")
+        assert check_sql_fence(B_R2, n, decl) == []
+
+    def test_case_normalization_does_not_relax(self):
+        """归一不放松：小写差异下真修改（表达式变更/未声明列）照拦。"""
+        b = ("SELECT T1.ORDER_ID, T1.CUST_ID, SUM(T1.AMOUNT) AS TOTAL_AMOUNT "
+             "FROM DWS.TMP_TRADE_ORDER T1 GROUP BY T1.ORDER_ID, T1.CUST_ID")
+        n = ("select t1.order_id, t1.cust_id, sum(t1.amount + 1) as total_amount "
+             "from dws.tmp_trade_order t1 group by t1.order_id, t1.cust_id")
+        vs = check_sql_fence(b, n, {"rule": "R1", "fields": [], "new_joins": []})
+        assert any("total_amount" in m and "被修改" in m for m in msgs(vs, "overreach"))
+        n2 = ("select t1.order_id, t1.cust_id, sum(t1.amount) as total_amount, t1.remark "
+              "from dws.tmp_trade_order t1 group by t1.order_id, t1.cust_id")
+        vs2 = check_sql_fence(b, n2, {"rule": "R1", "fields": [], "new_joins": []})
+        assert any("remark" in m for m in msgs(vs2, "overreach"))

@@ -84,9 +84,10 @@ class TestExplainParamSubstitution:
         assert "P_START_DATE" in results[0]["detail"]
 
 
-class TestColumnOrderCheck:
-    """describe 列序对账（2026-10-23 缺 b，对齐 6a 口径：期望=结构源序∩规则产出列）：
-    INSERT 按位置对齐——多/缺/乱序都拦（FAIL 归 coder 硬阻断），describe 无列宁放过披露。"""
+class TestColumnExistenceCheck:
+    """describe 列对账（2026-11-04 问题7 层1 翻转：opt 语义=存在性对账，序不比对——
+    逆向档 tables 序[物理/DDL 序]与 SQL 投影序独立来源常态错位，coder 老列不许动；
+    幻觉列[SQL 输出不在表结构]硬拦，表有列 SQL 不产的差集披露；describe 无列宁放过）。"""
 
     def _ts(self):
         return {"rules": {"R0001": {"target_table": "dws.t_f",
@@ -100,27 +101,69 @@ class TestColumnOrderCheck:
         (etl / "R0001.sql").write_text(sql, encoding="utf-8")
         return etl
 
-    def test_order_match_passes(self, tmp_path):
+    def test_all_in_table_passes(self, tmp_path):
         ex = FakeExecutor(desc_columns=["x", "y"])
         rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
         assert rs[0]["status"] == "PASS"
-        assert "列序对账 2 列一致" in rs[0]["detail"]
+        assert "列存在性对账 2 列全在表内" in rs[0]["detail"]
 
-    def test_order_drift_blocked_to_coder(self, tmp_path):
-        ex = FakeExecutor(desc_columns=["y", "x"])      # 乱序——按位置对齐=静默错位
+    def test_order_drift_passes_in_opt(self, tmp_path):
+        """序漂移不拦（opt 语义——2026-11-04）：tables 序与 SQL 序独立来源；
+        INSERT 列清单=describe 实际序（见 TestColumnOrderWritePath），序无对错。"""
+        ex = FakeExecutor(desc_columns=["y", "x"])
+        rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
+        assert rs[0]["status"] == "PASS"
+
+    def test_hallucinated_col_blocked(self, tmp_path):
+        ex = FakeExecutor(desc_columns=["x", "z"])     # z 不在表结构——幻觉列
         rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
         assert rs[0]["status"] == "FAIL"
-        assert "列序对账失败" in rs[0]["detail"] and "coder" in rs[0]["detail"]
+        assert "不在表结构" in rs[0]["detail"]
 
-    def test_missing_col_blocked(self, tmp_path):
-        ex = FakeExecutor(desc_columns=["x"])           # 缺列
-        rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
-        assert rs[0]["status"] == "FAIL" and "缺列" in rs[0]["detail"]
+    def test_table_extra_cols_disclosed(self, tmp_path):
+        """表有列 SQL 不产（审计/平台配置列）——披露不拦（层2 查证后决定处置）。"""
+        ts = self._ts()
+        ts["tables"]["t_f"]["fields"].append({"target_field": "etl_time"})
+        ex = FakeExecutor(desc_columns=["x", "y"])
+        rs = run_explain_single(ex, ts, self._etl(tmp_path), tmp_path / "ts.json", {})
+        assert rs[0]["status"] == "PASS"
+        assert "差集披露" in rs[0]["detail"] and "etl_time" in rs[0]["detail"]
 
     def test_describe_no_columns_skipped(self, tmp_path):
         ex = FakeExecutor(desc_columns=[])              # describe 无列——宁放过披露
         rs = run_explain_single(ex, self._ts(), self._etl(tmp_path), tmp_path / "ts.json", {})
-        assert rs[0]["status"] == "PASS" and "列序对账跳过" in rs[0]["detail"]
+        assert rs[0]["status"] == "PASS" and "列对账跳过" in rs[0]["detail"]
+
+
+class TestColumnOrderWritePath:
+    """写路径列清单权威（2026-11-04 问题7 层1）：opt=SELECT 实际输出序（describe
+    实测）——INSERT 按位置对齐 SELECT，与平台拼接动作同构；序错位资产照跑通。"""
+
+    FIELDS = [{"target_field": "order_id"}, {"target_field": "cust_id"},
+              {"target_field": "amount"}]   # 结构源序（物理序）——与 SQL 序故意错位
+
+    def test_insert_follows_describe_order(self):
+        sql = wrap_write("SELECT a.amt AS amount, a.cid AS cust_id, a.oid AS order_id FROM t a",
+                         "dws.t_f", self.FIELDS, column_order=["amount", "cust_id", "order_id"])
+        # 列清单按 describe 实际序（amount 在前）而非结构源序（order_id 在前）
+        assert sql.index("amount") < sql.index("order_id")
+        assert "INSERT INTO dws.t_f (" in sql
+
+    def test_column_not_in_table_fails_loud(self):
+        with pytest.raises(ValueError, match="不在目标表结构内"):
+            wrap_write("SELECT 1", "dws.t_f", self.FIELDS,
+                       column_order=["amount", "ghost_col"])
+
+    def test_merge_uses_describe_order(self):
+        sql = wrap_write("SELECT a.oid AS order_id FROM t a", "dws.t_f", self.FIELDS,
+                         load_mode="merge_into", write_condition="T.order_id=T1.order_id",
+                         column_order=["order_id"])
+        assert "MERGE INTO dws.t_f T" in sql
+
+    def test_new_pipe_semantics_unchanged_without_order(self):
+        """无 column_order=新建结构源序语义不变（回归锁）。"""
+        sql = wrap_write("SELECT 1", "dws.t_f", self.FIELDS)
+        assert sql.index("order_id") < sql.index("amount")
 
 
 class TestExecuteWritePath:
@@ -203,6 +246,45 @@ class TestApplyAltersVerdict:
         ex = FakeExecutor(fail_on={"MODIFY": "value too long"})
         with pytest.raises(RuntimeError, match="ALTER 失败"):
             apply_alters(ex, tmp_path, ["t1"], "dws")
+
+
+class TestRunRollback:
+    """回退步骤（2026-11-04 UT 幂等补环）：逐句容忍首次失败、缺目录/文件 fail loud。"""
+
+    def _rb_dir(self, tmp_path, table="t1"):
+        d = tmp_path / "ddl_rollback"
+        d.mkdir(exist_ok=True)
+        (d / f"rollback_alter_{table}.sql").write_text(
+            "-- 回退脚本\nTRUNCATE TABLE dws.t1;\nALTER TABLE dws.t1 DROP COLUMN c1;\n",
+            encoding="utf-8")
+        return d
+
+    def test_rollback_executes_all_statements(self, tmp_path):
+        from ut_opt import run_rollback
+        ex = FakeExecutor()
+        res = run_rollback(ex, self._rb_dir(tmp_path), ["t1"])
+        assert [r["ok"] for r in res] == [True, True]
+        assert len(ex.executed) == 2
+
+    def test_first_run_column_missing_tolerated(self, tmp_path):
+        """首次"列不存在"容忍——结果记录但不抛（与 new-pipe 回退容忍同款）。"""
+        from ut_opt import run_rollback
+        ex = FakeExecutor(fail_on={"DROP COLUMN": "column c1 does not exist"})
+        res = run_rollback(ex, self._rb_dir(tmp_path), ["t1"])
+        assert res[0]["ok"] is True       # TRUNCATE 成功
+        assert res[1]["ok"] is False      # DROP COLUMN 容忍失败
+        assert "does not exist" in res[1]["error"]
+
+    def test_missing_dir_fails_loud(self, tmp_path):
+        from ut_opt import run_rollback
+        with pytest.raises(ValueError, match="先跑 assemble_ddl_opt"):
+            run_rollback(FakeExecutor(), tmp_path / "nope", ["t1"])
+
+    def test_missing_file_fails_loud(self, tmp_path):
+        from ut_opt import run_rollback
+        (tmp_path / "ddl_rollback").mkdir()
+        with pytest.raises(ValueError, match="回退脚本缺失"):
+            run_rollback(FakeExecutor(), tmp_path / "ddl_rollback", ["t1"])
 
 
 class TestUtCheckFullSet:

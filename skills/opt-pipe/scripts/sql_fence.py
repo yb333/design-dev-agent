@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 
 # 归一化生成参数：双方走同一生成器，格式/空白差异天然消解；注释剥离
 _GEN_KW = {"comments": False}
@@ -35,22 +36,24 @@ def _top_select(tree):
 
 
 def _projection_names(select) -> Dict[str, str]:
-    """输出列名 → 归一化表达式文本。SELECT * 标记为 {'*': '*'}。"""
+    """输出列名 → 归一化表达式文本。SELECT * 标记为 {'*': '*'}。
+    键 lower（入册准则：标识符比较双侧归一——normalize_identifiers 已折非引号
+    标识符，键再 lower 与声明侧[change 段/decisions 大小写任意]统一比较域）。"""
     out: Dict[str, str] = {}
     for e in select.expressions:
         if isinstance(e, exp.Star):
             return {"*": "*"}
-        out[e.alias_or_name] = _norm(e)
+        out[str(e.alias_or_name).lower()] = _norm(e)
     return out
 
 
 def _projection_nodes(select) -> Dict[str, object]:
-    """输出列名 → 表达式节点（cast 包裹判定用——场景 B）。"""
+    """输出列名 → 表达式节点（cast 包裹判定用——场景 B）。键同 _projection_names lower。"""
     out: Dict[str, object] = {}
     for e in select.expressions:
         if isinstance(e, exp.Star):
             return {"*": e}
-        out[e.alias_or_name] = e
+        out[str(e.alias_or_name).lower()] = e
     return out
 
 
@@ -120,6 +123,12 @@ def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[di
         from sql_clean import clean_platform_sql, SQLGLOT_DIALECT
         b_tree = sqlglot.parse_one(clean_platform_sql(baseline_sql), dialect=SQLGLOT_DIALECT)
         n_tree = sqlglot.parse_one(clean_platform_sql(new_sql), dialect=SQLGLOT_DIALECT)
+        # ★ 标识符大小写归一（2026-11-04 入册准则·内网实报：baseline 大写别名/
+        # 声明大写字段对 SELECT 小写=字面比较误判）——两侧同一变换（oracle 折叠
+        # 非引号标识符，带引号保持原样=正确语义；字符串字面量不动），此后全部
+        # 比较面（投影名/JOIN 键/FROM/WHERE/GROUP/表达式）天然大小写不敏感
+        b_tree = normalize_identifiers(b_tree, dialect=SQLGLOT_DIALECT)
+        n_tree = normalize_identifiers(n_tree, dialect=SQLGLOT_DIALECT)
     except RecursionError:
         bad("SQL 嵌套层级过深（RecursionError）——机器审不了，转人工审查（闸口②'人审 SQL diff）")
         return v
@@ -145,9 +154,11 @@ def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[di
         bad("FROM 主表被修改——冻结")
 
     # ---- JOIN：存量冻结 + 新 JOIN 须声明 ----
-    b_joins = {_join_key(j) for j in b_sel.find_all(exp.Join)}
-    n_joins = {_join_key(j) for j in n_sel.find_all(exp.Join)}
-    declared = {(j.get("table", "").split(".")[-1], j.get("alias", ""))
+    # 归一化比较（入册准则）：AST 侧经 normalize_identifiers 已折叠，声明侧 lower 后比
+    _low = lambda t: tuple(str(x).lower() for x in t)
+    b_joins = {_low(_join_key(j)) for j in b_sel.find_all(exp.Join)}
+    n_joins = {_low(_join_key(j)) for j in n_sel.find_all(exp.Join)}
+    declared = {_low((j.get("table", "").split(".")[-1], j.get("alias", "")))
                 for j in rule_decl.get("new_joins", [])}
     for gone in b_joins - n_joins:
         bad(f"存量 JOIN 被删除/改写 {gone}")
@@ -166,7 +177,7 @@ def check_sql_fence(baseline_sql: str, new_sql: str, rule_decl: dict) -> List[di
     if "*" in b_cols or "*" in n_cols:
         bad("SELECT * 无法逐列审计——存量含 * 请先改写为显式列清单（另立变更）")
         return v
-    declared_fields = set(rule_decl.get("fields", []))
+    declared_fields = {str(f).lower() for f in rule_decl.get("fields", [])}
     declared_mods = rule_decl.get("modify_types") or {}
     n_nodes = _projection_nodes(n_sel)
     b_nodes = _projection_nodes(b_sel)

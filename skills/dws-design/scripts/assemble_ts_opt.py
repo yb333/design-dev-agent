@@ -173,6 +173,19 @@ def validate_modify_types(decisions: dict, ts_baseline: dict) -> None:
                   f"——无意义的类型修改")
 
 
+def validate_baseline_design(decisions: dict) -> None:
+    """baseline_design 段（2026-11-04 用户定调：designer 还原前人的设计——与逆向
+    已有的设计结果合成完整 ts 文档）。只约束存在性与非空（内容=归纳叙述，证据锚定
+    baseline_view，推断处标「推测，需业务确认」——内容质量归闸口①'人审）。"""
+    bd = decisions.get("baseline_design") or {}
+    for k, label in (("grain", "粒度还原"), ("keys", "主键归纳"),
+                     ("topology", "规则拓扑叙述")):
+        if not str(bd.get(k, "") or "").strip():
+            _fail(f"baseline_design.{k}（{label}）为空——存量设计还原是完整 ts 文档的"
+                  f"组成部分（从 baseline_view 归纳事实，推断标「推测，需业务确认」；"
+                  f"模板见 dws-design-opt/assets/opt-decisions-template.yaml）")
+
+
 def validate_decisions(decisions: dict, ts_baseline: dict, cache: dict | None = None) -> None:
     """decisions 自身合法性（与 ts_baseline 的对接面），fail loud。
     cache: schema_cache（{(schema,table): {col:type}}）——新 JOIN 类型比对用；
@@ -275,6 +288,10 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
     from ts_compat import normalize_ts
     v2 = normalize_ts(json.loads(json.dumps(ts_baseline)))  # 深拷贝 + 升级两视图（幂等）
     v2["generated_by"] = "assemble_ts_opt"
+    # 存量设计还原（2026-11-04）：designer 归纳的叙述进 design 段——首轮起随 advance
+    # 进档案，逆向档语义空位逐轮填实（baseline ts 逐字不动，design 是 v2 侧新增）
+    if decisions.get("baseline_design"):
+        v2.setdefault("design", {})["baseline_design"] = decisions["baseline_design"]
     change_fields = []
 
     for f in decisions["fields"]:
@@ -417,22 +434,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     validate_decisions(decisions, ts_baseline, cache)
     validate_modify_types(decisions, ts_baseline)
     validate_modify_logics(decisions, ts_baseline, cache)
+    validate_baseline_design(decisions)
     v2 = apply_decisions(ts_baseline, decisions)
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(v2, ensure_ascii=False, indent=2), encoding="utf-8")
-    # ts.md 同步产出（当前态完整性：档案 ts.json/ts.md 成对）——投影件，渲染失败不阻断组装。
+    # ts.md 同步产出（当前态完整性：档案 ts.json/ts.md 成对）。渲染器=shared/render_md
+    # （2026-11-04 下沉），对逆向形态降级容错（design 缺省渲染占位）——正常路径必产。
+    # 渲染失败 fail loud（exit 1）：成对交付是契约，WARN 会被长流程吞掉（内网实报：
+    # md 缺位静默漂到闸口才发现）；此处拦的是未来形态漂移的安全网。
     # 文件名按产出标准 {资产短名}_ts.md（与主线 assemble_ts 同标准，消费方统一寻址）
     try:
-        from assemble_ts import render_md
+        from render_md import render_md
         _short = (((v2.get("meta", {}) or {}).get("target", {}) or {})
                   .get("f_table", {}) or {}).get("table") or "ts"
         md_path = out.parent / f"{_short}_ts.md"
         md_path.write_text(render_md(v2), encoding="utf-8")
         print(f"ts_md: {md_path}")
     except Exception as e:
-        print(f"WARN: ts.md 渲染失败（不阻断）: {e}", file=sys.stderr)
+        print(f"[ASSEMBLE_OPT_ERROR] ts.md 渲染失败（档案成对交付契约——产物不完整）: {e}",
+              file=sys.stderr)
+        return 1
     n_joins = sum(len(f.get("new_joins", [])) for f in decisions["fields"])
     print(f"ts_v2: {out}")
     print(f"fields: {len(decisions['fields'])}, new_joins: {n_joins}")
