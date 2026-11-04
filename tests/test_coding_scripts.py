@@ -373,12 +373,33 @@ class TestCheckSql:
 # run_ut.py 的 INSERT 包装测试
 # ============================================================
 
-    def test_no_alias_cannot_verify(self):
-        """SELECT 无 AS 别名 → 报'字段覆盖无法校验'提示（统一 AS 写法）。"""
+    _BARE_TS = {"rules": {"R0001": {"fields": {"direct": ["t1.id AS id", "t1.amt AS amt"],
+                                                 "processed": [], "assign": []}}},
+                "design": {"audit_fields": {}, "business_key": []}}
+
+    def test_bare_column_counts_as_output_name(self):
+        """裸列=输出名（2026-11-04 存量实报 #4：存量资产不强制 AS，只认 AS 误报缺少字段）。"""
         from check_sql import check_sql
-        ts = {"rules": {"R0001": {"field_targets": ["id"]}}, "design": {"audit_fields": {}}}
-        issues = check_sql("SELECT id FROM ods.t", ts, "R0001")
-        assert any("没有 AS 别名" in i for i in issues)
+        issues = check_sql("SELECT id, amt FROM ods.t t1", self._BARE_TS, "R0001")
+        assert not any("字段覆盖" in i and "缺少字段" in i for i in issues)
+
+    def test_mixed_bare_and_aliased_no_noise(self):
+        """混合形态（存量常态）：部分 AS 部分裸列——裸列不再触发缺少字段误报。"""
+        from check_sql import check_sql
+        issues = check_sql("SELECT id, t1.amt AS amt FROM ods.t t1", self._BARE_TS, "R0001")
+        assert not any("缺少字段" in i for i in issues)
+
+    def test_real_missing_still_detected(self):
+        """归一不放松：真缺字段照报（裸列认可≠覆盖检查放松）。"""
+        from check_sql import check_sql
+        issues = check_sql("SELECT id FROM ods.t t1", self._BARE_TS, "R0001")
+        assert any("缺少字段" in i and "amt" in i for i in issues)
+
+    def test_star_cannot_verify(self):
+        """SELECT * → 提不出列名，披露不猜（覆盖无法校验）。"""
+        from check_sql import check_sql
+        issues = check_sql("SELECT * FROM ods.t t1", self._BARE_TS, "R0001")
+        assert any("提不出任何列名" in i for i in issues)
 
 
 class TestInsertWrapping:

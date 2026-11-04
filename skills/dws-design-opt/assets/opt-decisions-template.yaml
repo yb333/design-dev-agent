@@ -25,7 +25,9 @@ baseline_design:
   topology: R0001 从 ods 订单表关联客户表加工入 tmp，R0002 终态装配写入 F 表
   notes: 客户表按 cust_id 唯一性为推测，需业务确认（notes 可选）
 
-# 回刷意向（增量基线才有意义；RS 有意向填之，否则 pending 到闸口①'人选拿）
+# 回刷意向——照抄 change_request.backfill（预处理已派生 2026-11-04：全量基线自动 no
+# =下次调度全量重建覆盖无需回刷；增量/merge/分区基线 pending 到闸口①'人选拿；
+# RS 有明确意向填之——照抄即可，勿自行推翻）
 backfill: pending
 
 fields:

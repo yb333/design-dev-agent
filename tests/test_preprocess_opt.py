@@ -175,12 +175,14 @@ class TestChangeSheetParsing:
         entries = read_change_sheet(pkg / PKG_XLSX)
         assert entries[0]["key"] == "channel_name"
 
-    def test_uppercase_key_normalized(self, tmp_path):
-        """真实填写形态：变更 key 全大写 → read_change_sheet 归一为小写（标识符 foldcase）。"""
+    def test_uppercase_key_original_case_preserved(self, tmp_path):
+        """数据值保留原形（2026-11-04 项目准则：解析不预归一——预归一曾致 change_request
+        携带小写别名与 baseline_view/SQL 原文大写漂移）；大小写等价=比较点双侧 lower 的事。
+        """
         make_pkg(tmp_path, [ent(), ent(table="dim_channel", alias="c")], [attr()],
                  [chg(2, "2026-10-14", "attr", "DEFAULT|CHANNEL_NAME", "资产字段", "ADD")])
         entries = read_change_sheet(tmp_path / PKG_XLSX)
-        assert entries[0]["key"] == "channel_name" and entries[0]["group"] == "default"
+        assert entries[0]["key"] == "CHANNEL_NAME" and entries[0]["group"] == "DEFAULT"
 
 
 class TestRenameSynth:
@@ -411,6 +413,29 @@ class TestMainEndToEnd:
         assert cr["rs_opt_section"] == ""
         assert [f["field"] for f in cr["fields"]] == ["channel_name"]   # 变更提取不受影响
         assert cr["source_files"]["rs"] == ""
+
+    def test_alias_case_aligned_to_sql(self, tmp_path, demo_baseline):
+        """别名展示对齐 SQL 落笔权威（2026-11-04 实报 #3）：mapping 台账别名小写 c、
+        baseline SQL 实际别名大写 C → change_request 展示 SQL 形态（与 baseline_view
+        别名对照一致，designer 照抄零翻译）。"""
+        arc = _opt_ready(tmp_path, demo_baseline)
+        # 存量表场景：R0001 源 ods_trade_order_di 的 SQL 实际别名大写 T1、
+        # mapping 台账别名小写 a（实报形态）——对齐展示 T1
+        (arc / "etl").mkdir()
+        (arc / "etl" / "R0001.sql").write_text(
+            "SELECT T1.ORDER_ID, T1.CUST_ID FROM ODS.ODS_TRADE_ORDER_DI T1",
+            encoding="utf-8")
+        pkg = make_pkg(tmp_path / "pkg", [ent()],
+                       [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                        attr(tcol="pay_channel", alias="a", stable="ods_trade_order_di",
+                             scol="pay_channel")],
+                       [chg(2, "2026-10-14", "attr", "default|pay_channel", "资产字段", "ADD")])
+        rc = main(["--mapping", str(pkg / PKG_XLSX),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc in (0, 1)
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        src_aliases = [f["source"]["alias"] for f in cr["fields"]]
+        assert "T1" in src_aliases, src_aliases    # 台账写 a → 展示 SQL 形态 T1
 
     def test_rs_provided_no_marker(self, tmp_path, demo_baseline):
         arc = _opt_ready(tmp_path, demo_baseline)
@@ -644,9 +669,45 @@ class TestCaseNormalization:
         cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
         assert not any(w["code"] == "unmarked_new_field" for w in cr["_warns"]), \
             [w for w in cr["_warns"] if w["code"] == "unmarked_new_field"]
-        # 大写新增字段照常提取（channel_name ADD 行 key 归一命中当前态行）
-        assert [f["field"] for f in cr["fields"]] == ["channel_name"]
+        # 大写新增字段照常提取（key 原形保留，与当前态行大小写不敏感配对——
+        # field 取属性级当前态原形 CHANNEL_NAME，decisions 照抄零翻译）
+        assert [f["field"] for f in cr["fields"]] == ["CHANNEL_NAME"]
         assert rc in (0, 1)
+
+
+class TestBackfillDerivation:
+    """回刷意向预处理派生（2026-11-04 实报 #6）：全量基线自动 no（回刷问题域为空，
+    不再走 designer 推翻默认值+闸口确认）；增量/merge/分区基线 pending 人选拿。"""
+
+    def test_full_truncate_baseline_derives_no(self, tmp_path, demo_baseline):
+        arc = _opt_ready(tmp_path, demo_baseline)
+        # 夹具 R0002（F 表终态）load_mode=truncate_partition → 改成 truncate_table 模拟全量
+        bl = json.loads((arc / "ts.json").read_text(encoding="utf-8"))
+        bl["rules"]["R0002"]["load_mode"] = "truncate_table"
+        (arc / "ts.json").write_text(json.dumps(bl, ensure_ascii=False), encoding="utf-8")
+        changes = STD_CHANGES + [chg(3, "2026-10-14", "entity", "default|c", "资产字段", "ADD")]
+        pkg = make_pkg(tmp_path / "pkg",
+                       [ent(), ent(table="dim_channel", alias="c")],
+                       [attr(tcol="order_id", alias="a", stable="ods_trade_order_di", scol="order_id"),
+                        attr()], changes)
+        rc = main(["--mapping", str(pkg / PKG_XLSX),
+                   "--ts-baseline", str(arc / "ts.json"), "--opt-root", str(tmp_path)])
+        assert rc in (0, 1)
+        cr = json.loads((tmp_path / "build" / "_internal" / "change_request.json").read_text())
+        assert cr["backfill"] == "no"
+
+    def test_partition_baseline_stays_pending(self, tmp_path, demo_baseline):
+        """分区基线（truncate_partition）历史分区不会被重算——pending 人选拿。"""
+        arc = _opt_ready(tmp_path, demo_baseline)
+        from preprocess_opt import derive_backfill
+        bl = json.loads((arc / "ts.json").read_text(encoding="utf-8"))
+        assert derive_backfill(bl) == "pending"   # 夹具 R0002=truncate_partition
+
+    def test_merge_baseline_stays_pending(self):
+        from preprocess_opt import derive_backfill
+        bl = {"meta": {"target": {"f_table": {"table": "dwb_x_d"}}},
+              "rules": {"R0001": {"target_table": "dws.dwb_x_d", "load_mode": "merge_into"}}}
+        assert derive_backfill(bl) == "pending"
 
 
 class TestHealthReport:

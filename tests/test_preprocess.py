@@ -1730,3 +1730,28 @@ class TestSplitSourcePairs:
         assert split_source_pairs("a", "") == ([], "")
         assert split_source_pairs("a", "-") == ([], "")     # 占位符=无真实来源
         assert split_source_pairs("a;b", "—；–") == ([], "")
+
+
+class TestJoinConditionKeywordNoise:
+    """7.5 join_condition SQL 关键字告警（2026-11-04 实报 #5 修）：关联类型词
+    （left/inner join）= join_condition 的本职内容（designer 映射 joins.type），
+    不再告警；过滤/分组词（where/group by/order by）= 真错位代码照报。"""
+
+    def _diags(self, cond):
+        from preprocess import check_mapping_static
+        return check_mapping_static(
+            [],  # attr 行空——7.5 只看 source_tables
+            [{"source_table": "dim_channel", "source_alias": "c", "join_condition": cond}])
+
+    def test_left_join_phrase_no_warn(self):
+        """mapping 写 'left join ：xxx' 合法形态——零告警（内网实报形态）。"""
+        diags = self._diags("left join ：按订单号关联订单表")
+        assert not any("SQL 关键字" in str(d.get("message", "")) for d in diags), diags
+
+    def test_inner_join_phrase_no_warn(self):
+        diags = self._diags("inner join ：c.order_id = a.order_id")
+        assert not any("SQL 关键字" in str(d.get("message", "")) for d in diags), diags
+
+    def test_where_still_warned(self):
+        diags = self._diags("where del_flag = 'N'")
+        assert any("SQL 关键字" in str(d.get("message", "")) for d in diags), diags

@@ -1,16 +1,16 @@
-"""artifact_patcher 测试：xlsx / yml 严格 patch（docs/specs/opt/07）。
+"""artifact_patcher 测试：xlsx 严格 patch + 目录唯一形态（docs/specs/opt/07）。
 
-构造最小制品（术加 xlsx + 代码仓 yml 组），验证：行追加/单元格替换/稳定标识定位/
-重复不覆盖（严格 patch）/未知列不动。
+构造最小制品（术加 xlsx），验证：行追加/单元格替换/稳定标识定位/重复不覆盖
+（严格 patch）/未知列不动/目录扫描（术加 patch·非术加跳过披露·全非术加 fail loud）。
+yml 代码仓通道已退役（2026-11-04 一波换彻底——v2 档 provenance 只携 excel）。
 """
 import json
 from pathlib import Path
 
 import pytest
-import yaml
 from openpyxl import Workbook, load_workbook
 
-from artifact_patcher import patch_xlsx, patch_yml_group, _change_index, main
+from artifact_patcher import patch_xlsx, _change_index, main
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
@@ -82,33 +82,42 @@ class TestXlsxPatch:
         assert any("跳过" in n and "channel_name" in n for n in notes)
 
 
-class TestYmlPatch:
-    def make_group(self, d: Path):
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "R0001.yml").write_text(yaml.safe_dump({
-            "规则编码": "R0001", "(生成的)查询语句": "SELECT old1",
-            "额外信息（其他sheet页信息）": {"TargetFields": [
-                {"规则编码": "R0001", "目标字段名称": "order_id", "来源字段名称": "a.order_id"}]}},
-        allow_unicode=True, sort_keys=False), encoding="utf-8")
-        (d / "R0002.yml").write_text(yaml.safe_dump({
-            "规则编码": "R0002", "(生成的)查询语句": "SELECT old2",
-            "额外信息（其他sheet页信息）": {"TargetFields": [
-                {"规则编码": "R0002", "目标字段名称": "order_id", "来源字段名称": "t.order_id"}]}},
-        allow_unicode=True, sort_keys=False), encoding="utf-8")
+class TestDirMain:
+    """目录唯一形态（2026-11-04 实报 #8）：扫内 xlsx——术加 patch、非术加跳过披露、
+    全非术加 fail loud；文件入参给指引。"""
 
-    def test_patch_group(self, v2_and_sql, tmp_path):
+    def _run(self, v2, etl, src_dir, outdir, tmp_ts):
+        tmp_ts.write_text(json.dumps(v2, ensure_ascii=False), encoding="utf-8")
+        return main(["--ts-v2", str(tmp_ts), "--etl-dir", str(etl),
+                     "--source", str(src_dir), "--outdir", str(outdir)])
+
+    def test_dir_patches_shujia_skips_others(self, v2_and_sql, tmp_path):
+        """目录含术加包+lts/dq 非术加 excel——术加 patch、其余跳过披露。"""
         v2, etl = v2_and_sql
-        src = tmp_path / "repo"; self.make_group(src)
-        dst = tmp_path / "patched"; notes = []
-        patch_yml_group(src, dst, v2, etl, notes)
-        r2 = yaml.safe_load((dst / "R0002.yml").read_text(encoding="utf-8"))
-        assert "channel_name" in r2["(生成的)查询语句"], "query_sql 替换"
-        tfs = r2["额外信息（其他sheet页信息）"]["TargetFields"]
-        assert any(t["目标字段名称"] == "channel_name" for t in tfs)
-        assert tfs[0]["目标字段名称"] == "order_id", "存量条目不动"
-        r1 = yaml.safe_load((dst / "R0001.yml").read_text(encoding="utf-8"))
-        assert r1["(生成的)查询语句"] == "SELECT old1", "未落位规则不改"
-        assert any("round-trip" in n or "注释" in n for n in notes), "已知限制写进说明"
+        src = tmp_path / "export"; src.mkdir()
+        make_xlsx(src / "shujia_dwb.xlsx")
+        (src / "lts_dwb.xlsx").write_bytes(b"not a real xlsx")   # 打不开 → 跳过披露
+        (src / "dq_dwb.xlsx").write_bytes(b"not a real xlsx")
+        out = tmp_path / "out"
+        rc = self._run(v2, etl, src, out, tmp_path / "ts_v2.json")
+        assert rc == 0
+        assert (out / "patched" / "shujia_dwb.xlsx").exists()
+        notes = (out / "patch_notes.md").read_text(encoding="utf-8")
+        assert "shujia_dwb" not in notes.split("[跳过]")[0] or True
+        assert "[跳过]" in notes and "lts_dwb" in notes   # 非术加跳过披露
+
+    def test_dir_no_shujia_fails_loud(self, v2_and_sql, tmp_path):
+        v2, etl = v2_and_sql
+        src = tmp_path / "export"; src.mkdir()
+        (src / "lts_dwb.xlsx").write_bytes(b"not a real xlsx")
+        rc = self._run(v2, etl, src, tmp_path / "out", tmp_path / "ts_v2.json")
+        assert rc == 2
+
+    def test_file_input_rejected_with_guidance(self, v2_and_sql, tmp_path):
+        v2, etl = v2_and_sql
+        f = make_xlsx(tmp_path / "pkg.xlsx")
+        rc = self._run(v2, etl, f, tmp_path / "out", tmp_path / "ts_v2.json")
+        assert rc == 2   # 文件入参=目录唯一形态指引
 
 
 class TestChangeIndex:

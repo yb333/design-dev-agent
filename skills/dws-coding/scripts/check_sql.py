@@ -127,9 +127,12 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
                 grain_key_fields.add(m.group(1).lower())
     ts_all_fields = ts_fields | audit_fields | business_key_fields | grain_key_fields
 
-    select_aliases = set(extract_select_aliases(sql_text))
+    # 输出名=AS 别名 ∪ 裸列名（2026-11-04 存量实报 #4：存量资产不强制 xxx AS xxx，
+    # 只认 AS 会把混合形态 SQL 的裸列全误报"缺少字段"——裸列输出名=列名是 SQL 语义）
+    from sql_parse import extract_select_output_names
+    _names = extract_select_output_names(sql_text)
+    select_aliases = set(_names) if _names is not None else set()
 
-    # 有 AS 才能校验字段覆盖；无 AS 报提示（统一 AS 写法便于静态对比）
     if select_aliases:
         missing = ts_fields - select_aliases
         if missing:
@@ -150,8 +153,9 @@ def check_sql(sql_text: str, ts: dict, rule_code: str, cache_path=None) -> list[
                 )
     else:
         issues.append(
-            "[字段覆盖] SELECT 输出列没有 AS 别名，字段覆盖无法校验"
-            "（输出列请统一用 `expr AS 别名` 写法，便于静态对比）"
+            "[字段覆盖] SELECT 输出列提不出任何列名（SELECT * 或全部为无别名表达式）"
+            "——字段覆盖无法校验（裸列输出名=列名已可校验；新写 SQL 仍建议统一 "
+            "`expr AS 别名` 便于静态对比）"
         )
 
     # 5. 投影列序对账（2026-09-15：内网实证列序错位到 6a describe 才发现——前移到

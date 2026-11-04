@@ -927,6 +927,23 @@ def split_top_projection_items(sql: str):
     return out
 
 
+def extract_select_output_names(sql: str):
+    """顶层 SELECT 输出列名集合（覆盖校验用；2026-11-04 存量实报 #4：裸列也是名）。
+
+    与 extract_select_aliases（只认 AS）的差异：裸列引用 `t.col` 输出名=列名
+    （SQL 语义本就如此——存量资产不强制 xxx AS xxx，只认 AS 会把混合形态 SQL
+    的裸列全部误报"缺少字段"）。无名项（函数表达式无 AS）跳过不参与比对；
+    SELECT * / 结构不可解析返回 None（覆盖校验不可进行，调用方披露不猜）。
+    """
+    items = split_top_projection_items(sql)
+    if items is None:
+        return None
+    names = [n for n, _ in items if n]
+    if "*" in names:
+        return None
+    return names
+
+
 def extract_top_projection(sql: str):
     """顶层 SELECT 投影列名序列（保序；AS 别名优先，别名.列取列名）。
 

@@ -273,7 +273,10 @@ def check_mapping_static(field_mappings: List[dict], source_tables: List[dict]) 
         cond = (st.get("join_condition") or "").strip()
         if not cond:
             continue
-        _kw_hits = [kw for kw in ("where", "left join", "inner join", "group by", "order by")
+        # 关联类型词（left/inner join 等）= join_condition 的本职内容（2026-11-04
+        # 实报：mapping 写 "left join ：xxx" 是合法形态——designer 映射到 joins.type）；
+        # 只留真正错位的过滤/分组词
+        _kw_hits = [kw for kw in ("where", "group by", "order by")
                     if re.search(rf'\b{kw}\b', cond, re.IGNORECASE)]
         if _kw_hits:
             _warn(

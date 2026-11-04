@@ -185,7 +185,7 @@ def _audit_core(facts: dict, asset: str, mapping_path: Optional[Path],
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="逆向交付入料审核（建档前的确定性门：契约/资产/变更冲突/台账对账）")
-    ap.add_argument("--facts", required=True, help="reverse/ 暂存区的 asset_facts.json 路径")
+    ap.add_argument("--facts", required=True, help="reverse/ 暂存区的 ts 草稿 json 路径（参数名沿旧称，收 v2 草稿）")
     ap.add_argument("--asset", required=True, help="资产标识 schema.table（probe 推出——资产对账基准）")
     ap.add_argument("--mapping", default="", help="mapping xlsx 路径（可选：给了做变更冲突/台账对账；纯逆向建档场景省略）")
     ap.add_argument("--accept-review", action="store_true",

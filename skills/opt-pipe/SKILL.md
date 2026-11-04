@@ -46,28 +46,29 @@ description: >-
    - **无档 + 契约参数 `artifacts`**（制品目录路径）→ 逆向 facts 服务产资产事实包到 **reverse/ 暂存区**（自由区：随时可删可覆盖，不参与路由判断）→ **入料审核** → 过则**建档**：
 
 ```bash
-# ① facts：制品目录 → 逆向暂存区（exit 0=产物落盘；stdout `asset_facts: ` 行取路径）
-#    ts 草稿=唯一契约形态（v1 facts 路径已退役 2026-11-04 一波换彻底——audit/建档
-#    遇 asset_facts 产物 fail loud 指引转 v2）
+# ① facts：制品目录 → 逆向暂存区（exit 0=产物落盘；stdout `ts_draft: ` 行取路径）。
+#    ts 草稿=唯一契约形态（彼侧 v1 投影已退役 2026-11-04——facts 只产 ts 草稿，
+#    参数只有 --dir/--output；我方 audit/建档遇 v1 产物 fail loud 指引转 v2）
 python {ANALYZER}/run.py facts --dir {artifacts目录} \
-    --output {ddlc}/reverse/ts_draft.json --format ts_draft
+    --output {ddlc}/reverse/ts_draft.json
 # {ANALYZER} 定位顺序：项目仓 .opencode/skills/dws-pipeline-analyzer →
 # ~/.config/opencode/skill(s)/dws-pipeline-analyzer（内网=双源同步位；都没有→fail loud 指引）
 
 # ② 入料审核（确定性门：契约/资产对账/变更冲突对账/台账对账）
-python PIPE_SCRIPTS/audit_ingest.py --facts {ddlc}/reverse/asset_facts.json \
+python PIPE_SCRIPTS/audit_ingest.py --facts {ddlc}/reverse/ts_draft.json \
     --asset {schema}.{table} --mapping {mapping}
 
-# ③ 审核过 → 建档（组装 ts_baseline + asset_facts 随档 + 制品入 export/ + MANIFEST 首条）
+# ③ 审核过 → 建档（**ts 草稿逐字 copy 零解析**：ts.json=草稿原样/etl=query_sql 逐字/
+#    首档 ts.md 成对 + 制品入 export/ + MANIFEST 首条）
 python PIPE_SCRIPTS/assemble_ts_baseline.py \
-    --baseline {ddlc}/reverse/asset_facts.json --archive-dir {arc} \
+    --baseline {ddlc}/reverse/ts_draft.json --archive-dir {arc} \
     --internal-dir {build}/_internal --asset {schema}.{table}
 ```
      - **exit 0 走完三步** → 档案诞生（此后 archive/ 即确认态）→ 步骤 1；
      - **任一步 exit 1/2** → **上报即止**：报错自带处置路由（缺料→问人要；串包→核对资产与料；制品新鲜度冲突→三选一给人；契约问题→退逆向侧）。**禁止：原因分析、读制品原文、代填、重试绕过**——处置后重来（archive 未诞生，零残留）；
      - 结构级矛盾的人审载体=审核拦截（自检结论通道待逆向 12 章 §八交付，当前 warnings 折叠披露）；首优连优化时基线确认并入闸口①'（零新增停等）。
-   - **无档 + 契约参数 `baseline`**（asset_facts json 路径直交）→ 第三方供方兼容通道：跳过 facts，仍走 ②③（审核+建档）。
-   - **两者皆无** → 停：指引"存量首优需提供制品目录（artifacts）或资产事实包 json（baseline）"。
+   - **无档 + 契约参数 `baseline`**（ts 草稿 json 路径直交——v2 契约形态）→ 第三方供方兼容通道：跳过 facts，仍走 ②③（审核+建档）。
+   - **两者皆无** → 停：指引"存量首优需提供制品目录（artifacts）或 ts 草稿 json（baseline）"。
 
 ## 步骤 1：优化输入预处理（契约参数直传）
 
@@ -257,10 +258,10 @@ python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {arc_tmp}/ts.json [--rule {ru
 ```bash
 python PIPE_SCRIPTS/artifact_patcher.py \
   --ts-v2 {arc_tmp}/ts.json --etl-dir {build}/etl \
-  --source {原始制品：xlsx 或代码仓规则组目录} \
+  --source {arc}/export/ \
   --outdir {build}/export
 ```
-`--source` 定位顺序：**`{arc}/export/`（档案的制品当前态——patch 链底本，首选）** → ts（本次产出）的 `_baseline.provenance`（逆向入料带的原始路径）→ 取不到问人。
+`--source` = **制品目录唯一形态**（2026-11-04）：一般 `{arc}/export/`（档案的制品当前态——patch 链底本）；脚本扫内 xlsx，术加包（含 RULE/TargetFields sheet）patch、lts/dq 等非术加跳过披露，一个都 patch 不了 fail loud。
 产出：`{build}/ddl/alter_table_*.sql`（变更单）+ view 重建 + `{build}/export/patched/`（更新后制品副本）+ `patch_notes.md`。patch 缺失/定位失败项照 notes 报告，不自动补。
 
 ## 步骤 7：闸口②' → 档案推进

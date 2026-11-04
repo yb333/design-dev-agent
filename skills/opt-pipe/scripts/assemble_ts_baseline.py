@@ -147,7 +147,7 @@ def _archive_ts_draft(draft: dict, args) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="ts 草稿建档（契约 v2=最终形态；审核后复制，零解析）")
-    ap.add_argument("--baseline", required=True, help="ts 草稿 json 路径（facts --format ts_draft 产物）")
+    ap.add_argument("--baseline", required=True, help="ts 草稿 json 路径（facts 产物——ts 草稿=唯一契约形态）")
     ap.add_argument("--archive-dir", required=True, help="档案目录（ddlc_design_dev/archive/）")
     ap.add_argument("--internal-dir", required=True, help="过程目录（ddlc_design_dev/opt/_internal/）")
     ap.add_argument("--manifest", default=None, help="逆向侧的制品清单文件（可选：给则按清单拷原始制品入 archive/export/）")
@@ -158,8 +158,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not (data.get("spec_type") == "ts" and str(data.get("version", "")).startswith("2.")):
         print("[TS_DRAFT_CONTRACT_VIOLATION] v1 facts 产物已退役（2026-11-04 一波换彻底——"
               "契约 v2.1 双侧落地，v1 入料路径删除）：产物必须是 ts 草稿"
-              "（`run.py facts --dir <制品目录> --output <路径> --format ts_draft`，"
-              "逆向侧 v2.1 已支持），不接受 asset_facts json。", file=sys.stderr)
+              "（`run.py facts --dir <制品目录> --output <路径>`——参数只有"
+              " --dir/--output），不接受 asset_facts json。", file=sys.stderr)
         return 2
     return _archive_ts_draft(data, args)
 

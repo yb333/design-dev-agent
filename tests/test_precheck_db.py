@@ -1474,7 +1474,9 @@ class TestJoinConditionGate:
 
 
 class TestJoinConditionKeywordWarn:
-    """join_condition 含 SQL 关键字 → warn（输入代码是描述不是规格，designer 归位）。"""
+    """join_condition SQL 关键字告警（2026-11-04 实报 #5 修正语义）：关联类型词
+    （left/inner join）= join_condition 本职内容不再告警；过滤/分组词（where 等）
+    = 真错位代码照报（输入代码是描述不是规格，designer 归位）。"""
 
     def test_where_in_condition_warns(self):
         from precheck import _check_join_conditions, PrecheckResult
@@ -1487,7 +1489,23 @@ class TestJoinConditionKeywordWarn:
         hits = [kw for kw in ("where", "left join") if _re.search(rf'\b{kw}\b', cond, _re.I)]
         assert "where" in hits
 
-    def test_keyword_check_via_precheck(self, tmp_path):
+    def test_where_via_precheck_warns(self, tmp_path):
+        from precheck import precheck
+        rs = {"field_mappings": [
+                {"source_table": "ods_a_f", "source_column": "id", "source_type": "bigint",
+                 "transform_rule": "直接复制", "transform_detail": "-",
+                 "target_column": "id", "target_column_cn": "ID", "target_type": "bigint",
+                 "source_alias": "a", "remark": ""}],
+              "source_tables": [
+                {"source_schema": "ods", "source_table": "ods_a_f", "source_alias": "a",
+                 "join_condition": "a.id = b.id where b.status = 'N'"}],
+              "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_t_f"}}}}
+        result = precheck(rs, tmp_path / "no_cache.json", False,
+                          tmp_path / "dec.yaml", None)
+        assert any("SQL 关键字" in w for w in result.warnings), result.warnings
+
+    def test_left_join_via_precheck_no_warn(self, tmp_path):
+        """'left join on ...' 合法关联描述（2026-11-04 实报 #5）——零关键字告警。"""
         from precheck import precheck
         rs = {"field_mappings": [
                 {"source_table": "ods_a_f", "source_column": "id", "source_type": "bigint",
@@ -1500,7 +1518,7 @@ class TestJoinConditionKeywordWarn:
               "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_t_f"}}}}
         result = precheck(rs, tmp_path / "no_cache.json", False,
                           tmp_path / "dec.yaml", None)
-        assert any("SQL 关键字" in w for w in result.warnings), result.warnings
+        assert not any("SQL 关键字" in w for w in result.warnings), result.warnings
 
 
 class TestDbScopeExpansion:
