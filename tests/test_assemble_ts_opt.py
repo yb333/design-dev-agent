@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from assemble_ts_baseline import build_ts_baseline
 from assemble_ts_opt import load_decisions, validate_decisions, apply_decisions, main
 from fence_check import check
 
@@ -19,9 +18,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
 @pytest.fixture(scope="module")
 def baseline():
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    ts, _ = build_ts_baseline(demo)
-    return ts
+    return json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
 
 
 def dec_direct():
@@ -403,11 +400,14 @@ class TestModifyLogics:
     direct→processed 迁移）+ 引用门禁 + fence 集成。"""
 
     def _baseline_with_bucket(self, baseline):
-        """demo 桶为空——给 R0002 注入 order_id 的 direct 条目（测迁移路径）。"""
+        """冻结夹具 R0002 桶已填充（normalize 产物）——重置为旧形态 direct 条目（测迁移路径）。"""
         b = copy.deepcopy(baseline)
-        b["rules"]["R0002"].setdefault("fields", {"processed": [], "assign": [], "direct": []})
-        b["rules"]["R0002"]["fields"]["direct"].append("a.order_id AS order_id")
-        b["rules"]["R0002"]["fields"]["direct"].append("a.cust_id AS cust_id")
+        for r in b["rules"].values():   # 受控场景：order_id 仅 R0002 有 direct 落点
+            for k in ("direct", "processed"):
+                r["fields"][k] = [e for e in r["fields"][k]
+                                  if (e if isinstance(e, str) else e.get("target", "")).split(" AS ")[-1].lower() != "order_id"]
+        b["rules"]["R0002"]["fields"] = {"processed": [], "assign": [], "direct": [
+            "a.order_id AS order_id", "a.cust_id AS cust_id"]}
         return b
 
     def test_direct_migrates_to_processed(self, baseline):
@@ -427,18 +427,28 @@ class TestModifyLogics:
 
     def test_no_bucket_entry_blocks(self, baseline):
         from assemble_ts_opt import validate_modify_logics
+        b = copy.deepcopy(baseline)
+        for r in b["rules"].values():   # 清空该字段全部桶条目 → 无落点
+            for k in ("direct", "processed"):
+                r["fields"][k] = [e for e in r["fields"][k]
+                                  if (e if isinstance(e, str) else e.get("target", "")).split(" AS ")[-1].lower() != "order_id"]
         d = {"modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
                                 "new_logic": "nvl(a.order_id, 0)"}]}
-        with pytest.raises(SystemExit):  # demo 桶空 → 无落点
-            validate_modify_logics(d, baseline)
+        with pytest.raises(SystemExit):
+            validate_modify_logics(d, b)
 
     def test_no_bucket_entry_blocks_with_cache_too(self, baseline):
         """签名扩 cache 后向后兼容：不传 cache 照常工作。"""
         from assemble_ts_opt import validate_modify_logics
+        b = copy.deepcopy(baseline)
+        for r in b["rules"].values():
+            for k in ("direct", "processed"):
+                r["fields"][k] = [e for e in r["fields"][k]
+                                  if (e if isinstance(e, str) else e.get("target", "")).split(" AS ")[-1].lower() != "order_id"]
         d = {"modify_logics": [{"field": "order_id", "target_table": "dwb_trade_order_d",
                                 "new_logic": "nvl(a.order_id, 0)"}]}
         with pytest.raises(SystemExit):
-            validate_modify_logics(d, baseline, {("ods", "ods_trade_order_di"): {"order_id": "varchar"}})
+            validate_modify_logics(d, b, {("ods", "ods_trade_order_di"): {"order_id": "varchar"}})
 
     def test_unqualified_logic_blocks(self, baseline):
         from assemble_ts_opt import validate_modify_logics

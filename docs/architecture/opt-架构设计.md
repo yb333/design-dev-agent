@@ -170,11 +170,9 @@ N 系校验适用性：新字段适用的等价物已补（N36→引用门禁 / 
 
 distribution_key/table_props 回收（facts 已带 is_distribute_key，v1 装配丢弃+gap 错定性"语义空位：物理设计决策"——物理事实被当语义判断扔）。
 
-### 11.5 实施排期（2026-10-27 批2 契约定稿后更新）
+### 11.5 实施记录（2026-11-04 全线闭环·v1 同日退役）
 
-批0 v1 顺手修 ✅（4ae0a9f）→ 批1 体检报告 ✅（d14d50c）→ **批2 v2 契约定稿 ✅**（ts_draft_v2.schema.json 权威 schema+`_reverse` 定形+调度映射表——**逆向侧可即刻按 12 章 v4 动工，不待案例**；案例校准的是 v1 运行体验与 v2 联调，不是契约形态）→ 批3 双仓实施（逆向装配实现+我方切换）→ 批4 v1 退役时间表。
-
-**批3 消费侧切换设计要点**（预设计，实施时展开）：audit_ingest 消费草稿（对账输入域不变，读 ts 形态字段）；assemble_ts_baseline 瘦身=守门+audit+copy+MANIFEST（解析装配整体退役）；view 渲染归一（别名对照改 ts.joins/source_tables 直读——SQL 重解析仅作 legacy v1 档兜底；建档渲染退役，preprocess_opt 单渲染点）；preprocess_opt/fence/UT 对 v1 档 v2 草稿双支持（按产物自描述版本路由）。
+批0 物理属性回收 ✅（4ae0a9f）→ 批1 体检报告 ✅（d14d50c）→ 批2 契约定稿 ✅（b5cfe1f→e3a7882 四件套交付包）→ 逆向侧 v4 交付+验收通过（v2.0 漏项 query_sql→契约 v2.1，彼侧 8cd0214 同日跟进）→ 批3 消费侧切换 ✅（5e4885d：audit v2 模式/建档逐字 copy/词形归一/消费直连）→ **v1 退役 ✅（2026-11-04 一波换彻底：v1 全路径同提交删除——audit v1 分支/建档 v1 组装[build_ts_baseline/kind 词表/拓扑推导/v1 渲染]/asset_facts.schema.json vendor+facts 联锁；baseline_contract 收缩为 norm_asset 单职责；遇 asset_facts 产物 fail loud 指引转 v2；消费链测试迁移冻结夹具 baseline_ts_dwb_trade_order_d.json）。ts 草稿=唯一契约形态。**
 
 ## 文档地图
 

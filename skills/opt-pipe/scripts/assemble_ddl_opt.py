@@ -110,8 +110,12 @@ def audit_full_ddl(ts_baseline: dict, ts_v2: dict) -> List[str]:
         vf = {x["target_field"] for x in ts_v2.get("tables", {}).get(t, {}).get("fields", [])}
         added, removed = vf - bf, bf - vf
         d = declared.get(t, set())
-        if added - d:
-            problems.append(f"[DDL审计] {t} 出现未声明的新列 {sorted(added - d)}")
+        # 审计列豁免（2026-11-04 对齐 2026-09-15 定调：审计补齐=底层标准非资产变更，
+        # 永不算"未声明新列"——不依赖 normalize 路径[标准形态快速路径不补审计]；
+        # 物理补齐仍由 audit_additions 进变更单，以原始 baseline 为基准）
+        from dws_standards import STANDARD_AUDIT_NAMES
+        if added - d - set(STANDARD_AUDIT_NAMES):
+            problems.append(f"[DDL审计] {t} 出现未声明的新列 {sorted(added - d - set(STANDARD_AUDIT_NAMES))}")
         if d - added:
             problems.append(f"[DDL审计] {t} 声明的列未在全量 DDL 落地 {sorted(d - added)}")
         if removed:

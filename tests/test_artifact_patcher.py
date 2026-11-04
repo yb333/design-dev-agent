@@ -17,10 +17,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
 @pytest.fixture(scope="module")
 def v2_and_sql(tmp_path_factory):
-    from assemble_ts_baseline import build_ts_baseline
     from assemble_ts_opt import apply_decisions
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    b, _ = build_ts_baseline(demo)
+    b = json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
     dec = {"change_type": "add_field", "backfill": "pending", "fields": [{
         "field": "channel_name", "target_table": "dwb_trade_order_d",
         "placed_rules": ["R0002"], "intermediate_tables": [],

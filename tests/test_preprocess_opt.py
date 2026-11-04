@@ -11,7 +11,6 @@ from openpyxl import Workbook
 
 import pytest
 
-from assemble_ts_baseline import build_ts_baseline
 from preprocess_opt import (
     read_change_sheet, pick_batch_version, synth_renames, extract_and_check,
     extract_version_section, parse_change_log, norm_asset, main,
@@ -59,8 +58,7 @@ def chg(seq, time_, page, key, column, ctype, before="", after=""):
 
 @pytest.fixture(scope="module")
 def facts():
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    ts, _ = build_ts_baseline(demo)
+    ts = json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
     from preprocess_opt import baseline_facts
     return baseline_facts(ts)
 
@@ -343,9 +341,7 @@ def _opt_ready(root, baseline_ts):
 
 @pytest.fixture()
 def demo_baseline():
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    ts, _ = build_ts_baseline(demo)
-    return ts
+    return json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
 
 
 class TestMainEndToEnd:
@@ -919,8 +915,7 @@ class TestMappingSheetsConverged:
 
 def facts_fixture():
     """TestScenario* 直调 extract_and_check 用的 facts（与 module fixture 同款构造）。"""
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    ts, _ = build_ts_baseline(demo)
+    ts = json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
     from preprocess_opt import baseline_facts
     return baseline_facts(ts)
 

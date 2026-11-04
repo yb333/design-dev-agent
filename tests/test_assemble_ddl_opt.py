@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from assemble_ts_baseline import build_ts_baseline
 from assemble_ts_opt import apply_decisions
 from assemble_ddl_opt import build_alter_ddl, declared_additions_by_table, audit_full_ddl, main
 
@@ -13,8 +12,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
 @pytest.fixture(scope="module")
 def pair():
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    b, _ = build_ts_baseline(demo)
+    demo = json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
+    b = demo
     dec = {"change_type": "add_field", "backfill": "pending", "fields": [{
         "field": "channel_name", "target_table": "dwb_trade_order_d",
         "placed_rules": ["R0002"], "intermediate_tables": ["tmp_trade_order"],

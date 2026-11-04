@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from assemble_ts_baseline import build_ts_baseline
 from fence_check import check, decompose_diff, main
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
@@ -17,8 +16,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "opt"
 
 @pytest.fixture(scope="module")
 def baseline():
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    ts, _ = build_ts_baseline(demo)
+    demo = json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
+    ts = demo
     return ts
 
 

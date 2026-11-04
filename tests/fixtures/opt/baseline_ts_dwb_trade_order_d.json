@@ -1,0 +1,384 @@
+{
+ "version": "2.1",
+ "spec_type": "ts",
+ "generated_at": "2026-07-25T10:23:01.289007",
+ "generated_by": "assemble_ts_baseline",
+ "_baseline": {
+  "source": "baseline_v1",
+  "contract_version": "1.1",
+  "platform_generation": "1.0",
+  "asset": "dws.dwb_trade_order_d",
+  "provenance": [
+   {
+    "type": "execution_tasks",
+    "path": "demo_repo/execution_tasks_DWB_TRADE_ORDER_D.xlsx"
+   },
+   {
+    "type": "lts",
+    "path": "demo_repo/LTS/BCNB_DAILY/GROUP_TRADE/TASK_TRADE_ORDER_F.yml"
+   },
+   {
+    "type": "lts",
+    "path": "demo_repo/LTS/BCNB_DAILY/GROUP_TRADE/TASK_TRADE_ORDER_I.yml"
+   },
+   {
+    "type": "dq",
+    "path": "demo_repo/DQ/FIN_DWB/FIN_DWB_COMMEN/dwb_trade_order_d/DQ_000001.yml"
+   },
+   {
+    "type": "dq",
+    "path": "demo_repo/DQ/FIN_DWB/FIN_DWB_COMMEN/dwb_trade_order_d/DQ_000002.yml"
+   }
+  ]
+ },
+ "meta": {
+  "target": {
+   "f_table": {
+    "schema": "dws",
+    "table": "dwb_trade_order_d",
+    "cn": ""
+   },
+   "i_view": {
+    "schema": "",
+    "table": "",
+    "cn": ""
+   }
+  },
+  "grain": "",
+  "load_strategy": {
+   "strategy": "",
+   "label": "",
+   "delete_mode": ""
+  },
+  "field_count": {
+   "business": 0,
+   "audit": 0,
+   "total": 0
+  },
+  "source_tables": [
+   {
+    "schema": "ods",
+    "table": "ods_trade_order_di",
+    "table_cn": "",
+    "alias": ""
+   },
+   {
+    "schema": "dws",
+    "table": "tmp_trade_order",
+    "table_cn": "",
+    "alias": ""
+   },
+   {
+    "schema": "dws",
+    "table": "dwb_trade_order_d",
+    "table_cn": "",
+    "alias": ""
+   }
+  ],
+  "schedule": {}
+ },
+ "design": {
+  "complexity_analysis": {},
+  "audit_fields": {},
+  "business_key": []
+ },
+ "tables": {
+  "tmp_trade_order": {
+   "type": "intermediate",
+   "distribution_key": [],
+   "distribute_type": "ROUNDROBIN",
+   "partition": "",
+   "storage": "column",
+   "logical_group": "",
+   "fields": [
+    {
+     "target_field": "order_id",
+     "field_type": "",
+     "field_comment": ""
+    },
+    {
+     "target_field": "cust_id",
+     "field_type": "",
+     "field_comment": ""
+    },
+    {
+     "target_field": "amount",
+     "field_type": "",
+     "field_comment": ""
+    },
+    {
+     "target_field": "last_upd_cycle_id",
+     "field_type": "bigint",
+     "field_comment": "最后更新批次ID"
+    },
+    {
+     "target_field": "crt_cycle_id",
+     "field_type": "bigint",
+     "field_comment": "创建批次ID"
+    },
+    {
+     "target_field": "del_flag",
+     "field_type": "nvarchar2(1)",
+     "field_comment": "删除标识: Y-已删除, N-正常"
+    },
+    {
+     "target_field": "dw_last_update_date",
+     "field_type": "timestamp(0) without time zone",
+     "field_comment": "数仓最后更新时间"
+    }
+   ],
+   "business_key": []
+  },
+  "dwb_trade_order_d": {
+   "type": "target",
+   "distribution_key": [],
+   "distribute_type": "ROUNDROBIN",
+   "partition": "",
+   "storage": "column",
+   "logical_group": "",
+   "fields": [
+    {
+     "target_field": "order_id",
+     "field_type": "VARCHAR(64)",
+     "field_comment": "订单ID"
+    },
+    {
+     "target_field": "cust_id",
+     "field_type": "VARCHAR(64)",
+     "field_comment": "客户ID"
+    },
+    {
+     "target_field": "total_amount",
+     "field_type": "DECIMAL(18,2)",
+     "field_comment": "订单总额"
+    },
+    {
+     "target_field": "last_upd_cycle_id",
+     "field_type": "bigint",
+     "field_comment": "最后更新批次ID"
+    },
+    {
+     "target_field": "crt_cycle_id",
+     "field_type": "bigint",
+     "field_comment": "创建批次ID"
+    },
+    {
+     "target_field": "del_flag",
+     "field_type": "nvarchar2(1)",
+     "field_comment": "删除标识: Y-已删除, N-正常"
+    },
+    {
+     "target_field": "dw_last_update_date",
+     "field_type": "timestamp(0) without time zone",
+     "field_comment": "数仓最后更新时间"
+    }
+   ],
+   "business_key": []
+  }
+ },
+ "rules": {
+  "R0001": {
+   "rule_name": "订单明细",
+   "scenario": "scenario_1",
+   "exec_sequence": 1,
+   "target_table": "dws.tmp_trade_order",
+   "is_view_step": false,
+   "design_intent": "",
+   "load_mode": "truncate_table",
+   "write_condition": "",
+   "step_type": "",
+   "target_role": "intermediate",
+   "produces_for": [
+    "R0002"
+   ],
+   "reads": [],
+   "source_tables": [
+    {
+     "schema": "ods",
+     "table": "ods_trade_order_di",
+     "alias": "a"
+    }
+   ],
+   "grain": {
+    "input": "",
+    "output": "",
+    "change": ""
+   },
+   "joins": [
+    {
+     "alias": "a",
+     "type": "FROM",
+     "condition": "",
+     "filter": ""
+    }
+   ],
+   "join_safety": [],
+   "field_targets": [
+    "amount",
+    "cust_id",
+    "order_id"
+   ],
+   "fields": {
+    "processed": [],
+    "assign": [
+     {
+      "target": "last_upd_cycle_id",
+      "value": "'${P_CYCLE_ID}'"
+     },
+     {
+      "target": "crt_cycle_id",
+      "value": "'${P_CYCLE_ID}'"
+     },
+     {
+      "target": "del_flag",
+      "value": "'N'"
+     },
+     {
+      "target": "dw_last_update_date",
+      "value": "CURRENT_TIMESTAMP"
+     }
+    ],
+    "direct": [
+     "ods.ods_trade_order_di.amount AS amount",
+     "ods.ods_trade_order_di.cust_id AS cust_id",
+     "ods.ods_trade_order_di.order_id AS order_id"
+    ]
+   }
+  },
+  "R0002": {
+   "rule_name": "订单汇总",
+   "scenario": "scenario_1",
+   "exec_sequence": 2,
+   "target_table": "dws.dwb_trade_order_d",
+   "is_view_step": false,
+   "design_intent": "",
+   "load_mode": "truncate_partition",
+   "write_condition": "",
+   "step_type": "",
+   "target_role": "target",
+   "produces_for": [],
+   "reads": [
+    "dws.tmp_trade_order"
+   ],
+   "source_tables": [],
+   "grain": {
+    "input": "",
+    "output": "",
+    "change": ""
+   },
+   "joins": [
+    {
+     "alias": "t",
+     "type": "FROM",
+     "condition": "",
+     "filter": ""
+    }
+   ],
+   "join_safety": [],
+   "field_targets": [
+    "cust_id",
+    "order_id",
+    "total_amount"
+   ],
+   "fields": {
+    "processed": [
+     {
+      "target": "total_amount",
+      "logic": "",
+      "refs": [
+       "ods.ods_trade_order_di.amount"
+      ]
+     }
+    ],
+    "assign": [
+     {
+      "target": "last_upd_cycle_id",
+      "value": "'${P_CYCLE_ID}'"
+     },
+     {
+      "target": "crt_cycle_id",
+      "value": "'${P_CYCLE_ID}'"
+     },
+     {
+      "target": "del_flag",
+      "value": "'N'"
+     },
+     {
+      "target": "dw_last_update_date",
+      "value": "CURRENT_TIMESTAMP"
+     }
+    ],
+    "direct": [
+     "ods.ods_trade_order_di.cust_id AS cust_id",
+     "ods.ods_trade_order_di.order_id AS order_id"
+    ]
+   }
+  }
+ },
+ "data_flow": {
+  "tables": [
+   {
+    "schema": "ods",
+    "name": "ods_trade_order_di",
+    "role": "source",
+    "layer": "ODS",
+    "is_view": false
+   },
+   {
+    "schema": "dws",
+    "name": "tmp_trade_order",
+    "role": "source",
+    "layer": "",
+    "is_view": false
+   },
+   {
+    "schema": "dws",
+    "name": "dwb_trade_order_d",
+    "role": "source",
+    "layer": "",
+    "is_view": false
+   }
+  ],
+  "dependencies": [
+   {
+    "from": "R0001",
+    "to": "R0002",
+    "type": "data_flow",
+    "intermediate_table": "dws.tmp_trade_order"
+   }
+  ],
+  "schedule_groups": [
+   {
+    "sequence": 1,
+    "rules": [
+     "R0001"
+    ]
+   },
+   {
+    "sequence": 2,
+    "rules": [
+     "R0002"
+    ]
+   }
+  ]
+ },
+ "init": {
+  "mode": "",
+  "group_mode": "",
+  "rules": {}
+ },
+ "dq_rules": [
+  {
+   "scope": "",
+   "check_type": "NULL",
+   "rule_name": "空值检查",
+   "rule_desc": "检查关键字段是否为空"
+  },
+  {
+   "scope": "",
+   "check_type": "CONSISTENCY",
+   "rule_name": "金额一致性检查",
+   "rule_desc": "校验订单金额与支付金额一致"
+  }
+ ]
+}

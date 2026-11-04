@@ -3,9 +3,8 @@
 
 契约交付包三件套的可校验性守卫：①schema 可载入/关键段必填；②**合格样例**
 （schemas/ts_draft_v2.example.json）过 schema 验——逆向侧的生成参照物自身合法；
-③**形态衔接**：v1 装配器真实产出（build_ts_baseline → normalize_ts 标准形态 →
-剥 dq_rules → 附 _reverse）也过 schema——证明 v2 契约与 v1 现产形态兼容，
-形态演进（改 assemble_ts_baseline/ts_compat）会在此被拦=契约波次提示。
+③**形态锚**：新建链路真装配产出（assemble_ts 工厂）附 _reverse 过 schema——
+契约目标形态=多轮磨砺的正向形态；装配器形态演进使断言失败=契约波次提示。
 ts-template.json 为完整结构权威（人读），schema 守契约必填面，消费链校验是终局守。
 """
 import json

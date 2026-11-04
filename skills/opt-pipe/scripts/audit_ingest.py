@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-dev-shared" / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from baseline_contract import norm_asset, validate_baseline_v1
+from baseline_contract import norm_asset
 from preprocess import parse_mapping_sheets
 from preprocess_opt import (pick_batch_version, read_change_sheet,
                             field_type_drift, WHOLE_ROW_MARK)
@@ -106,17 +106,6 @@ def audit_ts_draft(draft: dict, asset: str, mapping_path: Optional[Path]):
         "warnings": rev.get("warnings", []),
     }
     return _audit_core(view, asset, mapping_path, errors, [], [])
-
-
-def audit(facts: dict, asset: str, mapping_path: Optional[Path]) -> Tuple[List[dict], List[dict], List[str]]:
-    """v1 facts 审核（返回 (errors, warns, report_lines)。errors 非空=拦）。"""
-    errors: List[dict] = []
-    # 1. 契约校验
-    violations = validate_baseline_v1(facts)
-    if violations:
-        errors.append({"code": "contract_violation", "detail": violations})
-        return errors, [], []
-    return _audit_core(facts, asset, mapping_path, errors, [], [])
 
 
 def _audit_core(facts: dict, asset: str, mapping_path: Optional[Path],
@@ -213,8 +202,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"AUDIT_BLOCKED: mapping 不存在: {mapping_path}", file=sys.stderr)
         return 2
 
-    errors, warns, lines = audit(facts, args.asset, mapping_path) \
-        if not is_ts_draft(facts) else audit_ts_draft(facts, args.asset, mapping_path)
+    if not is_ts_draft(facts):
+        print("[AUDIT_BLOCKED] v1 facts 产物已退役（2026-11-04 一波换彻底——契约 v2.1 双侧"
+              "落地）：产物必须是 ts 草稿（facts --format ts_draft），不接受 asset_facts json。",
+              file=sys.stderr)
+        return 2
+    errors, warns, lines = audit_ts_draft(facts, args.asset, mapping_path)
     if args.accept_review:
         errors = [e for e in errors if e["code"] != "structural_review"]
         print("自检待审已放行（--accept-review，人裁决：矛盾已知悉）")

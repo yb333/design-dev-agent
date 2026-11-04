@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from slice_ts import slice_rule, slice_rule_opt
-from assemble_ts_baseline import build_ts_baseline
 from assemble_ts_opt import apply_decisions
 from fence_check import check
 
@@ -34,8 +33,8 @@ def dec_new_join():
 
 @pytest.fixture(scope="module")
 def v2():
-    demo = json.loads((FIXTURES / "baseline_v1_demo_full.json").read_text(encoding="utf-8"))
-    baseline, _ = build_ts_baseline(demo)
+    demo = json.loads((FIXTURES / "baseline_ts_dwb_trade_order_d.json").read_text(encoding="utf-8"))
+    baseline = demo
     return baseline, apply_decisions(baseline, dec_new_join())
 
 
