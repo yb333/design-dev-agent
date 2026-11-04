@@ -188,7 +188,7 @@ class TestMappingSheetsConverged:
 
 
 # ============================================================
-# v2 ts 草稿模式（2026-10-28 批3：双支持期——产物自描述路由）
+# v2 ts 草稿模式（2026-10-28 批3：产物自描述路由——v1 过渡路径退场条件见 audit_ingest 模块头）
 # ============================================================
 
 DRAFT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "opt" / "ts_draft_v2_case.json"
@@ -229,7 +229,7 @@ class TestTsDraftMode:
         assert [e["code"] for e in errs] == ["asset_mismatch"]
 
     def test_main_routes_by_self_description(self, tmp_path):
-        """CLI 双支持期路由：草稿（spec_type=ts/version 2.x）走 v2 审核。"""
+        """CLI 按产物自描述路由：草稿（spec_type=ts/version 2.x）走 v2 审核。"""
         from audit_ingest import main
         fp = tmp_path / "ts_draft.json"
         fp.write_text(json.dumps(_draft(), ensure_ascii=False), encoding="utf-8")

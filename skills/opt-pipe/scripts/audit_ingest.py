@@ -33,7 +33,7 @@ from preprocess import parse_mapping_sheets
 from preprocess_opt import (pick_batch_version, read_change_sheet,
                             field_type_drift, WHOLE_ROW_MARK)
 
-# ts 草稿契约 v2（2026-10-28 批3：双支持期——产物自描述路由 v1 facts / v2 草稿）
+# ts 草稿契约 v2（2026-10-28 批3；v1 路径=带退场条件的过渡——彼侧 v2.1 波次落地+内网同波同步的同一提交删除 v1 全路径（一波换彻底——不留双版本过渡期））
 TS_DRAFT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "ts_draft_v2.schema.json"
 
 # 每类拦截自带处置路由（"结案陈词"——AI 上报即止，不侦探）
@@ -73,7 +73,7 @@ def _target_fields(facts: dict, asset: str) -> Tuple[str, set, Dict[str, str]]:
 
 
 def is_ts_draft(doc: dict) -> bool:
-    """v2 ts 草稿识别（产物自描述——双支持期路由）。"""
+    """v2 ts 草稿识别（产物自描述路由——v1 过渡期退场条件见模块头）。"""
     return doc.get("spec_type") == "ts" and str(doc.get("version", "")).startswith("2.")
 
 

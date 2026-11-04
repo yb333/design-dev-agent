@@ -47,8 +47,8 @@ description: >-
 
 ```bash
 # ① facts：制品目录 → 逆向暂存区（exit 0=产物落盘；stdout `asset_facts: ` 行取路径）
-#    双格式（契约双支持期：v2 ts 草稿=最终形态——audit/建档按产物自描述路由，命令不变；
-#    v1 asset_facts 仍可用，新场景用 v2）
+#    v2 ts 草稿=唯一目标形态（audit/建档按产物自描述 spec_type=ts/version 2.x 路由，命令不变）。
+#    v1 asset_facts 路径=带退场条件的过渡：彼侧 v2.1 波次落地+内网同波同步的同一提交删除 v1 全路径（一波换彻底——不留双版本过渡期）
 python {ANALYZER}/run.py facts --dir {artifacts目录} \
     --output {ddlc}/reverse/ts_draft.json --format ts_draft
 # {ANALYZER} 定位顺序：项目仓 .opencode/skills/dws-pipeline-analyzer →

@@ -527,7 +527,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
 
     # v2 ts 草稿建档（2026-10-28 批3：契约=最终形态——审核过后的建档动作=守门+copy，
-    # 零解析零变换[任何需要的变换留在消费侧=契约失败]；v1 facts 路径保留=双支持期）
+    # 零解析零变换[任何需要的变换留在消费侧=契约失败]；v1 facts 路径=带退场条件的过渡
+    # （彼侧 v2.1 波次落地+内网同波同步的同一提交删除 v1 全路径（一波换彻底——不留双版本过渡期）））
     if data.get("spec_type") == "ts" and str(data.get("version", "")).startswith("2."):
         return _archive_ts_draft(data, args)
 
