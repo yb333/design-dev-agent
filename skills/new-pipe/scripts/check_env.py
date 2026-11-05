@@ -146,7 +146,6 @@ def check(skill_root_arg: str = "") -> list[str]:
     #    的模块可导入且符号契约在——混装在此刻报清，不带病跑到半路）
     try:
         sys.path.insert(0, str(skills_root / "design-dev-shared" / "scripts"))
-        sys.path.insert(0, str(skills_root / "opt-pipe" / "scripts"))
         import run_ut as _ru
         _need_ru = ("execute_write_path", "verify_merge_idempotent", "run_ut_check",
                     "run_dq_checks", "read_select", "substitute_params",
@@ -155,15 +154,19 @@ def check(skill_root_arg: str = "") -> list[str]:
         if _miss_ru:
             problems.append(f"接口 canary：run_ut 缺符号 {_miss_ru}（技能副本混装/同步不完整"
                             f"——{_ru.__file__}；{fix_hint} 全量更新后重试）")
-        import ut_opt as _uo
-        _need_uo = ("run_rollback", "describe_output_columns", "apply_alters",
-                    "run_explain_single")
-        _miss_uo = [s for s in _need_uo if not hasattr(_uo, s)]
-        if _miss_uo:
-            problems.append(f"接口 canary：ut_opt 缺符号 {_miss_uo}（技能副本混装/同步不完整"
-                            f"——{_uo.__file__}；{fix_hint} 全量更新后重试）")
-        if not _miss_ru and not _miss_uo:
-            print(f"[接口 canary] 跨 skill 消费面自洽（run_ut/ut_opt 符号契约全在）")
+        # opt-pipe 侧探测走子进程 --help（pipe 间禁互 import[分层铁律]；--help 即完整
+        # 触发模块顶层 import——混装副本的 ImportError 在此当场暴露，不带病跑到 UT）
+        import subprocess as _sp
+        _uo = skills_root / "opt-pipe" / "scripts" / "ut_opt.py"
+        if _uo.exists():
+            _r = _sp.run([sys.executable, str(_uo), "--help"],
+                         capture_output=True, text=True, timeout=60)
+            if _r.returncode != 0:
+                problems.append(f"接口 canary：opt-pipe/ut_opt 装载失败（技能副本混装/同步"
+                                f"不完整——{_uo}；{fix_hint} 全量更新后重试）："
+                                f"{(_r.stderr or '').strip()[-200:]}")
+        if not problems or not any("接口 canary" in p for p in problems):
+            print(f"[接口 canary] 跨 skill 消费面自洽（run_ut 符号契约全在 + ut_opt 装载通过）")
     except Exception as e:
         problems.append(f"接口 canary 导入失败: {e}（技能副本混装/同步不完整——{fix_hint} 全量更新后重试）")
 

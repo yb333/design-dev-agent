@@ -67,3 +67,73 @@ class TestCheckRequirements:
         """本机全量对账（开发机装了 requirements 全家——探针对真解释器零歧义）。"""
         req = (REPO / "requirements.txt").read_text(encoding="utf-8")
         assert check_requirements(req) == []
+
+
+# ---------------------------------------------------------------------------
+# 接口 canary / 双源混装检测（2026-11-05 内网实报：ut_opt↔run_ut 漂移致 UT 失败）
+# ---------------------------------------------------------------------------
+import sys as _sys
+for _d in ("new-pipe/scripts", "design-dev-shared/scripts"):
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / _d))
+import check_env  # noqa: E402
+
+REPO2 = Path(__file__).resolve().parent.parent
+
+
+def _mini_tree(root: Path, gut_run_ut: bool) -> Path:
+    """最小技能树：shared+opt-pipe 整目录真件（run_ut 可选掏空=模拟新旧混装）。"""
+    import shutil
+    sk = root / "skills"
+    (sk / "new-pipe").mkdir(parents=True)
+    (sk / "new-pipe" / "SKILL.md").write_text("x", encoding="utf-8")
+    shutil.copytree(REPO2 / "skills" / "design-dev-shared", sk / "design-dev-shared",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    if gut_run_ut:
+        (sk / "design-dev-shared" / "scripts" / "run_ut.py").write_text(
+            "def wrap_write(): pass\n", encoding="utf-8")
+    for d in ("dws-design/scripts", "dws-coding/scripts"):
+        (sk / d).mkdir(parents=True)
+    (sk / "dws-design" / "scripts" / "assemble_ts.py").write_text("x=1", encoding="utf-8")
+    (sk / "dws-coding" / "scripts" / "slice_ts.py").write_text("x=1", encoding="utf-8")
+    shutil.copytree(REPO2 / "skills" / "opt-pipe", sk / "opt-pipe",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    return root
+
+
+class TestInterfaceCanary:
+    def test_mixed_tree_caught_at_step0(self, tmp_path, monkeypatch):
+        """旧 run_ut（缺符号）+ 新 ut_opt 混装 → canary 在步骤 0 报清（非跑到 UT 才爆）。"""
+        monkeypatch.setattr("check_env.Path.home", lambda: tmp_path / "home")
+        tree = _mini_tree(tmp_path, gut_run_ut=True)
+        problems = check_env.check(str(tree / "skills"))
+        assert any("接口 canary" in p and "run_ut" in p for p in problems), problems
+
+    def test_broken_ut_opt_caught_via_subprocess(self, tmp_path, monkeypatch):
+        """opt-pipe/ut_opt 顶层 import 炸 → 子进程探测报清（pipe 间禁互 import 的合规形态）。"""
+        monkeypatch.setattr("check_env.Path.home", lambda: tmp_path / "home")
+        tree = _mini_tree(tmp_path, gut_run_ut=False)
+        uo = tree / "skills" / "opt-pipe" / "scripts" / "ut_opt.py"
+        uo.write_text("import sys\nsys.path.insert(0, r'%s')\nfrom run_ut import not_exist\n"
+                      % (tree / "skills" / "design-dev-shared" / "scripts"), encoding="utf-8")
+        problems = check_env.check(str(tree / "skills"))
+        assert any("接口 canary" in p and "ut_opt" in p for p in problems), problems
+
+    def test_consistent_tree_passes_canary(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("check_env.Path.home", lambda: tmp_path / "home")
+        tree = _mini_tree(tmp_path, gut_run_ut=False)
+        problems = [p for p in check_env.check(str(tree / "skills"))
+                    if "接口 canary" in p]
+        assert problems == []
+
+
+class TestDualSourceDetection:
+    def test_dual_installation_flagged(self, tmp_path, monkeypatch):
+        """同名 skill 同时在项目 .opencode/skills 与全局 ~/.config → 双源报错。"""
+        for side in (".opencode/skills/opt-pipe", "home/.config/opencode/skills/opt-pipe"):
+            d = tmp_path / side
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text("x", encoding="utf-8")
+        monkeypatch.setattr("check_env.Path.home", lambda: tmp_path / "home")
+        monkeypatch.setattr("check_env.Path.cwd", lambda: tmp_path)
+        problems = check_env.check("")
+        assert any("双源混装" in p for p in problems), problems
