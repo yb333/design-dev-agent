@@ -140,7 +140,49 @@ def check(skill_root_arg: str = "") -> list[str]:
     else:
         problems.append("缺 _install_meta.json（非 install.py 安装或安装损坏——重跑 install.py）")
 
-    # 6. 运行时依赖对账（开关式：config 目录放清单才查，没放静默跳过零输出——
+    # 6. ★跨 skill 接口 canary（2026-11-05 内网实报：ut_opt/run_ut 接口漂移致 UT 失败
+    #    ——同步不完整/双源混装时新旧文件共存，import/符号缺失在跑到 UT 才爆。canary
+    #    在步骤 0 当场验：跨 skill 消费面（opt-pipe/new-pipe 消费 design-dev-shared）
+    #    的模块可导入且符号契约在——混装在此刻报清，不带病跑到半路）
+    try:
+        sys.path.insert(0, str(skills_root / "design-dev-shared" / "scripts"))
+        sys.path.insert(0, str(skills_root / "opt-pipe" / "scripts"))
+        import run_ut as _ru
+        _need_ru = ("execute_write_path", "verify_merge_idempotent", "run_ut_check",
+                    "run_dq_checks", "read_select", "substitute_params",
+                    "resolve_all_params", "rule_output_fields", "load_dq_rules")
+        _miss_ru = [s for s in _need_ru if not hasattr(_ru, s)]
+        if _miss_ru:
+            problems.append(f"接口 canary：run_ut 缺符号 {_miss_ru}（技能副本混装/同步不完整"
+                            f"——{_ru.__file__}；{fix_hint} 全量更新后重试）")
+        import ut_opt as _uo
+        _need_uo = ("run_rollback", "describe_output_columns", "apply_alters",
+                    "run_explain_single")
+        _miss_uo = [s for s in _need_uo if not hasattr(_uo, s)]
+        if _miss_uo:
+            problems.append(f"接口 canary：ut_opt 缺符号 {_miss_uo}（技能副本混装/同步不完整"
+                            f"——{_uo.__file__}；{fix_hint} 全量更新后重试）")
+        if not _miss_ru and not _miss_uo:
+            print(f"[接口 canary] 跨 skill 消费面自洽（run_ut/ut_opt 符号契约全在）")
+    except Exception as e:
+        problems.append(f"接口 canary 导入失败: {e}（技能副本混装/同步不完整——{fix_hint} 全量更新后重试）")
+
+    # 6b. ★双源混装检测（同名 skill 同时存在于项目 .opencode/skills 与全局
+    #     ~/.config/opencode/skills ——opencode 两处都会索引，跨目录各取一半即
+    #     接口漂移；2026-11-05 内网实报机制之一。发现即报错：留一个删一个）
+    _global_skills = Path.home() / ".config" / "opencode" / "skills"
+    for _probe in (Path.cwd() / ".opencode" / "skills",):
+        if _probe.is_dir() and _global_skills.is_dir():
+            _dup = [d.name for d in _probe.iterdir() if d.is_dir()
+                    and (_global_skills / d.name).is_dir()
+                    and (d / "SKILL.md").exists()]
+            if _dup:
+                problems.append(
+                    f"双源混装：{_dup} 同时存在于 {_probe} 与 {_global_skills}——"
+                    f"opencode 两处都会加载，跨目录各取新旧即接口漂移（内网实报 2026-11-05）。"
+                    f"保留一处：内网部署=项目 .opencode/skills（随仓同步），删全局侧同名目录")
+
+    # 7. 运行时依赖对账（开关式：config 目录放清单才查，没放静默跳过零输出——
     # 内网环境依赖由部署侧统一管默认不查，想开启放文件即开；自测 install 自动放）。
     _bs = str(skills_root / "design-dev-shared" / "scripts")
     sys.path.insert(0, _bs)
