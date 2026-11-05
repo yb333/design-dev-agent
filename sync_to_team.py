@@ -9,6 +9,8 @@
   skills/    → .opencode/skills/     逐 skill 目录镜像（含 design-dev-shared）
   agents/    → .opencode/agents/     *.md 覆盖（不删别人的）
   commands/  → .opencode/commands/   *.md 覆盖（不删别人的）
+  docs/user-guide.md → 内部仓根目录 使用指南-设计开发段.md（单文件覆盖——
+              唯一放根目录的条目，使用者一眼可见；其余内容仍在 .opencode/ 下）
   四个 config → .opencode/_references/rules/<dws-design-dev>/
               缺失时从 example 初始化，已有不覆盖（config 以远端为准；
               要更新 config：拷文件到内网仓该目录下，跑工具即随同步提交）
@@ -48,6 +50,9 @@ CONFIG_MAP = [  # (example 相对路径, 真实名) —— 对齐 install.py 第
     ("skills/dws-design/assets/schedule_config.example.json", "schedule_config.json"),
     ("skills/dws-design/assets/schema_apps.example.json", "schema_apps.json"),
 ]
+# 使用指南单文件同步（源相对路径 → 内部仓根目标名）——2026-11-05 用户定调：
+# 分段交付现实下用户直接使用本段，指南放根目录可见性优先（唯一根目录例外条目）
+USER_GUIDE_SYNC = ("docs/user-guide.md", "使用指南-设计开发段.md")
 
 
 def fail(msg: str):
@@ -381,6 +386,7 @@ def managed_paths(skills: list, agents: list, commands: list, rules_dir: str) ->
         + [f".opencode/agents/{a}" for a in agents]
         + [f".opencode/commands/{c}" for c in commands]
         + [f".opencode/_references/rules/{rules_dir}"]
+        + [USER_GUIDE_SYNC[1]]  # 使用指南=唯一内部仓根目录条目
     )
 
 
@@ -399,7 +405,8 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
     export_dir = tmp / "src"
     export_dir.mkdir()
     r = subprocess.run(
-        ["git", "-C", str(src_repo), "archive", src_branch, "--", "skills", "agents", "commands"],
+        ["git", "-C", str(src_repo), "archive", src_branch, "--",
+         "skills", "agents", "commands", USER_GUIDE_SYNC[0]],
         capture_output=True,
     )
     if r.returncode != 0:
@@ -571,6 +578,13 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
                        tracked=tracked, repo_prefix=f".opencode/skills/{s}")
         copy_md(export_dir / "agents", oc / "agents")
         copy_md(export_dir / "commands", oc / "commands")
+        # 使用指南 → 内部仓根（单文件覆盖，与 md 同款不比名的语义：内容不同才写）
+        guide_src = export_dir / USER_GUIDE_SYNC[0]
+        guide_dst = team_repo / USER_GUIDE_SYNC[1]
+        if guide_src.exists() and (
+            not guide_dst.exists() or guide_dst.read_bytes() != guide_src.read_bytes()
+        ):
+            shutil.copy2(guide_src, guide_dst)
         inited = []
         for ex, real in CONFIG_MAP:
             dst = rules_path / real
@@ -605,6 +619,8 @@ def do_sync(src_repo: Path, tmp: Path, team_repo: Path, src_branch: str, team_br
             p = l.split(maxsplit=2)[-1].strip('"')
             if p.startswith(".opencode/_references"):
                 continue  # config 不在源仓
+            if p == USER_GUIDE_SYNC[1]:
+                p = USER_GUIDE_SYNC[0]  # 根文件按映射回源路径反查归属提交
             # .opencode/x/y → x/y；根文件（install.py/requirements.txt）原样
             cap_files.append(p[len(".opencode/"):] if p.startswith(".opencode/") else p)
         entries = list(dict.fromkeys(  # 去重保序
