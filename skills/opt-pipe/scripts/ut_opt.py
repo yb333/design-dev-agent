@@ -193,35 +193,46 @@ def apply_alters(executor, ddl_dir: Path, tables: List[str], schema: str) -> Lis
     return applied
 
 
-def run_rollback(executor, rb_dir: Path, tables: List[str]) -> List[dict]:
-    """执行回退脚本（UT 重跑幂等——2026-11-04 内网实报补环：ALTER 已应用的重跑
+def run_rollback(executor, rb_dir: Path, tables: List[str], schema: str = "") -> List[dict]:
+    """执行回退（UT 重跑幂等——2026-11-04 内网实报补环：ALTER 已应用的重跑
     "column already exists" 归 ENV 假故障；先回退到变更前状态再应用，重跑=从头）。
 
-    回退=变更的逆（TRUNCATE 空表起步+列级结构逆——与新建 DROP+CREATE 同语义：
-    UT 从来是空表起步验证交付物，不是生产历史仿真）。逐句执行**逐句容忍**：
-    首次执行列/表不存在属正常（回退无物可退）；非首次失败分色汇总进报告人可查
-    （与 new-pipe ut_precheck 回退容忍同款纪律）。缺目录=fail loud（流程顺序错）。
+    两段（2026-11-05 用户定调拆职责——交付件与执行器分家）：
+    - 数据清空 TRUNCATE：**本函数运行时执行**（UT 语义=空表起步全量装载，与新建
+      DROP+CREATE 同语义——UT 从来是空表起步验证交付物，不是生产历史仿真；不进
+      回退脚本交付件）；新表（rollback_create_table_ 文件）跳过——DROP 即清。
+    - 结构逆 DDL：执行 rollback_*.sql 脚本语句（纯 DDL——列级逆/新表 DROP）。
+    逐句执行**逐句容忍**：首次执行列/表不存在属正常（回退无物可退）；非首次失败
+    分色汇总进报告人可查（与 new-pipe ut_precheck 回退容忍同款纪律）。
+    缺目录=fail loud（流程顺序错）。
     """
     if not rb_dir.exists():
         raise ValueError(
             f"回退脚本目录缺失: {rb_dir}——先跑 assemble_ddl_opt（产 ddl/ + ddl_rollback/）再执行 UT")
     results = []
+
+    def _exec(table: str, stmt: str):
+        r = executor.execute(stmt)
+        results.append({
+            "table": table,
+            "stmt": re.sub(r"\s+", " ", stmt)[:80],
+            "ok": bool(r.success),
+            "error": (r.error or "")[:80] if not r.success else "",
+        })
+
     for t in tables:
         p = rb_dir / f"rollback_alter_{t}.sql"
+        is_new = False
         if not p.exists():
             p = rb_dir / f"rollback_create_table_{t}.sql"
+            is_new = True
         if not p.exists():
             raise ValueError(f"回退脚本缺失: rollback_*_{t}.sql（{rb_dir}）——重跑 assemble_ddl_opt")
+        if not is_new and schema:
+            _exec(t, f"TRUNCATE TABLE {schema}.{t}")   # UT 时数据清空（非交付件）
         # 与 apply_alters 同款切句：注释行与语句同 chunk 合法（注释前缀 DB 接受）
-        stmts = [x.strip() for x in p.read_text(encoding="utf-8").split(";") if x.strip()]
-        for stmt in stmts:
-            r = executor.execute(stmt)
-            results.append({
-                "table": t,
-                "stmt": re.sub(r"\s+", " ", stmt)[:80],
-                "ok": bool(r.success),
-                "error": (r.error or "")[:80] if not r.success else "",
-            })
+        for stmt in [x.strip() for x in p.read_text(encoding="utf-8").split(";") if x.strip()]:
+            _exec(t, stmt)
     return results
 
 

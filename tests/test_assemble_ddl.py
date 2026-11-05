@@ -294,3 +294,28 @@ class TestIViewByMeta:
         # 目标 F 表建表 + 视图
         assert "create_table_dwb_test_f.sql" in ddls
         assert "create_view_dwb_test_i.sql" in ddls
+
+
+class TestSkipRollback:
+    """--skip-rollback（2026-11-05 opt 档案推进：只产 ddl/ 不产 ddl_rollback/——
+    回退=变更现场件归 assemble_ddl_opt 产 build/，档案零回退）。"""
+
+    def test_skip_rollback_no_dir(self, tmp_path):
+        import json as _json
+        from pathlib import Path as _Path
+        import assemble_ddl as ad
+        from conftest import make_ts_json
+        ts = make_ts_json()
+        tp = tmp_path / "ts.json"
+        tp.write_text(_json.dumps(ts, ensure_ascii=False), encoding="utf-8")
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr("sys.argv", ["assemble_ddl.py", "--ts", str(tp),
+                                         "--outdir", str(tmp_path), "--skip-rollback"])
+        try:
+            ad.main()
+        except SystemExit as e:
+            assert e.code in (0, None)
+        finally:
+            monkeypatch.undo()
+        assert (tmp_path / "ddl").exists()
+        assert not (tmp_path / "ddl_rollback").exists()

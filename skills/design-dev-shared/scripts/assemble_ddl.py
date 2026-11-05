@@ -318,6 +318,9 @@ def main():
     )
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--outdir", required=True, help="DDL 输出根目录（ddl/ 和 ddl_rollback/ 在下面）")
+    parser.add_argument("--skip-rollback", action="store_true",
+                        help="不产 ddl_rollback/（opt 场景档案推进只需 ddl/——回退=变更"
+                             "现场件由 assemble_ddl_opt 产 build/，档案零回退不变量）")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -331,11 +334,16 @@ def main():
     ddl_dir = Path(args.outdir) / "ddl"
     rollback_dir = Path(args.outdir) / "ddl_rollback"
     ddl_dir.mkdir(parents=True, exist_ok=True)
-    rollback_dir.mkdir(parents=True, exist_ok=True)
+    if not args.skip_rollback:
+        rollback_dir.mkdir(parents=True, exist_ok=True)
 
     for filename, content in ddls.items():
         (ddl_dir / filename).write_text(content, encoding="utf-8")
         print(f"  ✓ ddl/{filename}")
+
+    if args.skip_rollback:
+        print(f"\n[完成] {len(ddls)} 个 DDL（--skip-rollback：回退不产——档案零回退）")
+        return
 
     for filename, content in rollbacks.items():
         (rollback_dir / filename).write_text(content, encoding="utf-8")

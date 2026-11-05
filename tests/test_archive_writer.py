@@ -91,3 +91,24 @@ class TestAdvance:
                    "--tmp", str(arc_tmp), "--build", str(build)])
         assert rc == 0
         assert json.loads((ddlc / "archive/ts.json").read_text())["v"] == 2
+
+
+class TestAdvanceZeroRollback:
+    """档案零回退不变量（2026-11-05 内网实报 #2）：ddl_rollback 混进 arc_tmp
+    （assemble_ddl 副产/误拷）——advance 前置清理拦在进档前。"""
+
+    def test_advance_strips_ddl_rollback(self, tmp_path):
+        import archive_writer
+        arc = tmp_path / "archive"
+        arc.mkdir()
+        (arc / "ts.json").write_text("{}", encoding="utf-8")
+        (arc / "MANIFEST.md").write_text("# m\n", encoding="utf-8")
+        arc_tmp = tmp_path / "archive_tmp"
+        arc_tmp.mkdir()
+        (arc_tmp / "ts.json").write_text("{}", encoding="utf-8")
+        (arc_tmp / "MANIFEST.md").write_text("# m\n", encoding="utf-8")
+        (arc_tmp / "ddl_rollback").mkdir()
+        (arc_tmp / "ddl_rollback" / "rollback_alter_t.sql").write_text("x", encoding="utf-8")
+        archive_writer.advance(arc, arc_tmp, tmp_path / "build")
+        assert not (arc / "ddl_rollback").exists(), "回退不得进档案"
+        assert (arc / "ts.json").exists()

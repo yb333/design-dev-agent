@@ -2,9 +2,9 @@
 
 产出（--outdir，一般 {deliver}）：
   ddl/alter_table_{表名}.sql   ★变更单（交付物）：ALTER ADD COLUMN + COMMENT，一表一文件
-  ddl_rollback/rollback_*.sql  回退脚本（2026-11-04 UT 幂等补环——变更的逆：
-                               存量表 TRUNCATE+列级结构逆 / 新表 DROP；build 现场
-                               件不进档案——adopt/advance 拷贝清单不含 ddl_rollback）
+  ddl_rollback/rollback_*.sql  回退脚本（UT 幂等重跑——**纯 DDL 逆**[2026-11-05 用户
+                               定调：TRUNCATE 是 UT 执行动作不进交付件，ut_opt 运行时
+                               做]；build 现场件不进档案——advance 前置清理兜底）
   ddl_full/create_table_*.sql  全量 DDL（档案推进用；复用 assemble_ddl.generate_ddl 从 ts_v2 生成，
                                json 路径无原 DDL 时即档案初始版）
 
@@ -49,22 +49,21 @@ def build_alter_ddl(schema: str, table: str, additions: List[dict],
 def build_rollback_ddl(schema: str, table: str, additions: List[dict],
                        modifies: List[dict] | None = None,
                        is_new_table: bool = False) -> str:
-    """一表一份回退脚本（UT 重跑幂等——2026-11-04 用户定调：回退=**变更的逆**，
-    不是整表回退；TRUNCATE 空表起步=与新建 UT 统一语义——merge 两分支由幂等
-    第二遍覆盖，dev 库不复现生产历史从来不是 UT 承诺）。
+    """一表一份回退脚本=**纯 DDL 逆**（2026-11-05 用户定调：交付件只含 DDL 回退——
+    TRUNCATE 是 UT 执行时的动作不是交付内容，由 ut_opt.run_rollback 运行时执行；
+    2026-11-04 首版把 TRUNCATE 写进脚本，混淆了交付件与执行器职责）。
 
-    - 存量表：TRUNCATE（数据回退）+ 结构逆（add_field/审计缺口列 DROP COLUMN、
-      modify_type 还原旧类型——old_type 照抄 change 声明）
+    - 存量表：结构逆（add_field/审计缺口列 DROP COLUMN、modify_type 还原旧类型
+      ——old_type 照抄 change 声明）
     - 新表（baseline 没有的中间表）：DROP TABLE
-    ★ 位置：build/ddl_rollback/ 现场件——adopt/advance 拷贝清单不含它，
-    资产档案零回退（与 new-pipe 同构：回退属变更生命周期不属资产）。"""
+    ★ 位置：build/ddl_rollback/ 现场件——档案零回退（adopt/advance 不拷贝，
+    advance 前置清理兜底）。"""
     full = f"{schema}.{table}" if schema else table
     if is_new_table:
-        return (f"-- 回退脚本（UT 重跑幂等）：DROP 新表 {full}\n"
+        return (f"-- 回退脚本（变更的 DDL 逆）：DROP 新表 {full}\n"
                 f"DROP TABLE IF EXISTS {full};\n")
-    lines = [f"-- 回退脚本（UT 重跑幂等）：{full} 回到变更前状态（列级逆——不整表回退）",
-             "-- UT 语义=空表起步全量装载（与新建一致）；由 assemble_ddl_opt 生成",
-             f"TRUNCATE TABLE {full};"]
+    lines = [f"-- 回退脚本（变更的 DDL 逆）：{full} 回到变更前结构（列级逆——不整表回退）",
+             "-- 数据清空（TRUNCATE）由 ut_opt 执行时做，不是交付件内容；由 assemble_ddl_opt 生成"]
     for f in additions:
         lines.append(f"ALTER TABLE {full} DROP COLUMN {f['field']};")
     for m in modifies or []:
@@ -205,9 +204,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if n_view:
         print(f"I 视图重建: {out / 'ddl'}/create_or_replace_view_{i_view['table']}.sql")
 
-    # 3. 回退脚本（2026-11-04 UT 幂等补环）：变更的逆——存量表 TRUNCATE+列级结构逆，
-    #    新表 DROP。覆盖面=alter 表 ∪ 全部规则目标表（UT 写路径全量装载——TRUNCATE
-    #    保证重跑不累积；纯 truncate_table 规则的写前清理与回退幂等重合无害）
+    # 3. 回退脚本（纯 DDL 逆——2026-11-05 定调：TRUNCATE 移出交付件归 ut_opt 运行时）：
+    #    覆盖面=alter 表 ∪ 全部规则目标表（UT 侧 run_rollback 对存量表先 TRUNCATE 再执行
+    #    本脚本语句——空表起步+结构逆两段职责分家）
     rb_dir = out / "ddl_rollback"
     rb_dir.mkdir(parents=True, exist_ok=True)
     _baseline_tables = set((baseline.get("tables") or {}).keys())

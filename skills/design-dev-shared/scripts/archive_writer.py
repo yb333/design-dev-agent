@@ -105,8 +105,11 @@ def advance(archive: Path, arc_tmp: Path, build: Path) -> Path:
     line += " |\n"
     with mf.open("a", encoding="utf-8") as fh:
         fh.write(line)
-    # 清过程产物（诊断/计划等应落 build——双保险防污染档案）
+    # 清过程产物（诊断/计划等应落 build——双保险防污染档案）。ddl_rollback 同类
+    # （2026-11-05 内网实报 #2：assemble_ddl 副产曾随 arc_tmp 整体上位进档案——
+    # 档案零回退不变量机器化：回退=变更现场件属 build，任何路径混进 tmp 都拦在进档前）
     shutil.rmtree(arc_tmp / "_internal", ignore_errors=True)
+    shutil.rmtree(arc_tmp / "ddl_rollback", ignore_errors=True)
     # 三步全量替换（每步失败均可恢复）
     replaced = archive.parent / (archive.name + ".replaced")
     if replaced.exists():

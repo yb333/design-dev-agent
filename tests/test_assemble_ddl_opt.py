@@ -118,7 +118,8 @@ class TestModifyTypeDdl:
         rb = tmp_path / "ddl_rollback" / "rollback_alter_dwb_trade_order_d.sql"
         assert rb.exists()
         text = rb.read_text(encoding="utf-8")
-        assert "TRUNCATE TABLE dws.dwb_trade_order_d;" in text
+        # 2026-11-05 用户定调：交付件=纯 DDL 逆——TRUNCATE 是 UT 执行动作不进脚本
+        assert "TRUNCATE TABLE" not in text   # 纯 DDL 逆（注释提及该词不算）
         assert "ALTER TABLE dws.dwb_trade_order_d DROP COLUMN" in text   # 列级逆非整表
         assert "DROP TABLE" not in text                                   # 存量表绝不整表 DROP
         assert (tmp_path / "ddl_rollback" / "rollback_alter_tmp_trade_order.sql").exists()

@@ -40,7 +40,7 @@ description: >-
 ## 步骤 0：环境自检 + 入口与基线
 
 0. 环境探针（一次）：`python {SKILL_BASE}/../new-pipe/scripts/check_env.py`——exit 1 = 环境/依赖不符 → 停。工具面自检同 new-pipe 步骤0。
-1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`，`{arc}` = `{ddlc}/archive`。（现场就绪——清场重建 build/ + cp archive→archive_tmp/——由步骤 1 的 preprocess_opt 做，不预建）
+1. 按资产定位：`python SHARED_SCRIPTS/preprocess.py --mapping {mapping} --rs {rs} --probe` → asset/appid/schema → `{ddlc}` = **probe 输出的 `ddlc_abs`（绝对路径——下游一律用它拼路径；相对路径随运行 cwd 漂移，内网实报产出漂到仓外）**，`{arc}` = `{ddlc}/archive`。（现场就绪——清场重建 build/ + cp archive→archive_tmp/——由步骤 1 的 preprocess_opt 做，不预建）
 3. **查基线（交付门模型，2026-10-14 定稿——archive/ 存在性=确认性）**：
    - **`{arc}/ts.json` 存在** → 有档（确认档：new-pipe adopt / 逆向入料建档 / 历次 advance），直接当 baseline。跳到步骤 1。
    - **无档 + 契约参数 `artifacts`**（制品目录路径）→ 逆向 facts 服务产资产事实包到 **reverse/ 暂存区**（自由区：随时可删可覆盖，不参与路由判断）→ **入料审核** → 过则**建档**：
@@ -118,10 +118,11 @@ Task(subagent_type="dws-designer", description="优化模式设计 {资产}",
 记下 designer 的 task_id（回路用）。ts 落位后**同产 DDL 入临时档案**（ts 的投影，同源同刻保一致）：
 
 ```bash
-python SHARED_SCRIPTS/assemble_ddl.py --ts {arc_tmp}/ts.json --outdir {arc_tmp}
+python SHARED_SCRIPTS/assemble_ddl.py --ts {arc_tmp}/ts.json --outdir {arc_tmp} --skip-rollback
 ```
-```
-记下 designer 的 task_id（回路用）。验证 `{arc_tmp}/ts.json` + `ts.md` 已产出。
+
+（--skip-rollback：档案推进只需 ddl/——回退=变更现场件归 build/ddl_rollback，档案零回退不变量；
+advance 前置清理另有兜底。）验证 `{arc_tmp}/ts.json` + `ts.md` 已产出。
 
 ## 步骤 3：ts 级围栏 → 闸口①'
 ```bash

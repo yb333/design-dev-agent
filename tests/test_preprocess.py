@@ -1370,8 +1370,29 @@ class TestProbeMode:
         assert payload["f_table"] == "dwb_test_f"
         assert payload["asset"] == "dwb_test_f"    # 资产名=输入目标表名原样（不剥后缀——_i/_f 按人写的算）
         assert "deliver_hint" in payload and "ddlc_design_dev" in payload["deliver_hint"]
+        # 绝对锚定（2026-11-05 实报 #1）：ddlc_abs 绝对路径，下游用它杜绝 cwd 漂移
+        # appid 查得到时三层齐、查不到时空层跳过（schema/asset 恒在）
+        _tail = "/".join(x for x in (payload["appid"], payload["schema"],
+                                     payload["asset"]) if x) + "/ddlc_design_dev"
+        assert payload.get("ddlc_abs", "").endswith(_tail), payload
+        import pathlib as _pl
+        assert _pl.Path(payload["ddlc_abs"]).is_absolute()
         # 探测不产 rs_input（未给 --output 也不报错——定位动作零副作用）
         assert not (tmp_path / "rs_input.json").exists()
+
+    def test_probe_warns_outside_repo_root(self, tmp_path):
+        """cwd 无仓根指纹（.git/skills/10_project_deliver 皆无）→ warn 回显绝对路径
+        （产出漂移防护——2026-11-05 实报 #1）。"""
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path
+        xlsx = tmp_path / "m2.xlsx"
+        _build_xlsx_with_assign_null(xlsx)
+        script = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "scripts" / "preprocess.py"
+        r = _sp.run([_sys.executable, str(script), "--mapping", str(xlsx), "--probe"],
+                    capture_output=True, text=True, timeout=120, cwd=str(tmp_path))
+        assert r.returncode == 0, r.stderr
+        assert "无项目仓根指纹" in r.stderr and "产出漂移" in r.stderr
 
     def test_output_still_required_without_probe(self, tmp_path):
         import subprocess as _sp

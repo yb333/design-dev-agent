@@ -254,23 +254,38 @@ class TestRunRollback:
     def _rb_dir(self, tmp_path, table="t1"):
         d = tmp_path / "ddl_rollback"
         d.mkdir(exist_ok=True)
+        # 2026-11-05：交付件=纯 DDL 逆（TRUNCATE 由 run_rollback 运行时执行不进脚本）
         (d / f"rollback_alter_{table}.sql").write_text(
-            "-- 回退脚本\nTRUNCATE TABLE dws.t1;\nALTER TABLE dws.t1 DROP COLUMN c1;\n",
+            "-- 回退脚本\nALTER TABLE dws.t1 DROP COLUMN c1;\n",
             encoding="utf-8")
         return d
 
-    def test_rollback_executes_all_statements(self, tmp_path):
+    def test_rollback_truncates_then_ddl(self, tmp_path):
+        """两段：运行时 TRUNCATE（UT 空表起步）+ 脚本 DDL 逆——顺序清数据在前。"""
         from ut_opt import run_rollback
         ex = FakeExecutor()
-        res = run_rollback(ex, self._rb_dir(tmp_path), ["t1"])
+        res = run_rollback(ex, self._rb_dir(tmp_path), ["t1"], "dws")
         assert [r["ok"] for r in res] == [True, True]
-        assert len(ex.executed) == 2
+        assert "TRUNCATE TABLE dws.t1" in ex.executed[0]
+        assert "DROP COLUMN" in ex.executed[1]
+
+    def test_new_table_rollback_skips_truncate(self, tmp_path):
+        """新表（rollback_create_table_ 文件）DROP 即清——跳过 TRUNCATE。"""
+        from ut_opt import run_rollback
+        d = tmp_path / "ddl_rollback"
+        d.mkdir()
+        (d / "rollback_create_table_t2.sql").write_text(
+            "DROP TABLE IF EXISTS dws.t2;\n", encoding="utf-8")
+        ex = FakeExecutor()
+        res = run_rollback(ex, d, ["t2"], "dws")
+        assert [r["ok"] for r in res] == [True]
+        assert not any("TRUNCATE" in s for s in ex.executed)
 
     def test_first_run_column_missing_tolerated(self, tmp_path):
         """首次"列不存在"容忍——结果记录但不抛（与 new-pipe 回退容忍同款）。"""
         from ut_opt import run_rollback
         ex = FakeExecutor(fail_on={"DROP COLUMN": "column c1 does not exist"})
-        res = run_rollback(ex, self._rb_dir(tmp_path), ["t1"])
+        res = run_rollback(ex, self._rb_dir(tmp_path), ["t1"], "dws")
         assert res[0]["ok"] is True       # TRUNCATE 成功
         assert res[1]["ok"] is False      # DROP COLUMN 容忍失败
         assert "does not exist" in res[1]["error"]

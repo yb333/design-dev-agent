@@ -83,7 +83,7 @@ bash 调用时用推算出的**绝对路径**（会话 cwd 不在 skill 目录�
 python SHARED_SCRIPTS/preprocess.py --mapping {mapping路径} --rs {RS路径} --probe
 ```
 
-输出一行 JSON：`{schema, f_table, asset, appid, deliver_hint}`。`{deliver}` = `10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev`（appid 查不到时层为空 warn 不阻断，建议先填 schema_apps.json）。探测与正式预处理幂等（同一输入必同一定位）；probe 结果与后续 preprocess 的 meta 不一致属输入自相矛盾，fail loud 报调用方。
+输出一行 JSON：`{schema, f_table, asset, appid, deliver_hint, ddlc_abs}`。`{deliver}` = **`ddlc_abs`（绝对路径——下游一律用它拼路径；相对路径随运行 cwd 漂移，内网实报 2026-11-05 产出漂到仓外）**（appid 查不到时层为空 warn 不阻断，建议先填 schema_apps.json）。探测与正式预处理幂等（同一输入必同一定位）；probe 结果与后续 preprocess 的 meta 不一致属输入自相矛盾，fail loud 报调用方。
 
 ---
 

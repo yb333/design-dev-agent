@@ -1940,9 +1940,24 @@ def main():
             appid = _ra(schema) or ""
         except Exception:
             pass  # 查不到 appid 不阻断探测（层为空 warn 归正流程处理）
+        # ★ 产出根绝对锚定（2026-11-05 内网实报 #1：相对路径随运行 cwd 漂移——仓外
+        # 同名目录导致产出漂位。deliver 锚 = cwd 下 10_project_deliver；仓根指纹
+        # 三选一（.git/skills/10_project_deliver），无指纹=warn 不阻断[新仓首跑合法]
+        # 但回显绝对路径供调用方核对。下游一律用 ddlc_abs 绝对路径，杜绝漂移）
+        _cwd = Path.cwd()
+        _deliver_root = _cwd / "10_project_deliver"
+        _repo_fp = ((_cwd / ".git").exists() or (_cwd / "skills").is_dir()
+                    or _deliver_root.is_dir())
+        if not _repo_fp:
+            print(f"[WARN] cwd={_cwd} 无项目仓根指纹（.git/skills/10_project_deliver 皆无）"
+                  f"——deliver 将锚定于 {_deliver_root.resolve()}，请核对运行目录防产出漂移",
+                  file=sys.stderr)
+        _ddlc_abs = str(_deliver_root.joinpath(
+            *[x for x in (appid, schema, asset) if x], "ddlc_design_dev").resolve())
         print(json.dumps({
             "schema": schema, "f_table": table, "asset": asset, "appid": appid,
             "deliver_hint": f"10_project_deliver/{appid}/{schema}/{asset}/ddlc_design_dev",
+            "ddlc_abs": _ddlc_abs,   # ★ 绝对路径（下游一律用它——相对路径随 cwd 漂移）
         }, ensure_ascii=False))
         return
 
