@@ -1940,18 +1940,27 @@ def main():
             appid = _ra(schema) or ""
         except Exception:
             pass  # 查不到 appid 不阻断探测（层为空 warn 归正流程处理）
-        # ★ 产出根绝对锚定（2026-11-05 内网实报 #1：相对路径随运行 cwd 漂移——仓外
-        # 同名目录导致产出漂位。deliver 锚 = cwd 下 10_project_deliver；仓根指纹
-        # 三选一（.git/skills/10_project_deliver），无指纹=warn 不阻断[新仓首跑合法]
-        # 但回显绝对路径供调用方核对。下游一律用 ddlc_abs 绝对路径，杜绝漂移）
-        _cwd = Path.cwd()
-        _deliver_root = _cwd / "10_project_deliver"
-        _repo_fp = ((_cwd / ".git").exists() or (_cwd / "skills").is_dir()
-                    or _deliver_root.is_dir())
-        if not _repo_fp:
-            print(f"[WARN] cwd={_cwd} 无项目仓根指纹（.git/skills/10_project_deliver 皆无）"
-                  f"——deliver 将锚定于 {_deliver_root.resolve()}，请核对运行目录防产出漂移",
-                  file=sys.stderr)
+        # ★ 产出根锚定（2026-11-05 实报 #1 修正定稿：**锚=用户启动目录[probe 运行
+        # cwd]无条件**——skill 全局安装，用户在任意文件夹启动 opencode 该文件夹即根；
+        # 首版误加 .git/skills 仓根指纹校验，内网交付文件夹无这些特征必误报，已删）。
+        # 漂移主防线=probe 首命令锚定一次 + ddlc_abs 绝对路径传遍全程（cwd 后续
+        # 变化不再影响产出位置）。嵌套锚定守卫：cwd 自身/祖先叫 10_project_deliver
+        # =100% 错锚（固定产出根名无合法嵌套场景——agent 在 probe 前 cd 进交付树
+        # 内所致），确定性上溯到树外再锚，stderr 说明一行。
+        _base = Path.cwd()
+        _fixed = False
+        while True:
+            if _base.name == "10_project_deliver":
+                _base, _fixed = _base.parent, True
+                continue
+            _hit = next((a for a in _base.parents if a.name == "10_project_deliver"), None)
+            if _hit is None:
+                break
+            _base, _fixed = _hit.parent, True
+        if _fixed:
+            print(f"[锚定纠偏] cwd 位于交付树内——锚上溯至用户根 {_base}"
+                  f"（10_project_deliver=固定产出根，嵌套锚定必错）", file=sys.stderr)
+        _deliver_root = _base / "10_project_deliver"
         _ddlc_abs = str(_deliver_root.joinpath(
             *[x for x in (appid, schema, asset) if x], "ddlc_design_dev").resolve())
         print(json.dumps({

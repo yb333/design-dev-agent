@@ -37,7 +37,7 @@ skills/
 │   └── schemas/         # ts_draft_v2.schema.json+ts_draft_v2.example.json+ts_sample_forward.json(★v2 草稿契约交付包四件套——权威在我方,逆向侧 vendor[方向反转];完整结构权威=ts-template.json;正向全貌靶=真装配产出 golden 守护[逆向侧点名要的];含 _reverse 段/物理属性恢复槽位/evidence 旁证封闭集[分布键禁入];test_ts_draft_contract 守契约+样例+正向样本确定性[三 hash seed 验证])
 └── design-dev-shared/   # ★ 公共设施：共用入口 + 公共库（纯代码库无 SKILL.md——路径锚点职能已由 new-pipe/opt-pipe 的 Base directory 承接，install 单独拷）
     └── scripts/         # ★ 共用入口（>1 消费者才留这，2026-09 按消费者归位定调）：
-                         #   preprocess.py(两剧本共用;probe绝对锚定2026-11-05[ddlc_abs绝对路径+仓根指纹校验.warn——相对路径随cwd漂移实报];★全仓唯一实现三件2026-10-22:clean_excel_column列名归一/parse_mapping_sheets全量两页签解析/check_mapping_static静态检查——precheck与preprocess_opt同一实现同一语义) sql_clean.py(★平台SQL解析预处理链vendor拷贝2026-10-22:权威在analyzer仓engine[版本8d41a04],剔注释/DWS特有语法/占位符量化,oracle方言——sql_fence围栏parse门票;指纹联锁test_vendor_sync盯漂移,修复改彼侧再re-vendor) check_db.py(两剧本共用) assemble_ddl.py(new-pipe直调+opt侧assemble_ddl_opt import;--skip-rollback 2026-11-05[opt档案推进只产ddl/——回退归变更现场件,档案零回退不变量]) resolve_appid.py(查appid,被preprocess/assemble_export import)
+                         #   preprocess.py(两剧本共用;probe产出根锚定2026-11-05定稿[锚=用户启动目录cwd无条件,ddlc_abs绝对路径传全程;嵌套锚定守卫:cwd在交付树内确定性上溯——相对路径随cwd漂移实报];★全仓唯一实现三件2026-10-22:clean_excel_column列名归一/parse_mapping_sheets全量两页签解析/check_mapping_static静态检查——precheck与preprocess_opt同一实现同一语义) sql_clean.py(★平台SQL解析预处理链vendor拷贝2026-10-22:权威在analyzer仓engine[版本8d41a04],剔注释/DWS特有语法/占位符量化,oracle方言——sql_fence围栏parse门票;指纹联锁test_vendor_sync盯漂移,修复改彼侧再re-vendor) check_db.py(两剧本共用) assemble_ddl.py(new-pipe直调+opt侧assemble_ddl_opt import;--skip-rollback 2026-11-05[opt档案推进只产ddl/——回退归变更现场件,档案零回退不变量]) resolve_appid.py(查appid,被preprocess/assemble_export import)
                          #   ★ 公共库（被多方 import）：
                          #   dws_db.py(连库) config_paths.py(★config路径集中) run_ut.py(UT函数库,无main,含dq_filename/load_dq_rules[dq.json优先,旧ts.dq_rules兜底];★UT写路径内核2026-10-26统一UT:execute_write_path[预处理+wrap_write真形态+r.success判定分流——opt契约误解病灶根治位]+verify_merge_idempotent[merge族幂等第二遍:WHEN MATCHED覆盖+重跑安全镜像]+无条件MERGE fail loud[旧1=1静默兜底退役];★INSERT列清单双权威2026-11-04问题7层1:column_order[opt=SELECT实际输出序describe实测,存在性对照结构源拦幻觉列]/缺省=新建结构源序语义不变) type_compat.py(类型兼容) render_md.py(★ts.md人读投影渲染器,2026-11-04自assemble_ts下沉——三消费者dws-design/assemble_ts[_opt]+opt-pipe/assemble_ts_baseline[首档md];形态容错:逆向/v2草稿无design段降级渲染占位+business_key表级回退+字段数/字段逻辑回退三桶+design.baseline_design[opt designer存量设计还原]渲染)
                          #   sql_parse.py(SQL文本解析原语) dws_standards.py(审计字段标准常量) ts_compat.py(ts结构兼容:分桶原语+旧结构升级) schema_query.py(字段查询能力层:check_field/pick_fields内核)
@@ -108,7 +108,7 @@ ddlc_design_dev/
 ```
 
 **易错点**：
-- **产出路径一律绝对**（probe 输出 `ddlc_abs` 锚定，2026-11-05 内网实报：相对路径随运行 cwd 漂移——仓外同名目录致产出漂位；probe 无仓根指纹[.git/skills/10_project_deliver 皆无]时 warn 回显绝对路径）。
+- **产出根=用户启动目录（probe cwd）无条件，产出路径一律绝对**（probe 输出 `ddlc_abs`；2026-11-05 实报与修正定稿：skill 全局安装、用户在任意文件夹启动 opencode 该文件夹即根——无仓指纹概念，首版误加 .git/skills 指纹校验已删；相对路径随 cwd 漂移是实报根因；嵌套锚定守卫：cwd 自身/祖先叫 10_project_deliver=确定性上溯到树外再锚）。
 - `ut_precheck_result.json` 放 `_internal/`，**不是** ts.json 同级。ut_precheck.py 默认写这、ut_execute.py 默认读这，且读不到会 **fail loud（退出码2）**，不再静默返回空导致全跳过。
 - 临时分析脚本/中间结果统一放 `_internal/diagnose/`，后续提炼成标准脚本。
 - 代码默认路径用 `ts_path.parent / "_internal" / "..."`，不要硬编码到 `ts_path.parent` 根下。

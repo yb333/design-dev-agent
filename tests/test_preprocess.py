@@ -1380,19 +1380,40 @@ class TestProbeMode:
         # 探测不产 rs_input（未给 --output 也不报错——定位动作零副作用）
         assert not (tmp_path / "rs_input.json").exists()
 
-    def test_probe_warns_outside_repo_root(self, tmp_path):
-        """cwd 无仓根指纹（.git/skills/10_project_deliver 皆无）→ warn 回显绝对路径
-        （产出漂移防护——2026-11-05 实报 #1）。"""
+    def test_probe_nested_tree_escalation(self, tmp_path):
+        """嵌套锚定纠偏（2026-11-05 修正定稿：锚=用户启动目录无条件——无仓指纹概念；
+        cwd 在交付树内=100% 错锚，确定性上溯到树外再锚）。"""
+        import json as _json2
         import subprocess as _sp
         import sys as _sys
         from pathlib import Path
-        xlsx = tmp_path / "m2.xlsx"
+        user_root = tmp_path / "F"                       # 用户启动文件夹
+        deep = user_root / "10_project_deliver" / "app1" / "dws" / "asset_x" / "ddlc_design_dev"
+        deep.mkdir(parents=True)
+        xlsx = deep / "m.xlsx"                           # agent cd 进交付树内再跑 probe
+        _build_xlsx_with_assign_null(xlsx)
+        script = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "scripts" / "preprocess.py"
+        r = _sp.run([_sys.executable, str(script), "--mapping", str(xlsx), "--probe"],
+                    capture_output=True, text=True, timeout=120, cwd=str(deep))
+        assert r.returncode == 0, r.stderr
+        assert "锚定纠偏" in r.stderr
+        payload = _json2.loads(r.stdout.strip().splitlines()[-1])
+        # 锚在树外用户根下（不在交付树内部嵌套）
+        assert payload["ddlc_abs"].startswith(str(user_root / "10_project_deliver")), payload
+        assert payload["ddlc_abs"].count("10_project_deliver") == 1
+
+    def test_probe_plain_user_folder_no_noise(self, tmp_path):
+        """普通用户文件夹（无 .git/skills——内网交付目录常态）零告警零纠偏。"""
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path
+        xlsx = tmp_path / "m3.xlsx"
         _build_xlsx_with_assign_null(xlsx)
         script = Path(__file__).resolve().parent.parent / "skills" / "design-dev-shared" / "scripts" / "preprocess.py"
         r = _sp.run([_sys.executable, str(script), "--mapping", str(xlsx), "--probe"],
                     capture_output=True, text=True, timeout=120, cwd=str(tmp_path))
         assert r.returncode == 0, r.stderr
-        assert "无项目仓根指纹" in r.stderr and "产出漂移" in r.stderr
+        assert "锚定纠偏" not in r.stderr and "WARN" not in r.stderr
 
     def test_output_still_required_without_probe(self, tmp_path):
         import subprocess as _sp
