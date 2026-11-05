@@ -60,3 +60,15 @@ task_id / 会话管理归编排者（pipe 记录并按需恢复你的会话）�
 
 - SQL 报错（COLUMN/TYPE/SYNTAX）→ 你改语法（恢复本会话）
 - 数据质量/对比失败（老列不一致）→ **不归你**，别用 ROW_NUMBER"修"它——那是掩蔽根因
+
+
+## 变更注释规约（2026-11-05 用户定调：交付 SQL 自含变更痕迹）
+
+以 baseline SQL 为底稿改动时，**凡本次变更涉及的投影行加行注释**（平台执行无影响
+——纯注释；围栏解析前剥注释不受影响）：
+
+- 新增列：`c.channel_name,  -- [202610 新增] channel_name`
+- 类型修改：`cast(t.order_id AS varchar(128)) AS order_id,  -- [202610 类型] varchar(64)→varchar(128)`
+- 口径修改：`nvl(a.amt, 0) AS amt,  -- [202610 口径] 金额空值按 0 计`
+
+格式：`-- [YYYYMM 类型] 简述`（YYYYMM=本次变更版本）。未动的存量行不加注释。

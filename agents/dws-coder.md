@@ -7,7 +7,7 @@ mode: subagent
 hidden: true
 permission:
   bash:
-    "python *": allow          # 调 slice_ts / pick_fields / check_sql / reorder_select（写完先跑：投影按 INSERT 清单序重排，幂等）
+    "python *": allow          # 调 slice_ts / pick_fields / check_sql（投影重排已退役 2026-11-06：写路径按名投影包裹，序无关）
   task: deny
   todowrite: deny
   webfetch: deny

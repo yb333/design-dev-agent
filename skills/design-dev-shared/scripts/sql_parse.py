@@ -862,7 +862,7 @@ def find_projection_span(body: str):
 
     括号感知——投影项里的标量子查询自带 FROM 不误切（2026-09-21 实证旧非贪婪正则
     `(.*?)\\bFROM\\b` 取第一个 FROM 把子查询切开、后续项全丢）。无 SELECT/FROM 返回
-    None。split_top_projection_items（切项）与 reorder_select（原文替换）共用单点。
+    None。split_top_projection_items（切项）单点（reorder_select 已退役 2026-11-06）。
     """
     m = re.search(r'\bSELECT\b', body, re.IGNORECASE)
     if not m:
@@ -889,7 +889,7 @@ def split_top_projection_items(sql: str):
     输出名：AS 别名优先（小写），裸列名/别名.列取列名；顶层 SELECT * / t.* 返回
     [("*", "*")]；无名项（函数表达式无 AS）名=None；无 SELECT..FROM 结构返回 None。
     2026-09-21 自 extract_top_projection 抽出单点化——名字提取与项原文同源，
-    reorder_select（投影重排器）按项原文 permutation 零加工（表达式原文不动只换序）。
+    （投影重排器已退役 2026-11-06：写路径按名投影包裹，序无关。）
     """
     _cte, main = split_cte_main(sql or "")
     body = main if main else (sql or "")

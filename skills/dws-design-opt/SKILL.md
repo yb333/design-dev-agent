@@ -78,8 +78,11 @@ strategy 空 / join_key_unique 缺结论 / **reason 空（断言必须有依据�
 python {skills根}/dws-design/scripts/assemble_ts_opt.py \
   --ts-baseline {arc}/ts.json \
   --decisions {build}/_internal/design_decisions_opt.yaml \
+  --change-request {build}/_internal/change_request.json \
   --output {arc_tmp}/ts.json（全量态直产临时档案）
 ```
+（--change-request：随本次变更追加 ts.change_log 变更记录行——需求编号=version，
+上线日期/设计责任人留空人补；ts.md 自动渲染「变更记录」章节。）
 模板骨架读 `assets/opt-decisions-template.yaml`（必填项见模板注释；缺了组装器 fail loud）。
 组装成功即回报调用方（围栏由 pipe 跑，不是你跑）。
 

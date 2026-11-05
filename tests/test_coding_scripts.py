@@ -1101,54 +1101,21 @@ class TestTopProjection:
         assert e("SELECT t.id, coalesce(x, 1) AS amt FROM dws.t t") == ["id", "amt"]
 
 
-class TestColumnOrderCheck:
-    """投影列序对账（2026-09-15 前移 6a：INSERT 列清单=结构源序按位对齐，乱序=静默错位数据）。"""
+class TestOrderCheckRetired:
+    """投影序检查已退役（2026-11-06 写路径统一按名投影包裹——序与 INSERT 对齐
+    无关）；用例锁：乱序不报序问题（列覆盖检查照常负责多/缺列）。"""
 
-    @staticmethod
-    def _ts_new():
-        """新形态 ts：tables 带结构源字段序（target_field）。"""
-        fields = [{"target_field": n, "field_type": "varchar(10)", "field_comment": n}
-                  for n in ("order_no", "amount", "del_flag")]
-        return {
-            "meta": {"target": {"f_table": {"schema": "dws", "table": "dwb_x_f"}}},
-            "design": {"business_key": ["order_no"], "audit_fields": {}},
-            "tables": {"dwb_x_f": {"fields": fields}},
-            "rules": {"R0001": {
-                "target_table": "dws.dwb_x_f", "source_tables": [
-                    {"schema": "ods", "table": "ods_src", "alias": "t"}],
-                "fields": {"processed": [], "assign": [], "direct": [
-                    "t.order_no AS order_no", "t.amt AS amount", "'N' AS del_flag"]}}},
-        }
+    _TS = {"rules": {"R0001": {"fields": {"direct": ["t1.id AS id", "t1.amt AS amt"],
+                                          "processed": [], "assign": []}}},
+           "design": {"audit_fields": {}, "business_key": []}}
 
-    def test_reordered_projection_reported(self):
+    def test_reordered_projection_not_flagged(self):
         from check_sql import check_sql
-        sql = ("SELECT t.amt AS amount, t.order_no AS order_no, 'N' AS del_flag "
-               "FROM ods.ods_src t")
-        issues = check_sql(sql, self._ts_new(), "R0001")
-        hits = [i for i in issues if "[列序]" in i]
-        assert hits and "amount" in hits[0] and "order_no" in hits[0]
-
-    def test_matching_order_passes(self):
-        from check_sql import check_sql
-        sql = ("SELECT t.order_no AS order_no, t.amt AS amount, 'N' AS del_flag "
-               "FROM ods.ods_src t")
-        issues = check_sql(sql, self._ts_new(), "R0001")
-        assert not any("[列序]" in i for i in issues), issues
-
-    def test_legacy_ts_without_tables_skips(self):
-        """旧形态 ts（tables 空）无结构源序——跳过（宁放过）。"""
-        from check_sql import check_sql
-        ts = self._ts_new()
-        ts["tables"] = {}
-        sql = ("SELECT t.amt AS amount, t.order_no AS order_no, 'N' AS del_flag "
-               "FROM ods.ods_src t")
-        issues = check_sql(sql, ts, "R0001")
-        assert not any("[列序]" in i for i in issues)
+        issues = check_sql("SELECT t1.amt AS amt, t1.id AS id FROM ods.t t1",
+                           self._TS, "R0001")
+        assert not any("[列序]" in i or "序不一致" in i for i in issues), issues
 
 
-# ============================================================
-# FROM 别名门禁 + 别名→表绑定（2026-10-19 内网反馈）
-# ============================================================
 
 class TestFromBindings:
     """extract_from_bindings：FROM/JOIN 表引用 → (引用原文, 别名|"") 绑定原语。"""

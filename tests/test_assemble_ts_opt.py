@@ -55,7 +55,7 @@ def dec_new_join():
         "source": {"table": "dws.dim_channel", "alias": "c", "field": "channel_name"},
         "new_joins": [{
             "rule": "R0002", "schema": "dws", "table": "dim_channel", "alias": "c",
-            "join_type": "LEFT", "on": "t.order_id = c.order_id",
+            "join_type": "LEFT", "join_on": "t.order_id = c.order_id",
             "join_safety": {"join_key_unique": True, "strategy": "直接关联",
                             "join_filter": "", "reason": "维表主键关联不发散"},
         }],
@@ -109,6 +109,90 @@ class TestApplyAndFenceIntegration:
         assert "channel_name" in {x["target_field"]
                                   for x in v2["tables"]["tmp_trade_order"]["fields"]}
         assert check(baseline, v2, cr_for("channel_name")) == []
+
+
+class TestChangeLog:
+    """变更记录（2026-11-05 用户定调：固定表格列追加行——需求编号/变更类型/上线日期/
+    设计责任人/详细记录；assemble_ts_opt 从 change_request 取 version 追加，基线
+    既有记录保留=跨轮累积；render_md 渲染成章节）。"""
+
+    def _cr(self, tmp_path, version="202610"):
+        crp = tmp_path / "change_request.json"
+        crp.write_text(json.dumps({"version": version, "fields": []}, ensure_ascii=False),
+                       encoding="utf-8")
+        return crp
+
+    def test_change_request_appends_row(self, baseline, tmp_path):
+        d = dec_direct()
+        crp = self._cr(tmp_path, "202611")
+        dp = tmp_path / "d.yaml"
+        dp.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        bp = tmp_path / "ts_baseline.json"
+        bp.write_text(json.dumps(baseline, ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "ts_v2.json"
+        assert main(["--ts-baseline", str(bp), "--decisions", str(dp),
+                     "--output", str(out), "--change-request", str(crp)]) == 0
+        v2 = json.loads(out.read_text(encoding="utf-8"))
+        cl = v2.get("change_log")
+        assert cl and cl[-1]["需求编号"] == "202611"
+        assert "pay_channel(R0002)" in cl[-1]["详细记录"]
+        assert cl[-1]["上线日期"] == "" and cl[-1]["设计责任人"] == ""
+
+    def test_baseline_history_accumulates(self, baseline, tmp_path):
+        bl = json.loads(json.dumps(baseline))
+        bl["change_log"] = [{"需求编号": "202609", "变更类型": "新增字段×1",
+                             "上线日期": "2026-09-30", "设计责任人": "张三",
+                             "详细记录": "old_field(R0001)"}]
+        crp = self._cr(tmp_path, "202610")
+        d = dec_direct()
+        dp = tmp_path / "d.yaml"
+        dp.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        bp = tmp_path / "ts_baseline.json"
+        bp.write_text(json.dumps(bl, ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "ts_v2.json"
+        assert main(["--ts-baseline", str(bp), "--decisions", str(dp),
+                     "--output", str(out), "--change-request", str(crp)]) == 0
+        v2 = json.loads(out.read_text(encoding="utf-8"))
+        assert [r["需求编号"] for r in v2["change_log"]] == ["202609", "202610"]
+        md = (out.parent / "dwb_trade_order_d_ts.md").read_text(encoding="utf-8")
+        assert "## 变更记录" in md and "202609" in md and "202610" in md and "张三" in md
+
+    def test_no_change_request_keeps_baseline_log(self, baseline, tmp_path):
+        bl = json.loads(json.dumps(baseline))
+        bl["change_log"] = [{"需求编号": "202609", "变更类型": "新增字段×1",
+                             "上线日期": "", "设计责任人": "", "详细记录": "x"}]
+        d = dec_direct()
+        dp = tmp_path / "d.yaml"
+        dp.write_text(yaml.safe_dump(d, allow_unicode=True), encoding="utf-8")
+        bp = tmp_path / "ts_baseline.json"
+        bp.write_text(json.dumps(bl, ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "ts_v2.json"
+        assert main(["--ts-baseline", str(bp), "--decisions", str(dp),
+                     "--output", str(out)]) == 0
+        v2 = json.loads(out.read_text(encoding="utf-8"))
+        assert [r["需求编号"] for r in v2["change_log"]] == ["202609"]   # 不凭空造行
+
+
+class TestTemplateSelfCheck:
+    """模板自检（2026-11-05 实报 #4：模板与校验器漂移——source 形态/backfill 布尔/
+    design_logic 门禁规约靠 designer 读源码才能写对。模板示例值直接喂校验器，
+    模板从此不能与校验器漂移）。modify_* 示例段依赖具体 baseline 内容不进自检。"""
+
+    TEMPLATE = Path(__file__).resolve().parent.parent / "skills" / "dws-design-opt" / "assets" / "opt-decisions-template.yaml"
+
+    def test_template_examples_pass_validators(self, baseline):
+        import yaml
+        validate_baseline_design(dict(yaml.safe_load(self.TEMPLATE.read_text(encoding="utf-8"))))
+        tpl = yaml.safe_load(self.TEMPLATE.read_text(encoding="utf-8"))
+        d = {"change_type": "add_field", "backfill": tpl["backfill"],
+             "baseline_design": tpl["baseline_design"], "fields": list(tpl["fields"])}
+        validate_decisions(d, baseline, None)   # 不炸即过（含 N36/N38 门禁与 new_joins 断言）
+
+    def test_template_backfill_no_stays_string(self):
+        """backfill: no 裸写=YAML 布尔——模板教引号写法，本测锁模板不含裸布尔示例。"""
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        assert 'backfill: "no"' in text or "backfill: pending" in text
+        assert "backfill: no\n" not in text
 
 
 class TestBaselineDesign:
@@ -337,7 +421,7 @@ CACHE_CROSS = {("dws", "dim_channel"): {"order_id": "varchar(20)"},
 class TestJoinTypeCheck:
     def _dec_with_on(self, on):
         d = dec_new_join()
-        d["fields"][0]["new_joins"][0]["on"] = on
+        d["fields"][0]["new_joins"][0]["join_on"] = on
         return d
 
     def _baseline_with_t_alias(self, baseline):

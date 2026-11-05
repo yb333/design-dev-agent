@@ -12,9 +12,10 @@
      **逐句判定 r.success**——类型 MODIFY 转换失败当场爆）
   4. EXPLAIN 单侧真跑（新 SELECT——opt 无 6a 前置故内嵌；计划两门槛+顶层行数）
   4. 写路径（共享内核 execute_write_path：load_mode 真形态——merge_into 拼真 MERGE
-     +写前清理，**多次重跑不再累积残留**；**opt 列清单=SELECT 实际输出序**——
-     逆向档 tables 序与 SQL 投影序独立来源，结构源序权威仅新建成立）+ **merge 族
-     幂等第二遍**（verify_merge_idempotent：同语句两遍行数不变——两分支覆盖）
+     +写前清理，**多次重跑不再累积残留**；**按名投影包裹**[2026-11-06 统一改造，
+     平台实证同款：INSERT(清单) SELECT 清单 FROM (原SELECT) _src——内层序/多列无关，
+     新建/优化同一形态]）+ **merge 族幂等第二遍**（verify_merge_idempotent：同语句
+     两遍行数不变——两分支覆盖）
   5. run_ut_check **全集**（行数/主键唯一/审计非空——2026-10-26 豁免移除：UT 是
      资产质量门不是 diff 门，口径修改后主键唯一性必须独立验证）
   6. 新列/新类型抽查（全 NULL=新 JOIN 关联不上；类型修改列转换 NULL=事故信号）

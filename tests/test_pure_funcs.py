@@ -514,11 +514,12 @@ class TestInsertColumnsIntersection:
         assert _resolve_insert_columns(tbl, None) == ["a", "b"]  # None=全列（兼容）
         assert _resolve_insert_columns(tbl, set()) == ["a", "b"]  # 空集=旧档无声明保守全列
 
-    def test_produced_not_in_structure_raises(self):
-        import pytest
+    def test_produced_not_in_structure_dropped(self):
+        """产出列在结构外=按名丢弃不 raise（2026-11-06 按名包裹定调：存量
+        「查出来不写」合法形态；拼写错误归设计期校验与 check_sql 静态）。"""
         from run_ut import _resolve_insert_columns
-        with pytest.raises(ValueError, match="不在目标表结构源"):
-            _resolve_insert_columns([{"target_field": "a"}], {"a", "ghost_col"})
+        assert _resolve_insert_columns([{"target_field": "a"}, {"target_field": "b"}],
+                                       {"a", "ghost_col"}) == ["a"]
 
     def test_merge_set_only_produced(self):
         """MERGE 的 UPDATE SET 只 SET 产出列——保留其余列旧值（全列 SET 会清 NULL）。"""
@@ -1019,43 +1020,6 @@ class TestFindUnqualifiedRefsExemption:
         # 豁免集存在但不含该字段 → 照拦（豁免≠放松全集）
         assert find_unqualified_refs("coalesce(rn, del_flag)", {"rn"}) == ["del_flag"]
 
-
-class TestColumnOrderCheck:
-    """6a 列序对账（compare_column_order）：SELECT 实际输出 vs ts 结构源字段序。
-
-    2026-09-11 定调：INSERT 列清单改结构源后，coder 输出多列/少列/乱序由数据库
-    describe 对账拦（按位置对齐的 INSERT 乱序=静默错位数据，最危险）。
-    """
-
-    def test_identical_passes(self):
-        from ut_precheck import compare_column_order
-        ok, parts = compare_column_order(["id", "org_name", "del_flag"],
-                                          ["id", "org_name", "del_flag"])
-        assert ok and parts == []
-
-    def test_extra_column_fails(self):
-        """多列：CTE 体 as rn 被误输出的形态——回 coder"""
-        from ut_precheck import compare_column_order
-        ok, parts = compare_column_order(["id", "org_name"],
-                                          ["id", "org_name", "rn"])
-        assert not ok and any("多列" in p and "rn" in p for p in parts)
-
-    def test_missing_column_fails(self):
-        from ut_precheck import compare_column_order
-        ok, parts = compare_column_order(["id", "org_name", "del_flag"],
-                                          ["id", "org_name"])
-        assert not ok and any("缺列" in p and "del_flag" in p for p in parts)
-
-    def test_reordered_fails(self):
-        """乱序：集合相等但顺序不同——按位置对齐会错位数据，必须拦"""
-        from ut_precheck import compare_column_order
-        ok, parts = compare_column_order(["a", "b", "c"], ["b", "a", "c"])
-        assert not ok and any("顺序漂移" in p for p in parts)
-
-    def test_case_insensitive(self):
-        from ut_precheck import compare_column_order
-        ok, _ = compare_column_order(["ID", "Org_Name"], ["id", "org_name"])
-        assert ok
 
 
 class TestDqRuleFilenameAndFieldPriority:

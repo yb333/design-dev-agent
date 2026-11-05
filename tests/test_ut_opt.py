@@ -135,35 +135,41 @@ class TestColumnExistenceCheck:
         assert rs[0]["status"] == "PASS" and "列对账跳过" in rs[0]["detail"]
 
 
-class TestColumnOrderWritePath:
-    """写路径列清单权威（2026-11-04 问题7 层1）：opt=SELECT 实际输出序（describe
-    实测）——INSERT 按位置对齐 SELECT，与平台拼接动作同构；序错位资产照跑通。"""
+class TestByNameProjectionWrap:
+    """写路径=按名投影包裹（2026-11-06 统一改造，平台实证同款）：
+    INSERT(清单) SELECT 清单 FROM (原SELECT) _src——内层序无关、多列自然丢弃、
+    新建/优化同一形态（column_order/describe 序方案退役）。"""
 
     FIELDS = [{"target_field": "order_id"}, {"target_field": "cust_id"},
-              {"target_field": "amount"}]   # 结构源序（物理序）——与 SQL 序故意错位
+              {"target_field": "amount"}]   # 结构源序（物理序）——内层 SQL 序故意错位
 
-    def test_insert_follows_describe_order(self):
-        sql = wrap_write("SELECT a.amt AS amount, a.cid AS cust_id, a.oid AS order_id FROM t a",
-                         "dws.t_f", self.FIELDS, column_order=["amount", "cust_id", "order_id"])
-        # 列清单按 describe 实际序（amount 在前）而非结构源序（order_id 在前）
-        assert sql.index("amount") < sql.index("order_id")
+    INNER = "SELECT a.amt AS amount, a.cid AS cust_id, a.oid AS order_id FROM t a"
+
+    def test_insert_wraps_by_name(self):
+        sql = wrap_write(self.INNER, "dws.t_f", self.FIELDS)
         assert "INSERT INTO dws.t_f (" in sql
+        # 外层按名投影：清单=结构源序，外层 SELECT 同名同序引用 _src
+        assert "SELECT order_id, cust_id, amount" in sql
+        assert ") _src;" in sql and self.INNER in sql
 
-    def test_column_not_in_table_fails_loud(self):
-        with pytest.raises(ValueError, match="不在目标表结构内"):
-            wrap_write("SELECT 1", "dws.t_f", self.FIELDS,
-                       column_order=["amount", "ghost_col"])
+    def test_inner_order_irrelevant(self):
+        """内层序与清单序错位照常包裹——序检查/reorder 机制退役的根基。"""
+        sql = wrap_write(self.INNER, "dws.t_f", self.FIELDS)
+        assert sql.index("SELECT order_id, cust_id, amount") < sql.index(self.INNER)
 
-    def test_merge_uses_describe_order(self):
-        sql = wrap_write("SELECT a.oid AS order_id FROM t a", "dws.t_f", self.FIELDS,
+    def test_extra_produced_cols_dropped_not_raised(self):
+        """produced 含表外列（存量「查出来不写」合法形态）——按名丢弃不 raise。"""
+        sql = wrap_write(self.INNER, "dws.t_f", self.FIELDS,
+                         produced={"order_id", "cust_id", "amount", "ghost_col"})
+        assert "ghost_col" not in sql
+        assert "SELECT order_id, cust_id, amount" in sql
+
+    def test_merge_wraps_by_name(self):
+        sql = wrap_write(self.INNER, "dws.t_f", self.FIELDS,
                          load_mode="merge_into", write_condition="T.order_id=T1.order_id",
-                         column_order=["order_id"])
+                         produced={"order_id"})
         assert "MERGE INTO dws.t_f T" in sql
-
-    def test_new_pipe_semantics_unchanged_without_order(self):
-        """无 column_order=新建结构源序语义不变（回归锁）。"""
-        sql = wrap_write("SELECT 1", "dws.t_f", self.FIELDS)
-        assert sql.index("order_id") < sql.index("amount")
+        assert "SELECT order_id\nFROM (" in sql
 
 
 class TestExecuteWritePath:

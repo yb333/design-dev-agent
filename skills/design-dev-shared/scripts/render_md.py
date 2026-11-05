@@ -267,6 +267,22 @@ def render_md(ts):
     lines.append("---")
     lines.append("")
 
+    # 变更记录（2026-11-05 用户定调：ts 文档的变更痕迹——固定表格列追加行，
+    # 数据源 ts.change_log[assemble_ts_opt 追加]；上线日期/设计责任人留空人补）
+    change_log = ts.get("change_log") or []
+    if change_log:
+        lines.append("## 变更记录")
+        lines.append("")
+        lines.append("| 需求编号 | 变更类型 | 上线日期 | 设计责任人 | 详细记录 |")
+        lines.append("|----------|----------|----------|------------|----------|")
+        for row in change_log:
+            g = lambda k: str(row.get(k, "") or "")
+            lines.append(f"| {g('需求编号')} | {g('变更类型')} | {g('上线日期')} | "
+                         f"{g('设计责任人')} | {g('详细记录')} |")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
     # §2 表模型设计（统一表格，目标表优先）
     lines.append("## 2. 表模型设计")
     lines.append("")

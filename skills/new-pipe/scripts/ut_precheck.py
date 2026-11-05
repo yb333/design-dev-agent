@@ -99,9 +99,6 @@ from explain_check import (  # noqa: F401
     _parse_actual_rows, _analyze_plan, _count_stream_operators,
 )
 
-# compare_column_order 已下沉 shared run_ut（2026-10-23：6a 与 opt ut_opt EXPLAIN 段
-# 双消费者；搬体留名 re-export 保旧引用）
-from run_ut import compare_column_order  # noqa: F401,E402
 
 
 def main():
@@ -287,16 +284,18 @@ def main():
                 streams = _count_stream_operators(plan_text)
                 print(f"  📋 计划检查: 通过（STREAM {streams}/{STREAM_LIMIT}，无 Data Node Scan）→ {plan_file}")
 
-            # 列序对账（2026-09-11 定调）：SELECT 实际输出列序 vs ts 结构源字段序。
-            # INSERT 列清单已改用结构源（run_ut._resolve_insert_columns），coder 若
-            # 输出多列/少列/乱序，按位置对齐的 INSERT 会错位——权威解释器是数据库
-            # （LIMIT 0 不取数零成本；CTE/内联子查询/注释任何形态天然正确）。
+            # 列覆盖对账（2026-11-06 按名投影包裹改造：序不再参与对齐——INSERT(清单)
+            # SELECT 清单 FROM (原SELECT) _src 按名选取，乱序无害；有意义的只剩覆盖）：
+            # - 缺列（清单列 SQL 没输出）→ FAIL 归 coder 漏写（包裹层引用不存在的列，
+            #   INSERT 必炸——提前到 6a 报清楚归因）
+            # - 多列（SQL 输出不在表结构）→ 披露（幻觉列嫌疑；包裹按名丢弃不炸，
+            #   check_sql 静态拦过一道，此处运行时实证一道）
+            # 权威解释器是数据库（LIMIT 0 不取数零成本）。
             target_short = target.rsplit(".", 1)[-1] if "." in target else target
             _tbl_fields = ts.get("tables", {}).get(target_short, {}).get("fields", [])
             expected_cols = [str(f.get("target_field", "")).lower()
                              for f in _tbl_fields if isinstance(f, dict) and f.get("target_field")]
-            # 列清单=结构源序 ∩ 规则产出列（2026-09-15）：对账口径与 INSERT 清单一致——
-            # 部分来源规则 SELECT 只出产出列（未产出的列不写 NULL 凑数），比交集序
+            # 清单=结构源 ∩ 规则产出列（对账口径与 INSERT 清单一致）
             _produced = rule_output_fields(rule)
             if _produced:
                 expected_cols = [c for c in expected_cols if c in _produced]
@@ -304,27 +303,32 @@ def main():
                 r_desc = etl_executor.execute(
                     f"SELECT * FROM ({select_sql.strip().rstrip(';')}) _ut_cols LIMIT 0")
                 if r_desc.success and r_desc.columns:
-                    actual_cols = [str(c).lower() for c in r_desc.columns]
-                    order_ok, detail_parts = compare_column_order(expected_cols, actual_cols)
-                    if order_ok:
-                        r_result["column_check"] = "PASS"
-                        print(f"  ✅ 列序对账: {len(expected_cols)} 列与 ts 字段声明一致")
-                    else:
-                        # 按位置对齐的 INSERT 遇多/缺列直接报错，遇乱序静默错位数据——都拦
+                    actual_set = {str(c).lower() for c in r_desc.columns}
+                    missing = [c for c in expected_cols if c not in actual_set]
+                    extra = [c for c in sorted(actual_set) if c not in
+                             {str(f.get("target_field", "")).lower() for f in _tbl_fields}]
+                    if missing:
                         r_result["status"] = "FAIL"
                         r_result["error_type"] = "SQL"
-                        r_result["detail"] = (f"列序对账失败（SQL 输出列 ≠ ts 字段声明）: "
-                                              f"{'; '.join(detail_parts)}——回 coder 修 SELECT 输出列")
+                        r_result["detail"] = (f"列覆盖对账失败（INSERT 清单列 SQL 未输出）: "
+                                              f"缺 {missing}——回 coder 修 SELECT 输出列")
                         r_result["column_check"] = "FAIL"
-                        print(f"  ❌ 列序对账失败: {'; '.join(detail_parts)}")
+                        print(f"  ❌ 列覆盖对账失败: 缺列 {missing}")
                         results.append(r_result)
                         prev_failed = True
                         continue
+                    if extra:
+                        r_result["column_check"] = "PASS"
+                        print(f"  ⚠️ 列覆盖对账: 清单齐；SQL 另输出表外列 {extra}"
+                              f"（包裹按名丢弃——幻觉列嫌疑，已过 check_sql 静态）")
+                    else:
+                        r_result["column_check"] = "PASS"
+                        print(f"  ✅ 列覆盖对账: {len(expected_cols)} 列齐")
                 else:
                     # describe 执行失败/无列——宁放过（EXPLAIN ANALYZE 已真实执行过 SELECT
                     # 本体，主守卫已过；对账是增益守卫），披露跳过原因
                     r_result["column_check"] = "SKIPPED"
-                    print("  ⏭️ 列序对账跳过（describe 无列返回）")
+                    print("  ⏭️ 列覆盖对账跳过（describe 无列返回）")
             results.append(r_result)
 
     # 输出结果

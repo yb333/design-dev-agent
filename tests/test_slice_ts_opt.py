@@ -25,7 +25,7 @@ def dec_new_join():
         "source": {"table": "dws.dim_channel", "alias": "c", "field": "channel_name"},
         "new_joins": [{
             "rule": "R0002", "schema": "dws", "table": "dim_channel", "alias": "c",
-            "join_type": "LEFT", "on": "t.order_id = c.order_id",
+            "join_type": "LEFT", "join_on": "t.order_id = c.order_id",
             "join_safety": {"join_key_unique": True, "strategy": "直接关联",
                             "join_filter": "", "reason": "维表主键关联不发散"},
         }]}]}

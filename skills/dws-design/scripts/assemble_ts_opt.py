@@ -30,7 +30,7 @@ from type_compat import join_key_pair_risky, types_compatible
 # decisions 必填键（缺 = fail loud，防 designer 漏声明）
 FIELD_REQUIRED_KEYS = ("field", "target_table", "placed_rules", "field_type",
                        "field_comment", "design_logic")
-JOIN_REQUIRED_KEYS = ("rule", "table", "alias", "join_type", "on", "join_safety")
+JOIN_REQUIRED_KEYS = ("rule", "table", "alias", "join_type", "join_on", "join_safety")  # join_on 非 on：YAML 1.1 把裸 on 键解析成布尔 True（模板实报雷）
 
 TS_RESERVED_RULE_KEYS = {"field_targets", "field_logics", "joins", "join_safety",
                          "source_tables"}
@@ -264,7 +264,7 @@ def _validate_join_types(f: dict, i: int, ts_baseline: dict, cache: dict) -> Non
     for j in f.get("new_joins", []):
         idx[str(j.get("alias", "")).lower()] = (j.get("schema", ""), j.get("table", ""))
     for j in f.get("new_joins", []):
-        on = j.get("on") or ""
+        on = j.get("join_on") or ""
         for (a1, c1), (a2, c2) in parse_join_pairs(on):
             sides = []
             for al, c in ((a1, c1), (a2, c2)):
@@ -326,7 +326,7 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
         for j in f.get("new_joins", []):
             rule = v2["rules"][j["rule"]]
             rule["joins"].append({"alias": j["alias"], "type": j["join_type"],
-                                  "condition": j["on"], "filter": ""})
+                                  "condition": j["join_on"], "filter": ""})
             rule["source_tables"].append({"schema": j.get("schema", ""),
                                           "table": j["table"], "alias": j["alias"]})
             js = j["join_safety"]
@@ -357,7 +357,7 @@ def apply_decisions(ts_baseline: dict, decisions: dict) -> dict:
             "design_logic": f["design_logic"],
             "placed_rules": list(f["placed_rules"]),
             "intermediate_tables": list(f.get("intermediate_tables", [])),
-            "new_joins": [{k: j[k] for k in ("rule", "table", "alias", "on")}
+            "new_joins": [{k: j[k] for k in ("rule", "table", "alias", "join_on")}
                           for j in f.get("new_joins", [])],
             "source": f.get("source") or {},   # 血缘（alias.field）——patcher 写 TargetFields 用
             "backfill": decisions.get("backfill", f.get("backfill", "pending")),
@@ -414,6 +414,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--decisions", required=True, help="design_decisions_opt.yaml")
     ap.add_argument("--output", required=True, help="ts_v2.json 输出路径")
     ap.add_argument("--schema-cache", default="", help="schema_cache.json 路径（默认 decisions 同目录）")
+    ap.add_argument("--change-request", default="",
+                    help="change_request.json 路径（可选：给则随本次变更追加 ts.change_log 变更记录行——"
+                         "需求编号=version，上线日期/设计责任人留空人补）")
     args = ap.parse_args(argv)
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
@@ -436,6 +439,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     validate_modify_logics(decisions, ts_baseline, cache)
     validate_baseline_design(decisions)
     v2 = apply_decisions(ts_baseline, decisions)
+
+    # 变更记录（2026-11-05 实报 #5 用户定调：ts 文档要有变更痕迹——固定表格列，
+    # 每轮**追加一行**填充逻辑恒定；ts.change_log 是数据源，render_md 渲染成表）。
+    # 需求编号=version（预处理锚定）；上线日期/设计责任人留空由人补（结构位恒在）。
+    _cl = list(ts_baseline.get("change_log") or [])
+    _row = None
+    if args.change_request and Path(args.change_request).exists():
+        _cr = json.loads(Path(args.change_request).read_text(encoding="utf-8"))
+        _types = []
+        if decisions.get("fields"):
+            _types.append(f"新增字段×{len(decisions['fields'])}")
+        if decisions.get("modify_types"):
+            _types.append(f"类型修改×{len(decisions['modify_types'])}")
+        if decisions.get("modify_logics"):
+            _types.append(f"口径修改×{len(decisions['modify_logics'])}")
+        _detail = "；".join(
+            f"{f['field']}({'/'.join(f.get('placed_rules', []))})" for f in decisions.get("fields", []))
+        for m in decisions.get("modify_types") or []:
+            _detail += f"；{m['field']} {m.get('old_type', '')}→{m.get('new_type', '')}"
+        for m in decisions.get("modify_logics") or []:
+            _detail += f"；{m['field']} 口径修订"
+        _row = {"需求编号": str(_cr.get("version", "")),
+                "变更类型": "，".join(_types) or decisions.get("change_type", ""),
+                "上线日期": "", "设计责任人": "", "详细记录": _detail}
+    elif v2.get("change"):
+        _row = None   # 无 change_request 时留基线既有记录（不凭空造行）
+    if _row:
+        _cl.append(_row)
+    if _cl:
+        v2["change_log"] = _cl
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -11,6 +11,19 @@
 #     禁读档案 etl SQL 原文自行核对——对照已由脚本算好）
 #   - 直挂字段穿聚合规则（GROUP BY）须声明聚合口径（如 MAX 组内任取）——
 #     design_logic 写明"组内任取"语义，coder 才能合法翻译（GROUP BY 属冻结层不可加键）
+#
+# ★YAML 语法坑（写错静默变义）：
+#   - 布尔词裸写会被解析成 true/false：no/yes/on/off 作**值**要加引号（backfill: "no"）；
+#     作**键**直接换名（new_joins 的关联条件键=join_on，裸 on: 键会变布尔 True）
+#   - 值以 { [ & * 开头或含 : # 时加引号
+#
+# ★design_logic 写法规约（引用门禁——违反即被组装器拦，不需读源码）：
+#   1. 字段引用一律 `别名.字段` 两段式（如 a.pay_channel）——裸字段名（pay_channel）
+#      和三段式（t.a.col）都被硬拦
+#   2. 口径说明文字一律放**全角括号（）**内、表达式只用半角——
+#      合法：nvl(a.amt, 0)（金额为空按 0 计）；全角段里的内容不参与门禁检查
+#   3. 只能引用真实存在的列：源表列（查 schema_cache）/ ts 表结构列；编造列名被拦
+#   4. 空值写 NULL 或空串，禁用裸"空"字
 # ============================================================================
 change_type: add_field
 
@@ -27,7 +40,8 @@ baseline_design:
 
 # 回刷意向——照抄 change_request.backfill（预处理已派生 2026-11-04：全量基线自动 no
 # =下次调度全量重建覆盖无需回刷；增量/merge/分区基线 pending 到闸口①'人选拿；
-# RS 有明确意向填之——照抄即可，勿自行推翻）
+# RS 有明确意向填之——照抄即可，勿自行推翻）。**值为 no 时必须带引号**（YAML 裸 no
+# =布尔 false——虽然组装器已兼容布尔，写引号保持可读）
 backfill: pending
 
 fields:
@@ -38,10 +52,11 @@ fields:
     intermediate_tables: []         # 穿中间表时列出（C 形态），否则 []
     field_type: VARCHAR(64)
     field_comment: 支付渠道
-    design_logic: 支付渠道编码直取    # 自然语言口径（不含 SQL）
+    design_logic: a.pay_channel 直取    # 口径=表达式或人话+全角括号说明（见头部规约）
     transform_type: direct          # direct | aggregate | ...
-    source:                         # 血缘（来自 change_request 的 source）
-      table: ods.ods_trade_order_di
+    source:                         # 血缘（照抄 change_request 的 source——schema/table 分开）
+      schema: ods
+      table: ods_trade_order_di
       alias: a
       field: pay_channel
     new_joins: []                   # 同源直挂无新 JOIN
@@ -53,10 +68,11 @@ fields:
     intermediate_tables: []
     field_type: VARCHAR(64)
     field_comment: 渠道名称
-    design_logic: 按订单关联渠道维表取渠道名称
+    design_logic: c.channel_name 直取（渠道维表按订单关联取名称）
     transform_type: direct
     source:
-      table: dws.dim_channel
+      schema: dws
+      table: dim_channel
       alias: c
       field: channel_name
     new_joins:
@@ -65,7 +81,7 @@ fields:
         table: dim_channel
         alias: c
         join_type: LEFT
-        on: t.order_id = c.order_id
+        join_on: t.order_id = c.order_id   # 键名 join_on 非 on——YAML 裸 on 键会解析成布尔 True
         join_safety:                # ★ 新 JOIN 必须声明关联安全性——先取证后断言（SKILL §二.3）
           join_key_unique: true     # 渠道维表按 order_id 唯一（断言必须有结论）
           strategy: 直接关联
@@ -85,7 +101,7 @@ modify_types:
 
 # ---- 口径修改（modify_logic，属性级 MODIFY·映射表达式）----
 # 变更记录「MODIFY | 字段 | 映射表达式 | 旧表达式 | 新表达式」的条目：人话新口径由你
-# 翻译成 design_logic 填此处（new_logic——表达式+全角括号说明，N36/N38 引用门禁约束）；
+# 翻译成 design_logic 填此处（new_logic——表达式+全角括号说明，写法规约见头部）；
 # 落点由脚本自动定位（baseline 桶条目——processed 替换 / direct 迁移为 processed）。
 modify_logics:
   - field: amt                   # baseline 存量字段（口径修改只针对存量）
