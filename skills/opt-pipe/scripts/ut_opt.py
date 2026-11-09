@@ -402,20 +402,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         t_short = target.rsplit(".", 1)[-1] if "." in target else target
         tbl_fields = (tables_meta.get(t_short) or {}).get("fields", [])
-        # ★ opt 列清单权威=SELECT 实际输出序（describe 实测——2026-11-04 问题7 层1：
-        # 逆向档 tables 序与 SQL 投影序独立来源常态错位，结构源序权威仅新建成立；
-        # 平台列清单跟随 SQL 序，UT 还原平台拼接动作。列不可得=fail loud 不静默
-        # 退回结构源序——那是静默错位数据）
-        actual_cols = describe_output_columns(executor, select_sql)
-        if not actual_cols:
-            writes.append({"rule": rule_code, "status": "FAIL", "error_type": "ENV",
-                           "detail": "SELECT 输出列不可得（describe 失败/无列返回）——"
-                                     "先修 SELECT 再跑写路径（不静默退回结构源序=静默错位）"})
-            continue
+        # 写路径=共享内核**按名投影包裹**（2026-11-06 统一改造，平台实证同款）：
+        # INSERT(清单) SELECT 清单 FROM (原SELECT) _src——内层序/多列无关，
+        # 新建/优化同一形态（2026-11-04 的 describe 序 column_order 方案随之退役。
+        # 2026-11-09 修复：227c13e 半改——run_ut 已删 column_order 参数而本调用点
+        # 残留 column_order=actual_cols 致内网 UT TypeError，补上当时未落盘的改动）
         wp = execute_write_path(executor, rule_code, target, select_sql,
                                 tbl_fields, rule.get("load_mode", "truncate_table"),
-                                rule.get("write_condition", ""), rule_output_fields(rule),
-                                column_order=actual_cols)
+                                rule.get("write_condition", ""), rule_output_fields(rule))
         writes.append(wp)
         # merge 族：幂等第二遍（WHEN MATCHED 覆盖+生产重跑安全性镜像）
         if wp["status"] == "PASS" and rule.get("load_mode") in ("merge_into", "update"):

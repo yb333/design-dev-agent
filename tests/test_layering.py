@@ -86,3 +86,19 @@ def test_layering_rule_has_teeth():
     assert "ut_execute" in _module_names("new-pipe")
     assert "ut_opt" in _module_names("opt-pipe")
     assert "run_ut" in _module_names("design-dev-shared")
+
+
+def test_no_retired_kwarg_callsites():
+    """退役参数调用点零残留（2026-11-09 内网实报：227c13e 半改——run_ut 删了
+    column_order 参数而 ut_opt 调用点残留 column_order= 致 UT TypeError；测试当时
+    没覆盖 ut_opt main 调用点、canary 只查签名不查调用。AST 守卫：全 skill 脚本
+    任何调用不得再传已退役关键字）。"""
+    import ast
+    retired = {"column_order"}
+    for py in (REPO / "skills").glob("*/scripts/*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for kw in node.keywords:
+                    assert kw.arg not in retired, (
+                        f"{py.relative_to(REPO)} 传已退役参数 {kw.arg}=（调用点与函数签名漂移）")
