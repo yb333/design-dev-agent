@@ -241,8 +241,8 @@ class TestLogicRefExistence:
     （precheck_opt 拉「新源∪baseline 全部源表」）、ts 表查结构声明集，幻觉列硬拦
     （此前只能等 UT 炸）；无 cache 源表侧宁放过（声明域仍查——结构在档零成本）。"""
 
-    CACHE = {("ods", "ods_trade_order_di"): {"order_id": "varchar(64)", "pay_channel": "varchar(32)"},
-             ("dws", "dim_channel"): {"channel_name": "varchar(64)"}}
+    CACHE = {"ods.ods_trade_order_di": {"order_id": "varchar(64)", "pay_channel": "varchar(32)"},
+             "dws.dim_channel": {"channel_name": "varchar(64)"}}
 
     def test_new_field_hallucinated_col_blocked(self, baseline, tmp_path):
         d = dec_direct()
@@ -415,8 +415,8 @@ class TestLogicRefGate:
         validate_decisions(load_decisions(p2), baseline)
 
 
-CACHE_CROSS = {("dws", "dim_channel"): {"order_id": "varchar(20)"},
-               ("ods", "ods_trade_order_di"): {"order_id": "numeric(10)"}}
+CACHE_CROSS = {"dws.dim_channel": {"order_id": "varchar(20)"},
+               "ods.ods_trade_order_di": {"order_id": "numeric(10)"}}
 
 class TestJoinTypeCheck:
     def _dec_with_on(self, on):
@@ -447,8 +447,8 @@ class TestJoinTypeCheck:
                            CACHE_CROSS)  # 不炸
 
     def test_same_type_passes(self, baseline, tmp_path):
-        cache = {("dws", "dim_channel"): {"order_id": "numeric(10)"},
-                 ("ods", "ods_trade_order_di"): {"order_id": "numeric(10)"}}
+        cache = {"dws.dim_channel": {"order_id": "numeric(10)"},
+                 "ods.ods_trade_order_di": {"order_id": "numeric(10)"}}
         d = self._dec_with_on("t.order_id = c.order_id")
         p2 = tmp_path / "d.yaml"; p2.write_text(yaml.dump(d, allow_unicode=True))
         validate_decisions(load_decisions(p2), self._baseline_with_t_alias(baseline), cache)

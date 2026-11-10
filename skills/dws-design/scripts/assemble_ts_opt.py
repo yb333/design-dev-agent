@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "design-d
 from sql_parse import (parse_join_pairs, find_unqualified_refs, find_three_part_refs,
                        extract_qualified_refs, extract_logic_refs)
 from type_compat import join_key_pair_risky, types_compatible
+from schema_cache import cache_key, load_cache_tables
 
 # decisions 必填键（缺 = fail loud，防 designer 漏声明）
 FIELD_REQUIRED_KEYS = ("field", "target_table", "placed_rules", "field_type",
@@ -87,7 +88,7 @@ def _check_logic_ref_existence(logic: str, label: str, ts_baseline: dict,
     for al, c in extract_logic_refs(logic, set())[0]:
         key = cache_domain.get(al)
         if key is not None:
-            fields = (cache or {}).get(key)
+            fields = (cache or {}).get(cache_key(*key))
             if fields is not None and c not in {str(k).lower() for k in fields}:
                 _fail(f"{label} 的口径引用 {al}.{c}，源表 {key[0]}.{key[1]} 里没有字段 "
                       f"'{c}'——检查拼写（引用确认可调 explore 批量模式 --ts 锚点）")
@@ -188,8 +189,8 @@ def validate_baseline_design(decisions: dict) -> None:
 
 def validate_decisions(decisions: dict, ts_baseline: dict, cache: dict | None = None) -> None:
     """decisions 自身合法性（与 ts_baseline 的对接面），fail loud。
-    cache: schema_cache（{(schema,table): {col:type}}）——新 JOIN 类型比对用；
-    None = 无缓存（比对降级，打印 warn 不硬拦——宁放过不误报）。"""
+    cache: schema_cache（{"schema.table": {col:type}} 字符串键——cache_key 契约）——
+    新 JOIN 类型比对用；None = 无缓存（比对降级，打印 warn 不硬拦——宁放过不误报）。"""
     fields = ts_baseline.get("tables", {})
     rules = ts_baseline.get("rules", {})
     target_asset = ts_baseline["meta"]["target"]["f_table"]["table"]
@@ -253,7 +254,8 @@ def validate_decisions(decisions: dict, ts_baseline: dict, cache: dict | None = 
 def _validate_join_types(f: dict, i: int, ts_baseline: dict, cache: dict) -> None:
     """ON 等值对两侧类型比对（跨大类须 cast——对齐 new-pipe N_JOIN2 语义）。
 
-    类型域：schema_cache（{(schema,table): {col: type}}）；alias 解析域 = baseline
+    类型域：schema_cache（{"schema.table": {col: type}} 字符串键——cache_key 契约）；
+    alias 解析域 = baseline
     全部规则源表 ∪ 本字段 new_joins 声明。查不到类型的对跳过（宁放过不误报）。
     """
     idx = {}
@@ -271,7 +273,7 @@ def _validate_join_types(f: dict, i: int, ts_baseline: dict, cache: dict) -> Non
                 st = idx.get(al)
                 ty = ""
                 if st:
-                    ty = (cache.get((st[0].lower(), st[1].lower())) or {}).get(c, "")
+                    ty = (cache.get(cache_key(*st)) or {}).get(c, "")
                 sides.append((f"{al}.{c}", ty))
             if sides[0][1] and sides[1][1] and \
                     join_key_pair_risky(sides[0][1], sides[1][1]):
@@ -413,7 +415,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--ts-baseline", required=True)
     ap.add_argument("--decisions", required=True, help="design_decisions_opt.yaml")
     ap.add_argument("--output", required=True, help="ts_v2.json 输出路径")
-    ap.add_argument("--schema-cache", default="", help="schema_cache.json 路径（默认 decisions 同目录）")
+    ap.add_argument("--schema-cache", default="",
+                    help="schema_cache.json 路径（默认 decisions 同目录 _internal/ 下）")
     ap.add_argument("--change-request", default="",
                     help="change_request.json 路径（可选：给则随本次变更追加 ts.change_log 变更记录行——"
                          "需求编号=version，上线日期/设计责任人留空人补）")
@@ -421,14 +424,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
     decisions = load_decisions(Path(args.decisions))
-    # schema_cache：默认 decisions 同目录（precheck_opt 步骤 1b 落的）；显式 --schema-cache 覆盖
+    # schema_cache：默认 decisions 同目录 _internal/（precheck_opt 步骤 1b 落的）；
+    # 显式 --schema-cache 覆盖。键契约 = cache_key 字符串键（2026-11-10 收口）
     cache_path = (Path(args.schema_cache) if args.schema_cache
-                  else Path(args.decisions).parent / "schema_cache.json")
+                  else Path(args.decisions).parent / "_internal" / "schema_cache.json")
     cache = None
     if cache_path.exists():
         try:
-            _c = json.loads(cache_path.read_text(encoding="utf-8")).get("tables", {})
-            cache = {k: v for k, v in _c.items()}
+            cache = load_cache_tables(cache_path)
         except Exception:
             cache = None
     if cache is None:

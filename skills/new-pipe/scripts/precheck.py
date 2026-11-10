@@ -33,7 +33,7 @@ from risk_checks import (  # noqa: F401
 )
 from schema_cache import (  # noqa: F401
     _load_schema_cache, _save_schema_cache, _is_cache_expired,
-    _fetch_tables_schema_batch, _normalize_type,
+    _fetch_tables_schema_batch, _normalize_type, cache_key,
 )
 
 VALID_RULES = {"直接复制", "数据加工", "赋值", "序列"}
@@ -992,11 +992,11 @@ def _check_db_schema(
             fetched = _fetch_tables_schema_batch(executor, all_tables)
             executor.close()
             found = fetched
-            # 写缓存（存 {col: type}；键小写归一——DWS 元数据小写语义）
+            # 写缓存（存 {col: type}；键走 cache_key 单点契约——2026-11-10 收口）
             if cache_path:
                 cache_new = {"cached_at": "", "tables": {}}
                 for (sch, tbl), cols in fetched.items():
-                    cache_new["tables"][f"{sch.lower()}.{tbl.lower()}"] = cols  # 已是 {col: type}
+                    cache_new["tables"][cache_key(sch, tbl)] = cols  # 已是 {col: type}
                 _save_schema_cache(cache_path, cache_new)
         except Exception as e:
             result.add_warn(f"[DB校验异常] {e}")

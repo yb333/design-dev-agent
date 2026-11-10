@@ -144,3 +144,15 @@ class TestModifyTypeDdl:
         assert "ALTER TABLE dws.t1 ADD COLUMN c1 varchar(64);" in sql
         assert "ALTER TABLE dws.t1 MODIFY (order_id varchar(128));" in sql
         assert "类型修改 1 列" in sql
+
+    def test_comments_are_block_style(self):
+        """SQL 注释一律 /* */（2026-11-10 准则入册）：交付件头注释禁 -- 行注释。"""
+        from assemble_ddl_opt import build_alter_ddl, build_rollback_ddl
+        for sql in (build_alter_ddl("dws", "t1", [{"field": "c1", "field_type": "varchar(64)"}]),
+                    build_rollback_ddl("dws", "t1", [{"field": "c1", "field_type": "varchar(64)"}]),
+                    build_rollback_ddl("dws", "t_new", [], is_new_table=True)):
+            assert "/*" in sql
+            for line in sql.splitlines():
+                stripped = line.strip()
+                assert not (stripped.startswith("--") or "  -- " in line), \
+                    f"交付 SQL 禁 -- 行注释: {line}"

@@ -64,11 +64,12 @@ task_id / 会话管理归编排者（pipe 记录并按需恢复你的会话）�
 
 ## 变更注释规约（2026-11-05 用户定调：交付 SQL 自含变更痕迹）
 
-以 baseline SQL 为底稿改动时，**凡本次变更涉及的投影行加行注释**（平台执行无影响
+以 baseline SQL 为底稿改动时，**凡本次变更涉及的投影行加块注释**（平台执行无影响
 ——纯注释；围栏解析前剥注释不受影响）：
 
-- 新增列：`c.channel_name,  -- [202610 新增] channel_name`
-- 类型修改：`cast(t.order_id AS varchar(128)) AS order_id,  -- [202610 类型] varchar(64)→varchar(128)`
-- 口径修改：`nvl(a.amt, 0) AS amt,  -- [202610 口径] 金额空值按 0 计`
+- 新增列：`c.channel_name,  /* [202610 新增] channel_name */`
+- 类型修改：`cast(t.order_id AS varchar(128)) AS order_id,  /* [202610 类型] varchar(64)→varchar(128) */`
+- 口径修改：`nvl(a.amt, 0) AS amt,  /* [202610 口径] 金额空值按 0 计 */`
 
-格式：`-- [YYYYMM 类型] 简述`（YYYYMM=本次变更版本）。未动的存量行不加注释。
+格式：`/* [YYYYMM 类型] 简述 */`（YYYYMM=本次变更版本）。注释一律块注释——`--` 行
+注释被 check_sql 规范项拦（团队规范，写 -- 必被打回）。未动的存量行不加注释。

@@ -3,7 +3,32 @@
 2026-09-04 从 new-pipe/precheck.py 搬体留名下沉（函数体零改动、原名保留——precheck
 re-export 同名）。new-pipe precheck（步骤1b）与 opt-pipe precheck_opt 共用。
 """
+import sys
 from pathlib import Path
+
+def cache_key(schema: str, table: str) -> str:
+    """cache 键契约单点：`schema.table`，双侧 .strip().lower() 归一（标识符
+    比较入册定调）。文件/内存的跨边界（存/取）一律走本函数，调用方不 handcraft
+    拼键——2026-11-10 实报：_fetch_tables_schema_batch 返回 tuple 键裸塞进
+    cache 致 json.dumps 炸、被 except-Exception 吞掉静默不落盘，下游全部
+    降级；且读回字符串键用 tuple 查永远 miss。两个方言的转换责任收口于此。"""
+    return f"{str(schema).strip().lower()}.{str(table).strip().lower()}"
+
+
+def load_cache_tables(cache_path: Path) -> dict:
+    """读表结构缓存 → {"schema.table": {col_lower: type_lower}}（字符串键契约）。
+
+    消费者统一入口：与 cache_key 配对（存取同构），列名/类型同步 lower。
+    文件不存在/损坏 → 空 dict（调用方按无 cache 降级）。"""
+    cache = _load_schema_cache(Path(cache_path))
+    out: dict = {}
+    for k, v in (cache.get("tables") or {}).items():
+        if isinstance(v, dict):  # 保留类型 {col: type}；旧格式 list 兼容转无类型
+            out[str(k).lower()] = {str(c).lower(): str(t).lower() for c, t in v.items()}
+        elif isinstance(v, list):
+            out[str(k).lower()] = {str(c).lower(): "" for c in v}
+    return out
+
 
 def _load_schema_cache(cache_path: Path) -> dict:
     """读表结构缓存。返回 {cached_at, tables: {schema.table: {col: type}}}。"""
@@ -18,15 +43,22 @@ def _load_schema_cache(cache_path: Path) -> dict:
 
 
 def _save_schema_cache(cache_path: Path, cache: dict):
-    """写表结构缓存。"""
+    """写表结构缓存。tables 的 tuple 键自动转 cache_key 字符串键（JSON 只收
+    字符串键——2026-11-10 实报的落盘炸点归口在此拦下）。写失败打 stderr WARN
+    不阻断（「不影响校验」意图保留），但不再无声——静默吞让键契约 bug 隐身
+    到 designer 侧降级 warn 才暴露。"""
     try:
         import json
         from datetime import datetime
 
+        tables = cache.get("tables") or {}
+        cache["tables"] = {(cache_key(*k) if isinstance(k, tuple) else str(k).lower()): v
+                           for k, v in tables.items()}
         cache["cached_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass  # 缓存写失败不影响校验
+    except Exception as e:
+        print(f"WARN: schema_cache 写盘失败（校验继续，缓存未落）: {e}", file=sys.stderr)
 
 
 def _is_cache_expired(cached_at: str, ttl_hours: int = 24) -> bool:

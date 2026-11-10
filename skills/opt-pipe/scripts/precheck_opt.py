@@ -33,7 +33,7 @@ from risk_checks import (
 )
 from schema_cache import (
     _load_schema_cache, _save_schema_cache, _is_cache_expired,
-    _fetch_tables_schema_batch,
+    _fetch_tables_schema_batch, cache_key,
 )
 from sql_parse import parse_join_pairs
 from type_compat import join_key_pair_risky
@@ -61,7 +61,13 @@ def _alias_index(ts: dict) -> dict[str, tuple[str, str]]:
 
 def _get_schema_types(ts: dict, cr: dict, cache_path: Path, result: PrecheckResult) -> dict | None:
     """收集待查表（新源表 ∪ baseline 全部源表——新 JOIN 类型比对需要 ON 两侧），
-    schema_cache 命中或连库批量查（24h 缓存）。无库返回 None。"""
+    schema_cache 命中或连库批量查（24h 缓存）。无库返回 None。
+
+    键契约 = cache_key 字符串键（2026-11-10 收口：此前 tuple 键裸塞致 json.dumps
+    炸、被 _save 吞掉静默不落盘；读回字符串键用 tuple 查也永远 miss）。
+    缺表不当命中（对齐 new-pipe 语义）：缓存新鲜但缺表 → 连库补缺——「缓存没这
+    张表」≠「库里没这列」（扩围旧缓存/新增表首轮都会缺）；表真不存在时连库也
+    回空 dict 进缓存，下轮键在缓存即命中不重查。"""
     tables = {(f["source"]["schema"], f["source"]["table"])
               for f in cr.get("fields", []) if f.get("source", {}).get("table")}
     for r in (ts.get("rules") or {}).values():
@@ -71,34 +77,36 @@ def _get_schema_types(ts: dict, cr: dict, cache_path: Path, result: PrecheckResu
     if not tables:
         return {}
     cache = _load_schema_cache(cache_path)
-    need = [(s, t) for (s, t) in tables
-            if (s.lower(), t.lower()) not in cache.get("tables", {})]
-    if need and not _is_cache_expired(cache.get("cached_at", "")):
-        need = []  # 缓存新鲜但缺表 = 查过不存在，不重查
-    if need:
-        schema = ts["meta"]["target"]["f_table"]["schema"]
+    cache_tables = {str(k).lower(): v for k, v in (cache.get("tables") or {}).items()}
+    expired = _is_cache_expired(cache.get("cached_at", ""))
+    need = [(s, t) for (s, t) in tables if cache_key(s, t) not in cache_tables]
+    if not expired and not need:
+        return cache_tables  # 全命中且新鲜
+    # 过期 → 全量重查（陈旧数据整体刷新）；新鲜但缺表 → 只补缺
+    fetch_list = sorted(tables) if expired else need
+    schema = ts["meta"]["target"]["f_table"]["schema"]
+    try:
+        from dws_db import create_executor_for_schema
+        executor = create_executor_for_schema(schema, role="etl")
         try:
-            from dws_db import create_executor_for_schema
-            executor = create_executor_for_schema(schema, role="etl")
-            try:
-                fetched = _fetch_tables_schema_batch(executor, need)
-                for k, v in fetched.items():
-                    cache.setdefault("tables", {})[k] = v
-                _save_schema_cache(cache_path, cache)
-            finally:
-                executor.close()
-        except Exception:
-            result.add_warn(f"[预检降级] {NO_DB_WARN}")
-            return None
-    return cache.get("tables", {})
+            fetched = _fetch_tables_schema_batch(executor, fetch_list)
+            for k, v in fetched.items():
+                cache_tables[cache_key(*k)] = v
+            cache["tables"] = cache_tables
+            _save_schema_cache(cache_path, cache)
+        finally:
+            executor.close()
+    except Exception:
+        result.add_warn(f"[预检降级] {NO_DB_WARN}")
+        return None
+    return cache_tables
 
 
 def _check_existence_and_types(cr: dict, ts: dict, tables: dict, result: PrecheckResult) -> None:
     """新增源字段：存在性（缺=error）+ 声明类型 vs 库实际（不一致 warn 以库为准回填）。"""
     for f in cr.get("fields", []):
         src = f.get("source", {})
-        key = (src.get("schema", "").lower(), src.get("table", "").lower())
-        cols = tables.get(key) or {}
+        cols = tables.get(cache_key(src.get("schema", ""), src.get("table", ""))) or {}
         col = (src.get("field") or "").lower()
         actual = cols.get(col, "")
         if not actual:
@@ -130,7 +138,7 @@ def _check_join_risks(cr: dict, ts: dict, tables: dict, outdir: Path,
                 sch_tbl = alias_idx.get(al)
                 if not sch_tbl:
                     continue
-                t = tables.get((sch_tbl[0].lower(), sch_tbl[1].lower())) or {}
+                t = tables.get(cache_key(sch_tbl[0], sch_tbl[1])) or {}
                 sides.append((f"{sch_tbl[0]}.{sch_tbl[1]}.{c}", t.get(c, "")))
             if len(sides) == 2 and sides[0][1] and sides[1][1]:
                 if join_key_pair_risky(sides[0][1], sides[1][1]):
@@ -358,7 +366,7 @@ def main(argv=None) -> int:
                              f"（小写字母/数字/下划线，不以数字开头，≤63）——退输入改 mapping")
 
     # 2. 连库存在性+类型对账（无库降 warn：3/5 跳过，值域探测自管）
-    tables = _get_schema_types(ts, cr, outdir / "schema_cache.json", result)
+    tables = _get_schema_types(ts, cr, outdir / "_internal" / "schema_cache.json", result)
     if tables is not None:
         _check_existence_and_types(cr, ts, tables, result)
 

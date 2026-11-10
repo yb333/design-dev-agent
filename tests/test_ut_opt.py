@@ -260,9 +260,10 @@ class TestRunRollback:
     def _rb_dir(self, tmp_path, table="t1"):
         d = tmp_path / "ddl_rollback"
         d.mkdir(exist_ok=True)
-        # 2026-11-05：交付件=纯 DDL 逆（TRUNCATE 由 run_rollback 运行时执行不进脚本）
+        # 2026-11-05：交付件=纯 DDL 逆（TRUNCATE 由 run_rollback 运行时执行不进脚本）；
+        # 注释=块注释（2026-11-10 全局准则：SQL 禁 -- 行注释，与 assemble_ddl_opt 产出同构）
         (d / f"rollback_alter_{table}.sql").write_text(
-            "-- 回退脚本\nALTER TABLE dws.t1 DROP COLUMN c1;\n",
+            "/* 回退脚本 */\nALTER TABLE dws.t1 DROP COLUMN c1;\n",
             encoding="utf-8")
         return d
 

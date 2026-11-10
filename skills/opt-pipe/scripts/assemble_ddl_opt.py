@@ -33,9 +33,9 @@ def build_alter_ddl(schema: str, table: str, additions: List[dict],
     head = f"新增 {len(additions)} 列"
     if modifies:
         head += f" + 类型修改 {len(modifies)} 列"
-    lines = [f"-- ALTER 变更单：{full} {head}（add_field"
-             + (" + modify_type" if modifies else "") + "）",
-             "-- 由 assemble_ddl_opt 生成；执行时机与顺序由人/平台决定（推生产不自主）"]
+    lines = [f"/* ALTER 变更单：{full} {head}（add_field"
+             + (" + modify_type" if modifies else "") + "） */",
+             "/* 由 assemble_ddl_opt 生成；执行时机与顺序由人/平台决定（推生产不自主） */"]
     for f in additions:
         ftype = f.get("field_type") or "VARCHAR(200)"
         lines.append(f"ALTER TABLE {full} ADD COLUMN {f['field']} {ftype};")
@@ -60,10 +60,10 @@ def build_rollback_ddl(schema: str, table: str, additions: List[dict],
     advance 前置清理兜底）。"""
     full = f"{schema}.{table}" if schema else table
     if is_new_table:
-        return (f"-- 回退脚本（变更的 DDL 逆）：DROP 新表 {full}\n"
+        return (f"/* 回退脚本（变更的 DDL 逆）：DROP 新表 {full} */\n"
                 f"DROP TABLE IF EXISTS {full};\n")
-    lines = [f"-- 回退脚本（变更的 DDL 逆）：{full} 回到变更前结构（列级逆——不整表回退）",
-             "-- 数据清空（TRUNCATE）由 ut_opt 执行时做，不是交付件内容；由 assemble_ddl_opt 生成"]
+    lines = [f"/* 回退脚本（变更的 DDL 逆）：{full} 回到变更前结构（列级逆——不整表回退） */",
+             "/* 数据清空（TRUNCATE）由 ut_opt 执行时做，不是交付件内容；由 assemble_ddl_opt 生成 */"]
     for f in additions:
         lines.append(f"ALTER TABLE {full} DROP COLUMN {f['field']};")
     for m in modifies or []:
