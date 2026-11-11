@@ -279,7 +279,7 @@ class TestSchemaCacheChain:
                  "col_type": "numeric(10,0)"}]
         rc, _ = self._run_main(tmp_path, monkeypatch, rows)
         assert rc == 1  # 无 error（warn 属值域类）
-        cache_file = tmp_path / "_internal" / "schema_cache.json"
+        cache_file = tmp_path / "schema_cache.json"
         assert cache_file.exists(), "cache 必须落盘（实报：tuple 键 json 炸被吞静默失败）"
         tables = json.loads(cache_file.read_text(encoding="utf-8"))["tables"]
         assert "dim.dim_channel" in tables and "(dim" not in str(list(tables))
@@ -306,7 +306,7 @@ class TestSchemaCacheChain:
                  "col_type": "numeric(10,0)"}]
         rc, _ = self._run_main(tmp_path, monkeypatch, rows)
         # 手动从缓存删掉一张表（模拟扩围前旧缓存）
-        cache_file = tmp_path / "_internal" / "schema_cache.json"
+        cache_file = tmp_path / "schema_cache.json"
         cache = json.loads(cache_file.read_text(encoding="utf-8"))
         del cache["tables"]["ods.ods_order"]
         cache_file.write_text(json.dumps(cache), encoding="utf-8")
@@ -374,7 +374,7 @@ class TestSchemaCacheChain:
         p.write_text(yaml.dump(good, allow_unicode=True), encoding="utf-8")
         # 好 decisions + 真文件 cache：通过（JOIN 类型比对真实吃到 numeric 两侧一致）
         from schema_cache import load_cache_tables
-        cache = load_cache_tables(tmp_path / "_internal" / "schema_cache.json")
+        cache = load_cache_tables(tmp_path / "schema_cache.json")
         validate_decisions(good, baseline, cache)
         # 幻觉列：源表没有该列 → 源表侧拦截（cache 命中才拦得住——哑火实报点）
         bad = yaml.safe_load(yaml.dump(good, allow_unicode=True))
