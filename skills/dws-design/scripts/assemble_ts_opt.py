@@ -416,7 +416,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--decisions", required=True, help="design_decisions_opt.yaml")
     ap.add_argument("--output", required=True, help="ts_v2.json 输出路径")
     ap.add_argument("--schema-cache", default="",
-                    help="schema_cache.json 路径（默认 decisions 同目录 _internal/ 下）")
+                    help="schema_cache.json 路径（默认 decisions 同目录）")
     ap.add_argument("--change-request", default="",
                     help="change_request.json 路径（可选：给则随本次变更追加 ts.change_log 变更记录行——"
                          "需求编号=version，上线日期/设计责任人留空人补）")
@@ -424,10 +424,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     ts_baseline = json.loads(Path(args.ts_baseline).read_text(encoding="utf-8"))
     decisions = load_decisions(Path(args.decisions))
-    # schema_cache：默认 decisions 同目录 _internal/（precheck_opt 步骤 1b 落的）；
-    # 显式 --schema-cache 覆盖。键契约 = cache_key 字符串键（2026-11-10 收口）
+    # schema_cache：默认 decisions 同目录（precheck_opt 步骤 1b 落的——SKILL 传
+    # --outdir {build}/_internal 且 decisions 也在 _internal/，脚本不自行拼 _internal、
+    # 落 --outdir/decisions 同目录原样——2026-11-11 双拼回炉）。
+    # 键契约 = cache_key 字符串键（2026-11-10 收口）
     cache_path = (Path(args.schema_cache) if args.schema_cache
-                  else Path(args.decisions).parent / "_internal" / "schema_cache.json")
+                  else Path(args.decisions).parent / "schema_cache.json")
     cache = None
     if cache_path.exists():
         try:

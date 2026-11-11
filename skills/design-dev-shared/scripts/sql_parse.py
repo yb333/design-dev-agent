@@ -961,3 +961,41 @@ def extract_top_projection(sql: str):
     if any(n is None for n, _ in items):
         return None
     return [n for n, _ in items]
+
+
+def extract_group_by_keys(sql: str):
+    """SQL 的 GROUP BY 键清单（设计候选推导用，2026-11-11 #5 空位语义治理）。
+
+    剥注释后取所有 GROUP BY 段（到下一个 HAVING/ORDER/WINDOW/LIMIT/右括号/结尾），
+    按逗号顶层切分。多支 UNION 各段合并去重。返回 []=无 GROUP BY（明细直灌也是
+    确定性事实）；候选提示用途非门禁——正则薄实现，复杂嵌套宁漏不误。
+    """
+    import re as _re
+    if not sql:
+        return []
+    s = _re.sub(r'/\*.*?\*/', ' ', sql, flags=_re.DOTALL)
+    s = _re.sub(r'--[^\n]*', ' ', s)
+    keys: list[str] = []
+    for m in _re.finditer(r'\bGROUP\s+BY\b(.*?)(?=\bHAVING\b|\bORDER\s+BY\b|\bWINDOW\b|'
+                          r'\bLIMIT\b|\)|$)', s, _re.IGNORECASE | _re.DOTALL):
+        seg = m.group(1).strip()
+        if not seg:
+            continue
+        # 顶层逗号切分（括号深度感知——函数包裹键 group by substr(a.x,1,3) 不切错）
+        depth, cur, parts = 0, "", []
+        for ch in seg:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append(cur.strip()); cur = ""
+            else:
+                cur += ch
+        if cur.strip():
+            parts.append(cur.strip())
+        for p in parts:
+            k = _re.sub(r'\s+', ' ', p)
+            if k and k.lower() not in {x.lower() for x in keys}:
+                keys.append(k)
+    return keys

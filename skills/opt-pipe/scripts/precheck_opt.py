@@ -317,7 +317,9 @@ def write_health_report(outdir: Path, blocked: list, cr_warns: list,
     pending = list(result.pendings)
     disclose = [f"[{w.get('code', '?')}] {w.get('message', '')}" for w in (cr_warns or [])]
     disclose += list(result.warnings)
-    verdict = (f"拦——必须修 {len(must_fix)} 处" if must_fix else "过") + \
+    # 结论行带检查项计数（2026-11-11 假绿修复：区分「跑了全过」vs「根本没跑」——
+    # 通过的明细不打印只计数，不通过的明细照打；跳过的项由披露段[预检降级]可见）
+    verdict = (f"拦——必须修 {len(must_fix)} 处" if must_fix else f"过（{result.checks} 项检查全过）") + \
         f"｜待决策 {len(pending)} 项｜带病披露 {len(disclose)} 条"
     lines = ["# 输入体检报告（一次全量；重跑只看增量段）", "",
              f"═══ 结论：{verdict} ═══", ""]
@@ -360,21 +362,25 @@ def main(argv=None) -> int:
     result = PrecheckResult()
 
     # 1. 命名规范（存量不审、新增按我方标准）
+    result.add_check()
     for f in cr.get("fields", []):
         if not FIELD_NAME_RE.match(f.get("field", "")):
             result.add_error(f"[命名规范] 新增字段 {f.get('field')!r} 不合规范"
                              f"（小写字母/数字/下划线，不以数字开头，≤63）——退输入改 mapping")
 
     # 2. 连库存在性+类型对账（无库降 warn：3/5 跳过，值域探测自管）
-    tables = _get_schema_types(ts, cr, outdir / "_internal" / "schema_cache.json", result)
+    tables = _get_schema_types(ts, cr, outdir / "schema_cache.json", result)
     if tables is not None:
+        result.add_check()
         _check_existence_and_types(cr, ts, tables, result)
 
     # 3. 类型风险决策（库类型已回填；无库跳过）
     if tables is not None:
+        result.add_check()
         _check_type_risks(cr, outdir, result)
 
     # 3.5 类型修改方向风险（场景 B：modify_type_fields——离线判定不依赖库）
+    result.add_check()
     _check_modify_type_risks(cr, outdir, result)
 
     # 4. 值域探测（原语自管连库；用回填后的库类型）
@@ -391,6 +397,7 @@ def main(argv=None) -> int:
 
     # 5. 新来源 JOIN 对账（无库跳过）
     if tables is not None:
+        result.add_check()
         _check_join_risks(cr, ts, tables, outdir, cr_path, result)
 
     # 决策有回写（fields[].decision / join_type_decisions）→ 落盘 change_request

@@ -496,7 +496,9 @@ class TestBaselineViewDecisionsLanguage:
                                   "source_tables": [{"schema": "ods", "table": "s", "alias": "a"}]}},
               "tables": {}}
         view = render_baseline_view_from_ts(ts)
-        assert "▢未声明（语义空位）" in view               # 粒度/主键空位标注
+        # 空位语义分色（2026-11-11）：冻结层标注 + grain 候选已推导段
+        assert "▢存量未声明·冻结层" in view
+        assert "确认即采纳" in view
         assert "JOIN: （无声明）" in view
 
     def test_merge_on_evidence_when_bk_empty(self):
@@ -508,7 +510,7 @@ class TestBaselineViewDecisionsLanguage:
                                   "write_condition": "T.order_id=T1.order_id"}},
               "tables": {}}
         view = render_baseline_view_from_ts(ts)
-        assert "business_key: ▢未声明（语义空位）" in view
+        assert "business_key: ▢存量未声明·冻结层" in view
         assert "旁证（强·MERGE ON" in view and "R0001·T.order_id=T1.order_id" in view
         ts["meta"]["business_key"] = ["order_id"]
         view2 = render_baseline_view_from_ts(ts)

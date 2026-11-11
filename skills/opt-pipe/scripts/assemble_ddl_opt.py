@@ -1,12 +1,19 @@
-"""assemble_ddl_opt —— 优化模式 DDL 生成（docs/specs/opt/05 §七 DDL 两形态）。
+"""assemble_ddl_opt —— 优化模式 DDL 一步产（docs/specs/opt/05 §七；2026-11-11 合并定调）。
 
-产出（--outdir，一般 {deliver}）：
+变更执行件+档案物料一个脚本一次原子产出（两动作在优化场景是事务型操作——此前
+SKILL 另跑 assemble_ddl 产档案物料，两命令两目录致「跑了两次 DDL」的编排困惑）。
+
+产出（--outdir=build）：
   ddl/alter_table_{表名}.sql   ★变更单（交付物）：ALTER ADD COLUMN + COMMENT，一表一文件
+  ddl/create_table_{新表}.sql  新表 CREATE（2026-11-11 缺口补环：此前只有回退 DROP、
+                               首次 CREATE 无执行路径；源=generate_ddl(v2) 按新表抽）
+  ddl/create_or_replace_view_{视图}.sql  I 视图重建（F 表加列后镜像同步，如有 i_view）
   ddl_rollback/rollback_*.sql  回退脚本（UT 幂等重跑——**纯 DDL 逆**[2026-11-05 用户
                                定调：TRUNCATE 是 UT 执行动作不进交付件，ut_opt 运行时
                                做]；build 现场件不进档案——advance 前置清理兜底）
-  ddl_full/create_table_*.sql  全量 DDL（档案推进用；复用 assemble_ddl.generate_ddl 从 ts_v2 生成，
-                               json 路径无原 DDL 时即档案初始版）
+
+产出（--archive-outdir=arc_tmp，可选）：全量 ddl/（generate_ddl(v2) 直投影——
+档案推进物料，重建环境一目录全搞定；档案零回退）。
 
 差异校验（生成物也要被审计，v2.2）：全量 DDL 反映的字段增量必须**恰好等于**
 change 段声明——多列=生成器带进了未声明的东西，少列=漏。fail loud。
@@ -152,10 +159,15 @@ def audit_full_ddl(ts_baseline: dict, ts_v2: dict) -> List[str]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="优化模式 DDL：ALTER 变更单 + 全量 DDL 推进")
+    ap = argparse.ArgumentParser(
+        description="优化模式 DDL 一步产（2026-11-11 合并定调：变更执行件+档案物料一个脚本"
+                    "一次原子产出——两动作在优化场景是事务型操作，此前 assemble_ddl 另跑"
+                    "一遍致'跑了两次 DDL'的困惑与编排分叉）")
     ap.add_argument("--ts-v2", required=True)
     ap.add_argument("--ts-baseline", required=True)
-    ap.add_argument("--outdir", required=True, help="交付目录（产出 ddl/ 与 ddl_full/）")
+    ap.add_argument("--outdir", required=True, help="交付目录（产出 ddl/ 与 ddl_rollback/）")
+    ap.add_argument("--archive-outdir", default="",
+                    help="档案物料目录（arc_tmp——给则产全量 ddl/ 推进物料；不给只产变更执行件")
     args = ap.parse_args(argv)
 
     v2 = json.loads(Path(args.ts_v2).read_text(encoding="utf-8"))
@@ -170,6 +182,30 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     out = Path(args.outdir)
     (out / "ddl").mkdir(parents=True, exist_ok=True)
+    _baseline_tables = set((baseline.get("tables") or {}).keys())
+
+    # 0. 新表 CREATE 进 build 执行件（2026-11-11 缺口补环：此前新中间表只有回退 DROP、
+    #    首次 CREATE 无执行路径——UT 序列=回退→CREATE 新表→ALTER→视图重建）。
+    #    源=generate_ddl(v2) 全量产物按新表抽（结构权威单点，不自造 CREATE）。
+    full_ddl, _ = generate_ddl(v2)
+    n_new = 0
+    for name, sql in full_ddl.items():
+        if not name.startswith("create_table_"):
+            continue
+        t = name[len("create_table_"):-len(".sql")]
+        if t not in _baseline_tables:
+            (out / "ddl" / name).write_text(sql, encoding="utf-8")
+            n_new += 1
+
+    # 0.5 档案物料（--archive-outdir 给则产：全量 ddl/ 推进物料——重建环境一目录全搞定；
+    #     档案零回退：rollback 不进档案物料）——原 SKILL 单独跑 assemble_ddl 的活并入此步
+    n_arch = 0
+    if args.archive_outdir:
+        arch = Path(args.archive_outdir)
+        (arch / "ddl").mkdir(parents=True, exist_ok=True)
+        for name, sql in full_ddl.items():
+            (arch / "ddl" / name).write_text(sql, encoding="utf-8")
+            n_arch += 1
 
     # 1. ALTER 变更单（目标表 + 中间表，一表一文件；DDL 交付物只有变更单——
     #    全量建表 DDL 是 ts 的可再生投影不入交付不入档案，2026-09-04 裁决）
@@ -209,7 +245,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     #    本脚本语句——空表起步+结构逆两段职责分家）
     rb_dir = out / "ddl_rollback"
     rb_dir.mkdir(parents=True, exist_ok=True)
-    _baseline_tables = set((baseline.get("tables") or {}).keys())
     _rb_tables = set(_adds_by_table) | set(_mods_by_table) | {
         str(r.get("target_table", "")).rsplit(".", 1)[-1]
         for r in (v2.get("rules") or {}).values() if r.get("target_table")}
@@ -224,6 +259,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             encoding="utf-8")
         n_rb += 1
     print(f"rollback 回退脚本: {rb_dir}（{n_rb} 表——build 现场件，档案零回退）")
+    if n_new:
+        print(f"新表 CREATE: {out / 'ddl'}（{n_new} 张——进执行件，UT 序列在 ALTER 前执行）")
+    if n_arch:
+        print(f"档案物料: {Path(args.archive_outdir) / 'ddl'}（{n_arch} 件全量——advance 推进用）")
     return 0
 
 

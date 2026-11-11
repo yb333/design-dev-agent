@@ -156,3 +156,64 @@ class TestModifyTypeDdl:
                 stripped = line.strip()
                 assert not (stripped.startswith("--") or "  -- " in line), \
                     f"交付 SQL 禁 -- 行注释: {line}"
+
+
+class TestMergedArchiveAndNewTable:
+    """2026-11-11 合并定调：变更执行件+档案物料一步产 + 新表 CREATE 进执行件。"""
+
+    def test_archive_outdir_produces_full_ddl(self, pair, tmp_path):
+        """--archive-outdir 产全量 ddl/（档案推进物料）；不给则不产。"""
+        import copy, json as _json
+        b, v2 = pair
+        bp = tmp_path / "b.json"; vp = tmp_path / "v2.json"
+        bp.write_text(_json.dumps(b, ensure_ascii=False), encoding="utf-8")
+        vp.write_text(_json.dumps(v2, ensure_ascii=False), encoding="utf-8")
+        from assemble_ddl_opt import main
+        rc = main(["--ts-v2", str(vp), "--ts-baseline", str(bp),
+                   "--outdir", str(tmp_path / "build"),
+                   "--archive-outdir", str(tmp_path / "arc")])
+        assert rc == 0
+        arch_ddl = tmp_path / "arc" / "ddl"
+        assert arch_ddl.exists() and any(arch_ddl.iterdir()), "档案物料必须产出"
+        assert not any((tmp_path / "arc").glob("ddl_rollback*")), "档案零回退"
+
+    def test_no_archive_outdir_skips_archive(self, pair, tmp_path):
+        import json as _json
+        b, v2 = pair
+        bp = tmp_path / "b.json"; vp = tmp_path / "v2.json"
+        bp.write_text(_json.dumps(b, ensure_ascii=False), encoding="utf-8")
+        vp.write_text(_json.dumps(v2, ensure_ascii=False), encoding="utf-8")
+        from assemble_ddl_opt import main
+        rc = main(["--ts-v2", str(vp), "--ts-baseline", str(bp),
+                   "--outdir", str(tmp_path / "build")])
+        assert rc == 0
+        assert not (tmp_path / "arc").exists()
+
+    def test_new_table_create_in_build(self, pair, tmp_path):
+        """新中间表：CREATE 进 build/ddl/（此前只有回退 DROP，首次 CREATE 无路径）。
+        v2 手工构造（apply_decisions 新表声明通道=C 类场景待案例，DDL 侧行为不依赖它）。"""
+        import copy, json as _json
+        b, v2 = pair
+        v2n = copy.deepcopy(v2)
+        v2n["tables"]["dwb_trade_order_d"]["fields"].append(
+            {"target_field": "cx", "field_type": "VARCHAR(8)", "field_comment": ""})
+        v2n["tables"]["tmp_brand_new"] = {
+            "fields": [{"target_field": "cx", "field_type": "VARCHAR(8)", "field_comment": ""}]}
+        # 新中间表必有规则产出（C 类新表=新规则产物——generate_ddl 按规则产表不加戏）
+        v2n["rules"]["R0003"] = {"rule_code": "R0003", "rule_name": "新中间加工",
+                                 "target_table": "dws.tmp_brand_new",
+                                 "field_targets": ["cx"]}
+        v2n.setdefault("change", {})["fields"] = v2["change"]["fields"] + [{
+            "field": "cx", "target_table": "dwb_trade_order_d",
+            "intermediate_tables": ["tmp_brand_new"]}]
+        bp = tmp_path / "b.json"; vp = tmp_path / "v2n.json"
+        bp.write_text(_json.dumps(b, ensure_ascii=False), encoding="utf-8")
+        vp.write_text(_json.dumps(v2n, ensure_ascii=False), encoding="utf-8")
+        from assemble_ddl_opt import main
+        rc = main(["--ts-v2", str(vp), "--ts-baseline", str(bp),
+                   "--outdir", str(tmp_path / "build")])
+        assert rc == 0
+        assert (tmp_path / "build/ddl/create_table_tmp_brand_new.sql").exists(), \
+            "新表 CREATE 必须进执行件（UT 序列 CREATE 新表→ALTER）"
+        assert not (tmp_path / "build/ddl/create_table_dwb_trade_order_d.sql").exists(), \
+            "存量表只有 ALTER 变更单，不产 CREATE"

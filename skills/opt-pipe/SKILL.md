@@ -115,14 +115,8 @@ Task(subagent_type="dws-designer", description="优化模式设计 {资产}",
           {build}/_internal/design_decisions_opt.yaml，然后调 assemble_ts_opt 组装
           {arc_tmp}/ts.json（全量态直产临时档案）。新 JOIN 必须声明 join_safety；
           发现存量问题走回报不直改。")
-记下 designer 的 task_id（回路用）。ts 落位后**同产 DDL 入临时档案**（ts 的投影，同源同刻保一致）：
-
-```bash
-python SHARED_SCRIPTS/assemble_ddl.py --ts {arc_tmp}/ts.json --outdir {arc_tmp} --skip-rollback
-```
-
-（--skip-rollback：档案推进只需 ddl/——回退=变更现场件归 build/ddl_rollback，档案零回退不变量；
-advance 前置清理另有兜底。）验证 `{arc_tmp}/ts.json` + `ts.md` 已产出。
+记下 designer 的 task_id（回路用）。ts 落位后验证 `{arc_tmp}/ts.json` + `ts.md` 已产出。
+（档案物料 DDL 不在此步单独产——步骤 4 的 assemble_ddl_opt 一次原子产出变更执行件+档案物料。）
 
 ## 步骤 3：ts 级围栏 → 闸口①'
 ```bash
@@ -212,13 +206,14 @@ python PIPE_SCRIPTS/sql_fence_check.py \
 
 ## 步骤 5：DDL 变更单 → UT（需要数据库）
 
-**先产 ALTER 变更单**（UT 依赖它应用新列；缺了 UT 会 fail loud 拒跑）：
+**DDL 一步产**（2026-11-11 合并：变更执行件+档案物料一个脚本一次原子产出——两动作是事务型操作，不再另跑 assemble_ddl）：
 
 ```bash
 python PIPE_SCRIPTS/assemble_ddl_opt.py \
-  --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json --outdir {build}
+  --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json \
+  --outdir {build} --archive-outdir {arc_tmp}
 ```
-产出 `{build}/ddl/alter_table_*.sql`（变更单）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）+ `{build}/ddl_rollback/rollback_*.sql`（**回退脚本=变更的逆**：存量表 TRUNCATE 空表起步+列级结构逆[DROP COLUMN/MODIFY 旧类型]、新表 DROP——UT 幂等重跑用；**build 现场件不进档案**，advance 不拷贝）。全量建表 DDL 不产（ts 的可再生投影）。
+产出 `{build}/ddl/alter_table_*.sql`（变更单）+ `create_table_{新表}.sql`（新中间表 CREATE——UT 在 ALTER 前执行）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）+ `{build}/ddl_rollback/rollback_*.sql`（**回退脚本=变更的逆**：纯 DDL 逆，UT 幂等重跑用；**build 现场件不进档案**，advance 不拷贝）；`--archive-outdir` 同时产 `{arc_tmp}/ddl/` 全量 DDL（档案推进物料——重建环境一目录全搞定，档案零回退）。
 
 ```bash
 python SHARED_SCRIPTS/check_db.py --ts {arc_tmp}/ts.json

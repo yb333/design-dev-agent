@@ -124,8 +124,20 @@ def _archive_ts_draft(draft: dict, args) -> int:
         "| 版本 | 内容 |\n|------|------|\n"
         "| v1 | 逆向入料建档（ts 草稿 v2 契约 → 审核确认后逐字落档，经 audit_ingest）|\n",
         encoding="utf-8")
+    # DQ 明细剥出独立 dq.json（2026-11-11 R2 契约接通）：草稿 dq 段=传输容器（平台制品
+    # 零翻译投影），建档剥出对齐正向「dq.json 唯一源」形态——ts 本体不带 DQ；dq_impact
+    # 由此接通（rule_number=平台编码=条目身份键，锚定无声明时从 sql 粗提兜底）。
+    # 剥段在 ts.json 落盘前（分拣非改写——ts 核心段仍逐字）。
+    dq_rules = draft.pop("dq", None) or []
     (archive / "ts.json").write_text(
         json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if dq_rules:
+        (archive / "dq.json").write_text(
+            json.dumps({"meta": {"source": "reverse_draft",
+                                 "note": "平台制品零翻译投影；rule_number=身份键永不重编"},
+                        "rules": dq_rules},
+                       ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"建档 DQ: {archive / 'dq.json'}（{len(dq_rules)} 条——平台形态，变更对照以 rule_number 对齐）")
     for code, r in sorted((draft.get("rules") or {}).items()):
         (archive / "etl" / f"{code}.sql").write_text(str(r.get("query_sql") or ""),
                                                      encoding="utf-8")

@@ -389,3 +389,47 @@ class TestFenceStalenessGate:
 
     def test_stale_fence_exit_2(self, tmp_path):
         assert self._run_main(tmp_path, fence_exists=True, stale=True) == 2
+
+
+class TestStructureSequence:
+    """UT 结构序列（2026-11-11 补环）：回退→CREATE 新表→ALTER→视图重建。"""
+
+    def test_new_table_creates_executed(self, tmp_path):
+        """新表 CREATE 文件存在才执行（存在性=新表判定，确定性文件名不 glob）。"""
+        from ut_opt import apply_new_table_creates
+        ddl = tmp_path / "ddl"
+        ddl.mkdir()
+        (ddl / "create_table_t_new.sql").write_text(
+            "/* 新表 */\nCREATE TABLE IF NOT EXISTS dws.t_new (c1 varchar(8));\n",
+            encoding="utf-8")
+        ex = FakeExecutor()
+        created = apply_new_table_creates(ex, ddl, ["t_new", "t_old"])
+        assert created == ["t_new"]
+        assert any("CREATE TABLE" in s for s in ex.executed)
+        assert len(ex.executed) == 1  # t_old 无文件不执行
+
+    def test_new_table_create_failure_raises(self, tmp_path):
+        from ut_opt import apply_new_table_creates
+        ddl = tmp_path / "ddl"
+        ddl.mkdir()
+        (ddl / "create_table_t9.sql").write_text(
+            "CREATE TABLE IF NOT EXISTS dws.t9 (c1 int);", encoding="utf-8")
+        ex = FakeExecutor(fail_on={"CREATE": "permission denied"})
+        with pytest.raises(RuntimeError, match="新表 CREATE"):
+            apply_new_table_creates(ex, ddl, ["t9"])
+
+    def test_i_view_rebuild_executed(self, tmp_path):
+        """ALTER 后视图重建：ts meta 有 i_view 且文件在才执行（无 i_view 返回空）。"""
+        from ut_opt import rebuild_i_view
+        ddl = tmp_path / "ddl"
+        ddl.mkdir()
+        (ddl / "create_or_replace_view_v1_i.sql").write_text(
+            "CREATE OR REPLACE VIEW dws.v1_i AS SELECT 1;", encoding="utf-8")
+        ex = FakeExecutor()
+        ts_v2 = {"meta": {"target": {"i_view": {"table": "v1_i"}}}}
+        assert rebuild_i_view(ex, ddl, ts_v2) == "v1_i"
+        assert any("OR REPLACE VIEW" in s for s in ex.executed)
+        # 无 i_view 元数据 → 不执行
+        ex2 = FakeExecutor()
+        assert rebuild_i_view(ex2, ddl, {"meta": {"target": {}}}) == ""
+        assert not ex2.executed

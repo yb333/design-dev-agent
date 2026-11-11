@@ -78,13 +78,13 @@ def generate_create_table(rule_code: str, rule: dict, design: dict, meta: dict, 
 
     lines = []
 
-    # 文件头注释
+    # 文件头注释（无「生成时间」行——2026-11-11 版本号双源治理：文件头时间戳与
+    # 变更版本[change_request.version 锚定 YYYYMM]两个口径易冲突；生成时间归 git/MANIFEST）
     lines.append(f"/* =====================================================")
     lines.append(f"   表名: {schema}.{table}")
     lines.append(f"   规则: {rule_code} - {rule.get('rule_name', '')}")
     lines.append(f"   分布键: {dist_key or '未指定'}")
     lines.append(f"   逻辑集群: {logical_group}")
-    lines.append(f"   生成时间: {datetime.now().strftime('%Y-%m-%d')}")
     lines.append(f"   说明: {rule.get('design_intent', '')}")
     lines.append(f"   ===================================================== */")
     lines.append("")
@@ -318,9 +318,6 @@ def main():
     )
     parser.add_argument("--ts", required=True, help="ts.json 路径")
     parser.add_argument("--outdir", required=True, help="DDL 输出根目录（ddl/ 和 ddl_rollback/ 在下面）")
-    parser.add_argument("--skip-rollback", action="store_true",
-                        help="不产 ddl_rollback/（opt 场景档案推进只需 ddl/——回退=变更"
-                             "现场件由 assemble_ddl_opt 产 build/，档案零回退不变量）")
     args = parser.parse_args()
 
     ts_path = Path(args.ts)
@@ -334,16 +331,11 @@ def main():
     ddl_dir = Path(args.outdir) / "ddl"
     rollback_dir = Path(args.outdir) / "ddl_rollback"
     ddl_dir.mkdir(parents=True, exist_ok=True)
-    if not args.skip_rollback:
-        rollback_dir.mkdir(parents=True, exist_ok=True)
+    rollback_dir.mkdir(parents=True, exist_ok=True)
 
     for filename, content in ddls.items():
         (ddl_dir / filename).write_text(content, encoding="utf-8")
         print(f"  ✓ ddl/{filename}")
-
-    if args.skip_rollback:
-        print(f"\n[完成] {len(ddls)} 个 DDL（--skip-rollback：回退不产——档案零回退）")
-        return
 
     for filename, content in rollbacks.items():
         (rollback_dir / filename).write_text(content, encoding="utf-8")

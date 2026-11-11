@@ -46,7 +46,9 @@ def minimal_draft():
     return {
         "version": "2.1",
         "meta": {
-            "target": {"f_table": {"schema": "dws", "table": "dwb_trade_order_d"}},
+            "target": {"f_table": {"schema": "dws", "table": "dwb_trade_order_d"},
+                       # i_view 必填（2026-11-11 R1）：无视图=显式空对象，沉默缺省不合法
+                       "i_view": {"schema": "", "table": "", "cn": ""}},
             "grain": "",
             "business_key": [],           # 无显式主键设计→空（推断不冒充声明）
             "source_tables": [{"schema": "ods", "table": "ods_trade_order_di", "alias": "a"}],

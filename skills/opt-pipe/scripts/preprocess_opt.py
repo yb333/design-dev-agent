@@ -38,7 +38,7 @@ import pandas as pd
 
 from preprocess import (ExcelMappingParser, parse_mapping_sheets, check_mapping_static,
                         clean_excel_column)
-from sql_parse import extract_from_bindings, join_type_norm
+from sql_parse import extract_from_bindings, join_type_norm, extract_group_by_keys
 from eval_workbench import render_eval_draft
 
 # 变更记录页签八列（规格见 mapping-format.md；列名按真实模板——「变更KEY」KEY 为大写，
@@ -57,7 +57,7 @@ def _short(name: str) -> str:
 
 # 判断位空位标记（语义空位——存量不补，只为增量建立语义；有则显示、无则标空，
 # adopt 档与逆向档的差异由数据存在性自然呈现，渲染器不分叉）
-EMPTY_MARK = "▢未声明（语义空位）"
+# （EMPTY_MARK 已退役 2026-11-11：空位语义分色——SLOT_UNDECLARED[冻结层·无需填写]与「候选已推导·确认即采纳」两类，见上方常量与 _derive_design_candidates）
 
 
 def build_alias_map(sql_by_rule: Dict[str, str], ts: dict) -> List[dict]:
@@ -122,6 +122,44 @@ def build_placement_hints(ts: dict, add_fields: List[dict]) -> List[dict]:
     return hints
 
 
+# 空位语义分类（2026-11-11 #5 空位语义治理——空白是失语状态：designer 角色定义
+# 驱动他看到空位当欠账处理[编造或硬填]。两类空位语义不同必须分色）：
+#   未声明=存量没记录（合法的未知，冻结层——断言义务只覆盖 new_joins）；
+#   待确认=有确定性候选（SQL 事实推导，designer 确认即采纳——从归纳者降为确认者）
+SLOT_UNDECLARED = "▢存量未声明·冻结层——无需填写（你的断言义务只覆盖 new_joins）"
+
+
+def _derive_design_candidates(ts: dict) -> List[str]:
+    """确定性设计候选（#5 2026-11-11：能确定性推导的不让 AI 归纳）。
+
+    grain=终态规则 query_sql 的 GROUP BY（无 GROUP BY=明细直灌也是事实）；
+    topology=规则链浓缩一行（谁供谁——脚本本就解析得出）。business_key 不做机器
+    推导（「业务上什么算一行」是语义，机器给候选反而诱导轻信——旁证机制另在锚点段）。"""
+    meta = ts.get("meta", {})
+    f_short = (meta.get("target", {}).get("f_table", {}) or {}).get("table", "")
+    rules = ts.get("rules") or {}
+    cands: List[str] = []
+    final_rules = {c: r for c, r in rules.items()
+                   if str(r.get("target_table", "")).rsplit(".", 1)[-1] == f_short}
+    if final_rules:
+        code, r = sorted(final_rules.items(),
+                         key=lambda kv: (kv[1].get("exec_sequence", 1), kv[0]))[-1]
+        sql = r.get("query_sql") or ""
+        keys = extract_group_by_keys(sql)
+        cands.append(f"grain: " + (
+            f"GROUP BY {', '.join(keys[:6])}（终态规则 {code} SQL 事实——确认即采纳）"
+            if keys else f"无 GROUP BY（终态规则 {code} 明细直灌——确认即采纳）"))
+    topo = []
+    for code in sorted(rules, key=lambda c: (rules[c].get("exec_sequence", 1), c)):
+        r = rules[code]
+        srcs = "·".join(f"{s.get('alias') or '?'}" for s in (r.get("source_tables") or [])[:4])
+        tgt = str(r.get("target_table", "")).rsplit(".", 1)[-1]
+        topo.append(f"{code}({srcs or '无源声明'})→{tgt}")
+    if topo:
+        cands.append("topology: " + "；".join(topo))
+    return cands
+
+
 def render_topology_sections(ts: dict, alias_rows: Optional[List[dict]] = None) -> List[str]:
     """decisions 语言核心段（两路径共用：档案 ts 渲染 / 逆向入料渲染）：
     锚点（粒度/主键）+ 规则拓扑（源/joins/safety/读写）+ 别名对照。"""
@@ -130,9 +168,18 @@ def render_topology_sections(ts: dict, alias_rows: Optional[List[dict]] = None) 
     grain = meta.get("grain")
     if isinstance(grain, dict):  # decisions grain 是 input/output 结构（装配定格形态）
         grain = f"{grain.get('input', '')} → {grain.get('output', '')}".strip(" →")
+    cands = _derive_design_candidates(ts)
+    grain_line = grain
+    if not grain_line:
+        grain_cand = next((c for c in cands if c.startswith("grain:")), "")
+        grain_line = "▢未声明（候选已推导：见下方设计候选段——确认即采纳）" if grain_cand \
+            else SLOT_UNDECLARED
     lines = ["## 锚点", "",
-             f"- 粒度: {grain or EMPTY_MARK}",
-             f"- business_key: {', '.join(bk) if bk else EMPTY_MARK}"]
+             f"- 粒度: {grain_line}",
+             f"- business_key: {', '.join(bk) if bk else SLOT_UNDECLARED}"]
+    if not grain and any(c.startswith("grain:") for c in cands):
+        lines += ["", "## 设计候选（脚本从 SQL 事实推导——确认即采纳，勿凭空归纳）", ""]
+        lines += [f"- {c}" for c in cands]
     if not bk:
         # 旁证随行（批0-③ 2026-10-27：判断位留空防误信，机械旁证亮在旁边供确认采纳）。
         # 强度：MERGE ON 键=强（upsert 语义要求目标侧唯一，即当初认定的行身份）；
@@ -166,7 +213,7 @@ def render_topology_sections(ts: dict, alias_rows: Optional[List[dict]] = None) 
                 js = safety.get((j.get("alias") or "").strip().lower())
                 lines.append("  - safety: " + (
                     f"唯一={js.get('join_key_unique')}·{js.get('strategy', '')}（{js.get('reason', '')}）"
-                    if js else EMPTY_MARK))
+                    if js else SLOT_UNDECLARED))
         else:
             lines.append("- JOIN: （无声明）")
         lines.append("")

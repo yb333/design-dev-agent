@@ -169,6 +169,43 @@ def check_new_column_nulls(executor, ts_v2: dict, schema: str) -> List[dict]:
     return out
 
 
+def _exec_ddl_script(executor, script: Path, label: str) -> None:
+    """逐句执行 DDL 脚本文件（按分号切句、剥空段——与 apply_alters 同款；块/行注释
+    前缀 DB 接受）。失败 raise RuntimeError（调用方归环境问题）。"""
+    for stmt in [x.strip() for x in script.read_text(encoding="utf-8").split(";") if x.strip()]:
+        r = executor.execute(stmt)
+        if not r.success:
+            raise RuntimeError(f"{label} 失败: {(r.error or '')[:200]}")
+
+
+def apply_new_table_creates(executor, ddl_dir: Path, tables: List[str]) -> List[str]:
+    """新表 CREATE（2026-11-11 缺口补环）：回退段对新表只有 DROP、首次 CREATE 无执行
+    路径。此文件由 assemble_ddl_opt 仅为新表产出——存在性=新表判定（确定性文件名，
+    不 glob）；CREATE TABLE IF NOT EXISTS 双保险。返回已建表名。"""
+    created = []
+    for t in sorted(set(tables)):
+        p = Path(ddl_dir) / f"create_table_{t}.sql"
+        if p.exists():
+            _exec_ddl_script(executor, p, f"新表 CREATE（{t}）")
+            created.append(t)
+    return created
+
+
+def rebuild_i_view(executor, ddl_dir: Path, ts_v2: dict) -> str:
+    """I 视图重建（2026-11-11 实报补环）：ALTER 加列后镜像不重建则 UT 全绿但视图缺新列
+    ——平台从 I 视图取数上线即缺列。视图名=ts meta 确定性拼接；文件存在才跑（无 i_view
+    资产 assemble_ddl_opt 不产此文件）。返回视图名（未执行返回空）。"""
+    iv = (ts_v2.get("meta", {}).get("target", {}) or {}).get("i_view", {}) or {}
+    name = (iv.get("table") or "").strip()
+    if not name:
+        return ""
+    p = Path(ddl_dir) / f"create_or_replace_view_{name}.sql"
+    if not p.exists():
+        return ""
+    _exec_ddl_script(executor, p, f"I 视图重建（{name}）")
+    return name
+
+
 def apply_alters(executor, ddl_dir: Path, tables: List[str], schema: str) -> List[str]:
     """应用 ALTER 变更单（确定文件名拼接，禁 glob）。表不存在让 DB 报错 → 环境问题归人。
 
@@ -360,17 +397,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     _rb_fail = len(rollbacks) - _rb_ok
     print(f"回退汇总: ✅{_rb_ok} 成功  ⚠️{_rb_fail} 失败(容忍——首次对象不存在属正常,非首次需查)")
 
+    # 1.5 新表 CREATE（回退→CREATE→ALTER 序列——见 apply_new_table_creates 注释）
+    ddl_dir = Path(args.ddl_dir)
+    try:
+        _created = apply_new_table_creates(executor, ddl_dir, _rb_tables)
+    except Exception as e:
+        print(f"UT_OPT_ENV: {e}", file=sys.stderr)
+        return 3
+    for t in _created:
+        print(f"新表 CREATE: {t} ✅")
+
     # 2. ALTER（变更单缺失=流程顺序错——先 assemble_ddl_opt 再 UT，与环境问题分开报）
     try:
         tables = sorted({f.get("target_table", "") for f in change["fields"]} |
                         {t for f in change["fields"] for t in f.get("intermediate_tables", [])})
-        alters = apply_alters(executor, Path(args.ddl_dir), tables, schema)
+        alters = apply_alters(executor, ddl_dir, tables, schema)
     except ValueError as e:
         print(f"UT_OPT_ERROR: {e}", file=sys.stderr)
         return 2
     except Exception as e:
         print(f"UT_OPT_ENV: ALTER 失败（表不存在=环境问题归人）: {e}", file=sys.stderr)
         return 3
+
+    # 2.5 I 视图重建（ALTER 后 F 表结构定型，镜像同步——见 rebuild_i_view 注释）
+    try:
+        _rebuilt = rebuild_i_view(executor, ddl_dir, ts_v2)
+    except Exception as e:
+        print(f"UT_OPT_ENV: {e}", file=sys.stderr)
+        return 3
+    if _rebuilt:
+        print(f"I 视图重建: {_rebuilt} ✅")
 
     # 参数值解析（与 ut_execute 同款三层兜底：test_params 配置 > ts 默认值 > 类型兜底；
     # 平台变量形态内默认值在 substitute_params 里兜底——配置优先）

@@ -35,11 +35,14 @@ def analyze(dq_rules: list, changed_fields: list, changed_sources: list) -> dict
     tset = {_short(t) for t in changed_sources if str(t).strip()}
     hits, untouched = [], []
     for r in dq_rules or []:
-        idx = r.get("idx") or (r.get("_idx") or 0)
+        idx = r.get("idx") or r.get("rule_number") or (r.get("_idx") or 0)
         anchor = {_norm_field(a) for a in (r.get("anchored_fields") or [])}
-        # 旧形态兼容（ts.dq_rules 无锚定声明）：从 violation_condition 粗提目标字段引用兜底
+        # 旧形态兼容（ts.dq_rules 无锚定声明）：从 violation_condition 粗提目标字段引用兜底；
+        # 平台形态（逆向建档 baseline dq.json，R2 2026-11-11）：rule_number 主键+sql 全文 → 同款粗提
         if not anchor and r.get("violation_condition"):
             anchor = {_norm_field(c) for c in _guess_anchors(r.get("violation_condition"))}
+        if not anchor and r.get("sql"):
+            anchor = {_norm_field(c) for c in _guess_anchors(r.get("sql"))}
         comps = {_short(s) for s in (r.get("compare_sources") or [])}
         reasons = []
         hit_fields = sorted(anchor & fset)

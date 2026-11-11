@@ -13,6 +13,12 @@ class PrecheckResult:
         self.warnings: list[str] = []
         self.errors: list[str] = []
         self.pendings: list[str] = []   # 待人决策项（PENDING 三选——不进 return_code，opt 体检报告「待决策」层）
+        self.checks: int = 0            # 发起过的检查项计数（2026-11-11 假绿修复：与结果无关，
+                                        # 每发起一项 +1——报告结论行「N 项检查」区分「跑了全过」
+                                        # vs「根本没跑」；通过明细不打印只计数）
+
+    def add_check(self):
+        self.checks += 1
 
     @property
     def return_code(self) -> int:
