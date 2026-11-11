@@ -1069,3 +1069,30 @@ class TestJoinTypeNorm:
         assert join_type_norm("Left") == "LEFT"
         assert join_type_norm("LEFT") == "LEFT"
         assert join_type_norm("") == ""
+
+
+class TestRunDQChecksPlatformForm:
+    """2026-11-11 平台形态通道：逆向建档条目（rule_number 身份键+建档注入 sql_file）
+    与正向 rule_id 条目同跑——文件名读侧 sql_file 优先契约锁。"""
+
+    @staticmethod
+    def _Exec():
+        class _E:
+            def __init__(self):
+                self.executed = []
+            def execute(self, sql):
+                self.executed.append(sql)
+                return type("R", (), {"success": True, "rows": [{"cnt": 0}], "error": ""})()
+        return _E()
+
+    def test_sql_file_priority_platform_form(self, tmp_path):
+        from run_ut import run_dq_checks
+        (tmp_path / "DQ2026001.sql").write_text(
+            "SELECT order_no FROM dws.t_f WHERE amt IS NULL", encoding="utf-8")
+        rules = [{"rule_number": "DQ2026001", "rule_name": "金额非空",
+                  "check_type": "空值检查", "sql_file": "DQ2026001.sql",
+                  "sql": "SELECT order_no FROM dws.t_f WHERE amt IS NULL"}]
+        ex = self._Exec()
+        results = run_dq_checks(ex, tmp_path, rules, {})
+        assert results[0]["status"] == "PASS", "sql_file 优先解析（平台形态不走去 check_type 派生）"
+        assert results[0]["mode"] == "assertion", "平台形态无 mode 字段默认断言式"

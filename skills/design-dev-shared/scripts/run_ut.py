@@ -422,9 +422,10 @@ def run_dq_checks(executor, dq_dir, dq_rules: list, param_values: dict,
     """执行 DQ 检查 SQL（对 UT 已灌数的目标表）——DQ 是上生产的制品，交付前必须执行验证。
 
     契约：DQ SELECT = **违规行探测器**——0 行通过，非 0 行告警；阈值/比例逻辑全收在
-    SQL 的 WHERE/HAVING 里，这里只判行数。文件名 = dq_filename（dq_{NN}_{清洗
-    check_type}.sql，序号消重名、清洗消非法字符），缺文件 = 发现项（coder 未按
-    切片 _file 契约产出）。
+    SQL 的 WHERE/HAVING 里，这里只判行数。文件名读侧三档：条目 sql_file 优先
+    （producer 自报 / 逆向建档注入 {rule_number}.sql——2026-11-11 平台形态通道，
+    rule_number=平台身份键）> 旧约定派生 dq_filename（legacy 兜底），缺文件 =
+    发现项（producer 未按切片 _file 契约产出 / 建档缺文件）。
 
     行数用 COUNT 包裹查（不拉全量结果集），告警才追加 LIMIT 采样抓违规行样例。
     返回 [{rule_name, check_type, mode, waived, file, status, detail, rows, samples}]，status：

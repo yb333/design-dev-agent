@@ -127,17 +127,28 @@ def _archive_ts_draft(draft: dict, args) -> int:
     # DQ 明细剥出独立 dq.json（2026-11-11 R2 契约接通）：草稿 dq 段=传输容器（平台制品
     # 零翻译投影），建档剥出对齐正向「dq.json 唯一源」形态——ts 本体不带 DQ；dq_impact
     # 由此接通（rule_number=平台编码=条目身份键，锚定无声明时从 sql 粗提兜底）。
-    # 剥段在 ts.json 落盘前（分拣非改写——ts 核心段仍逐字）。
+    # ★文件成对落盘（2026-11-11 UT 缺环补齐）：sql 逐字落 archive/dq/{rule_number}.sql
+    # +条目注入 sql_file——UT 的 run_dq_checks 按 sql_file 找文件（读侧零适配），
+    # 对齐正向档案形态（dq.json+dq/ 成对，adopt 同款）；UT DQ 段跑全部条目
+    # （空表起步全量重算后验证「变更后数据仍满足全部约束」——含存量约束，
+    # dq_impact 锚定粗提的兜底）。剥段在 ts.json 落盘前（分拣非改写——ts 核心段仍逐字）。
     dq_rules = draft.pop("dq", None) or []
     (archive / "ts.json").write_text(
         json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if dq_rules:
+        (archive / "dq").mkdir(exist_ok=True)
+        for r in dq_rules:
+            rn = str(r.get("rule_number") or "").strip()
+            if rn:
+                (archive / "dq" / f"{rn}.sql").write_text(
+                    (r.get("sql") or "").rstrip() + "\n", encoding="utf-8")
+                r["sql_file"] = f"{rn}.sql"
         (archive / "dq.json").write_text(
             json.dumps({"meta": {"source": "reverse_draft",
                                  "note": "平台制品零翻译投影；rule_number=身份键永不重编"},
                         "rules": dq_rules},
                        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"建档 DQ: {archive / 'dq.json'}（{len(dq_rules)} 条——平台形态，变更对照以 rule_number 对齐）")
+        print(f"建档 DQ: {archive / 'dq.json'}（{len(dq_rules)} 条——平台形态，SQL 文件成对落 dq/）")
     for code, r in sorted((draft.get("rules") or {}).items()):
         (archive / "etl" / f"{code}.sql").write_text(str(r.get("query_sql") or ""),
                                                      encoding="utf-8")

@@ -75,3 +75,39 @@ class TestV2DraftArchive:
         by = {(r["rule"], r["table"]): r for r in rows}
         assert by[("R0001", "ods_acct_balance_di")]["sql_alias"] == ""
         assert "以 ts 声明为准" in by[("R0001", "ods_acct_balance_di")]["note"]
+
+
+class TestDqPairedOnArchive:
+    """2026-11-11 UT 缺环补齐：建档时 DQ 文件成对落盘（sql 逐字 + sql_file 注入）——
+    UT 的 run_dq_checks 按 sql_file 找文件，读侧零适配。"""
+
+    def test_dq_files_and_sql_file_injection(self, tmp_path):
+        d = _draft_pass()
+        d["dq"] = [
+            {"rule_number": "DQ2026001", "rule_name": "金额非空", "rule_desc": "",
+             "check_type": "空值检查", "alert_level": "严重",
+             "sql": "SELECT order_no FROM dws.dwb_cust_asset_f WHERE amt IS NULL",
+             "target_table": "dwb_cust_asset_i", "target_schema": "dws", "owner": "张三"},
+            {"rule_number": "DQ2026002", "rule_name": "行数一致", "rule_desc": "",
+             "check_type": "数量一致性检查", "alert_level": "警告",
+             "sql": "SELECT 1 FROM dws.dwb_cust_asset_f WHERE 1=0",
+             "target_table": "dwb_cust_asset_i", "target_schema": "dws", "owner": "李四"},
+        ]
+        assert _archive_ts_draft(d, _args(tmp_path)) == 0
+        arc = tmp_path / "archive"
+        # dq.json 在档且条目带 sql_file（读侧契约）
+        dq = json.loads((arc / "dq.json").read_text(encoding="utf-8"))
+        assert [r["sql_file"] for r in dq["rules"]] == ["DQ2026001.sql", "DQ2026002.sql"]
+        # 文件成对：sql 逐字
+        assert (arc / "dq" / "DQ2026001.sql").read_text(encoding="utf-8").strip() \
+            == "SELECT order_no FROM dws.dwb_cust_asset_f WHERE amt IS NULL"
+        assert (arc / "dq" / "DQ2026002.sql").exists()
+        # ts 本体不带 dq（剥段分拣——对齐正向 ts 无 DQ）
+        assert "dq" not in json.loads((arc / "ts.json").read_text(encoding="utf-8"))
+
+    def test_no_dq_section_no_files(self, tmp_path):
+        """无 DQ 草稿：无 dq.json 无 dq/（合法态）。"""
+        d = _draft_pass()
+        assert _archive_ts_draft(d, _args(tmp_path)) == 0
+        arc = tmp_path / "archive"
+        assert not (arc / "dq.json").exists() and not (arc / "dq").exists()

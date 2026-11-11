@@ -182,9 +182,20 @@ python ../dws-dq/scripts/assemble_dq.py --ts {arc_tmp}/ts.json \
 
 围栏全过后新 SQL 入临时档案：`cp {build}/dq/*.sql {arc_tmp}/dq/`。
 
-## 步骤 4：编码（SQL 围栏闸门在你）
+## 步骤 4：编码 + DDL 一步产（闸口①'确认后并行发起——对齐 new-pipe 步骤4）
 
-对 change 段 placed_rules 的每条规则**并行**发起 coder：
+DDL 与 coder 零依赖（DDL 输入=ts_v2+baseline，围栏已在步骤3 过）——**同消息并行发起**，coder 干活（分钟级）期间 DDL（秒级脚本）已跑完：
+
+**① DDL 一步产**（2026-11-11 合并：变更执行件+档案物料一个脚本一次原子产出——两动作是事务型操作，不再另跑 assemble_ddl）：
+
+```bash
+python PIPE_SCRIPTS/assemble_ddl_opt.py \
+  --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json \
+  --outdir {build} --archive-outdir {arc_tmp}
+```
+产出 `{build}/ddl/alter_table_*.sql`（变更单）+ `create_table_{新表}.sql`（新中间表 CREATE——UT 在 ALTER 前执行）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）+ `{build}/ddl_rollback/rollback_*.sql`（**回退脚本=变更的逆**：纯 DDL 逆，UT 幂等重跑用；**build 现场件不进档案**，advance 不拷贝）；`--archive-outdir` 同时产 `{arc_tmp}/ddl/` 全量 DDL（档案推进物料——重建环境一目录全搞定，档案零回退）。
+
+**② 编码**（SQL 围栏闸门在你）：对 change 段 placed_rules 的每条规则**并行**发起 coder：
 
 ```
 Task(subagent_type="dws-coder", description="优化编码 {rule_code}",
@@ -204,16 +215,7 @@ python PIPE_SCRIPTS/sql_fence_check.py \
 `_internal/sql_fence_result.json`——**回路铁律已机器化**：ut_opt 开跑校验围栏时效，SQL 晚于围栏结果 = 拒跑（exit 2，先重跑本步）。
 围栏全过 → **新 SQL 入临时档案**（进度态 etl 全量）：`cp {build}/etl/*.sql {arc_tmp}/etl/`（同名覆盖=规则当前版）。
 
-## 步骤 5：DDL 变更单 → UT（需要数据库）
-
-**DDL 一步产**（2026-11-11 合并：变更执行件+档案物料一个脚本一次原子产出——两动作是事务型操作，不再另跑 assemble_ddl）：
-
-```bash
-python PIPE_SCRIPTS/assemble_ddl_opt.py \
-  --ts-v2 {arc_tmp}/ts.json --ts-baseline {arc}/ts.json \
-  --outdir {build} --archive-outdir {arc_tmp}
-```
-产出 `{build}/ddl/alter_table_*.sql`（变更单）+ `create_table_{新表}.sql`（新中间表 CREATE——UT 在 ALTER 前执行）+ `create_or_replace_view_*.sql`（I 视图重建——F 表加列后镜像须同步，如有 i_view）+ `{build}/ddl_rollback/rollback_*.sql`（**回退脚本=变更的逆**：纯 DDL 逆，UT 幂等重跑用；**build 现场件不进档案**，advance 不拷贝）；`--archive-outdir` 同时产 `{arc_tmp}/ddl/` 全量 DDL（档案推进物料——重建环境一目录全搞定，档案零回退）。
+## 步骤 5：UT（需要数据库——DDL 与新 SQL 均在位才跑）
 
 ```bash
 python SHARED_SCRIPTS/check_db.py --ts {arc_tmp}/ts.json
@@ -228,11 +230,11 @@ python PIPE_SCRIPTS/ut_opt.py \
 ```
 - **回退先行**（UT 幂等重跑）：ut_opt 先执行 ddl_rollback 回到变更前状态再应用 ALTER（首次"列不存在"容忍，分色汇总进报告）——UT 语义=空表起步全量装载，与新建统一（merge 两分支由幂等第二遍覆盖，dev 不复现生产历史）；
 - **写路径列清单=SELECT 实际输出序**（describe 实测——2026-11-04：还原平台拼接动作；逆向档 tables 序[物理序]与 SQL 投影序独立来源常态错位，结构源序权威仅新建成立）；列存在性对账：SQL 输出列不在表结构=幻觉列/变更单缺失 FAIL；表有列 SQL 不产=差集披露（平台配置补值列——闸口②'素材）；
-- exit 2 = ALTER 变更单/回退脚本缺失（流程顺序错，回本步骤头部补跑 assemble_ddl_opt）；
+- exit 2 = ALTER 变更单/回退脚本缺失（流程顺序错，回步骤4 ①补跑 assemble_ddl_opt）；
 - exit 3 = 环境问题（表不存在/无库）→ 归人；
 - 每规则 EXPLAIN ANALYZE 真实执行一次（计划两门槛 + 0 行信号，计划落盘 diagnose/）+
   **新列空值检查**（写路径后真实数据；全 NULL = 疑似新 JOIN 关联不上——闸口②'素材）+
-  **DQ 段**（2026-09-14 补环：{arc_tmp} 有 DQ 规则且对比/INSERT 全过时自动真跑——重做条目上生产前必须执行验证；ALERT 阻断出口归闸口②' 人判三选一，与 new-pipe 同款）；
+  **DQ 段**（跑 {arc_tmp}/dq.json **全部条目**——UT=空表起步全量重算后验证「变更后数据仍满足全部约束」（含存量约束，dq_impact 锚定粗提的兜底）；逆向档 SQL 文件建档成对落 archive/dq/{rule_number}.sql，条目 sql_file 自报；ALERT 阻断出口归闸口②' 人判三选一，与 new-pipe 同款）；
 - 对比 FAIL（老列不一致）/ 新列全 NULL → **先跑定位工具产证据，再 question 人定根因**：
 
 ```bash
