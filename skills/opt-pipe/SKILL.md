@@ -35,7 +35,7 @@ description: >-
 
 ## 上报处理（贯穿全程）
 
-子 agent（designer/coder/dq-producer）的上报一律按**第一响应人协议**处理（身份层定调；方法手册 `../new-pipe/references/report-triage.md`——四步核实→诊断→影响→路由，永不裸转发）。剧本挂点：围栏越界回 designer（限 3 轮）/ 对比 FAIL 先 diagnose_fanout_opt 产证据再人定 / DQ FAIL 恢复 producer 修限 3 轮——实例见手册与各步骤。
+子 agent（designer/coder/dq-producer）的上报一律按**第一响应人协议**处理（身份层定调；方法手册 `../new-pipe/references/report-triage.md`——四步核实→诊断→影响→路由，永不裸转发）。剧本挂点：围栏越界回 designer（限 3 轮）/ 资产检查 FAIL（主键重复等）先 diagnose_fanout_opt 产证据再人定 / DQ FAIL 恢复 producer 修限 3 轮——实例见手册与各步骤。
 
 ## 步骤 0：环境自检 + 入口与基线
 
@@ -97,7 +97,7 @@ python PIPE_SCRIPTS/precheck_opt.py \
   --ts-baseline {arc}/ts.json \
   --outdir {build}/_internal
 ```
-- 检查项：新增字段命名规范 / 源字段连库存在性+类型对账（**以库为准**修正回填）/ 类型风险决策（人三选：转换/不加/返源端）/ 值域探测（整数位溢出退 BA、字符超长披露）/ 新来源 JOIN 键类型对账（三选：转换/改关联键/接受）。存量零预检（围栏+双跑兜底）。
+- 检查项：新增字段命名规范 / 源字段连库存在性+类型对账（**以库为准**修正回填）/ 类型风险决策（人三选：转换/不加/返源端）/ 值域探测（整数位溢出退 BA、字符超长披露）/ 新来源 JOIN 键类型对账（三选：转换/改关联键/接受）。存量零预检（围栏+UT 资产检查兜底——双跑对比 2026-10-26 已退役）。
 - stdout `TYPE_RISK_PENDING` / `JOIN_TYPE_RISK_PENDING` → **用 question 收集决策再填**（同 new-pipe 1b：`python SHARED_SCRIPTS/fill_type_risk_decision.py --decision {build}/_internal/type_risk_decision.yaml ...`），填完**重跑本步**放行。批量按类型对归并提问；`返源端`/`改关联键` = **本轮终止**（修 mapping/源端后重跑步骤 1）。
 - 决策回写 change_request（fields『decision』标记 + join_type_decisions）——designer 见标记勿推翻方向。
 - **《输入体检报告》**（批1：跨脚本短路修复）——本步聚合产出 `{build}/_internal/input_health_report.md`：
@@ -229,13 +229,13 @@ python PIPE_SCRIPTS/ut_opt.py \
   --report {build}/ut_report_opt.md
 ```
 - **回退先行**（UT 幂等重跑）：ut_opt 先执行 ddl_rollback 回到变更前状态再应用 ALTER（首次"列不存在"容忍，分色汇总进报告）——UT 语义=空表起步全量装载，与新建统一（merge 两分支由幂等第二遍覆盖，dev 不复现生产历史）；
-- **写路径列清单=SELECT 实际输出序**（describe 实测——2026-11-04：还原平台拼接动作；逆向档 tables 序[物理序]与 SQL 投影序独立来源常态错位，结构源序权威仅新建成立）；列存在性对账：SQL 输出列不在表结构=幻觉列/变更单缺失 FAIL；表有列 SQL 不产=差集披露（平台配置补值列——闸口②'素材）；
+- **写路径=按名投影包裹**（INSERT(清单) SELECT 清单 FROM (原SELECT) _src——清单=结构源序∩规则产出列，与外层投影同源书写配对按构造对齐；内层序无关、多列自然丢弃、缺列 DB 当场报错；平台按名匹配同款）；列存在性对账（describe）：SQL 输出列不在表结构=幻觉列/变更单缺失 FAIL；表有列 SQL 不产=差集披露（平台配置补值列——闸口②'素材）；
 - exit 2 = ALTER 变更单/回退脚本缺失（流程顺序错，回步骤4 ①补跑 assemble_ddl_opt）；
 - exit 3 = 环境问题（表不存在/无库）→ 归人；
 - 每规则 EXPLAIN ANALYZE 真实执行一次（计划两门槛 + 0 行信号，计划落盘 diagnose/）+
   **新列空值检查**（写路径后真实数据；全 NULL = 疑似新 JOIN 关联不上——闸口②'素材）+
   **DQ 段**（跑 {arc_tmp}/dq.json **全部条目**——UT=空表起步全量重算后验证「变更后数据仍满足全部约束」（含存量约束，dq_impact 锚定粗提的兜底）；逆向档 SQL 文件建档成对落 archive/dq/{rule_number}.sql，条目 sql_file 自报；ALERT 阻断出口归闸口②' 人判三选一，与 new-pipe 同款）；
-- 对比 FAIL（老列不一致）/ 新列全 NULL → **先跑定位工具产证据，再 question 人定根因**：
+- 资产检查 FAIL（主键重复/空值——老列回归由 SQL 围栏 AST 级兜底，UT 不再双跑对比）/ 新列全 NULL → **先跑定位工具产证据，再 question 人定根因**：
 
 ```bash
 python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {arc_tmp}/ts.json [--rule {rule}]
@@ -247,7 +247,7 @@ python PIPE_SCRIPTS/diagnose_fanout_opt.py --ts-v2 {arc_tmp}/ts.json [--rule {ru
 | 类型 | 识别 | 去向 |
 |------|------|------|
 | SQL 报错 | 新 SELECT/INSERT 报错含 COLUMN/TYPE/SYNTAX | 回该规则 coder（恢复会话），限 3 轮 |
-| 对比 FAIL | 冻结列回归失败（老列不一致） | question 人定根因：新 JOIN 发散=设计问题（改法→回 designer→回闸口①'重确认→SQL 围栏重跑→UT 重跑）；源数据=环境归人 |
+| 资产检查 FAIL | 主键重复/空值（run_ut_check 全集——冻结列回归由 SQL 围栏兜，UT 无对比类） | question 人定根因：新 JOIN 发散=设计问题（改法→回 designer→回闸口①'重确认→SQL 围栏重跑→UT 重跑）；源数据=环境归人 |
 | 新列全 NULL / 0 行 / 计划门槛 | 提示级（披露不代答） | 闸口②'人判（关联不上→designer 核 ON；数据真缺→人定） |
 | 环境问题 | ALTER 失败/表不存在/无库（exit 3） | 归人，不回调 agent |
 

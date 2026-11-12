@@ -167,8 +167,6 @@ def _check_join_risks(cr: dict, ts: dict, tables: dict, outdir: Path,
                  "decision": (entries.get(r["condition"], {}).get("处置") or "").strip(),
                  "reason": (entries.get(r["condition"], {}).get("原因") or "").strip()}
                 for r in risks]
-            result.add_pass(f"关联键决策已回写 change_request（{len(risks)} 对——"
-                            "designer 读 join_type_decisions：转换的须在 joins 声明 cast）")
             return
         result.add_error("关联键决策文件未填全或清单不一致，已重新生成骨架，请填后重跑")
     else:
@@ -214,8 +212,6 @@ def _check_type_risks(cr: dict, outdir: Path, result: PrecheckResult) -> None:
                                      "——译成守卫式转换 design_logic（版本无关写法，"
                                      "见 dws-coding-standards §0）")
                     n += 1
-            result.add_pass(f"类型决策已回写 change_request：{n} 个字段带『决策』标记"
-                            "（designer 译守卫式转换，勿推翻）")
             return
         result.add_error("类型风险决策文件未填全或字段不一致，已重新生成骨架，请填后重跑")
     else:
@@ -249,7 +245,6 @@ def _check_modify_type_risks(cr: dict, outdir: Path, result: PrecheckResult) -> 
                         "new_type": m.get("new_type", ""), "risk": risk,
                         "risk_cn": RISK_LABEL_CN.get(risk, risk)})
     if not pending:
-        result.add_pass(f"类型修改 {len(mods)} 项均为扩容/兼容方向，无需决策")
         return
 
     decision = outdir / "modify_type_decision.yaml"
@@ -279,7 +274,6 @@ def _check_modify_type_risks(cr: dict, outdir: Path, result: PrecheckResult) -> 
                     m["decision"] = ("类型修改已人定确认（跨大类/收窄方向，ALTER 自动转换"
                                      "存量值——UT 抽查新类型列质量）勿推翻")
                     n += 1
-            result.add_pass(f"类型修改决策已回写 change_request：{n} 个字段带『决策』标记")
             return
     else:
         result.add_error(f"检测到类型修改风险待人工决策（决策文件将生成于：{decision}）")
@@ -317,9 +311,11 @@ def write_health_report(outdir: Path, blocked: list, cr_warns: list,
     pending = list(result.pendings)
     disclose = [f"[{w.get('code', '?')}] {w.get('message', '')}" for w in (cr_warns or [])]
     disclose += list(result.warnings)
-    # 结论行带检查项计数（2026-11-11 假绿修复：区分「跑了全过」vs「根本没跑」——
-    # 通过的明细不打印只计数，不通过的明细照打；跳过的项由披露段[预检降级]可见）
-    verdict = (f"拦——必须修 {len(must_fix)} 处" if must_fix else f"过（{result.checks} 项检查全过）") + \
+    # 结论行带检查项计数（2026-11-11 假绿修复+2026-11-12 收口：计数与 summary 同源
+    # len(passed)——曾另设 checks 第二口径与「通过: N」打架已删；通过明细不打印只计数，
+    # 不通过的明细照打；跳过的项由披露段[预检降级]可见）
+    verdict = (f"拦——必须修 {len(must_fix)} 处" if must_fix
+               else f"过（{len(result.passed)} 项检查全过）") + \
         f"｜待决策 {len(pending)} 项｜带病披露 {len(disclose)} 条"
     lines = ["# 输入体检报告（一次全量；重跑只看增量段）", "",
              f"═══ 结论：{verdict} ═══", ""]
@@ -362,7 +358,7 @@ def main(argv=None) -> int:
     result = PrecheckResult()
 
     # 1. 命名规范（存量不审、新增按我方标准）
-    result.add_check()
+    result.add_pass("命名规范")
     for f in cr.get("fields", []):
         if not FIELD_NAME_RE.match(f.get("field", "")):
             result.add_error(f"[命名规范] 新增字段 {f.get('field')!r} 不合规范"
@@ -371,16 +367,16 @@ def main(argv=None) -> int:
     # 2. 连库存在性+类型对账（无库降 warn：3/5 跳过，值域探测自管）
     tables = _get_schema_types(ts, cr, outdir / "schema_cache.json", result)
     if tables is not None:
-        result.add_check()
+        result.add_pass("存在性+类型对账")
         _check_existence_and_types(cr, ts, tables, result)
 
     # 3. 类型风险决策（库类型已回填；无库跳过）
     if tables is not None:
-        result.add_check()
+        result.add_pass("类型风险决策")
         _check_type_risks(cr, outdir, result)
 
     # 3.5 类型修改方向风险（场景 B：modify_type_fields——离线判定不依赖库）
-    result.add_check()
+    result.add_pass("类型修改方向风险")
     _check_modify_type_risks(cr, outdir, result)
 
     # 4. 值域探测（原语自管连库；用回填后的库类型）
@@ -397,7 +393,7 @@ def main(argv=None) -> int:
 
     # 5. 新来源 JOIN 对账（无库跳过）
     if tables is not None:
-        result.add_check()
+        result.add_pass("新来源 JOIN 对账")
         _check_join_risks(cr, ts, tables, outdir, cr_path, result)
 
     # 决策有回写（fields[].decision / join_type_decisions）→ 落盘 change_request

@@ -1211,3 +1211,37 @@ class TestScenarioModifyLogic:
         add, ns, mods, mlogics, uns, diags = self._run(column="映射规则")
         assert not mlogics
         assert any(u["change_type"] == "modify" for u in uns)
+
+
+class TestCaseNormalizationOpt:
+    """标识符双侧归一锁（2026-11-12 体检实报：alias_map 键查询/别名值对照、
+    placement_hints 表名比较、_short 无 lower 同名漂移——大写形态全 miss）。"""
+
+    def test_alias_map_uppercase_forms_hit(self):
+        """ts 声明大写表名+大写别名 vs SQL 小写——查得到、判一致（存储原样）。"""
+        from preprocess_opt import build_alias_map
+        ts = {"rules": {"R0001": {"source_tables": [
+            {"table": "ODS_A", "alias": "A"}]}}}
+        sql = {"R0001": "SELECT a.x FROM ods.ods_a a"}
+        rows = build_alias_map(sql, ts)
+        assert rows[0]["sql_alias"] == "a"
+        assert rows[0]["note"] == "", "大写别名对照归一后应判一致（实报：误报 SQL 缺失/不一致）"
+
+    def test_placement_hints_uppercase_table_hits(self):
+        """mapping 当前态大写源表 vs ts 声明小写——直挂候选不丢（实报：全判新来源）。"""
+        from preprocess_opt import build_placement_hints
+        ts = {"meta": {"target": {"f_table": {"table": "t_f"}}},
+              "rules": {"R0002": {"target_table": "dws.t_f",
+                                  "source_tables": [{"table": "ods_b", "alias": "b"}]}}}
+        hints = build_placement_hints(ts, [{"field": "f1", "source": {"table": "ODS_B"}}])
+        assert hints[0]["direct_rules"] == ["R0002"], "大写源表归一后应命中直挂候选"
+
+    def test_design_candidates_uppercase_target_hits(self):
+        """终态规则 target_table 大写 vs meta f_table 小写——grain 候选不丢。"""
+        from preprocess_opt import _derive_design_candidates
+        ts = {"meta": {"target": {"f_table": {"table": "t_f"}}},
+              "rules": {"R0001": {"target_table": "DWS.T_F", "exec_sequence": 1,
+                                  "query_sql": "SELECT a.x FROM ods.s a GROUP BY a.x",
+                                  "source_tables": [{"table": "s", "alias": "a"}]}}}
+        cands = _derive_design_candidates(ts)
+        assert any("GROUP BY a.x" in c for c in cands), "大写 target 归一后终态规则应命中"

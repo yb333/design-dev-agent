@@ -122,6 +122,29 @@ def render(v2: dict, baseline: dict, cr: dict) -> str:
             lines.append(f"- {u.get('level','')}.{u.get('change_type','')}: {u.get('name','')}"
                          f"（备注动词'{u.get('verb','')}'）")
         lines.append("")
+    # 变更条目并排（2026-11-12 #4 处置：change_entries 的真实消费者兑现——
+    # 「闸口①'并排材料」承诺此前未渲染；fields[].change_entry 已收 seq 引用，
+    # 前后值单点在此逐条并排呈现）
+    ces = cr.get("change_entries") or []
+    if ces:
+        lines.append("## 变更条目并排（变更记录页签本批次全量——seq 为 fields/modify 段引用锚）")
+        lines.append("")
+        lines.append("| seq | 类型 | 对象 | 变更前 → 变更后 |")
+        lines.append("|-----|------|------|----------------|")
+        for e in ces:
+            obj = e.get("key") or e.get("group") or ""
+            if e.get("column"):
+                obj = f"{obj}.{e['column']}" if obj else e["column"]
+            lines.append(f"| {e.get('seq','')} | {e.get('ctype','')} | {obj} "
+                         f"| {e.get('before','')} → {e.get('after','')} |")
+        lines.append("")
+    renames = cr.get("renames") or []
+    if renames:
+        lines.append("## 改名合成对（先删后加两行合成——待扩展形态，当前仅登记）")
+        for r in renames:
+            lines.append(f"- {r.get('old','')} → {r.get('new','')}"
+                         f"（分组 {r.get('group','')}，seq {r.get('seq','')}）")
+        lines.append("")
     return "\n".join(lines)
 
 

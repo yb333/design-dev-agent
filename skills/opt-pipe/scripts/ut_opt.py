@@ -124,7 +124,7 @@ def run_explain_single(executor, ts_v2: dict, etl_dir: Path, ts_path: Path,
 def check_new_column_nulls(executor, ts_v2: dict, schema: str) -> List[dict]:
     """新列空值检查（写路径后真实数据）：逐目标表统计新列 NULL——兑现 06 §一
     '空值只查新列'的承诺；全 NULL = 疑似新 JOIN 关联不上的信号（LEFT JOIN 常态形态）。
-    类型修改列（场景 B·2026-10-22）同款抽查：MINUS 豁免后由空值/转换异常守——
+    类型修改列（场景 B·2026-10-22）同款抽查（双跑对比退役后由空值/转换异常守）——
     ALTER 自动转换失败的存量脏值落 NULL（PG 语义）→ 空值率异常即转换事故信号。"""
     change = ts_v2.get("change") or {}
     by_table: Dict[str, List[str]] = {}
@@ -340,7 +340,7 @@ def render_report(ts_v2: dict, alters: List[str], explains: List[dict],
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="优化模式 UT：ALTER + 输出对比 + INSERT")
+    ap = argparse.ArgumentParser(description="优化模式 UT：回退→CREATE 新表→ALTER→I 视图重建→EXPLAIN/写路径（按名包裹）→资产检查+DQ")
     ap.add_argument("--ts", required=True, help="ts_v2.json")
     ap.add_argument("--etl-dir", required=True, help="新 SELECT 目录 etl/")
     ap.add_argument("--baseline-dir", required=True, help="etl_baseline/")

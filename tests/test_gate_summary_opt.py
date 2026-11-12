@@ -49,3 +49,23 @@ def test_no_join_no_section():
     v2["change"]["fields"][0]["new_joins"] = []
     text = render(v2, {}, _cr())
     assert "新 JOIN" not in text
+
+
+
+class TestChangeEntriesAndRenames:
+    """2026-11-12 #4 处置：change_entries 逐条并排渲染（兑现闸口材料承诺）+renames 登记。"""
+
+    def test_change_entries_table_rendered(self):
+        import gate_summary_opt as g
+        v2 = {"change": {"fields": [], "backfill": "no"}, "tables": {}}
+        baseline = {"tables": {}}
+        cr = {"version": "202611", "change_type": "add_field", "fields": [],
+              "change_entries": [
+                  {"seq": 1, "time": "202611", "page": "attr", "group": "g1",
+                   "key": "channel_name", "column": "映射表达式", "ctype": "MODIFY",
+                   "before": "旧口径", "after": "新口径"}],
+              "renames": [{"kind": "rename", "group": "g1", "old": "x1",
+                           "new": "x2", "seq": "3+4", "after_raw": "x2"}]}
+        text = g.render(v2, baseline, cr)
+        assert "变更条目并排" in text and "旧口径 → 新口径" in text
+        assert "改名合成对" in text and "x1 → x2" in text

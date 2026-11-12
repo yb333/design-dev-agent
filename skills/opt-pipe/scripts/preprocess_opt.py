@@ -52,7 +52,11 @@ SUPPORTED_CTYPES = {"ADD"}
 
 
 def _short(name: str) -> str:
-    return (name or "").split(".")[-1]
+    """短表名（剥 schema 前缀）+ 归一（strip+lower——标识符比较入册口径：对照归一
+    存储原样）。2026-11-12 体检修正：本函数曾无归一（同文件 derive_backfill 与
+    dq_impact._short 同名实现却带 lower——同名漂移雷），placement_hints 的表名
+    比较点大写形态全 miss 致落位预判全错。"""
+    return (name or "").split(".")[-1].strip().lower()
 
 
 # 判断位空位标记（语义空位——存量不补，只为增量建立语义；有则显示、无则标空，
@@ -78,11 +82,15 @@ def build_alias_map(sql_by_rule: Dict[str, str], ts: dict) -> List[dict]:
                 binds[_short(ref).lower()] = (alias or "").strip()
         for s in (r.get("source_tables") or []):
             tbl = s.get("table") or ""
-            sql_alias = binds.get(tbl, "")
+            # 读侧键查询同写侧归一（2026-11-12 实报：ts 声明大写表名查小写键
+            # miss→误报「SQL 缺失」；别名值对照同款——比较点双侧归一，
+            # 展示的 sql_alias/ts_alias 保持原样）
+            sql_alias = binds.get(_short(tbl), "")
+            _ts_alias = s.get("alias") or ""
             rows.append({
                 "rule": code, "table": tbl,
-                "sql_alias": sql_alias, "ts_alias": s.get("alias") or "",
-                "note": "" if sql_alias and sql_alias == (s.get("alias") or "")
+                "sql_alias": sql_alias, "ts_alias": _ts_alias,
+                "note": "" if sql_alias and sql_alias.strip().lower() == _ts_alias.strip().lower()
                 else ("SQL 缺失/未引用——以 ts 声明为准" if not sql_alias
                       else "与 ts 声明不一致——落笔以 SQL 为准"),
             })
@@ -100,8 +108,11 @@ def build_placement_hints(ts: dict, add_fields: List[dict]) -> List[dict]:
     for f in add_fields:
         src = (f.get("source") or {}).get("table") or ""
         direct, via = [], {}
+        # 表名比较点双侧归一（2026-11-12 体检：原样×原样——mapping 当前态大写 vs
+        # ts 声明小写全 miss→落位预判全错判成新来源）
+        src_n = _short(src)
         for code, r in rules.items():
-            if src not in {s.get("table") for s in (r.get("source_tables") or [])}:
+            if src_n not in {_short(s.get("table")) for s in (r.get("source_tables") or [])}:
                 continue
             if _short(r.get("target_table") or "") == f_table:
                 direct.append(code)
@@ -136,11 +147,13 @@ def _derive_design_candidates(ts: dict) -> List[str]:
     topology=规则链浓缩一行（谁供谁——脚本本就解析得出）。business_key 不做机器
     推导（「业务上什么算一行」是语义，机器给候选反而诱导轻信——旁证机制另在锚点段）。"""
     meta = ts.get("meta", {})
-    f_short = (meta.get("target", {}).get("f_table", {}) or {}).get("table", "")
+    f_short = _short((meta.get("target", {}).get("f_table", {}) or {}).get("table", ""))
     rules = ts.get("rules") or {}
     cands: List[str] = []
+    # 表名比较点双侧归一（2026-11-12 体检：曾无 lower——对照同文件 derive_backfill
+    # 的正确写法，同名比较点做全或做无）
     final_rules = {c: r for c, r in rules.items()
-                   if str(r.get("target_table", "")).rsplit(".", 1)[-1] == f_short}
+                   if _short(r.get("target_table", "")) == f_short}
     if final_rules:
         code, r = sorted(final_rules.items(),
                          key=lambda kv: (kv[1].get("exec_sequence", 1), kv[0]))[-1]
@@ -603,7 +616,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                     "schema": hit.get("source_schema", ""),
                     "table": hit.get("source_table", ""),
                     "join_condition": hit.get("join_condition", ""),
-                    "change_entry": {"seq": e["seq"], "before": e["before"], "after": e["after"]},
+                    "change_entry": {"seq": e["seq"]},   # 变更前后值看 change_entries 同 seq 行（单点不双存）
                 })
                 declared_source_aliases.add((hit.get("source_alias") or "").strip().lower())
                 continue
@@ -662,7 +675,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                 "field": facts.get("field_orig", {}).get(_kl, e["key"]),
                 "old_type": old_type or before,
                 "new_type": new_type,
-                "change_entry": {"seq": e["seq"], "before": before, "after": after},
+                "change_entry": {"seq": e["seq"]},   # 变更前后值看 change_entries 同 seq 行（单点不双存）
             })
             continue
         if e["ctype"] == "MODIFY" and (e["column"] or "").strip() == "映射表达式":
@@ -713,7 +726,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
                 "old_expr": before or (old_entries[0]["logic"] if old_entries else ""),
                 "new_expr": new_expr,
                 "rules": sorted({x["rule"] for x in old_entries}),
-                "change_entry": {"seq": e["seq"], "before": before, "after": after},
+                "change_entry": {"seq": e["seq"]},   # 变更前后值看 change_entries 同 seq 行（单点不双存）
             })
             continue
         if e["ctype"] != "ADD":
@@ -770,7 +783,7 @@ def extract_and_check(batch: List[dict], renames: List[dict], mapping: Dict[str,
             "field": row.get("target_column") or e["key"],
             "cn": row.get("target_column_cn", ""),
             "type": row.get("target_type", ""), "scene_group": row.get("scene_group", ""),
-            "change_entry": {"seq": e["seq"], "before": e["before"], "after": e["after"]},
+            "change_entry": {"seq": e["seq"]},   # 变更前后值看 change_entries 同 seq 行（单点不双存）
             "source": {"schema": ent.get("source_schema", ""),
                        "table": ent.get("source_table", ""), "alias": hit_alias,
                        "field": hit_col or row.get("source_column", ""),

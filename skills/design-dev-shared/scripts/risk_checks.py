@@ -9,16 +9,14 @@ from pathlib import Path
 
 class PrecheckResult:
     def __init__(self):
-        self.passed: list[str] = []
+        self.passed: list[str] = []     # 完成的检查项计数载体（2026-11-12 假绿收口：消息
+                                        # 文本不渲染[用户定调：通过明细不打印只计数]，
+                                        # 消费=len() 进 summary「通过: N」与体检报告结论行
+                                        # 「N 项检查全过」——两处同源不打架；曾另设 checks
+                                        # 第二口径是打架根源已删）
         self.warnings: list[str] = []
         self.errors: list[str] = []
         self.pendings: list[str] = []   # 待人决策项（PENDING 三选——不进 return_code，opt 体检报告「待决策」层）
-        self.checks: int = 0            # 发起过的检查项计数（2026-11-11 假绿修复：与结果无关，
-                                        # 每发起一项 +1——报告结论行「N 项检查」区分「跑了全过」
-                                        # vs「根本没跑」；通过明细不打印只计数）
-
-    def add_check(self):
-        self.checks += 1
 
     @property
     def return_code(self) -> int:
