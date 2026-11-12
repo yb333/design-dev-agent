@@ -50,8 +50,7 @@
 | 文件 | 管什么 | 怎么填 | 不配会怎样 |
 |---|---|---|---|
 | `db-sources.json` | 数据库连接 | 一般已配好；新增数据源照文件内说明加块 | 跳过测试环节（见 §8） |
-| `schema_apps.json` | 产出目录的 appid 层、租户匹配 | `apps` 里把你的 schema 挂到所属 appid 名下（一个 appid 可挂多个 schema）；没把握先设 `default_appid` | 产出目录**少一层 appid**，且术加租户匹配不上 |
-| `shujia_config.json` | 术加平台包里的租户身份 | `shujia_tenants` 下按 appid 填：项目中文名 `project_cn`、责任人 `business_owner`、租户数据源等（appid↔schema 对应关系在 schema_apps） | 术加包这些格子是空的，只能事后人工/脚本补 |
+| `shujia_config.json` | 术加平台包里的租户身份 | `shujia_tenants` 下照已有条目的样式加块：项目中文名 `project_cn`、责任人 `business_owner`、租户数据源等 | 术加包这些格子是空的，只能事后人工/脚本补 |
 | `lts_config.json` | LTS 调度包（项目名/任务组/集群/库名/依赖任务号） | 见下方展开 | 显示"待配置"、依赖行缺任务号 |
 
 `lts_config.json` 三块内容：
